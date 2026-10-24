@@ -57,6 +57,9 @@ NOTHING_FOUND_TEXT = (
     "• The system uses a file system this live disc cannot read."
 )
 
+NOTHING_YET_TITLE = "No installed system was found yet"
+NOTHING_YET_TEXT = "There are encrypted disks or volumes that are not open. Unlock or activate them first: the tool then looks inside."
+
 RISK_TITLES = {
     "info": "Only looks",
     "low": "Low risk",

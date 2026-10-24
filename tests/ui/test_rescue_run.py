@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-import threading
-
 import pytest
 import shiboken6
 
-from gentoo_installer.rescue_app import DIAGNOSE, PLAN
+from gentoo_installer.rescue_app import DIAGNOSE
 from gentoo_installer.rescue_ui import messages
 from gentoo_installer.rescue_ui.plan_page import PlanPage
 from tests.rescue.flow import plan_and_run

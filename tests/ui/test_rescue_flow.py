@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from gentoo_installer.rescue_app import DIAGNOSE, FIND, FINISH, MOUNT, PLAN
 from tests.ui.rescue_fakes import (  # noqa: F401  (fixtures)
     daemon_factory,

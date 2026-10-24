@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 from PySide6.QtWidgets import QLineEdit
 
-from gentoo_installer.rescue_app import DIAGNOSE, FIND, FINISH, MOUNT, PLAN
+from gentoo_installer.rescue_app import DIAGNOSE, FINISH, MOUNT
 from gentoo_installer.rescue_ui import find_page, messages
 from tests.rescue.test_flow_encrypted import MAPPER, PASSPHRASE, encrypted_lab
 from tests.ui.rescue_fakes import (  # noqa: F401  (fixtures)
@@ -39,7 +39,8 @@ def test_a_locked_disk_is_listed_with_what_to_do_and_nothing_is_guessed(qtbot, l
     qtbot.waitUntil(lambda: unlock_button(window) is not None, timeout=20000)
     page = window.find_page
     assert not page.systems_card.isVisibleTo(page) and page.empty_card.isVisibleTo(page) and page.locked_card.isVisibleTo(page)
-    assert "Encrypted volumes were found" in page.hints.text()
+    assert page.empty_title.text() == messages.NOTHING_YET_TITLE and "Unlock or activate them first" in page.empty_text.text()  # not the list of common reasons
+    assert not page.hints.isVisibleTo(page)  # the card above already says it
     assert not page.continue_button.isEnabled() and not page.unlock_panel.isVisibleTo(page)
     assert lab.system.mapped == {}  # looking at the disks opened nothing
 

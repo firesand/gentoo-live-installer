@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import pytest
-
 from gentoo_installer.rescue_app import FIND, SERVICE
 from gentoo_installer.rescue_ui import messages
 from tests.rescue.flow import uefi_gentoo_lab

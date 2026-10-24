@@ -5,13 +5,13 @@ from __future__ import annotations
 import subprocess
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QTimer, Qt, Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from ..keyboard import KeyboardChooser
 from ..widgets import Card, ChoiceGroup, wrapped_label
 from . import messages, model
-from .base import Busy, Expander, InlineConfirm, Notice, RescuePage, SecretField, primary_style, soft_breaks
+from .base import Busy, Expander, InlineConfirm, Notice, RescuePage, SecretField, primary_style, soft_breaks, tone
 from .client import Call, RescueClient
 
 STAGE_TEXTS = {
@@ -21,6 +21,7 @@ STAGE_TEXTS = {
     "environment": "Checking the firmware…",
 }
 KEYBOARD_FAILURES_BEFORE_OPENING = 2
+REPEATED_HINTS = frozenset({"locked_volumes", "inactive_vg", "md_members"})
 
 
 def read_layout() -> tuple[str, str] | None:
@@ -74,7 +75,7 @@ class UnlockPanel(QFrame):
         self.passphrase.edit.setObjectName("rescuePassphrase")
         column.addWidget(self.passphrase)
         self.typing_note = wrapped_label("")
-        self.typing_note.setStyleSheet("color: #b87818;")
+        self.typing_note.setStyleSheet(f"color: {tone('warning')};")
         column.addWidget(self.typing_note)
         self.layout_label = wrapped_label("", muted=True)
         column.addWidget(self.layout_label)
@@ -192,6 +193,7 @@ class FindPage(RescuePage):
     systemChosen = Signal(dict, dict)  # the system's scan entry, the whole scan
     serviceProblem = Signal(str)
     storageChanged = Signal()  # a disk was unlocked or a volume activated: it has to be released again
+    resumeRequested = Signal(dict)  # a session that is still open in the daemon (the reply of rescue.session)
     quitRequested = Signal()
 
     def __init__(self, client: RescueClient) -> None:
@@ -210,14 +212,17 @@ class FindPage(RescuePage):
         self.busy = Busy()
         self.content.addWidget(self.busy)
 
+        self.open_card = Card("Still open", "These systems were opened earlier and are still open. Continue with one, or close it on the last page.")
+        self.open_rows = QVBoxLayout()
+        self.open_card.content.addLayout(self.open_rows)
+        self.open_card.hide()
+        self.content.addWidget(self.open_card)
+
         self.systems_card = Card("Installed systems", "Choose the system you want to repair.")
         self.group = ChoiceGroup([], columns=1)
         self.group.selectionChanged.connect(self._selection_changed)
         self.systems_card.content.addWidget(self.group)
         self.content.addWidget(self.systems_card)
-
-        self.empty_card = Card(messages.NOTHING_FOUND_TITLE, messages.NOTHING_FOUND_TEXT)
-        self.content.addWidget(self.empty_card)
 
         self.locked_card = Card("Encrypted disks", "These disks are locked. Unlock a disk to look for a system inside it.")
         self.locked_rows = QVBoxLayout()
@@ -232,6 +237,11 @@ class FindPage(RescuePage):
         self.storage_rows = QVBoxLayout()
         self.storage_card.content.addLayout(self.storage_rows)
         self.content.addWidget(self.storage_card)
+
+        self.empty_card = Card(messages.NOTHING_FOUND_TITLE, messages.NOTHING_FOUND_TEXT)
+        self.empty_title = self.empty_card.findChild(QLabel, "cardTitle")
+        self.empty_text = self.empty_card.findChildren(QLabel)[-1]
+        self.content.addWidget(self.empty_card)
 
         self.confirm = InlineConfirm()
         self.confirm.confirmed.connect(self._activation_confirmed)
@@ -261,6 +271,22 @@ class FindPage(RescuePage):
         self.notice.clear()
         self.busy.start(messages.CONNECTING_TEXT)
         self.scan_button.setEnabled(False)
+
+    def show_open_sessions(self, sessions: list[dict[str, Any]]) -> None:
+        """Systems that an earlier window (or a crashed one) left open: they can be taken over instead of opened again."""
+        clear_layout(self.open_rows)
+        for session in sessions:
+            row = QHBoxLayout()
+            title = model.os_name(session.get("os") or {})
+            mode = "repairs enabled" if session.get("mode") == "rw" else "read-only"
+            row.addWidget(wrapped_label(soft_breaks(f"{title} on {(session.get('root') or {}).get('device', '')} ({mode})")), 1)
+            button = QPushButton("&Continue with it")
+            button.setObjectName(f"rescueResume:{session.get('session_id')}")
+            button.setAccessibleName(f"Continue with {title}")
+            button.clicked.connect(lambda _=False, item=session: self.resumeRequested.emit(item))
+            row.addWidget(button)
+            self.open_rows.addLayout(row)
+        self.open_card.setVisible(bool(sessions))
 
     # ---- scanning -------------------------------------------------------------------------------------------------------------------
     def start_scan(self) -> None:
@@ -335,9 +361,14 @@ class FindPage(RescuePage):
         inactive = model.inactive_groups(scan)
         arrays = model.unassembled_arrays(scan)
         self.empty_card.setVisible(bool(scan) and not rows)
+        waiting = bool(locked or inactive or arrays)  # the volumes below have to be opened first: the usual list of reasons would only distract
+        if self.empty_title is not None:
+            self.empty_title.setText(messages.NOTHING_YET_TITLE if waiting else messages.NOTHING_FOUND_TITLE)
+        self.empty_text.setText(messages.NOTHING_YET_TEXT if waiting else messages.NOTHING_FOUND_TEXT)
         self._render_locked(locked)
         self._render_storage(inactive, arrays)
-        hints = [item["text"] for item in scan.get("hints", [])] + [str(item) for item in scan.get("warnings", [])]
+        # what the cards above already say (an encrypted disk, an inactive volume group, a RAID array) is not said twice
+        hints = [item["text"] for item in scan.get("hints", []) if item.get("id") not in REPEATED_HINTS] + [str(item) for item in scan.get("warnings", [])]
         self.hints.setText(soft_breaks("\n".join(f"• {text}" for text in hints)))
         self.hints.setVisible(bool(hints))
         live = scan.get("live_medium", [])
@@ -408,6 +439,11 @@ class FindPage(RescuePage):
     def _open_unlock(self, volume: model.LockedVolume) -> None:
         self.confirm.hide()
         self.unlock_panel.open_for(volume.device, volume.size, volume.hints)
+        self._show_panel()
+
+    def _show_panel(self) -> None:
+        """Scroll the passphrase panel (and its buttons) into view once it has its size."""
+        QTimer.singleShot(0, lambda: self.scroll_area.ensureWidgetVisible(self.unlock_panel, 0, 24) if self.unlock_panel.isVisible() else None)
 
     def _unlock(self, device: str, passphrase: str) -> None:
         self._set_busy(True)
@@ -425,6 +461,7 @@ class FindPage(RescuePage):
     def _unlock_failed(self, _code: str, text: str, _data: dict[str, Any]) -> None:
         self._set_busy(False)
         self.unlock_panel.failed(text)
+        self._show_panel()
 
     def _unlock_lost(self, text: str) -> None:
         self._set_busy(False)

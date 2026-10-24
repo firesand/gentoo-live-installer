@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QCheckBox, QFileDialog, QPushButton
 
 from ..widgets import Card, wrapped_label
 from . import launcher, messages, model
-from .base import Busy, InlineConfirm, Notice, RescuePage, soft_breaks
+from .base import Busy, InlineConfirm, Notice, RescuePage, soft_breaks, tone
 from .client import Call, RescueClient
 
 FORCE_WARNING = (
@@ -91,7 +91,7 @@ class FinishPage(RescuePage):
         self.report_path = ""
         self.notice.clear()
         self.holders.clear()
-        lines = [f'<span style="color:{"#27855c" if outcome == "success" else "#b87818" if outcome in {"warning", "cancelled"} else "#c33d50"}">'
+        lines = [f'<span style="color:{tone(messages.OUTCOME_STATUS.get(outcome, "error"))}">'
                  f'{"✓" if outcome == "success" else "!" if outcome in {"warning", "cancelled"} else "×"}</span> {html.escape(title)} — '
                  f'{html.escape(messages.OUTCOME_TITLES.get(outcome, outcome or "result not known").rstrip("."))}' for title, outcome in history]
         self.did.setText("<b>What was done in this session</b><br>" + "<br>".join(lines) if lines else "No repair was made. The system was only looked at.")

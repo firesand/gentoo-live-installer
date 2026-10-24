@@ -9,11 +9,11 @@ from PySide6.QtWidgets import QCheckBox, QHBoxLayout, QLabel, QPushButton, QVBox
 
 from ..widgets import Card, wrapped_label
 from . import launcher, messages, model
-from .base import Busy, Expander, InlineConfirm, Notice, RescuePage, danger_style, primary_style, soft_breaks
+from .base import Busy, Expander, InlineConfirm, Notice, RescuePage, primary_style, soft_breaks, tone
 from .client import RescueClient
 from .find_page import clear_layout
 
-SEVERITY_COLORS = {"error": "#c33d50", "warn": "#b87818", "info": "#6d6979"}
+SEVERITY_TONES = {"error": "error", "warn": "warning", "info": "muted"}
 
 
 class DiagnosisPage(RescuePage):
@@ -106,13 +106,13 @@ class DiagnosisPage(RescuePage):
         self.system_label.setText(soft_breaks(f"{system.title} on {system.root_device}"))
         if not system.allow_write:
             self.mode_label.setText("LOOK ONLY")
-            self.mode_label.setStyleSheet("color: #6d6979; font-weight: 700;")
+            self.mode_label.setStyleSheet(f"color: {tone('muted')}; font-weight: 700;")
         elif system.writable:
             self.mode_label.setText("REPAIRS ENABLED")
-            self.mode_label.setStyleSheet("color: #b87818; font-weight: 700;")
+            self.mode_label.setStyleSheet(f"color: {tone('warning')}; font-weight: 700;")
         else:
             self.mode_label.setText("READ-ONLY")
-            self.mode_label.setStyleSheet("color: #27855c; font-weight: 700;")
+            self.mode_label.setStyleSheet(f"color: {tone('ok')}; font-weight: 700;")
         findings = model.sorted_findings(system.findings)
         counts = model.finding_counts(findings)
         if not findings:
@@ -165,7 +165,7 @@ class DiagnosisPage(RescuePage):
         title = QLabel(f"{messages.SEVERITY_SYMBOLS.get(severity, 'i')}  {finding.get('title', '')}")
         title.setObjectName("cardTitle")
         title.setWordWrap(True)
-        title.setStyleSheet(f"color: {SEVERITY_COLORS.get(severity, '#6d6979')};")
+        title.setStyleSheet(f"color: {tone(SEVERITY_TONES.get(severity, 'muted'))};")
         card.content.addWidget(title)
         card.content.addWidget(wrapped_label(soft_breaks(str(finding.get("detail", "")))))
         evidence = [str(item) for item in finding.get("evidence", [])]

@@ -32,6 +32,11 @@ from ..widgets import Card, Page, StatusRow, wrapped_label
 SYMBOLS = {"ok": "✓", "warning": "!", "error": "×", "info": "i", "pending": "○", "running": "●", "skipped": "–"}
 
 
+def tone(kind: str) -> str:
+    """Text colour of a state word: ok, warning and error are the installer's status colours, anything else the muted colour of the current theme."""
+    return theme.STATUS_COLORS.get(kind, theme.MUTED)
+
+
 def soft_breaks(text: str, chunk: int = 36) -> str:
     """Allow a line break inside very long unbroken words (device paths, digests) so a label never makes the page wider than the window."""
     return re.sub(rf"(\S{{{chunk}}})(?=\S)", "\\1\u200b", text)
@@ -263,7 +268,7 @@ class TextView(QTextEdit):
         """A unified diff with removed lines in red and added lines in green."""
         lines = []
         for line in diff.splitlines():
-            colour = "#c33d50" if line.startswith("-") and not line.startswith("---") else "#27855c" if line.startswith("+") and not line.startswith("+++") else ""
+            colour = tone("error") if line.startswith("-") and not line.startswith("---") else tone("ok") if line.startswith("+") and not line.startswith("+++") else ""
             safe = html.escape(line) or "&nbsp;"
             lines.append(f'<span style="color:{colour}">{safe}</span>' if colour else safe)
         self.setHtml('<pre style="margin:0">' + "<br>".join(lines) + "</pre>")

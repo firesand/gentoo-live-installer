@@ -19,12 +19,12 @@ from PySide6.QtWidgets import QCheckBox, QLabel, QLineEdit, QListWidget, QListWi
 
 from ..widgets import Card, wrapped_label
 from . import messages, model
-from .base import Busy, Expander, FlowText, InlineConfirm, Notice, RescuePage, SecretField, TextView, danger_style, primary_style, soft_breaks
+from .base import Busy, Expander, FlowText, InlineConfirm, Notice, RescuePage, SecretField, TextView, danger_style, primary_style, soft_breaks, tone
 from .client import Call, RescueClient
 from .find_page import clear_layout
 from .options_form import OptionsForm
 
-RISK_COLORS = {"info": "#27855c", "low": "#27855c", "medium": "#b87818", "high": "#c33d50", "dangerous": "#c33d50"}
+RISK_TONES = {"info": "ok", "low": "ok", "medium": "warning", "high": "error", "dangerous": "error"}
 STEP_SYMBOLS = {"pending": "○", "running": "●", "done": "✓", "failed": "×", "skipped": "–"}
 LOG_FLUSH_MS = 100
 
@@ -189,7 +189,7 @@ class PlanPage(RescuePage):
         self.current_step.setObjectName("cardTitle")
         column.addWidget(self.current_step)
         self.step_warning = wrapped_label("")
-        self.step_warning.setStyleSheet("color: #b87818;")
+        self.step_warning.setStyleSheet(f"color: {tone('warning')};")
         column.addWidget(self.step_warning)
         self.bar = QProgressBar()
         self.bar.setRange(0, 100)
@@ -332,7 +332,7 @@ class PlanPage(RescuePage):
         self.confirmation = model.Confirmation.of(plan)
         self.heading.setText(str(plan.get("title", "")))
         self.risk_label.setText(f"{messages.RISK_TITLES.get(risk, risk)}. {messages.RISK_TEXTS.get(risk, '')}")
-        self.risk_label.setStyleSheet(f"color: {RISK_COLORS.get(risk, '#6d6979')}; font-weight: 600;")
+        self.risk_label.setStyleSheet(f"color: {tone(RISK_TONES.get(risk, 'muted'))}; font-weight: 600;")
         self.summary.setText(soft_breaks(str(plan.get("summary", ""))))
         if self.confirmation.required:
             self.first_write.show_message("warning", messages.FIRST_WRITE_NOTICE)
@@ -341,11 +341,11 @@ class PlanPage(RescuePage):
         lines = []
         for item in plan.get("preconditions", []):
             ok = item.get("ok", True)
-            lines.append(f'<span style="color:{"#27855c" if ok else "#c33d50"}">{"✓" if ok else "×"}</span> {html.escape(str(item.get("text", "")))}')
+            lines.append(f'<span style="color:{tone("ok" if ok else "error")}">{"✓" if ok else "×"}</span> {html.escape(str(item.get("text", "")))}')
         self.checks.setText("<br>".join(lines))
         self.checks.setVisible(bool(lines))
-        advice = [f'<span style="color:#b87818">!</span> {html.escape(soft_breaks(str(w)))}' for w in plan.get("warnings", [])]
-        advice += [f'<span style="color:#6d6979">Note:</span> {html.escape(soft_breaks(str(n)))}' for n in plan.get("notes", [])]
+        advice = [f'<span style="color:{tone("warning")}">!</span> {html.escape(soft_breaks(str(w)))}' for w in plan.get("warnings", [])]
+        advice += [f'<span style="color:{tone("muted")}">Note:</span> {html.escape(soft_breaks(str(n)))}' for n in plan.get("notes", [])]
         self.advice.setText("<br>".join(advice))
         self.advice.setVisible(bool(advice))
         steps = plan.get("steps", [])
@@ -354,7 +354,7 @@ class PlanPage(RescuePage):
         for number, step in enumerate(steps, start=1):
             text = html.escape(str(step.get("display", "")))
             condition = model.CONDITION_TEXTS.get(str(step.get("when", "")))
-            tail = f' <span style="color:#6d6979">[{condition}]</span>' if condition else ""
+            tail = f' <span style="color:{tone("muted")}">[{condition}]</span>' if condition else ""
             (preparation if model.is_preparation(step) else main).append(f"{number}. {text}{tail}")
         self.commands_text.set_lines(main, html_text=True)
         self.commands_text.setVisible(bool(main))
@@ -492,7 +492,7 @@ class PlanPage(RescuePage):
         suffix = f" (exit code {step.rc})" if step.status == "failed" and step.rc is not None else ""
         item.setText(f"{STEP_SYMBOLS.get(step.status, '○')}  {soft_breaks(step.text)}{suffix}")
         quiet = step.cleanup or step.group in model.PREPARATION_GROUPS
-        colour = {"failed": "#c33d50", "done": "#27855c", "running": "", "skipped": "#6d6979"}.get(step.status, "#6d6979" if quiet or step.status == "pending" else "")
+        colour = {"failed": tone("error"), "done": tone("ok"), "running": "", "skipped": tone("muted")}.get(step.status, tone("muted") if quiet or step.status == "pending" else "")
         item.setForeground(QBrush(QColor(colour)) if colour else QBrush())
         if step.status == "running":
             self.steps_list.scrollToItem(item)
@@ -651,7 +651,7 @@ class PlanPage(RescuePage):
             self.result_title.setText(messages.OUTCOME_TITLES.get(outcome, outcome))
             lines = self._result_lines(result, tracker)
         status = "error" if result is None else messages.OUTCOME_STATUS.get(outcome, "info")
-        self.result_title.setStyleSheet(f"color: {RISK_COLORS['info'] if status == 'ok' else '#b87818' if status == 'warning' else '#c33d50'};")
+        self.result_title.setStyleSheet(f"color: {tone(status)};")
         self.result_text.setText("<br>".join(lines))
         self._set_state("result")
         self.done_button.setFocus()
@@ -660,12 +660,12 @@ class PlanPage(RescuePage):
         lines = []
         for step in tracker.failed_steps():
             detail = f" (exit code {step.rc})" if step.rc is not None else ""
-            lines.append(f'<span style="color:#c33d50">×</span> This step failed{detail}: {html.escape(soft_breaks(step.text))}' + (f"<br>&nbsp;&nbsp;{html.escape(step.error)}" if step.error else ""))
+            lines.append(f'<span style="color:{tone("error")}">×</span> This step failed{detail}: {html.escape(soft_breaks(step.text))}' + (f"<br>&nbsp;&nbsp;{html.escape(step.error)}" if step.error else ""))
         for check in result.get("post_checks", []):
             ok = check.get("ok")
-            lines.append(f'<span style="color:{"#27855c" if ok else "#c33d50"}">{"✓" if ok else "×"}</span> {html.escape(soft_breaks(str(check.get("text", ""))))}')
+            lines.append(f'<span style="color:{tone("ok" if ok else "error")}">{"✓" if ok else "×"}</span> {html.escape(soft_breaks(str(check.get("text", ""))))}')
         for warning in result.get("warnings", []):
-            lines.append(f'<span style="color:#b87818">!</span> {html.escape(soft_breaks(str(warning)))}')
+            lines.append(f'<span style="color:{tone("warning")}">!</span> {html.escape(soft_breaks(str(warning)))}')
         for note in tracker.notes:
             lines.append(html.escape(note))
         for hint in result.get("next_hints", []):

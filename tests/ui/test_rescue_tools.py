@@ -4,10 +4,8 @@ from __future__ import annotations
 
 import shlex
 
-import pytest
-
 from gentoo_installer.rescue_app import DIAGNOSE, FIND, FINISH, LOGS
-from gentoo_installer.rescue_ui import messages, model
+from gentoo_installer.rescue_ui import messages
 from tests.rescue import fakeroot as fr
 from tests.rescue.flow import uefi_gentoo_lab
 from tests.ui.rescue_fakes import (  # noqa: F401  (fixtures)
@@ -258,3 +256,49 @@ def test_a_second_system_can_be_repaired_after_the_first_was_closed(qtbot, gento
     qtbot.waitUntil(lambda: len(window.find_page.candidates) == 2 and not window.find_page._busy, timeout=20000)
     open_system(qtbot, window, "/dev/sdb1")
     assert window.system.title.startswith("Debian")
+
+
+# ---- read-only and read-write ---------------------------------------------------------------------------------------------------------
+def test_repairs_can_be_switched_on_and_off_without_repairing_anything(qtbot, gentoo_machine, repair_kit) -> None:
+    daemon, lab, _tree = gentoo_machine
+    window = repair_kit.open(daemon.path)
+    open_system(qtbot, window)
+    page = window.diagnose_page
+    assert page.mode_label.text() == "READ-ONLY"
+    request_action(qtbot, window, "session.enter_write")
+    plan = window.plan_page
+    assert plan.risk_label.text().startswith("High risk") and "read-only to read-write" in plan.prep_note.text() + plan.commands.title
+    plan.reviewed.setChecked(True)
+    plan.typed.setText("nvme0n1p5")
+    plan.run_button.click()
+    qtbot.waitUntil(lambda: plan.state == "result", timeout=30000)
+    assert plan.tracker.outcome == "success" and "now open with permission to write" in plan.result_text.text()
+    plan.done_button.click()
+    qtbot.waitUntil(lambda: page.mode_label.text() == "REPAIRS ENABLED" and not page.busy.isVisibleTo(page), timeout=20000)
+    assert not lab.system.chroot_calls or all(call[2][0] == "true" for call in lab.system.chroot_calls)  # nothing was repaired
+    assert not page.findChild(object, "rescueAction:session.enter_write").isEnabled() and page.findChild(object, "rescueAction:session.leave_write").isEnabled()
+    request_action(qtbot, window, "session.leave_write")
+    assert not window.plan_page.reviewed.isVisibleTo(window.plan_page) and window.plan_page.run_button.isEnabled()  # a low-risk step: the click is the confirmation
+    window.plan_page.run_button.click()
+    qtbot.waitUntil(lambda: window.plan_page.state == "result", timeout=30000)
+    window.plan_page.done_button.click()
+    qtbot.waitUntil(lambda: page.mode_label.text() == "READ-ONLY" and not page.busy.isVisibleTo(page), timeout=20000)
+
+
+def test_systems_that_an_earlier_window_left_open_are_offered_when_the_tool_starts(qtbot, gentoo_machine, repair_kit) -> None:
+    daemon, _lab, _tree = gentoo_machine
+    first = repair_kit.open(daemon.path)
+    system = open_system(qtbot, first)
+    first.force_close()
+    second = repair_kit.open(daemon.path)
+    qtbot.waitUntil(lambda: second.find_page.open_card.isVisibleTo(second.find_page), timeout=20000)
+    button = second.find_page.findChild(object, f"rescueResume:{system.session_id}")
+    assert button is not None
+    qtbot.waitUntil(lambda: not second.find_page._busy and bool(second.find_page.candidates), timeout=20000)
+    button.click()
+    qtbot.waitUntil(lambda: second.stack.currentIndex() == DIAGNOSE and second.system is not None and not second.diagnose_page.busy.isVisibleTo(second.diagnose_page), timeout=20000)
+    assert second.system.session_id == system.session_id and second.system.actions
+    finish(qtbot, second)
+    second.finish_page.unmount_button.click()
+    qtbot.waitUntil(lambda: second.finish_page.state == "done", timeout=20000)
+    assert daemon.manager.session_summary("")["sessions"] == []

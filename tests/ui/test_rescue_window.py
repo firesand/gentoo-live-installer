@@ -6,11 +6,10 @@ import pytest
 import shiboken6
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence
-from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QAbstractButton, QApplication
 
 from gentoo_installer import app as app_module
-from gentoo_installer.rescue_app import DIAGNOSE, FIND, FINISH, MOUNT, PLAN, RescueWindow, bounded_size
+from gentoo_installer.rescue_app import DIAGNOSE, RescueWindow, bounded_size
 from tests.rescue.test_flow_encrypted import PASSPHRASE, encrypted_lab
 from tests.ui.rescue_fakes import (  # noqa: F401  (fixtures)
     daemon_factory,

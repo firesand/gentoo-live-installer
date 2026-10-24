@@ -6,7 +6,7 @@ import json
 
 import pytest
 
-from gentoo_installer.rescue_app import DIAGNOSE, FIND, MOUNT
+from gentoo_installer.rescue_app import DIAGNOSE, FIND
 from gentoo_installer.rescue_ui import messages
 from tests.rescue import fakeroot as fr
 from tests.rescue import lsblk_fixtures as lf

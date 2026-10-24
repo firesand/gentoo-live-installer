@@ -5,8 +5,6 @@ from __future__ import annotations
 import socket
 import threading
 
-import pytest
-
 from gentoo_installer.rescue_ui.client import Call, RescueClient
 from tests.ui.rescue_fakes import (  # noqa: F401  (fixtures)
     CuttingProxy,

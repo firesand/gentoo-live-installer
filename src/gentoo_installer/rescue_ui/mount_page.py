@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QCheckBox, QGridLayout, QHBoxLayout, QLabel, QPush
 
 from ..widgets import Card, wrapped_label
 from . import messages, model
-from .base import Busy, Expander, FlowText, Notice, RescuePage, soft_breaks
+from .base import Busy, Expander, FlowText, Notice, RescuePage, soft_breaks, tone
 from .client import Call, RescueClient
 from .find_page import clear_layout
 
@@ -67,7 +67,7 @@ class MountPage(RescuePage):
         self.content.addWidget(self.suggest_card)
 
         self.warnings = wrapped_label("")
-        self.warnings.setStyleSheet("color: #b87818;")
+        self.warnings.setStyleSheet(f"color: {tone('warning')};")
         self.content.addWidget(self.warnings)
         self.commands_text = FlowText(mono=True)
         self.commands = Expander("Show the exact commands", self.commands_text)

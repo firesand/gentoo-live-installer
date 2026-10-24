@@ -7,7 +7,6 @@ from PySide6.QtCore import Qt
 from PySide6.QtTest import QTest
 from PySide6.QtWidgets import QLabel
 
-from gentoo_installer.rescue_ui import messages
 from tests.ui.rescue_fakes import (  # noqa: F401  (fixtures)
     daemon_factory,
     gentoo_machine,

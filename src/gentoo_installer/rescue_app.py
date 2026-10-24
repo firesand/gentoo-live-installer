@@ -180,6 +180,7 @@ class RescueWindow(QMainWindow):
         self.service_page.terminalToolRequested.connect(self._open_tool_terminal)
         self.service_page.quitRequested.connect(self.close)
         self.find_page.systemChosen.connect(self._system_chosen)
+        self.find_page.resumeRequested.connect(self._resume)
         self.find_page.serviceProblem.connect(lambda text: self._show_service(UNREACHABLE_TITLE, messages.describe_daemon_problem("", text)))
         self.find_page.storageChanged.connect(self._storage_changed)
         self.find_page.quitRequested.connect(self.close)
@@ -220,7 +221,18 @@ class RescueWindow(QMainWindow):
         elif state.job_running:
             self._show_service("An installation is running", messages.INSTALL_RUNNING_TEXT)
         else:
+            self._look_for_open_sessions()
+
+    def _look_for_open_sessions(self) -> None:
+        """Systems an earlier window left open are offered first; the scan starts either way."""
+        def listed(result: dict[str, Any]) -> None:
+            self.find_page.show_open_sessions([item for item in result.get("sessions", []) if str(item.get("state", "")).startswith("mounted")])
             self.find_page.start_scan()
+
+        def failed(*_args: Any) -> None:
+            self.find_page.start_scan()
+
+        self.client.request("rescue.session", {}).then(listed, failed, failed)
 
     def _show_service(self, title: str, text: str) -> None:
         self.find_page.busy.stop()
@@ -324,26 +336,32 @@ class RescueWindow(QMainWindow):
 
     def _adopt(self, device: str) -> None:
         """A system may already be open in a session of the daemon (the connection broke while it was being opened, or an earlier window left it)."""
-        def failed(*args: Any) -> None:
-            self.mount_page.not_adopted()
-
         def listed(result: dict[str, Any]) -> None:
             found = next((item for item in result.get("sessions", []) if (item.get("root") or {}).get("device") == device and str(item.get("state", "")).startswith("mounted")), None)
             if found is None:
                 self.mount_page.not_adopted()
-                return
-            self.client.request("rescue.query", {"session_id": found["session_id"], "query": "diag.summary"}).then(lambda r: with_findings(found, r), failed, failed)
+            else:
+                self._resume(found)
 
-        def with_findings(session: dict[str, Any], result: dict[str, Any]) -> None:
+        self.client.request("rescue.session", {}).then(listed, lambda *_a: self.mount_page.not_adopted(), lambda *_a: self.mount_page.not_adopted())
+
+    def _resume(self, session: dict[str, Any]) -> None:
+        """Continue with a session that is open already: the reply of rescue.session lacks the findings and actions, so they are asked for."""
+        sid = session["session_id"]
+
+        def failed(*args: Any) -> None:
+            self.find_page.notice.show_message("error", "The open system could not be read: " + str(args[1] if len(args) > 1 else args[0]))
+
+        def with_findings(result: dict[str, Any]) -> None:
             data = result.get("data", {})
             info = {**session, "findings": data.get("findings", []), "recommended": data.get("recommended", [])}
-            self.client.request("rescue.query", {"session_id": session["session_id"], "query": "actions.list"}).then(lambda r: with_actions(info, r), failed, failed)
+            self.client.request("rescue.query", {"session_id": sid, "query": "actions.list"}).then(lambda r: with_actions(info, r), failed, failed)
 
         def with_actions(info: dict[str, Any], result: dict[str, Any]) -> None:
             info["actions"] = result.get("data", {}).get("actions", [])
             self._opened(info)
 
-        self.client.request("rescue.session", {}).then(listed, failed, failed)
+        self.client.request("rescue.query", {"session_id": sid, "query": "diag.summary"}).then(with_findings, failed, failed)
 
     # ---- closing ------------------------------------------------------------------------------------------------------------------
     def ask_close_choice(self, what: str) -> str:
