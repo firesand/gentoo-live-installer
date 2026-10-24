@@ -357,6 +357,53 @@ class KernelStageStackTests(StageMixin, unittest.TestCase):
         self.assertEqual(read(self.target, "etc/kernel/cmdline"), f"root=UUID={ROOT_FS_UUID} rw\n")
 
 
+class PreflightTests(StageMixin, unittest.TestCase):
+    """A root the initramfs cannot reach is refused in the preflight, before anything is formatted."""
+
+    def problems(self, tree: str, root: str, volumes=None, m=None) -> list[str]:
+        from gentoo_installerd.configure import live_input_problems
+
+        runner = LayerRunner(VOLUMES if volumes is None else volumes, ARRAYS)
+        runner.respond("lsblk --json", tree)
+        with tempfile.TemporaryDirectory() as temporary:
+            return live_input_problems(m or manual_manifest(root), root=temporary, runner=runner)
+
+    def test_a_root_on_multipath_is_refused(self) -> None:
+        problems = self.problems(multipath_tree(), "/dev/mapper/mpatha2")
+        self.assertEqual(len(problems), 1)
+        self.assertIn("mpath", problems[0])
+
+    def test_a_root_volume_that_cannot_be_named_is_refused(self) -> None:
+        tree = lvm_tree().replace("vg0-root", "weird-name-here")
+        problems = self.problems(tree, "/dev/mapper/weird-name-here", volumes={})
+        self.assertIn("which LVM volume group", problems[0])
+
+    def test_plain_partitions_lvm_and_md_roots_pass(self) -> None:
+        self.assertEqual(self.problems(lvm_tree(), "/dev/sda3"), [])
+        self.assertEqual(self.problems(lvm_tree(), "/dev/mapper/vg0-root"), [])
+        self.assertEqual(self.problems(md_tree(), "/dev/md0"), [])
+
+    def test_guided_installs_and_unreadable_trees_are_not_looked_at(self) -> None:
+        from gentoo_installerd.configure import live_input_problems
+
+        runner = LayerRunner()
+        with tempfile.TemporaryDirectory() as temporary:
+            self.assertEqual(live_input_problems(target_manifest(), root=temporary, runner=runner), [])
+            self.assertEqual(runner.commands, [])
+            runner.respond("lsblk --json", "not json")
+            self.assertEqual(live_input_problems(manual_manifest(), root=temporary, runner=runner), [])
+
+    def test_the_installers_preflight_stops_with_the_reason(self) -> None:
+        runner = LayerRunner(VOLUMES, ARRAYS)
+        runner.respond("lsblk --json", multipath_tree())
+        layout = [LayoutEntry("/dev/mapper/mpatha2", "/", "ext4"), LayoutEntry("/dev/sda1", "/efi", "vfat")]
+        with tempfile.TemporaryDirectory() as empty_live_system:
+            installer = self.make(manual_manifest("/dev/mapper/mpatha2"), runner, layout=layout, live_root=Path(empty_live_system))
+            with self.assertRaisesRegex(InstallError, "Preflight failed: The root filesystem sits on a mpath device"):
+                installer._preflight()
+        self.assertFalse(any(line.startswith(("mkfs", "sgdisk", "wipefs")) for line in runner.lines()))
+
+
 class LaterStageStackTests(StageMixin, unittest.TestCase):
     def prepare(self, tree: str, layout, modules: str = "") -> Installer:
         installer = self.make(manual_manifest(), layout=layout, runner_factory=lambda target: LayerRunner(VOLUMES, ARRAYS))

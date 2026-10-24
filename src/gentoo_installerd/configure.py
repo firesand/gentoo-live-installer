@@ -577,7 +577,24 @@ def live_input_problems(manifest: InstallManifest, *, root: str | Path = "/", ru
         problems.append(f"The console font {system.console_font!r} is not installed")
     if system.secure_boot and runner is not None:
         problems.extend(check_secure_boot_material(runner, system))
+    if manifest.storage.mode == "manual" and runner is not None:
+        problems.extend(root_stack_problems(manifest, runner))
     return problems
+
+
+def root_stack_problems(manifest: InstallManifest, runner: Runner) -> list[str]:
+    """A manual root on a device type the initramfs cannot assemble, or on a volume or array that cannot be named for it.
+
+    Looked up in the live device tree before anything is formatted; the kernel stage checks again for the layout it built.
+    """
+    try:
+        output = runner.run(blockdev.lsblk_argv()).stdout
+        disks = blockdev.parse_lsblk(output[output.index("{"):] if "{" in output else output)
+    except (RunnerError, OSError, ValueError, KeyError, TypeError, AttributeError):
+        return []  # no tree to judge by: the kernel stage looks again
+    layout = [LayoutEntry(row.device, row.mountpoint, row.filesystem) for row in manifest.storage.partitions]
+    stack = detect_existing_stack(runner, layout, disks)
+    return [stack.unsupported] if stack.unsupported else []
 
 
 # --- explaining a failed emerge ---------------------------------------------------------------------
@@ -808,6 +825,105 @@ MDADM_ARRAY_RE = re.compile(r"ARRAY [\x21-\x7e]+( [\x21-\x7e]+)*")
 def _is_md(node: blockdev.BlockDevice) -> bool:
     """lsblk calls an md array by its RAID level (raid1, raid10, linear) or plain md."""
     return node.type == "md" or node.type == "linear" or node.type.startswith("raid")
+
+
+def detect_existing_stack(runner: Runner, layout: Sequence[LayoutEntry], disks: Sequence[blockdev.BlockDevice], resume_device: str | None = None,
+                          notify: Callable[[str], None] = lambda message: None) -> ExistingStack:
+    """What the layout sits on that the installer did not create: LVM volumes and md arrays (see ExistingStack).
+
+    ``disks`` is the live device tree (lsblk). Only read-only lookups (lvs, mdadm --examine/--detail) are run, and
+    only for devices that really sit on a volume or an array.
+    """
+    everything = blockdev.all_nodes(disks)
+    # device -> whether the initramfs needs it (the root, and the swap that hibernation resumes from)
+    wanted: dict[str, bool] = {}
+    root_device = ""
+    for entry in layout:
+        if entry.source:
+            continue  # a swap file is named by its path inside the root
+        wanted[entry.device] = wanted.get(entry.device, False) or entry.mountpoint == "/" or entry.device == resume_device
+        root_device = entry.device if entry.mountpoint == "/" else root_device
+    lvm = md = thin = root_lvm = False
+    root_md = unsupported = ""
+    lvs: list[str] = []
+    uuids: list[str] = []
+    arrays: list[str] = []
+    for device, early in wanted.items():
+        try:
+            node = blockdev.find(disks, device)
+        except (LookupError, ValueError):
+            continue
+        # the device and everything it sits on: partitions, arrays, volumes, disks
+        chain = [other for other in everything if any(sub.key == node.key for sub in other.walk())]
+        on_arrays = [other for other in chain if _is_md(other)]
+        lvm = lvm or any(other.type == "lvm" for other in chain)
+        md = md or bool(on_arrays)
+        if device == root_device:
+            root_lvm = any(other.type == "lvm" for other in chain)
+            root_md = on_arrays[-1].type.removeprefix("raid") if on_arrays else ""
+            bad = next((other for other in chain if other.type in UNSUPPORTED_ROOT_TYPES), None)
+            if bad is not None:
+                unsupported = (f"The root filesystem sits on a {bad.type} device ({bad.path}), which the installer cannot make bootable. "
+                               "It can boot from a partition, an LVM volume, an md RAID array or the encrypted volume it creates itself.")
+        if node.type == "lvm":
+            name, segtype = _lvm_volume(runner, node, notify)
+            thin = thin or "thin" in segtype or "cache" in segtype
+            if early and name:
+                lvs.append(name)
+            elif device == root_device:
+                unsupported = unsupported or f"Could not find out which LVM volume group the root volume {node.path} belongs to, so the initramfs could not activate it."
+        for array in on_arrays:
+            arrays.extend(_md_scan(runner, array))
+            if early:
+                uuids.append(_md_uuid(runner, array, everything, notify))
+                if not uuids[-1] and device == root_device:
+                    unsupported = unsupported or f"Could not read the UUID of the RAID array {array.path} under the root, so the initramfs could not assemble it."
+    return ExistingStack(lvm=lvm, md=md, thin=thin, root_lvm=root_lvm, root_md=root_md, lvs=tuple(dict.fromkeys(lvs)),
+                         md_uuids=tuple(dict.fromkeys(uuid for uuid in uuids if uuid)), arrays=tuple(dict.fromkeys(arrays)), unsupported=unsupported)
+
+
+def _lvm_volume(runner: Runner, node: blockdev.BlockDevice, notify: Callable[[str], None]) -> tuple[str, str]:
+    """("vg/lv", segment type) of a logical volume; the name is "" when it cannot be found out."""
+    try:
+        # name=value pairs: the runner mixes stderr into the output, and lvm likes to warn about leaked descriptors
+        output = runner.run(("lvs", "--noheadings", "--nameprefixes", "-o", "vg_name,lv_name,segtype", node.path)).stdout
+    except (RunnerError, OSError):
+        output = ""
+    fields = dict(re.findall(r"LVM2_(VG_NAME|LV_NAME|SEGTYPE)='([^']*)'", output))
+    name = f"{fields.get('VG_NAME', '')}/{fields.get('LV_NAME', '')}"
+    if LVM_NAME_RE.fullmatch(name):
+        return name, fields.get("SEGTYPE", "")
+    # /dev/mapper/<vg>-<lv>: a dash inside a name is doubled
+    parts = re.split(r"(?<!-)-(?!-)", os.path.basename(node.path))
+    name = "/".join(part.replace("--", "-") for part in parts)
+    if len(parts) == 2 and LVM_NAME_RE.fullmatch(name):
+        return name, ""
+    notify(f"warning: could not tell which LVM volume {node.path} is, so the initramfs may not activate it")
+    return "", ""
+
+
+def _md_uuid(runner: Runner, array: blockdev.BlockDevice, everything: Sequence[blockdev.BlockDevice], notify: Callable[[str], None]) -> str:
+    """The UUID dracut's rd.md.uuid wants: from a member as dracut itself reads it (a firmware-RAID volume has another UUID than its container)."""
+    members = [other for other in everything if other.fstype in MD_MEMBER_TYPES and any(sub.key == array.key for sub in other.walk()[1:])]
+    for argv in ([("mdadm", "--examine", "--export", members[0].path)] if members else []) + [("mdadm", "--detail", "--export", array.path)]:
+        try:
+            output = runner.run(argv).stdout
+        except (RunnerError, OSError):
+            continue
+        uuid = next((line.partition("=")[2].strip() for line in output.splitlines() if line.startswith("MD_UUID=")), "")
+        if MD_UUID_RE.fullmatch(uuid):
+            return uuid
+    notify(f"warning: could not read the UUID of the RAID array {array.path}, so the initramfs may not assemble it")
+    return ""
+
+
+def _md_scan(runner: Runner, array: blockdev.BlockDevice) -> list[str]:
+    """The ARRAY line(s) mdadm prints for an assembled array, for /etc/mdadm.conf."""
+    try:
+        output = runner.run(("mdadm", "--detail", "--scan", array.path)).stdout
+    except (RunnerError, OSError):
+        return []
+    return [line.strip() for line in output.splitlines() if MDADM_ARRAY_RE.fullmatch(line.strip())]
 
 
 class Configurer:
@@ -1776,99 +1892,10 @@ class Configurer:
     # ----- LVM volumes and md arrays that existed before the installation ------------------------------
 
     def detect_stack(self, layout: Sequence[LayoutEntry], disks: Sequence[blockdev.BlockDevice] | None, resume_device: str | None = None) -> ExistingStack:
-        """What the layout sits on that the installer did not create: LVM volumes and md arrays (see ExistingStack).
-
-        ``disks`` is the live device tree (lsblk). A preview, or a missing tree, finds nothing.
-        """
+        """What the layout sits on that the installer did not create (see detect_existing_stack); a preview, or a missing tree, finds nothing."""
         if self.dry_run or not disks:
             return ExistingStack()
-        everything = blockdev.all_nodes(disks)
-        # device -> whether the initramfs needs it (the root, and the swap that hibernation resumes from)
-        wanted: dict[str, bool] = {}
-        root_device = ""
-        for entry in layout:
-            if entry.source:
-                continue  # a swap file is named by its path inside the root
-            wanted[entry.device] = wanted.get(entry.device, False) or entry.mountpoint == "/" or entry.device == resume_device
-            root_device = entry.device if entry.mountpoint == "/" else root_device
-        lvm = md = thin = root_lvm = False
-        root_md = unsupported = ""
-        lvs: list[str] = []
-        uuids: list[str] = []
-        arrays: list[str] = []
-        for device, early in wanted.items():
-            try:
-                node = blockdev.find(disks, device)
-            except (LookupError, ValueError):
-                continue
-            # the device and everything it sits on: partitions, arrays, volumes, disks
-            chain = [other for other in everything if any(sub.key == node.key for sub in other.walk())]
-            on_arrays = [other for other in chain if _is_md(other)]
-            lvm = lvm or any(other.type == "lvm" for other in chain)
-            md = md or bool(on_arrays)
-            if device == root_device:
-                root_lvm = any(other.type == "lvm" for other in chain)
-                root_md = on_arrays[-1].type.removeprefix("raid") if on_arrays else ""
-                bad = next((other for other in chain if other.type in UNSUPPORTED_ROOT_TYPES), None)
-                if bad is not None:
-                    unsupported = (f"The root filesystem sits on a {bad.type} device ({bad.path}), which the installer cannot make bootable. "
-                                   "It can boot from a partition, an LVM volume, an md RAID array or the encrypted volume it creates itself.")
-            if node.type == "lvm":
-                name, segtype = self._lvm_volume(node)
-                thin = thin or "thin" in segtype or "cache" in segtype
-                if early and name:
-                    lvs.append(name)
-                elif device == root_device:
-                    unsupported = unsupported or f"Could not find out which LVM volume group the root volume {node.path} belongs to, so the initramfs could not activate it."
-            for array in on_arrays:
-                arrays.extend(self._md_scan(array))
-                if early:
-                    uuids.append(self._md_uuid(array, everything))
-                    if not uuids[-1] and device == root_device:
-                        unsupported = unsupported or f"Could not read the UUID of the RAID array {array.path} under the root, so the initramfs could not assemble it."
-        return ExistingStack(lvm=lvm, md=md, thin=thin, root_lvm=root_lvm, root_md=root_md, lvs=tuple(dict.fromkeys(lvs)),
-                             md_uuids=tuple(dict.fromkeys(uuid for uuid in uuids if uuid)), arrays=tuple(dict.fromkeys(arrays)), unsupported=unsupported)
-
-    def _lvm_volume(self, node: blockdev.BlockDevice) -> tuple[str, str]:
-        """("vg/lv", segment type) of a logical volume; the name is "" when it cannot be found out."""
-        try:
-            # name=value pairs: the runner mixes stderr into the output, and lvm likes to warn about leaked descriptors
-            output = self.runner.run(("lvs", "--noheadings", "--nameprefixes", "-o", "vg_name,lv_name,segtype", node.path)).stdout
-        except (RunnerError, OSError):
-            output = ""
-        fields = dict(re.findall(r"LVM2_(VG_NAME|LV_NAME|SEGTYPE)='([^']*)'", output))
-        name = f"{fields.get('VG_NAME', '')}/{fields.get('LV_NAME', '')}"
-        if LVM_NAME_RE.fullmatch(name):
-            return name, fields.get("SEGTYPE", "")
-        # /dev/mapper/<vg>-<lv>: a dash inside a name is doubled
-        parts = re.split(r"(?<!-)-(?!-)", os.path.basename(node.path))
-        name = "/".join(part.replace("--", "-") for part in parts)
-        if len(parts) == 2 and LVM_NAME_RE.fullmatch(name):
-            return name, ""
-        self.notify(f"warning: could not tell which LVM volume {node.path} is, so the initramfs may not activate it")
-        return "", ""
-
-    def _md_uuid(self, array: blockdev.BlockDevice, everything: Sequence[blockdev.BlockDevice]) -> str:
-        """The UUID dracut's rd.md.uuid wants: from a member as dracut itself reads it (a firmware-RAID volume has another UUID than its container)."""
-        members = [other for other in everything if other.fstype in MD_MEMBER_TYPES and any(sub.key == array.key for sub in other.walk()[1:])]
-        for argv in ([("mdadm", "--examine", "--export", members[0].path)] if members else []) + [("mdadm", "--detail", "--export", array.path)]:
-            try:
-                output = self.runner.run(argv).stdout
-            except (RunnerError, OSError):
-                continue
-            uuid = next((line.partition("=")[2].strip() for line in output.splitlines() if line.startswith("MD_UUID=")), "")
-            if MD_UUID_RE.fullmatch(uuid):
-                return uuid
-        self.notify(f"warning: could not read the UUID of the RAID array {array.path}, so the initramfs may not assemble it")
-        return ""
-
-    def _md_scan(self, array: blockdev.BlockDevice) -> list[str]:
-        """The ARRAY line(s) mdadm prints for an assembled array, for /etc/mdadm.conf."""
-        try:
-            output = self.runner.run(("mdadm", "--detail", "--scan", array.path)).stdout
-        except (RunnerError, OSError):
-            return []
-        return [line.strip() for line in output.splitlines() if MDADM_ARRAY_RE.fullmatch(line.strip())]
+        return detect_existing_stack(self.runner, layout, disks, resume_device, self.notify)
 
     def prepare_stack_packages(self, stack: ExistingStack) -> None:
         """USE flags for the tools the existing volumes need; before they are emerged (lvm2[-lvm] has no lvm command, and the thin tools need thin)."""
