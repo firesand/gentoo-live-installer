@@ -70,6 +70,30 @@ the interfaces between them. The daemon wire protocol is in [protocol.md](protoc
 not their values. `InstallManifest.load_redacted(path)` reads such a file without validating
 it: each `"<redacted>"` value becomes empty and the proxy keeps its placeholder.
 
+## Wizard pages: hooks every page has (`src/gentoo_installer/widgets.py`, `pages/review.py`)
+
+* `Page.summary_rows() -> list[tuple[str, str]]` is the **Review protocol**. A page returns one
+  `(label, value)` per setting the user can change on it that the Review page should list, in plain
+  English ("Init system", "OpenRC"; "Kernel", "Gentoo prebuilt kernel"), never an internal value.
+  The default is `[]`. `ReviewPage.set_sources([(step_index, step_title, page), ...])` (called by
+  `app.py`) groups the rows by step, adds the core rows it builds from the manifest
+  (`ReviewPage.core_rows()`; a label that a page also returns is shown once, the page's value wins)
+  and gives every group an "Edit" link that goes back to that step. A page that owns a new Wave 5
+  setting only adds its rows to its own `summary_rows()`; it never edits `review.py`.
+  `ReviewPage.rows()` is the pure list `[(step_title, label, value)]` that tests read.
+* `Page.show_problem(text)` shows a red message at the top of the page (`""` clears it) and
+  emits `problemChanged(bool)`; the window marks the step in the sidebar with a red dot. `validate_page()`
+  returns `(False, message)`; the window shows the message with `show_problem` and never opens a dialog
+  for it. A message starts with a plain sentence and puts the technical detail after it.
+  A page may call `show_problem` itself for a problem it can place beside a control.
+* `Page.set_advanced(bool)` as before. `ReviewPage` shows its file previews open in Advanced.
+* File previews: `gentoo_installerd.configure.preview_files(manifest, plan=None, ...)` returns
+  `{"partition plan": ..., "/etc/fstab": ..., "make.conf": ..., "package.use": ..., "binrepos.conf": ...}`,
+  rendered by the same pure functions the daemon uses (`render_make_conf`, `render_package_use`,
+  `render_fstab`). Before the disk exists, fstab names filesystems with placeholder UUIDs.
+* The finish text is built by `gentoo_installer/first_steps.py` (GUI, text installer and
+  `FIRST-STEPS.txt` share it); the `completed` event carries its inputs (see protocol.md).
+
 ## Block devices (`src/gentoo_installer/blockdev.py`)
 
 There is one lsblk parser for the GUI, the daemon, hardware detection and rescue.

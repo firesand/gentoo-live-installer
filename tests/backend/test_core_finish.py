@@ -130,7 +130,12 @@ class FirstStepsFileTests(Base):
         installer = self.prepare()
         installer.boot_check = "Boot check passed: GRUB found the kernel"
         installer.news_unread = 0
-        self.assertEqual(installer._finish_data(True), {"first_steps": [], "boot_check": "Boot check passed: GRUB found the kernel", "news_unread": 0})
+        data = installer._finish_data(True)
+        login = data.pop("login")
+        self.assertEqual(data, {"first_steps": [], "boot_check": "Boot check passed: GRUB found the kernel", "news_unread": 0})
+        self.assertEqual(login["username"], installer.manifest.accounts.username)
+        self.assertEqual(login["hostname"], installer.manifest.accounts.hostname)
+        self.assertEqual(set(login), {"username", "hostname", "privilege", "ssh", "minimal", "bootloader"})
         self.assertEqual(installer._finish_data(False), {})
 
 

@@ -236,6 +236,7 @@ def shrinkable_combos(root: QWidget, width: int = 120) -> None:
 
 class Page(QWidget):
     advanceRequested = Signal()
+    problemChanged = Signal(bool)  # an inline problem message appeared (True) or was cleared (False): the sidebar marks the step
 
     def __init__(self, title: str, subtitle: str = "", parent: QWidget | None = None):
         super().__init__(parent)
@@ -261,6 +262,33 @@ class Page(QWidget):
             text.setWordWrap(True)
             text.setProperty("muted", True)
             self.content.addWidget(text)
+        # CORE-09: a Continue that fails shows its reason here, in red, instead of in a dialog.
+        self.problem_label = QLabel()
+        self.problem_label.setObjectName("problemLabel")
+        self.problem_label.setWordWrap(True)
+        self.problem_label.setAccessibleName("Problem on this step")
+        self.problem_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.problem_label.hide()
+        self.content.addWidget(self.problem_label)
+
+    def show_problem(self, text: str) -> None:
+        """Show (or, with "", clear) the page's inline problem message: a plain sentence, then the technical detail."""
+        shown = bool(text)
+        was_shown = not self.problem_label.isHidden()
+        self.problem_label.setText(text)
+        self.problem_label.setVisible(shown)
+        if shown:
+            self.scroll_area.ensureVisible(0, 0)
+        if shown != was_shown:
+            self.problemChanged.emit(shown)
+
+    def has_problem(self) -> bool:
+        return not self.problem_label.isHidden()
+
+    def summary_rows(self) -> list[tuple[str, str]]:
+        """Review protocol (docs/contracts.md): (plain label, plain value) for every setting of this page that
+        the Review page should list, in reading order. The default is none; the review adds the core rows itself."""
+        return []
 
     def finish_layout(self) -> None:
         """Called at the end of a page's constructor: narrow-window rules for the widgets the page has built."""

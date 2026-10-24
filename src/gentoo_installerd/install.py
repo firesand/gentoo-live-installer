@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
+from gentoo_installer import first_steps
 from gentoo_installer.manifest import InstallManifest
 
 from . import __version__
@@ -724,7 +725,13 @@ class Installer(Stage3Stage, RepositoryStage, PortageStage, KernelStage, Bootloa
         """What the finish page shows beyond the outcome: the boot check, unread news and the hardware first steps."""
         if not success:
             return {}
-        data: dict[str, object] = {"first_steps": list(getattr(self.hardware_plan, "first_steps", ()))}
+        steps = first_steps.from_manifest(self.manifest)
+        data: dict[str, object] = {
+            "first_steps": list(self.hardware_plan.first_steps) if self.hardware_plan is not None else [],
+            # What the finish page needs to build its card without a manifest (a GUI that attached to the job has none).
+            "login": {"username": steps.username, "hostname": steps.hostname, "privilege": steps.privilege, "ssh": steps.ssh,
+                      "minimal": steps.minimal, "bootloader": steps.bootloader},
+        }
         if self.boot_check:
             data["boot_check"] = self.boot_check
         if self.news_unread is not None:

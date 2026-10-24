@@ -84,6 +84,8 @@ class FakePlan:
     kernel_cmdline: list[str] = field(default_factory=list)
     post_steps: list[list[str]] = field(default_factory=list)
     summary: list[str] = field(default_factory=list)
+    first_steps: list[str] = field(default_factory=list)
+    scalars: dict[str, object] = field(default_factory=dict)
 
 
 def target_manifest(**sections: Mapping[str, object]) -> InstallManifest:

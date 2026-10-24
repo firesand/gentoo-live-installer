@@ -123,7 +123,7 @@ def gather(installer: Installer) -> first_steps.FirstSteps:
     installer.boot_check = boot_check_text(installer)
     installer.news_unread = None if installer.dry_run else unread_news(installer)
     return first_steps.from_manifest(installer.manifest, boot_check=installer.boot_check, news_unread=installer.news_unread,
-                                     hardware=getattr(plan, "first_steps", ()) if plan is not None else ())
+                                     hardware=plan.first_steps if plan is not None else ())
 
 
 def write_first_steps(installer: Installer, steps: first_steps.FirstSteps) -> str:
