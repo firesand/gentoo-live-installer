@@ -214,7 +214,8 @@ class SystemPage(Page):
         system.profile = "" if chosen == self._derived_profile and chosen != self._loaded_profile else chosen
         self.desktop_section.collect(system)
         self.boot_section.collect(system)
-        system.world_update = self.world_update.isChecked()
+        if self.world_update.isChecked() != (system.world_update == "now"):  # "auto" stays unless the box changes
+            system.world_update = "now" if self.world_update.isChecked() else "later"
 
     def validate_page(self) -> tuple[bool, str]:
         self.save_manifest()
