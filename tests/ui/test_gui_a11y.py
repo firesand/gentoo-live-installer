@@ -324,14 +324,39 @@ def test_welcome_offers_install_and_repair(make_window):
     assert window.current == 1
 
 
-def test_repair_without_the_repair_tools_points_to_the_terminal_command(make_window, monkeypatch):
+def test_repair_without_the_repair_tools_offers_a_terminal_that_runs_the_text_tool(make_window, monkeypatch):
     window = make_window()
     monkeypatch.delitem(sys.modules, "gentoo_installer.rescue_app", raising=False)
-    shown = []
-    monkeypatch.setattr(QMessageBox, "information", lambda parent, title, text, *a, **k: shown.append((title, text)))
+    asked, started = [], []
+    monkeypatch.setattr(QMessageBox, "question", lambda parent, title, text, *a, **k: (asked.append((title, text)), QMessageBox.StandardButton.Yes)[1])
+    monkeypatch.setattr(app_module.QProcess, "startDetached", staticmethod(lambda program, arguments=[]: (started.append((program, arguments)), True)[1]))
     window.welcome.repair_button.click()
-    assert shown[0][0] == "Repair an existing system" and "'gentoo-rescue'" in shown[0][1]
+    assert asked[0][0] == "Repair an existing system" and "sudo gentoo-rescue" in asked[0][1]
+    assert started == [("xfce4-terminal", ["-e", "sudo gentoo-rescue"])]
     assert window.isVisible()
+
+
+def test_repair_without_a_terminal_falls_back_to_the_message(make_window, monkeypatch):
+    window = make_window()
+    monkeypatch.delitem(sys.modules, "gentoo_installer.rescue_app", raising=False)
+    shown, tried = [], []
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
+    monkeypatch.setattr(QMessageBox, "information", lambda parent, title, text, *a, **k: shown.append((title, text)))
+    monkeypatch.setattr(app_module.QProcess, "startDetached", staticmethod(lambda program, arguments=[]: (tried.append(program), False)[1]))
+    window.welcome.repair_button.click()
+    assert tried == ["xfce4-terminal", "xterm"]
+    assert shown[0][0] == "Repair an existing system" and "'gentoo-rescue'" in shown[0][1] and "sudo gentoo-rescue" in shown[0][1]
+    assert window.isVisible()
+
+
+def test_declining_the_terminal_starts_nothing(make_window, monkeypatch):
+    window = make_window()
+    monkeypatch.delitem(sys.modules, "gentoo_installer.rescue_app", raising=False)
+    started = []
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.No)
+    monkeypatch.setattr(app_module.QProcess, "startDetached", staticmethod(lambda program, arguments=[]: started.append(program) or True))
+    window.welcome.repair_button.click()
+    assert started == []
 
 
 def fake_rescue_module(monkeypatch, record):
@@ -390,7 +415,7 @@ def test_picking_a_layout_applies_it_and_prefills_the_manifest(make_window, monk
     assert window.manifest.system.keymap == "de-latin1-nodeadkeys"
     assert calls[-1][1][:4] == ["-layout", "de", "-variant", "nodeadkeys"]
     window._show_page(5)
-    assert window.accounts.keymap.currentText() == "de-latin1-nodeadkeys"
+    assert window.accounts.keymap.currentData() == "de-latin1-nodeadkeys" and "German (no dead keys)" in window.accounts.keymap.currentText()
     assert "de (nodeadkeys)" in window.accounts.keyboard_summary.text()
 
 
@@ -414,7 +439,7 @@ def test_every_console_keymap_in_the_table_exists_on_the_live_image():
     directory = Path("/usr/share/keymaps")
     if not directory.is_dir():
         pytest.skip("no kbd keymaps on this host")
-    missing = sorted(name for name in set(keyboard.CONSOLE_KEYMAPS.values()) if not keyboard.keymap_exists(name))
+    missing = sorted(name for name in keyboard.CONSOLE_KEYMAP_CHOICES if not keyboard.keymap_exists(name))
     assert missing == []
 
 
@@ -482,12 +507,13 @@ def fake_main(monkeypatch):
     monkeypatch.setattr(keyboard, "start_detached", lambda program, arguments: True)
 
 
-def test_main_repair_mode_without_the_repair_tools_explains_and_exits(fake_main, monkeypatch):
+def test_main_repair_mode_without_the_repair_tools_offers_the_terminal_and_exits(fake_main, monkeypatch):
     monkeypatch.delitem(sys.modules, "gentoo_installer.rescue_app", raising=False)
-    shown = []
-    monkeypatch.setattr(QMessageBox, "information", lambda parent, title, text, *a, **k: shown.append(text))
+    asked, started = [], []
+    monkeypatch.setattr(QMessageBox, "question", lambda parent, title, text, *a, **k: (asked.append(text), QMessageBox.StandardButton.Yes)[1])
+    monkeypatch.setattr(app_module.QProcess, "startDetached", staticmethod(lambda program, arguments=[]: (started.append((program, arguments)), True)[1]))
     assert app_module.main(["--mode", "repair"]) == 0
-    assert "gentoo-rescue" in shown[0]
+    assert "sudo gentoo-rescue" in asked[0] and started == [("xfce4-terminal", ["-e", "sudo gentoo-rescue"])]
 
 
 def test_main_repair_mode_opens_the_rescue_window(fake_main, monkeypatch, qtbot):

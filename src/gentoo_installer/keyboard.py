@@ -15,6 +15,8 @@ from pathlib import Path
 from PySide6.QtCore import QProcess, Signal
 from PySide6.QtWidgets import QComboBox, QLabel, QLineEdit, QVBoxLayout, QWidget
 
+from . import keymaps
+
 EVDEV_XML = Path("/usr/share/X11/xkb/rules/evdev.xml")
 KEYMAP_DIR = Path("/usr/share/keymaps")
 
@@ -48,31 +50,16 @@ FALLBACK_LAYOUTS = (
     Layout("ua", "Ukrainian"),
 )
 
-# XKB layout (and variant) -> console keymap of sys-apps/kbd. The console prompt
-# for a LUKS passphrase has no font for non-Latin scripts, so those fall back to
-# "us". Every name here exists in /usr/share/keymaps (a test checks that).
-CONSOLE_KEYMAPS: dict[tuple[str, str], str] = {
-    ("us", ""): "us", ("us", "dvorak"): "dvorak",
-    ("gb", ""): "uk", ("ie", ""): "uk",
-    ("de", ""): "de-latin1", ("de", "nodeadkeys"): "de-latin1-nodeadkeys", ("at", ""): "de-latin1",
-    ("ch", ""): "de_CH-latin1", ("ch", "de"): "de_CH-latin1", ("ch", "fr"): "fr_CH-latin1",
-    ("fr", ""): "fr", ("fr", "latin9"): "fr-latin9", ("be", ""): "be-latin1",
-    ("es", ""): "es", ("it", ""): "it", ("pt", ""): "pt-latin9",
-    ("se", ""): "sv-latin1", ("dk", ""): "dk-latin1", ("is", ""): "is-latin1", ("no", ""): "no-latin1", ("fi", ""): "fi",
-    ("cz", ""): "cz-lat2", ("hu", ""): "hu", ("ro", ""): "ro", ("hr", ""): "croat", ("si", ""): "slovene",
-    ("bg", ""): "bg_bds-utf8", ("ee", ""): "et", ("lt", ""): "lt", ("lv", ""): "lv", ("tr", ""): "trq",
-    ("jp", ""): "jp106", ("ca", ""): "ca", ("ca", "fr"): "cf", ("latam", ""): "la-latin1", ("br", ""): "br-abnt2",
-    ("nl", ""): "nl2", ("pl", ""): "pl2", ("sk", ""): "sk-qwertz",
-}
-# Console keymaps offered in the Accounts page (each is in CONSOLE_KEYMAPS).
-CONSOLE_KEYMAP_CHOICES = sorted(set(CONSOLE_KEYMAPS.values()))
+# The console keymap that goes with an XKB layout comes from keymaps.py, the one table of the installer
+# (the installer service uses the same one to decide what the disk-passphrase prompt can use).
+# The console keymaps that can be chosen (kbd names, sorted) and a plain name for each.
+CONSOLE_KEYMAP_CHOICES = sorted({console for console, _ in keymaps.console_choices()})
+CONSOLE_KEYMAP_LABELS = dict(keymaps.console_choices())
 
 
 def console_keymap(layout: str, variant: str = "") -> str:
     """Console keymap that best matches the first XKB layout (and variant)."""
-    first = layout.split(",")[0].strip()
-    first_variant = variant.split(",")[0].strip()
-    return CONSOLE_KEYMAPS.get((first, first_variant)) or CONSOLE_KEYMAPS.get((first, "")) or "us"
+    return keymaps.console_keymap_for(layout, variant)
 
 
 def keymap_exists(name: str, directory: Path = KEYMAP_DIR) -> bool:

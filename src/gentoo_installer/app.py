@@ -64,10 +64,16 @@ SECTION_PAGES = {
 }
 SECTION_ORDER = ("general", "storage", "system", "portage", "network", "options", "accounts", "locale", "hardware")
 HANDBOOK_URL = "https://wiki.gentoo.org/wiki/Handbook:AMD64/Full/Installation"
+REPAIR_COMMAND = "sudo gentoo-rescue"
+REPAIR_TERMINALS = (("xfce4-terminal", ["-e", REPAIR_COMMAND]), ("xterm", ["-e", "sudo", "gentoo-rescue"]))
+REPAIR_TERMINAL_TEXT = (
+    "The graphical repair window is not part of this installer image, but the repair tools also work in a terminal.\n\n"
+    f"Open a terminal that runs “{REPAIR_COMMAND}”?"
+)
 REPAIR_MISSING = (
-    "The graphical repair tools are not part of this installer image.\n\n"
+    "The graphical repair tools are not part of this installer image, and a terminal could not be started.\n\n"
     "The repair tools are available from the terminal as 'gentoo-rescue'. "
-    "Open a terminal and run: gentoo-rescue --help"
+    "Open a terminal yourself and run: sudo gentoo-rescue    (for help: gentoo-rescue --help)"
 )
 
 MIN_WINDOW_WIDTH = 800
@@ -135,6 +141,22 @@ def load_draft() -> InstallManifest:
         return InstallManifest.from_dict(json.loads(text))
     except (json.JSONDecodeError, ManifestError, TypeError, ValueError):
         return InstallManifest()
+
+
+def start_repair_terminal() -> bool:
+    """Open a terminal window that runs the text-mode repair tool."""
+    return any(QProcess.startDetached(program, arguments) for program, arguments in REPAIR_TERMINALS)
+
+
+def offer_terminal_repair(parent: QWidget | None) -> bool:
+    """The graphical repair window is missing: offer the terminal version. True when a terminal was started."""
+    answer = QMessageBox.question(parent, "Repair an existing system", REPAIR_TERMINAL_TEXT)
+    if answer != QMessageBox.StandardButton.Yes:
+        return False
+    if start_repair_terminal():
+        return True
+    QMessageBox.information(parent, "Repair an existing system", REPAIR_MISSING)
+    return False
 
 
 def create_repair_window(socket_path: str) -> QWidget | None:
@@ -256,6 +278,7 @@ class InstallerWindow(QMainWindow):
         self.review.importRequested.connect(self.import_settings)
         self.storage.manual_editor.rescanRequested.connect(self.refresh_readiness)
         self.accounts.keyboardChangeRequested.connect(lambda: self.go_to(WELCOME))
+        self.accounts.keyboardPicked.connect(self._keyboard_picked)
         self.system.desktopChanged.connect(self.customize.desktop_changed)
         self.progress.rebootRequested.connect(self.reboot)
         self.progress.started.connect(self._install_running)
@@ -470,7 +493,7 @@ class InstallerWindow(QMainWindow):
 
     def _mode_changed(self) -> None:
         advanced = self.mode.currentData() == "advanced"
-        self.storage.encryption.setVisible(advanced or self.storage.luks.isChecked())
+        self.storage.set_advanced(advanced)
         self.customize.set_advanced(advanced)
         suffix = " · All available controls are shown" if advanced else " · Recommended choices are selected for you"
         self.header_subtitle.setText(STEPS[self.current][1] + suffix)
@@ -707,7 +730,8 @@ class InstallerWindow(QMainWindow):
         self._update_navigation()
 
     def _install_finished(self, success: bool) -> None:
-        self._install_succeeded = success
+        # A system that can start although a later step failed is not started over by accident: the wizard stays locked.
+        self._install_succeeded = success or self.progress.bootable
         self._update_navigation()
 
     def _worker_stopped(self) -> None:
@@ -725,8 +749,16 @@ class InstallerWindow(QMainWindow):
     # --- keyboard, settings files, repair ---------------------------------------------------------------------
 
     def _keyboard_changed(self, layout: str, variant: str, console_keymap: str) -> None:
+        """A layout was chosen on the Welcome page: the three names of one keyboard are always set together
+        (the passphrase prompt of the installed system only uses the console map when it matches the layout)."""
         system = self.manifest.system
         system.keyboard_layout, system.keyboard_variant, system.keymap = layout, variant, console_keymap
+
+    def _keyboard_picked(self, layout: str, variant: str, console_keymap: str) -> None:
+        """A console keymap was chosen on the Accounts page: apply the matching layout to this session as well."""
+        self._keyboard_changed(layout, variant, console_keymap)
+        keyboard.apply_layout(layout, variant, self.manifest.system.keyboard_options, self.manifest.system.keyboard_model)
+        self.welcome.keyboard.set_selection(layout, variant)
 
     def import_settings(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Import installation settings", "", "JSON files (*.json);;All files (*)")
@@ -752,7 +784,7 @@ class InstallerWindow(QMainWindow):
             QMessageBox.critical(self, "Repair an existing system", f"The repair tools could not be started: {exc}")
             return
         if window is None:
-            QMessageBox.information(self, "Repair an existing system", REPAIR_MISSING)
+            offer_terminal_repair(self)
             return
         window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         window.destroyed.connect(self._repair_closed)
@@ -966,7 +998,7 @@ def main(argv: list[str] | None = None) -> int:
             QMessageBox.critical(None, "Repair an existing system", f"The repair tools could not be started: {exc}")
             return 1
         if repair is None:
-            QMessageBox.information(None, "Repair an existing system", REPAIR_MISSING)
+            offer_terminal_repair(None)
             return 0
         repair.show()
         return app.exec()
