@@ -28,6 +28,11 @@ SWAP = "0657fd6d-a4ab-43c4-84e5-0933c84b4f4f"
 WRITE_EXECUTABLES = {"sgdisk", "wipefs", "mkswap", "pvcreate", "vgcreate", "lvcreate"}
 
 
+def dm_name(vg: str, lv: str) -> str:
+    """The device-mapper name LVM gives a logical volume: both parts with their hyphens doubled, joined by one hyphen."""
+    return vg.replace("-", "--") + "-" + lv.replace("-", "--")
+
+
 def is_write(argv: tuple[str, ...]) -> bool:
     exe = argv[0]
     return (
@@ -150,6 +155,17 @@ class StatefulRunner:
 
     def _mounted_at(self, device: str) -> list[str]:
         return [dest for dest, (source, _) in self.mounts.items() if source == device]
+
+    def dm_taken(self, name: str) -> bool:
+        """Whether a device-mapper device of this name exists: the kernel allows each name once (EBUSY).
+
+        LVM names its devices <vg>-<lv>, so an LV and a dm-crypt mapping can clash.
+        """
+        return (
+            name in self.mapper
+            or any(dm_name(lv["vg"], lv["name"]) == name for lv in self.lvs)
+            or any(h.active and h.path == f"/dev/mapper/{name}" for h in self.all_holders())
+        )
 
     # -- lsblk -----------------------------------------------------------------------
     def _node(self, path: str, kind: str, size: int, **extra) -> dict:
@@ -435,6 +451,8 @@ class StatefulRunner:
             if p is not None:
                 p["fstype"] = "crypto_LUKS"
         elif sub == "open":
+            if self.dm_taken(args[-1]):
+                raise RunnerError(args, 5, f"Device {args[-1]} already exists.")
             self.mapper[args[-1]] = {"backing": args[-2]}
         elif sub == "status":
             name = args[2]
@@ -474,6 +492,8 @@ class StatefulRunner:
 
     def _cmd_lvcreate(self, args):
         name, vg = args[args.index("--name") + 1], args[-1]
+        if self.dm_taken(dm_name(vg, name)):
+            raise RunnerError(args, 5, f"device-mapper: create ioctl on {dm_name(vg, name)} failed: Device or resource busy\n  Failed to activate new LV.")
         self.lvs.append({"vg": vg, "name": name, "path": f"/dev/{vg}/{name}", "pv": self.pv_device})
         return self.ok(args)
 

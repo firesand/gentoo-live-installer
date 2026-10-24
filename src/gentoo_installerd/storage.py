@@ -16,7 +16,8 @@ that can be checked before the first command that writes. The order matters:
  6. LVM / md members are looked up explicitly (live auto-activation is off, lsblk shows
     nothing active) and active volumes are listed: they are refused unless the manifest
     consents to deactivating them;
- 7. the stack names this installer creates (gentoo-root, VG gentoo) are free;
+ 7. the names this installer creates (the LUKS mapping, the root volume's device-mapper name, VG gentoo)
+    are free;
  8. consented volumes are released and the identity is checked once more;
  9. only then: wipefs, partition table, partitions, signature clean-up, mkfs, mounts. Legacy BIOS
     disks also get the boot flag that strict BIOS firmware looks for (protective MBR or active partition).
@@ -414,15 +415,22 @@ class StorageManager:
     # ---- holders, signatures, name collisions
 
     def _check_name_collisions(self, rewritten: Sequence[Disk]) -> None:
-        """The stack names this installer creates (mapper gentoo-root, VG gentoo) must be free.
+        """The names this installer creates (the LUKS mapping, the root volume's device-mapper name, VG gentoo) must be free.
 
         Checked before the first write; anything that lives on the devices about to be rewritten
         does not count, it disappears with them (and is released first).
         """
         s = self.manifest.storage
-        if s.luks and (self.dev_root / "mapper" / "gentoo-root").exists():
-            if "gentoo-root" not in {holder.name for node in rewritten for holder in holders(node)}:
-                raise StorageError("A device-mapper volume named gentoo-root is already active; close it (cryptsetup close gentoo-root) and retry", "storage.collision")
+        releasing = {holder.name for node in rewritten for holder in holders(node)}
+        wanted: list[tuple[str, str]] = []  # (device-mapper name, the command that frees it)
+        if s.luks:
+            mapper = guided_layout.luks_mapper_name(s)
+            wanted.append((mapper, f"cryptsetup close {mapper}"))
+        if s.lvm:
+            wanted.append(("gentoo-root", "dmsetup remove gentoo-root"))  # LVM names the volume <group>-<volume>
+        for name, command in wanted:
+            if (self.dev_root / "mapper" / name).exists() and name not in releasing:
+                raise StorageError(f"A device-mapper volume named {name} is already active; close it ({command}) and retry", "storage.collision")
         if s.lvm:
             try:
                 listing = self.runner.run(("pvs", "--noheadings", "--separator", ":", "-o", "pv_name,vg_name")).stdout
@@ -718,7 +726,7 @@ class StorageManager:
         s = self.manifest.storage
         current = device
         if s.luks:
-            mapper = f"gentoo-{name}"
+            mapper = guided_layout.luks_mapper_name(s, name)
             if (self.dev_root / "mapper" / mapper).exists():
                 raise StorageError(f"Mapper already exists: {mapper}", "storage.collision")
             self._stack["luks_device"] = current

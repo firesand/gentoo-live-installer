@@ -64,6 +64,17 @@ def recommended_root_mib(manifest: InstallManifest) -> int:
     return RECOMMENDED_ROOT_MIB[desktop] + extra
 
 
+def luks_mapper_name(storage: Storage, name: str = "root") -> str:
+    """Name of the dm-crypt mapping that holds the encrypted ``name`` volume (gentoo-root for the root).
+
+    LVM names a logical volume <volume group>-<volume>, so the root volume of the group "gentoo" is
+    /dev/mapper/gentoo-root, and the kernel allows each device-mapper name once. With LVM on top of
+    the container the mapping therefore needs another name. The storage stage that creates the mapping
+    and the initramfs configuration (rd.luks.name) both ask here; resume reads the name from the receipt.
+    """
+    return "gentoo-crypt" if storage.lvm else f"gentoo-{name}"
+
+
 def swap_in_root(storage: Storage) -> bool:
     """Whether the guided layout keeps swap as a file inside the (encrypted) root.
 

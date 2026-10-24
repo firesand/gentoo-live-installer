@@ -18,6 +18,7 @@ from typing import Any, Callable, Mapping, MutableMapping, Sequence
 
 from gentoo_installer import __version__ as INSTALLER_VERSION
 from gentoo_installer import keymaps
+from gentoo_installer import layout as guided_layout
 from gentoo_installer.manifest import ATOM_RE, CMDLINE_TOKEN_RE, USE_TOKEN_RE, InstallManifest, Network, System
 
 from .proxy import make_conf_settings, proxy_environment
@@ -1699,7 +1700,7 @@ class Configurer:
                 raise ConfigurationError("LUKS backing device has no valid UUID")
             # Dracut uses rd.luks.uuid to select the backing device. The
             # rd.luks.name mapping only names a device selected that way.
-            arguments.extend((f"rd.luks.uuid={uuid}", f"rd.luks.name={uuid}=gentoo-root"))
+            arguments.extend((f"rd.luks.uuid={uuid}", f"rd.luks.name={uuid}={guided_layout.luks_mapper_name(manifest.storage)}"))
             if _plan_scalar(plan, "luks_allow_discards", False):
                 # TRIM through the encryption: the user accepted what that tells an attacker about free space.
                 arguments.append(f"rd.luks.options={uuid}=discard" if manifest.system.init == "systemd" else f"rd.luks.allow-discards={uuid}")
