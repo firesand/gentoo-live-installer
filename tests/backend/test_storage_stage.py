@@ -15,7 +15,7 @@ from gentoo_installerd.storage import StorageError
 
 from tests.backend.helpers import FakeInspector, FakeRunner, manifest
 from tests.backend.test_storage_identity import erase
-from tests.backend.test_storage_support import FakeDisk, GiB, StatefulRunner, make_manager
+from tests.backend.test_storage_support import FakeDisk, GiB, StatefulRunner, first_write, make_manager
 
 
 class Flaky(FakeRunner):
@@ -224,3 +224,60 @@ class TestStorageStage:
         monkeypatch.setattr(Path, "read_text", read_text)
         with pytest.raises(InstallError, match="no readable /etc/resolv.conf.*connect to a network first"):
             installer._mounts()
+
+
+class TestResumeOnAnAssembledArray:
+    """Automatic md assembly is off on the live image, so a resume after a reboot has to assemble the array itself."""
+
+    def install(self, tmp_path):
+        from gentoo_installer.manifest import Partition
+        from tests.backend.test_storage_identity import ESP_ROW, machine_with_array, manual
+
+        disks = machine_with_array()
+        runner = StatefulRunner(disks)
+        runner.mdadm_detail["/dev/md0"] = "MD_LEVEL=raid1\nMD_UUID=aaaa:bbbb:cccc:dddd\nMD_DEVICES=2\n"
+        m = manual(ESP_ROW, Partition("/dev/md0", "/", "ext4", format=False), additional_device_ids=["SER-B"])
+        manager = make_manager(runner, tmp_path)
+        manager.prepare(m)
+        return runner, manager, m, disks
+
+    def test_the_receipt_records_the_members_and_the_array_uuid(self, tmp_path):
+        runner, manager, m, disks = self.install(tmp_path)
+        receipt = manager.snapshot()
+        assert receipt["md"] == [{"device": "/dev/md0", "uuid": "aaaa:bbbb:cccc:dddd", "members": ["/dev/sda3", "/dev/sdb3"]}]
+
+    def test_resume_assembles_the_array_before_checking_the_filesystems(self, tmp_path):
+        runner, manager, m, disks = self.install(tmp_path)
+        receipt = json.loads(json.dumps(manager.snapshot()))
+        manager.cleanup()
+        for disk in disks:
+            for part in disk.parts:
+                for holder in part.get("holders", []):
+                    holder.active = False  # the reboot: nothing assembles the array by itself
+        runner.commands.clear()
+        make_manager(runner, tmp_path).restore(m, manager.layout, receipt)
+        text = [" ".join(c) for c in runner.commands]
+        assemble = "mdadm --assemble --uuid=aaaa:bbbb:cccc:dddd /dev/md0 /dev/sda3 /dev/sdb3"
+        assert assemble in text
+        assert text.index(assemble) < text.index("blkid -s UUID -o value /dev/md0")
+        assert first_write(runner.commands) is None
+
+    def test_an_array_that_is_still_assembled_is_left_alone(self, tmp_path):
+        runner, manager, m, disks = self.install(tmp_path)
+        receipt = json.loads(json.dumps(manager.snapshot()))
+        manager.cleanup()
+        runner.commands.clear()
+        make_manager(runner, tmp_path).restore(m, manager.layout, receipt)
+        assert not any(c[:2] == ("mdadm", "--assemble") for c in runner.commands)
+
+    def test_missing_members_stop_the_resume_with_the_list(self, tmp_path):
+        runner, manager, m, disks = self.install(tmp_path)
+        receipt = json.loads(json.dumps(manager.snapshot()))
+        manager.cleanup()
+        for disk in disks:
+            for part in disk.parts:
+                for holder in part.get("holders", []):
+                    holder.active = False
+        runner.disks["/dev/sdb"].parts = [part for part in runner.disks["/dev/sdb"].parts if part["num"] != 3]
+        with pytest.raises(StorageError, match="not assembled and its members are not all present \\(missing: /dev/sdb3\\)"):
+            make_manager(runner, tmp_path).restore(m, manager.layout, receipt)

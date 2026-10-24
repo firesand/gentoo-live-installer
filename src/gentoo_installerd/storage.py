@@ -35,7 +35,7 @@ from gentoo_installer import blockdev
 from gentoo_installer import layout as guided_layout
 from gentoo_installer.manifest import InstallManifest, Partition
 
-from .inspect import BY_PATH_DIR, PROC_CMDLINE, Disk, Discovery, find_disk, find_volume_sets, holders, parent_disks, resolve_by_path
+from .inspect import BY_PATH_DIR, MD_MEMBER_TYPES, PROC_CMDLINE, Disk, Discovery, find_disk, find_volume_sets, holders, parent_disks, resolve_by_path
 from .runner import Runner, RunnerError
 
 BIOS_BOOT_GUID = "21686148-6449-6e6f-744e-656564454649"
@@ -932,10 +932,64 @@ class StorageManager:
             "signatures": {device: list(value) for device, value in self._signatures.items()},
             "uuids": {e.device: self._uuid(e.device) for e in self.layout if not e.source},
             "stack": stack,
+            "md": self._md_receipt(),
             # The checkpoint's layout.json only keeps device/mountpoint/filesystem/format; options and
             # swap-file sources are restored from here.
             "entries": [asdict(entry) for entry in self.layout],
         }
+
+    def _md_receipt(self) -> list[dict[str, Any]]:
+        """The assembled md arrays the layout lives on, with the members to assemble them again.
+
+        The live system does not assemble arrays by itself, so after a reboot a resume has to do it explicitly.
+        """
+        arrays: list[dict[str, Any]] = []
+        block = [entry for entry in self.layout if not entry.source]
+        if not block:
+            return arrays
+        disks = self._discovery().disks()
+        for entry in block:
+            try:
+                node = find_disk(disks, entry.device)
+            except ValueError:
+                continue
+            if not (node.type.startswith("raid") or node.type == "md"):
+                continue
+            members = sorted({
+                sub.path for root in disks for sub in root.walk()
+                if sub.fstype in MD_MEMBER_TYPES and any(child.key == node.key for child in sub.walk()[1:])
+            })
+            try:
+                detail = self.runner.run(("mdadm", "--detail", "--export", node.path)).stdout
+            except (RunnerError, OSError):
+                continue
+            uuid = next((line.split("=", 1)[1].strip() for line in detail.splitlines() if line.startswith("MD_UUID=")), "")
+            if uuid and members:
+                arrays.append({"device": node.path, "uuid": uuid, "members": members})
+        return arrays
+
+    def _assemble_arrays(self, arrays: object) -> None:
+        """Assemble the saved md arrays that are not present (explicitly: automatic assembly is disabled)."""
+        if not isinstance(arrays, list) or not arrays:
+            return
+        disks = self._discovery().disks()
+        for array in arrays:
+            device, uuid, members = str(array.get("device", "")), str(array.get("uuid", "")), [str(m) for m in array.get("members", [])]
+            try:
+                find_disk(disks, device)
+                continue  # already assembled
+            except ValueError:
+                pass
+            missing = [member for member in members if not any(os.path.realpath(node.path) == os.path.realpath(member) for root in disks for node in root.walk())]
+            if not device or not uuid or not members or missing:
+                raise StorageError(
+                    f"The RAID array {device or 'of this installation'} is not assembled and its members are not all present"
+                    + (f" (missing: {', '.join(missing)})" if missing else "")
+                    + "; reconnect the disks and resume again",
+                    "storage.resume",
+                )
+            self._run(("mdadm", "--assemble", f"--uuid={uuid}", device, *members))
+            self._run(("udevadm", "settle"))
 
     def restore(self, manifest: InstallManifest, layout: list[LayoutEntry], receipt: dict) -> None:
         """Reopen and mount saved devices. There is deliberately no format fallback."""
@@ -956,6 +1010,7 @@ class StorageManager:
                 raise StorageError(f"Saved disk {device} is not present any more: {exc}", "storage.identity") from exc
             if not self._signature_matches(node, list(signature)):
                 raise StorageError(f"Saved disk identity changed: {device}", "storage.identity")
+        self._assemble_arrays(receipt.get("md"))
         stack = receipt.get("stack", {})
         if "luks_device" in stack:
             if self._uuid(stack["luks_device"]) != stack.get("luks_uuid"):

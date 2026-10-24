@@ -106,6 +106,7 @@ class StatefulRunner:
         self.pvs: list[tuple[str, str]] = []  # (pv device, vg) that exist outside the fake disks' own partitions
         self.pv_device = ""
         self.mdadm_examine: dict[str, str] = {}
+        self.mdadm_detail: dict[str, str] = {}
         self.files: dict[str, dict] = {}  # swap files created by mkswap --file / btrfs mkswapfile
         self.uuids: dict[str, str] = {}
         self.hooks: list[tuple[str, Callable[["StatefulRunner", tuple[str, ...]], None]]] = []
@@ -421,6 +422,12 @@ class StatefulRunner:
                     h.active = False
         elif args[1] == "--examine":
             return self.ok(args, self.mdadm_examine.get(args[2], ""))
+        elif args[1] == "--detail":
+            return self.ok(args, self.mdadm_detail.get(args[-1], ""))
+        elif args[1] == "--assemble":
+            for h in self.all_holders():
+                if h.path == args[3]:
+                    h.active = True
         return self.ok(args)
 
     def _cmd_dmsetup(self, args):
