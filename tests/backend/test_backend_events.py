@@ -127,6 +127,8 @@ class TestCompletedEvent:
         inst, events = installer(tmp_path)
         assert inst.run()
         done = completed(events)
+        login = done.data.pop("login")
+        assert login["username"] == inst.manifest.accounts.username and set(login) == {"username", "hostname", "privilege", "ssh", "minimal", "bootloader"}
         assert done.data == {"success": True, "bootable": True, "degraded": [], "warnings": [], "first_steps": [], "boot_check": "Boot check passed: GRUB found the kernel and initramfs"}
         assert done.progress == 100.0
 
