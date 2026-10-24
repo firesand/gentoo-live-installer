@@ -58,6 +58,19 @@ def test_only_the_job_with_the_memory_for_pyside_installs_hwmonux():
             assert parsed(entry).companions == "portagehub", entry.name  # PortageHub is a Rust build that a 4 GiB VM does
 
 
+def test_the_callers_companions_reach_only_the_job_that_does_not_name_its_own():
+    """--companions is passed to every child (its default is 'both'), and the entry's option comes later: the install jobs keep PortageHub only."""
+    base = ["--matrix", "wave3", "--iso", "a.iso", "--ssh-host", "127.0.0.1", "--ssh-private-key", "k"]
+    for caller, defaults_gets in ((None, "both"), ("none", "none"), ("portagehub", "portagehub")):
+        args = vm.build_parser().parse_args(base + (["--companions", caller] if caller else []))
+        shared = vm_matrix.passthrough_arguments(args)
+        assert ["--companions", caller or "both"] in [shared[i:i + 2] for i in range(len(shared))]
+        chosen = {entry.name: vm.build_parser().parse_args(vm_matrix.job_argv(entry, port=40222, shared=[*shared, "--ssh-host", "127.0.0.1"])).companions
+                  for entry in vm_matrix.WAVE3.entries if not vm.SCENARIO_MAP[entry.scenario].image}
+        assert chosen["defaults"] == defaults_gets
+        assert {name: value for name, value in chosen.items() if name != "defaults"} == {name: "portagehub" for name in chosen if name != "defaults"}
+
+
 def test_the_matrix_stays_within_its_memory_budget_with_two_jobs_at_a_time():
     biggest_pair = sorted((entry.memory_mib for entry in vm_matrix.WAVE3.entries), reverse=True)[:vm_matrix.PARALLEL_MAX]
     assert sum(biggest_pair) <= vm_matrix.DEFAULT_BUDGET_MIB

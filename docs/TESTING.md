@@ -512,7 +512,8 @@ or the network card that the entry is there to vary, and PySide would put an hou
 a memory limit that a 4 GiB VM does not meet, into every one of them. They still install PortageHub,
 and `disabled-hwmonux-absent` proves that the switched-off companion is not installed. The
 alternative, 6 GiB for every entry, would fit the budget (12 + 6 GiB of 24) but is still a guess for
-PySide's large compile jobs and keeps the hour in each job. The minutes are estimates of an install
+PySide's large compile jobs and keeps the hour in each job. A `--companions` given to `--matrix`
+reaches only the `defaults` job (the other entries name their own). The minutes are estimates of an install
 without PySide, from the stage times of the first real runs: about 10 minutes for the base system, a
 few more for PortageHub, and the boots and probes.
 
