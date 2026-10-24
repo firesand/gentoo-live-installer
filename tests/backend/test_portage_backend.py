@@ -110,6 +110,13 @@ class BinaryPackageHostTests(unittest.TestCase):
             self.assertEqual(c.prepare_binhost_trust(manifest), "")
             self.assertEqual(len([line for line in runner.lines() if line.endswith("getuto")]), 2)  # one try and one retry
 
+    def test_a_getbinpkg_typed_into_features_is_dropped_when_the_host_is_off(self) -> None:
+        manifest = target_manifest(portage={"features": ["ccache", "getbinpkg"]})
+        self.assertIn("FEATURES='ccache getbinpkg binpkg-request-signature'", render_make_conf(manifest).splitlines())
+        off = render_make_conf(manifest, binhost=False)
+        self.assertNotIn("getbinpkg", off.replace("binpkg-request-signature", ""))
+        self.assertIn("ccache", off)
+
     def test_a_second_try_of_getuto_can_succeed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             runner = ScriptedRunner()

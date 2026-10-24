@@ -189,7 +189,9 @@ def render_make_conf(manifest: InstallManifest, plan: object | None = None, *, m
     jobs = make_opts if make_opts is not None else p.make_opts
     use_binhost = p.binhost if binhost is None else binhost and p.binhost
     # A signature is always required for a binary package, also when the host is left out.
-    features = " ".join([*p.features, *(["getbinpkg"] if use_binhost else []), "binpkg-request-signature"] if p.binhost else p.features)
+    # When the host was switched off after a failed getuto, a getbinpkg the user typed into FEATURES is dropped too.
+    own = [word for word in p.features if use_binhost or not p.binhost or word != "getbinpkg"]
+    features = " ".join(dict.fromkeys([*own, *(["getbinpkg"] if use_binhost else []), "binpkg-request-signature"] if p.binhost else own))
     native = native_wanted(p, manifest.hardware.target == "portable")
     cflags, rustflags = tuned_flags(p.cflags, p.rustflags, native)
     if native:
