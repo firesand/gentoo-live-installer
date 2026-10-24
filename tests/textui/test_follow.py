@@ -319,3 +319,11 @@ def test_the_json_sink_prints_every_event_unchanged(installer, host: FakeHost) -
 
 def test_an_outcome_knows_whether_it_is_ok() -> None:
     assert Outcome("success").ok and not Outcome("failed").ok and DEFAULT_LOG_PATH.endswith("install.log")
+
+
+def test_build_output_cannot_drive_the_terminal(installer, host: FakeHost) -> None:
+    fake = installer(jobs=[[log("\x1b[32;01m>>>\x1b[0m Emerging (1 of 1) dev-libs/foo\r\x1b[2K50% done"), error("\x1b[31mbad\x1b[0m thing"), completed(False)]])
+    follower, script = follower_for(fake, host)
+    outcome = follower.run(start_request())
+    assert "\x1b" not in script.text and "50% done" in script.text and "Emerging (1 of 1)" not in script.text  # the \r kept only what follows it
+    assert "Error: bad thing" in script.text and outcome.message == "\x1b[31mbad\x1b[0m thing"  # the Outcome keeps the raw text; printing cleans it

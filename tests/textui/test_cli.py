@@ -373,3 +373,66 @@ def test_programs_cannot_run_in_tests() -> None:
     for call in (lambda: Host().loadkeys("us"), lambda: Host().reboot(), lambda: Host().run_interactive(["nmtui"])):
         with pytest.raises(AssertionError, match="real program"):
             call()
+
+
+# --- waiting for the service, and files written under sudo ---------------------------------------------------------------------------------------
+
+
+def test_the_service_is_waited_for_a_while_after_boot_and_not_at_all_with_wait_0(tmp_path: Path, sock_dir: Path, host: FakeHost) -> None:
+    missing = str(sock_dir / "nobody.sock")
+    result = run_main(["--manifest", write_manifest(tmp_path), "--yes", "--confirm-device", "/dev/vda", "--socket", missing], Script(), host)
+    assert result.code == 4 and sum(host.slept) == 20.0 and host.slept[0] == 1.0 and max(host.slept) <= 3.0
+    assert "Waiting for the installer service to start..." in result.out
+    host.slept.clear()
+    result = run_main(["--manifest", write_manifest(tmp_path), "--yes", "--confirm-device", "/dev/vda", "--wait", "0", "--socket", missing], Script(), host)
+    assert result.code == 4 and host.slept == [] and "Waiting" not in result.out
+    assert run_main(["--wait", "-1"], Script(), host).code == 2
+
+
+def test_the_service_that_starts_late_is_found(tmp_path: Path, sock_dir: Path, installer, host: FakeHost) -> None:
+    fake = serial_installer(installer)
+    real_sleep = host.sleep
+    calls = {"n": 0}
+
+    def sleep(seconds: float) -> None:
+        calls["n"] += 1
+        real_sleep(seconds)
+        if calls["n"] == 2:  # the service comes up while the installer waits: move the fake socket to the awaited path
+            import os
+
+            os.symlink(fake.path, awaited)
+
+    awaited = str(sock_dir / "late.sock")
+    host.sleep = sleep  # type: ignore[method-assign]
+    result = run_main(["--manifest", write_manifest(tmp_path), "--yes", "--confirm-device", "/dev/vda", "--socket", awaited], Script(), host)
+    assert result.code == 0 and host.slept == [1.0, 2.0]
+
+
+def test_files_written_under_sudo_go_to_the_home_of_the_person_who_ran_sudo(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    import os
+    import pwd
+    from types import SimpleNamespace
+
+    from gentoo_installer.textui.host import Host
+
+    home = tmp_path / "alice"
+    home.mkdir()
+    monkeypatch.setattr(os, "geteuid", lambda: 0)
+    monkeypatch.setenv("SUDO_USER", "alice")
+    monkeypatch.setenv("SUDO_UID", "1000")
+    monkeypatch.setenv("SUDO_GID", "100")
+    monkeypatch.setattr(pwd, "getpwnam", lambda name: SimpleNamespace(pw_dir=str(home)))
+    assert Host().home_dir() == home
+    changed = []
+    monkeypatch.setattr(os, "chown", lambda path, uid, gid: changed.append((str(path), uid, gid)))
+    Host().give_to_invoker(home / "x.log")
+    assert changed == [(str(home / "x.log"), 1000, 100)]
+    monkeypatch.setenv("SUDO_USER", "nosuchuser")
+    monkeypatch.setattr(pwd, "getpwnam", lambda name: (_ for _ in ()).throw(KeyError(name)))
+    assert Host().home_dir() == Path.home()
+    monkeypatch.setattr(os, "geteuid", lambda: 1000)
+    monkeypatch.setenv("SUDO_USER", "alice")
+    assert Host().home_dir() == Path.home()  # not root: nothing to translate
+    changed.clear()
+    Host().give_to_invoker(home / "y.log")
+    assert changed == []

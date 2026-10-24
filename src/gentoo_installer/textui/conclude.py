@@ -84,6 +84,7 @@ def save_log(console: Console, daemon: Daemon, host: Host) -> None:
     except OSError as exc:
         console.warn(f"Could not write {path}: {exc.strerror or exc}")
         return
+    host.give_to_invoker(path)
     console.good(f"Saved {len(lines)} log lines to {path}. Copy it to a USB stick before you restart if you want to keep it: this live system forgets everything.")
 
 

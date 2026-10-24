@@ -23,7 +23,7 @@ import sys
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Mapping, Sequence, TextIO
+from typing import Any, Iterator, Mapping, Sequence, TextIO
 
 from .. import __version__, daemon_client
 from ..daemon_client import DaemonState
@@ -39,7 +39,7 @@ from .summary import build_summary, render_summary
 from .wizard import Refused, Wizard
 
 PROGRAM = "gentoo-installer-text"
-STARTUP_WAIT = (1.0, 2.0, 2.0, 2.0, 3.0)  # seconds to wait for the service to appear (it may still be starting after boot)
+DEFAULT_WAIT = 20.0  # seconds to wait for the service to appear (it may still be starting right after boot)
 EPILOG = """\
 examples:
   gentoo-installer-text                       ask the questions, then install
@@ -80,6 +80,8 @@ def build_parser(out: TextIO | None = None, err: TextIO | None = None) -> argpar
         epilog=EPILOG,
     )
     parser.add_argument("--socket", default=daemon_client.DEFAULT_SOCKET, metavar="PATH", help="socket of the installer service (default: %(default)s)")
+    parser.add_argument("--wait", type=float, default=DEFAULT_WAIT, metavar="SECONDS",
+                        help="how long to wait for the installer service to appear (default: %(default).0f; 0 = do not wait)")
     parser.add_argument("--manifest", metavar="FILE", help="installation settings (JSON) to use instead of asking the questions")
     parser.add_argument("--yes", action="store_true", help="with --manifest: install without asking anything (needs --confirm-device)")
     parser.add_argument("--confirm-device", metavar="DEVICE", help="with --yes: the target disk, typed exactly as in the manifest (for example /dev/vda); the disk is erased")
@@ -94,6 +96,8 @@ def build_parser(out: TextIO | None = None, err: TextIO | None = None) -> argpar
 
 def check_options(args: argparse.Namespace) -> str:
     """What is wrong with the combination of options ("" when nothing)."""
+    if args.wait < 0:
+        return "--wait cannot be negative"
     if args.yes and not args.manifest:
         return "--yes needs --manifest FILE"
     if args.dry_run and not args.manifest:
@@ -168,11 +172,21 @@ def exit_code(outcome: Outcome) -> int:
     return {"success": EXIT_OK, "invalid": EXIT_USAGE, "unreachable": EXIT_NO_DAEMON, "detached": EXIT_INTERRUPTED}.get(outcome.state, EXIT_FAILED)
 
 
+def wait_schedule(total: float) -> Iterator[float]:
+    """Pauses that add up to ``total`` seconds: a short one first, then up to three seconds each."""
+    remaining, step = max(0.0, total), 1.0
+    while remaining > 0:
+        pause = min(step, remaining)
+        yield pause
+        remaining -= pause
+        step = min(3.0, step + 1.0)
+
+
 def connect(ctx: Context, *, ask_retry: bool) -> DaemonState | None:
     """The daemon's state, or None when it cannot be reached (after waiting a little, and offering to try again).
 
     Right after boot the service may still be starting, so a missing or stale socket is waited for first."""
-    delays = iter(STARTUP_WAIT)
+    delays = wait_schedule(ctx.args.wait)
     announced = False
     while True:
         state = ctx.daemon.probe()

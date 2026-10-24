@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import platform
+import pwd
 import shutil
 import subprocess
 import time
@@ -97,7 +98,28 @@ class Host:
     # --- system data -----------------------------------------------------------------------
 
     def home_dir(self) -> Path:
+        """Where saved files go: the home of the user who ran ``sudo gentoo-installer-text``, else the home of this user."""
+        user = os.environ.get("SUDO_USER", "")
+        if os.geteuid() == 0 and user and user != "root":
+            try:
+                home = Path(pwd.getpwnam(user).pw_dir)
+            except KeyError:
+                home = Path.home()
+            if home.is_dir():
+                return home
         return Path.home()
+
+    def give_to_invoker(self, path: Path) -> None:
+        """A file written as root by ``sudo`` belongs to the person who ran sudo (best effort)."""
+        try:
+            uid, gid = int(os.environ.get("SUDO_UID", "")), int(os.environ.get("SUDO_GID", ""))
+        except ValueError:
+            return
+        if os.geteuid() == 0:
+            try:
+                os.chown(path, uid, gid)
+            except OSError:
+                pass
 
     def console_keymaps(self) -> set[str]:
         """Names of the installed console keymaps (empty when they cannot be listed)."""

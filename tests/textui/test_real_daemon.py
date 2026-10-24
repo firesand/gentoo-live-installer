@@ -227,3 +227,39 @@ def test_the_status_of_a_failed_job_is_what_the_follower_reports(real: RealDaemo
         time.sleep(0.01)
     status = Daemon(real.path).status()
     assert status["status"] == "failed" and status["error"] == "emerge died"
+
+
+# --- the real inspect reply -------------------------------------------------------------------------------------------------------------------------
+
+
+def test_the_real_inspect_reply_is_understood(real: RealDaemon, monkeypatch: pytest.MonkeyPatch) -> None:
+    """handle_inspect with a prepared inventory (no network, no programs): the reply has the shape the daemon really sends."""
+    from gentoo_installer import blockdev, hardware
+    from gentoo_installerd import server
+    from gentoo_installerd.inspect import Inspection
+
+    from tests.hardware.helpers import fixture_dict
+    from tests.textui.support import ALL_TOOLS, device_number
+    from gentoo_installer.textui.inventory import MachineView
+
+    profile = hardware.HardwareProfile.from_dict(fixture_dict("qemu-q35-virtio"))
+    vda = blockdev.BlockDevice(name="vda", path="/dev/vda", type="disk", size=40 * 1024**3, model="", serial="REAL-SERIAL-1", maj_min=device_number("vda"), transport="virtio")
+    usb = blockdev.BlockDevice(name="sdb", path="/dev/sdb", type="disk", size=16 * 1024**3, model="USB DISK 3.0", maj_min=device_number("sdb"), transport="usb", removable=True, hotplug=True,
+                               children=(blockdev.BlockDevice(name="sdb1", path="/dev/sdb1", type="part", size=3 * 1024**3, maj_min=device_number("sdb1"), fstype="iso9660"),))
+
+    class Discovery:
+        def __init__(self, runner, **kwargs) -> None:
+            pass
+
+        def inspect(self) -> Inspection:
+            return Inspection("x86_64", 4 * 1024**3, True, True, dict(ALL_TOOLS), [vda, usb], [], [], [], ["/dev/sdb", "/dev/sdb1"])
+
+    monkeypatch.setattr(server, "Discovery", Discovery)
+    monkeypatch.setattr(hardware, "probe", lambda *args, **kwargs: profile)
+    reply = Daemon(real.path).inspect(proxy="http://proxy.example:3128")
+    view = MachineView(reply)
+    assert view.uefi is True and view.network is True and view.profile.machine.hypervisor == "qemu"
+    entries = {entry.disk.path: entry for entry in view.disk_entries()}
+    assert entries["/dev/vda"].usable and entries["/dev/vda"].disk.transport == "virtio"  # the to_dict() spelling survived the trip
+    assert not entries["/dev/sdb"].usable and "installer medium" in entries["/dev/sdb"].problem
+    assert {finding.code for finding in view.findings} >= {"hw.vm_detected"}

@@ -15,6 +15,7 @@ text console, over a serial line, over SSH and, with scripted input, in the test
 from __future__ import annotations
 
 import os
+import re
 import sys
 import textwrap
 from dataclasses import dataclass
@@ -60,6 +61,20 @@ class Selection:
 
     index: int = -1
     command: str = ""
+
+
+# Terminal escape sequences (CSI, OSC and two-character ones) and the control characters except newline and tab.
+CONTROL_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?|\x1b[@-_]|[\x00-\x08\x0b-\x1f\x7f-\x9f]")
+
+
+def sanitize(text: str) -> str:
+    """Text from the outside (build output, disk labels, error messages) made safe to print on a terminal.
+
+    Escape sequences are removed, so a label or a log line cannot recolour, clear or retitle the screen; a carriage
+    return keeps only what follows it (a progress line that rewrites itself); the tab becomes a space."""
+    if "\r" in text:
+        text = "\n".join(line.rsplit("\r", 1)[-1] for line in text.split("\n"))
+    return CONTROL_RE.sub("", text.replace("\t", " "))
 
 
 def is_tty(stream: object) -> bool:
@@ -143,7 +158,7 @@ class Console:
         first = " " * indent
         later = " " * (indent if hanging is None else hanging)
         lines: list[str] = []
-        for paragraph in text.translate(ASCII_FALLBACK).split("\n"):  # before wrapping: "..." is longer than the one character it replaces
+        for paragraph in sanitize(text).translate(ASCII_FALLBACK).split("\n"):  # before wrapping: "..." is longer than the one character it replaces
             if not paragraph.strip():
                 lines.append("")
                 continue
@@ -186,7 +201,7 @@ class Console:
     def kv_lines(self, label: str, value: str, *, label_width: int = 14) -> list[str]:
         """'  Disk          /dev/sda (...)' with the value wrapped under itself."""
         head = f"  {label:<{label_width}} "
-        lines = textwrap.wrap(value.translate(ASCII_FALLBACK), max(20, self.width - len(head)), break_on_hyphens=False) or [""]
+        lines = textwrap.wrap(sanitize(value).translate(ASCII_FALLBACK), max(20, self.width - len(head)), break_on_hyphens=False) or [""]
         return [head + lines[0], *(" " * len(head) + line for line in lines[1:])]
 
     def kv(self, label: str, value: str, *, label_width: int = 14) -> None:
@@ -210,7 +225,7 @@ class Console:
 
     def numbered(self, labels: Sequence[str], *, start: int = 1) -> None:
         """Numbered items; in two columns when there are many short ones."""
-        numbers = [f"{start + offset:>3}) {label}" for offset, label in enumerate(labels)]
+        numbers = [f"{start + offset:>3}) {sanitize(label)}" for offset, label in enumerate(labels)]
         half = (len(numbers) + 1) // 2
         column = (self.width - 2) // 2
         if len(numbers) > 10 and all(len(item) <= column for item in numbers):
@@ -498,6 +513,6 @@ class Console:
 
 def clip(text: str, width: int) -> str:
     """``text`` cut to ``width`` characters, ending in '...' when something was removed."""
-    text = text.translate(ASCII_FALLBACK)
+    text = sanitize(text).translate(ASCII_FALLBACK)
     return text if len(text) <= width else text[: max(0, width - 3)] + "..."
 

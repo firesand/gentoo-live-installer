@@ -285,3 +285,27 @@ def test_output_is_not_paused_when_it_is_piped() -> None:
     console, script = console_for([])
     console.show_lines([f"line {n}" for n in range(100)])
     assert "-- more" not in script.text
+
+
+# --- text from the outside -----------------------------------------------------------------------------------------------------------------------
+
+
+def test_sanitize_removes_escape_sequences_and_control_characters() -> None:
+    from gentoo_installer.textui.console import sanitize
+
+    assert sanitize("\x1b[32;01m>>>\x1b[0m Emerging (1 of 2)") == ">>> Emerging (1 of 2)"
+    assert sanitize("label\x1b]0;evil title\x07 after\x1b[2J\x1b[H!") == "label after!"
+    assert sanitize("progress 10%\rprogress 55%") == "progress 55%"
+    assert sanitize("a\tb\x00c\x7fd\x9be") == "a bcde"
+    assert sanitize("first\nsecond") == "first\nsecond" and sanitize("plain text 100%") == "plain text 100%"
+
+
+def test_nothing_from_a_disk_label_or_a_log_line_can_drive_the_terminal() -> None:
+    console, script = console_for([])
+    console.para("Partition \x1b[2Jlabelled \x1b]0;pwned\x07here")
+    console.kv("Disk", "\x1b[31mred\x1b[0m disk")
+    console.numbered(["one\x1b[1m", "two"])
+    assert "\x1b" not in script.text and "Partition labelled here" in script.text and "red disk" in script.text
+    from gentoo_installer.textui.console import clip
+
+    assert clip("\x1b[31m" + "x" * 100, 20) == "x" * 17 + "..."

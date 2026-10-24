@@ -17,7 +17,7 @@ from typing import Any, Deque, TextIO
 
 from ..daemon_client import event_data
 from ..layout import human_size
-from .console import Console, GoBack, Option, Quit, clip
+from .console import Console, GoBack, Option, Quit, clip, sanitize
 from .daemon import Daemon
 from .host import Host
 
@@ -176,7 +176,7 @@ class TextSink:
             self.console.say(f"{self._prefix()}   {clip(message, self.console.width - 9)}")
 
     def _log(self, message: str, replay: bool) -> None:
-        for line in message.rstrip().splitlines() or [""]:
+        for line in sanitize(message).rstrip().split("\n"):
             if MERGE_LISTING.match(line):
                 self._merged += 1
                 continue

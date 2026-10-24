@@ -128,31 +128,34 @@ def render_summary(console: Console, summary: Summary) -> None:
     def add(text: str = "", *, indent: int = 0, hanging: int | None = None) -> None:
         lines.extend(console.wrap(text, indent=indent, hanging=hanging))
 
+    def heading(text: str, *styles: str) -> None:
+        lines.append(console.style(text, *styles))
+
     for name, value in summary.settings:
         lines.extend(console.kv_lines(name, value, label_width=12))
     if summary.hardware:
         add()
-        add(console.style("Chosen for this computer:", "bold"))
+        heading("Chosen for this computer:", "bold")
         for item in summary.hardware:
             add(f"- {item}", indent=2, hanging=4)
     if summary.storage:
         add()
-        add(console.style("What will happen to the disks:", "bold"))
+        heading("What will happen to the disks:", "bold")
         for item in summary.storage:
             add(item, indent=2, hanging=9)
     if summary.advice:
         add()
-        add(console.style("Advice for this computer:", "bold"))
+        heading("Advice for this computer:", "bold")
         for item in summary.advice:
             add(f"- {item}", indent=2, hanging=4)
     if summary.notes:
         add()
-        add(console.style("Good to know:", "bold"))
+        heading("Good to know:", "bold")
         for item in summary.notes:
             add(f"- {item}", indent=2, hanging=4)
     if summary.problems:
         add()
-        add(console.style("These problems stop the installation until they are fixed:", "red", "bold"))
+        heading("These problems stop the installation until they are fixed:", "red", "bold")
         for item in summary.problems:
             add(f"- {item}", indent=2, hanging=4)
     console.show_lines(lines)
