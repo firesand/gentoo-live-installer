@@ -174,15 +174,30 @@ def _plain(value: Any) -> Any:
     return value
 
 
+def _shorten(value: Any) -> Any:
+    return "…" + value[-6:] if isinstance(value, str) and value else value
+
+
 def describe_system_info(info: Any) -> dict[str, Any]:
-    """SystemInfo as plain data; serial numbers and WWNs are shortened to their tails."""
+    """SystemInfo as plain data; serial numbers and WWNs are shortened to their tails, partition-table ids and
+    the names of saved network connections are removed."""
     data = _plain(info) if info is not None else {}
+    data.pop("roots", None)  # the lsblk tree behind `disks`: the same facts with full serial numbers and UUIDs
     for disk in data.get("disks", []):
         for key in ("serial", "wwid"):
             if disk.get(key):
-                disk[key] = "…" + disk[key][-6:]
+                disk[key] = _shorten(disk[key])
         disk["by_path"] = disk.get("by_path", "")
         disk["partitions"] = [{k: v for k, v in part.items() if k not in {"uuid", "partuuid"}} for part in disk.get("partitions", [])]
+    hardware = data.get("hardware")
+    if isinstance(hardware, dict):
+        for disk in hardware.get("disks", []) if isinstance(hardware.get("disks"), list) else []:
+            if isinstance(disk, dict):
+                for key in ("serial", "wwn"):
+                    disk[key] = _shorten(disk.get(key, ""))
+                disk["ptuuid"] = ""
+        if isinstance(hardware.get("network_profiles"), list):
+            hardware["network_profiles"] = ["<name removed>"] * len(hardware["network_profiles"])
     daemon = data.get("daemon")
     if isinstance(daemon, dict):
         daemon["features"] = sorted(daemon.get("features", []))

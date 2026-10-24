@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import re
+from functools import partial
 from pathlib import Path
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QCheckBox, QFormLayout, QHBoxLayout, QLineEdit, QPushButton, QVBoxLayout
 
-from .. import diagnostics
+from .. import diagnostics, theme
 from ..manifest import InstallManifest
-from ..system_info import MIN_DISK_BYTES, SystemInfo
+from ..system_info import MIN_DISK_BYTES, SystemInfo, desktop_disk_bytes, format_size, smallest_disk_bytes
 from ..widgets import Card, Page, StatusRow, wrapped_label
 
 DAEMON_LOG = Path("/var/log/gentoo-installerd.log")
@@ -26,6 +27,21 @@ WARNING_AREAS = {
 # Daemon error strings that the rows above already explain in structured form.
 COVERED_ERRORS = ("Missing required tools", "No network connection", "Gentoo AMD64 requires", "At least 2 GiB", "Memory size could not")
 CLOCK_ACTIONS = ("sync_time", "clock-sync")
+# Findings carry the name of a fix. With a daemon that offers it the row gets a button, otherwise a sentence says what to do.
+ACTION_BUTTONS = {
+    "sync_time": "Set clock from network",
+    "set_time": "Set date and time…",
+    "reboot_firmware": "Restart into firmware settings",
+}
+ACTION_HELP = {
+    "reboot_firmware": "Restart the computer and open its firmware settings (often by pressing F2, F10, Del or Esc while it starts).",
+    "sync_time": "Connect to the internet and press Check again, or set the date and time with the clock of the desktop.",
+    "set_time": "Set the date and time with the clock of the desktop, then press Check again.",
+    "safe_graphics": "Restart the installer and choose the compatibility entry in the boot menu.",
+    "connect_charger": "Connect the charger, then press Check again.",
+    "install_guest_tools": "Guest tools are installed for you. You can change that on the Hardware tab of the Customization step.",
+}
+SEVERITY_ORDER = {"error": 0, "warning": 1}
 
 
 def proxy_problem(proxy: str) -> str:
@@ -43,6 +59,7 @@ class ReadinessPage(Page):
     networkSettingsRequested = Signal()
     diagnosticsRequested = Signal()
     clockSyncRequested = Signal(str)  # name of the daemon action to run
+    hardwareActionRequested = Signal(str)  # a finding's fix: sync_time, set_time or reboot_firmware
 
     def __init__(self, manifest: InstallManifest | None = None):
         super().__init__("A quick compatibility check", "We’ll confirm that the live environment is ready. Problems that would make the installation fail are marked as errors and must be fixed first.")
@@ -54,6 +71,7 @@ class ReadinessPage(Page):
         self.rows: dict[str, StatusRow] = {}
         for key, title in (
             ("service", "Installer service"),
+            ("hardware", "This computer"),
             ("architecture", "AMD64 architecture"),
             ("memory", "Memory"),
             ("firmware", "Boot firmware"),
@@ -68,9 +86,12 @@ class ReadinessPage(Page):
         self.service_log = wrapped_label("", muted=True, selectable=True)
         self.service_log.hide()
         self.card.content.addWidget(self.service_log)
+        self.hardware_hint = wrapped_label("Choices for this hardware (graphics driver, power, firmware and more) are on the Hardware tab of the Customization step.", muted=True)
+        self.hardware_hint.hide()
+        self.card.content.addWidget(self.hardware_hint)
         self.content.addWidget(self.card)
 
-        self.notes_card = Card("Hardware notes")
+        self.notes_card = Card("Hardware notes", "What was found on this computer that needs your attention or is good to know.")
         self.notes_box = QVBoxLayout()
         self.notes_card.content.addLayout(self.notes_box)
         self.notes_card.hide()
@@ -106,6 +127,9 @@ class ReadinessPage(Page):
         actions.addWidget(self.diagnostics_button)
         actions.addStretch()
         self.content.addLayout(actions)
+        self.action_note = wrapped_label("", selectable=True)
+        self.action_note.hide()
+        self.content.addWidget(self.action_note)
         note = wrapped_label("An internet connection is required to download and verify the Gentoo stage3 archive and synchronize Portage.", muted=True)
         self.content.addWidget(note)
         self.advance_on_enter(self.proxy)
@@ -140,6 +164,7 @@ class ReadinessPage(Page):
             self.blocking.append("The hardware check is still running. Please wait a moment.")
             return
         self._service(info)
+        self._hardware(info)
         self._architecture(info)
         self._memory(info)
         self._firmware(info)
@@ -196,32 +221,55 @@ class ReadinessPage(Page):
             text += ". Secure Boot is on: the installed system will not start unless it is signed. Turn Secure Boot off in the firmware settings."
         self.rows["firmware"].set_status(status, text)
 
+    def _hardware(self, info: SystemInfo) -> None:
+        row = self.rows["hardware"]
+        summary = info.profile.summary() if info.hardware else ""
+        if summary:
+            row.set_status("ok", summary)
+        elif info.daemon is not None and info.daemon.kind == "dev":
+            row.set_status("info", "Not detected in development mode")
+        else:
+            row.set_status("unknown", "The hardware could not be described. The installer will decide when it runs.")
+        self.hardware_hint.setVisible(bool(summary))
+
     def _disks(self, info: SystemInfo) -> None:
         row = self.rows["disk"]
-        usable = [disk for disk in info.disks if disk.selectable and disk.size >= MIN_DISK_BYTES]
+        manifest = self.manifest
+        smallest = smallest_disk_bytes(manifest) if manifest is not None else MIN_DISK_BYTES
+        usable = [disk for disk in info.disks if disk.selectable and disk.size >= smallest]
         with_identity = [disk for disk in usable if disk.has_identity]
         approvable = [disk for disk in usable if not disk.has_identity and disk.by_path]
         if not usable:
             small = [disk for disk in info.disks if disk.selectable]
-            hint = f" ({', '.join(f'{d.path} {d.size_text}' for d in small)}: too small, 16 GiB needed)" if small else ""
-            message = "No suitable disk found: a writable disk of at least 16 GiB that is not the installer medium is required" + hint + "."
+            hint = f" ({', '.join(f'{d.path} {d.size_text}' for d in small)}: too small, {format_size(smallest)} needed)" if small else ""
+            message = f"No suitable disk found: a writable disk of at least {format_size(smallest)} that is not the installer medium is required" + hint + "."
             row.set_status("error", message)
             self.blocking.append(message)
-        elif with_identity:
+            return
+        if with_identity:
             text = ", ".join(f"{disk.path} ({disk.size_text})" for disk in with_identity)
             extra = [disk for disk in usable if disk not in with_identity]
             if extra:
                 many = len(extra) != 1
                 text += f" · {len(extra)} more disk{'s' if many else ''} without a serial number {'need' if many else 'needs'} your explicit approval on the Storage page"
-            row.set_status("ok", text)
+            status = "ok"
         elif approvable:
             names = ", ".join(f"{disk.path} ({disk.size_text})" for disk in approvable)
-            row.set_status("warning", f"{names}: no serial number or WWN (virtual disk?). You will be asked to approve the disk explicitly on the Storage page.")
+            text = f"{names}: no serial number or WWN (virtual disk?). You will be asked to approve the disk explicitly on the Storage page."
+            status = "warning"
         else:
             names = ", ".join(disk.path for disk in usable)
             message = f"{names} has no serial number (virtual disk?) and no stable hardware path, so it cannot be identified safely. {VIRTUAL_DISK_HINT}"
             row.set_status("error", message)
             self.blocking.append(message)
+            return
+        largest = max(disk.size for disk in usable)
+        wanted = desktop_disk_bytes(manifest) if manifest is not None else 0
+        if wanted and largest < wanted:
+            desktop = "a minimal system" if manifest is not None and manifest.system.desktop == "minimal" else manifest.system.desktop.upper() if manifest is not None else "the desktop"
+            text += f" · The largest disk is too small for {desktop} (about {format_size(wanted)} needed); a lighter desktop or the minimal system still fits."
+            status = "warning"
+        row.set_status(status, text)
 
     def _network(self, info: SystemInfo) -> None:
         row = self.rows["network"]
@@ -259,18 +307,28 @@ class ReadinessPage(Page):
             item = self.notes_box.takeAt(0)
             widget = item.widget() if item is not None else None
             if widget is not None:
+                widget.hide()
                 widget.deleteLater()
         shown = 0
-        for warning in info.warnings:
+        daemon = info.daemon
+        findings = sorted((w for w in info.warnings if str(w.get("message", "")).strip()), key=lambda w: SEVERITY_ORDER.get(str(w.get("severity", "info")), 2))
+        for warning in findings:
             code = clean_code(str(warning.get("code", "")))
             severity = str(warning.get("severity", "info"))
             message = str(warning.get("message", "")).strip()
-            if not message:
-                continue
             action = str(warning.get("action", "")).strip()
-            text = message + (f" ({action.replace('_', ' ')})" if action and action != "none" else "")
+            action = "" if action == "none" else action
+            button = ACTION_BUTTONS.get(action, "") if action and daemon is not None and daemon.supports(action) else ""
+            if button:
+                text = message
+            elif action in ACTION_HELP:
+                text = f"{message} {ACTION_HELP[action]}"
+            else:
+                text = message + (f" ({action.replace('_', ' ')})" if action else "")
             row = StatusRow(WARNING_AREAS.get(code.split("_", 1)[0], "Hardware"), text)
             row.set_status({"error": "error", "warning": "warning"}.get(severity, "info"), text)
+            if button:
+                row.set_action(button, partial(self.hardwareActionRequested.emit, action))
             self.notes_box.addWidget(row)
             shown += 1
             if severity == "error" and code in GLOBAL_BLOCKERS:
@@ -282,6 +340,12 @@ class ReadinessPage(Page):
                 self.notes_box.addWidget(row)
                 shown += 1
         self.notes_card.setVisible(bool(shown))
+
+    def show_action_result(self, ok: bool, message: str) -> None:
+        """What a button of this page (set the clock, restart into firmware) reported back."""
+        self.action_note.setText(message)
+        self.action_note.setStyleSheet(f"color: {theme.status_color('ok' if ok else 'error')};")
+        self.action_note.setVisible(bool(message))
 
     def _sync_clock(self) -> None:
         action = str(self.sync_button.property("action") or "")

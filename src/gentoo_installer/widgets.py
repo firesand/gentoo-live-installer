@@ -324,7 +324,7 @@ class StatusRow(QWidget):
 
     def __init__(self, title: str, detail: str = "", parent: QWidget | None = None):
         super().__init__(parent)
-        layout = QHBoxLayout(self)
+        layout = self.row_layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 3, 0, 3)
         self.status = "unknown"
         self.indicator = QLabel("●")
@@ -339,7 +339,24 @@ class StatusRow(QWidget):
         self.detail.setWordWrap(True)
         self.detail.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
         layout.addWidget(self.detail, 1)
+        self.action: QPushButton | None = None
         self.set_status("unknown", detail)
+
+    def set_action(self, text: str, callback: Callable[[], None] | None) -> None:
+        """Show a button at the end of the row (None removes it), for the fix the finding offers."""
+        if self.action is not None:
+            self.row_layout.removeWidget(self.action)
+            self.action.hide()
+            self.action.setParent(None)
+            self.action.deleteLater()
+            self.action = None
+        if callback is None or not text:
+            return
+        button = QPushButton(text)
+        button.setAccessibleName(f"{text} - {self.title.text()}")
+        button.clicked.connect(lambda _=False: callback())
+        self.row_layout.addWidget(button, 0, Qt.AlignmentFlag.AlignTop)
+        self.action = button
 
     def set_status(self, status: str, detail: str = "") -> None:
         self.status = status

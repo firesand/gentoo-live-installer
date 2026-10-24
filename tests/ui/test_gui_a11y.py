@@ -226,7 +226,7 @@ def test_the_applications_tab_does_not_stretch_its_card(themed, make_window):
     window = make_window()
     window.resize(1180, 800)
     window._show_page(4)
-    window.customize.tabs.setCurrentIndex(2)
+    window.customize.tabs.setCurrentIndex(3)  # Hardware, Portage, Network, Applications
     QApplication.processEvents()
     card = window.customize.tabs.currentWidget().findChild(Card)
     assert card.height() <= card.sizeHint().height() * 1.3

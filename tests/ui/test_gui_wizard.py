@@ -122,6 +122,8 @@ def test_a_wrong_clock_is_an_error_with_instructions_and_offers_the_daemons_sync
 class _NoopWorker:
     def __init__(self):
         self.finished = _Signal()
+        self.eventReceived = _Signal()
+        self.connectionFailed = _Signal()
 
     def start(self):
         pass
@@ -320,7 +322,7 @@ def test_a_late_error_navigates_to_the_page_that_owns_it(make_window, monkeypatc
 
 @pytest.mark.parametrize(
     ("section", "page"),
-    [("storage", 2), ("system", 3), ("portage", 4), ("network", 4), ("options", 4), ("accounts", 5), ("locale", 5), ("hardware", 6)],
+    [("storage", 2), ("system", 3), ("portage", 4), ("network", 4), ("options", 4), ("accounts", 5), ("locale", 5), ("hardware", 4)],
 )
 def test_every_section_has_an_owning_page(make_window, section, page):
     window = make_window()
@@ -476,7 +478,7 @@ def test_switching_to_minimal_unticks_the_graphical_companions_and_back_restores
     assert not window.manifest.options.install_hwmonux and not window.manifest.options.install_portagehub
     window._show_page(4)
     assert not window.customize.checks["install_hwmonux"].isChecked()
-    window.customize.tabs.setCurrentIndex(2)
+    window.customize.tabs.setCurrentIndex(3)  # Hardware, Portage, Network, Applications
     assert window.customize.companion_note.isVisibleTo(window.customize)
     window.customize.checks["install_hwmonux"].setChecked(True)  # the user can tick them again
     window.customize.save_manifest()
