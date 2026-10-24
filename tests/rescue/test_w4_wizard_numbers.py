@@ -2,11 +2,36 @@
 
 from __future__ import annotations
 
+import io
+
 import pytest
 
 from gentoo_installerd.rescue import cli
+from gentoo_installerd.rescue.api import RescueApi
+from gentoo_installerd.rescue.client import LocalTransport
 
-from .test_cli import prepared
+from .flow import uefi_gentoo_lab
+
+
+class Run:
+    """One invocation of the repair tool against a lab, with scripted answers (the same way tests/rescue/test_cli.py drives it)."""
+
+    def __init__(self, lab) -> None:
+        self.lab = lab
+
+    def __call__(self, *argv: str, answers: list[str] | None = None, interactive: bool = False):
+        out, err = io.StringIO(), io.StringIO()
+        scripted = list(answers or [])
+        console = cli.Console(out=out, err=err, ask=lambda _p: scripted.pop(0) if scripted else "", secret=lambda _p: "", interactive=interactive)
+        transport = LocalTransport(RescueApi(self.lab.manager(auto_adopt=True)))
+        code = cli.main(list(argv), transport=transport, console=console)
+        return code, out.getvalue(), err.getvalue()
+
+
+def prepared(lab_factory):
+    lab, tree = uefi_gentoo_lab(lab_factory)
+    return lab, tree, Run(lab)
+
 
 TOO_LONG = pytest.param("9" * 5000, id="5000-digits")  # int() refuses more than 4300 digits
 LOOKALIKES = ["²", "³", "¹", "①", "⑩", "12²", "½", TOO_LONG]
