@@ -39,11 +39,13 @@ def test_fsscript_fails_the_build_instead_of_continuing() -> None:
 
 
 def test_fsscript_creates_the_target_and_rescue_directories_and_the_live_user() -> None:
-    assert "install -d -m 0755 /mnt/gentoo /mnt/rescue" in FSSCRIPT
+    assert re.search(r"^install -d -m 0755 /mnt/gentoo$", FSSCRIPT, re.M)
+    assert re.search(r"^install -d -m 0700 /mnt/rescue$", FSSCRIPT, re.M), "the repair sessions are private to root"
     assert "passwd -d gentoo" in FSSCRIPT and "passwd -l root" in FSSCRIPT
     assert "usermod -a -G gentoo-installer gentoo" in FSSCRIPT
     paths = {item["path"]: item for item in CONTRACT["squashfs"]["required"]}
     assert paths["mnt/rescue"]["type"] == "dir" and paths["mnt/gentoo"]["type"] == "dir"
+    assert paths["mnt/rescue"]["mode"] == "0700" and "mode" not in paths["mnt/gentoo"], "the contract checks the mode the fsscript sets"
 
 
 def test_fsscript_checks_files_that_the_overlay_provides() -> None:
@@ -63,7 +65,23 @@ def test_fsscript_memtest_files_are_the_ones_the_menu_and_the_iso_need() -> None
 
 
 def test_rescue_scripts_are_only_a_warning() -> None:
-    """Whether pyproject defines the console scripts is another change; it must not sink a long build."""
-    block = FSSCRIPT[FSSCRIPT.index("gentoo_installerd/rescue"):]
-    assert "warning:" in block.split("# Configuration that keeps")[0]
-    assert "fail " not in block.split("# Configuration that keeps")[0]
+    """scripts/verify-iso.py fails the build for a console script that pyproject.toml declares; the fsscript only warns."""
+    block = FSSCRIPT[FSSCRIPT.index("if compgen -G '/usr/lib/python3*/site-packages/gentoo_installerd/rescue"):]
+    scripts = block.split("# The repair tool falls back")[0]
+    assert "warning:" in scripts
+    assert "fail " not in scripts
+    for command in ("/usr/bin/gentoo-rescue", "/usr/bin/gentoo-chroot", "/usr/bin/gentoo-installer-text"):
+        assert command in scripts, command
+    assert "gentoo_installer/textui/__init__.py" in scripts, "the text installer is checked where the package has it"
+
+
+def test_the_live_grub_is_checked_for_both_platforms_of_the_fallback_install() -> None:
+    """The repair tool runs the live grub-install when the repaired system cannot run its own."""
+    assert "/usr/lib/grub/i386-pc" in FSSCRIPT and "/usr/lib/grub/x86_64-efi" in FSSCRIPT
+    paths = {item["path"]: item for item in CONTRACT["squashfs"]["required"]}
+    assert paths["usr/lib/grub/i386-pc"]["type"] == paths["usr/lib/grub/x86_64-efi"]["type"] == "dir"
+
+
+def test_the_polkit_agent_of_the_live_session_is_required() -> None:
+    assert "/usr/libexec/polkit-gnome-authentication-agent-1" in FSSCRIPT
+    assert "usr/libexec/polkit-gnome-authentication-agent-1" in {item["path"] for item in CONTRACT["squashfs"]["required"]}

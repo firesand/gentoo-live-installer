@@ -261,12 +261,41 @@ def test_console_scripts_are_required_only_when_pyproject_declares_them() -> Non
                               lambda path, text: path == "pyproject.toml" and text in declared)
         return next((c.detail for c in result.errors if c.id == "squashfs.required"), "")
 
-    assert "usr/bin/gentoo-rescue" not in report("")
-    cli_only = report('gentoo-rescue = "x"')
-    assert "usr/bin/gentoo-rescue," in cli_only + "," or cli_only.endswith("usr/bin/gentoo-rescue")
-    assert "usr/bin/gentoo-rescue-gui" not in cli_only
-    both = report('gentoo-rescue = "x"\ngentoo-rescue-gui = "y"')
+    def missing(declared: str) -> set[str]:
+        return {name.strip() for name in report(declared).removeprefix("missing from the image: ").split(",")}
+
+    assert "usr/bin/gentoo-rescue" not in missing("")
+    cli_only = missing('gentoo-rescue = "x"')
+    assert "usr/bin/gentoo-rescue" in cli_only
+    assert "usr/bin/gentoo-rescue-gui" not in cli_only and "usr/bin/gentoo-installer-text" not in cli_only
+    both = missing('gentoo-rescue = "x"\ngentoo-rescue-gui = "y"')
     assert "usr/bin/gentoo-rescue-gui" in both
+    text_installer = missing('gentoo-installer-text = "gentoo_installer.textui.cli:main"')
+    assert "usr/bin/gentoo-installer-text" in text_installer and "usr/bin/gentoo-rescue" not in text_installer
+
+
+def test_gentoo_chroot_follows_the_rescue_package_not_pyproject() -> None:
+    """The ebuild installs the wrapper from FILESDIR whenever the sources contain the repair tool."""
+    def missing(source) -> str:
+        result = verify.Report()
+        verify.check_squashfs(result, verify.parse_description(LISTING), CONTRACT, [], "testkey", lambda p: b"", "UID: 0\nGID: 0", (), source)
+        return next((c.detail for c in result.errors if c.id == "squashfs.required"), "")
+
+    assert "usr/bin/gentoo-chroot" not in missing(lambda p: False)
+    assert "usr/bin/gentoo-chroot" in missing(lambda p: p == "src/gentoo_installerd/rescue/__init__.py")
+
+
+def test_required_modes_are_checked() -> None:
+    """/mnt/rescue holds the repair sessions: a 0755 directory (the fsscript's old mode) must not pass."""
+    def wrong(mode: str) -> str:
+        listing = LISTING + f"dir mnt/rescue {mode} 0 0\n"
+        result = verify.Report()
+        verify.check_squashfs(result, verify.parse_description(listing), CONTRACT, [], "testkey", lambda p: b"", "UID: 0\nGID: 0", (), lambda p: False)
+        return next((c.detail for c in result.errors if c.id == "squashfs.required_types"), "")
+
+    assert "mnt/rescue" not in wrong("0700")
+    assert "mnt/rescue has mode 0755, expected 0700" in wrong("0755")
+    assert "mnt/rescue has mode 0777, expected 0700" in wrong("0777")
 
 
 def test_package_rules() -> None:
@@ -406,7 +435,8 @@ def image_entries(flavor: str, live_make_conf: str) -> dict[str, tuple[str, int,
         path = item["path"]
         if path not in entries:
             kind = item.get("type", "file").split("|")[0]
-            add(path, kind, 0o755 if item.get("executable") or kind == "dir" else 0o644)
+            mode = int(item["mode"], 8) if item.get("mode") else 0o755 if item.get("executable") or kind == "dir" else 0o644
+            add(path, kind, mode)
     for command in CONTRACT["squashfs"]["commands"]:
         add(f"usr/bin/{command}", mode=0o755)
     for package in CONTRACT["squashfs"]["required_packages"]:

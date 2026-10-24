@@ -11,7 +11,8 @@ script opens the ISO read-only and checks what a user's PC will depend on:
     the volume label that grub.cfg searches for, the GRUB loaders for 64-bit and 32-bit UEFI;
   * boot/grub/grub.cfg: every `linux` line carries root=live:CDLABEL=<volume id> and the
     boot arguments of iso/pins.env, the default entry has no `dokeymap`, there are text-console,
-    nomodeset and Memtest86+ entries, no entry promises a "safe graphics" desktop;
+    repair, text-install, nomodeset and Memtest86+ entries (`gentoo.autostart=` only with `nox`),
+    no entry promises a "safe graphics" desktop;
   * the initramfs: dmsquash-live and the storage modules a live medium needs;
   * image.squashfs: the required files and commands, every service in livecd/rcadd as a
     runlevel link plus init script, no builder-owned files (uid/gid 1000), a locked root
@@ -413,6 +414,21 @@ def check_grub(
     for entry in linux_entries:
         if any("dokeymap" in line.split() for line in entry.linux) and not any("nox" in line.split() for line in entry.linux):
             report.failed("grub.dokeymap", f"'{entry.title}' has dokeymap but starts the desktop; only the text console entry may ask for a keymap")
+    # gentoo.autostart=<tool> makes the first console login start a text tool (etc/profile.d/20-gentoo-autostart.sh).
+    # Only values the hook knows may be used, and only together with nox: otherwise the desktop would start as well.
+    known_autostart = set(rules.get("autostart_values", []))
+    autostart_problems: list[str] = []
+    for entry in linux_entries:
+        for line in entry.linux:
+            words = line.split()
+            for word in words:
+                if not word.startswith("gentoo.autostart="):
+                    continue
+                if word.split("=", 1)[1] not in known_autostart:
+                    autostart_problems.append(f"'{entry.title}': {word} is not a value the console hook knows ({', '.join(sorted(known_autostart)) or 'none'})")
+                elif "nox" not in words:
+                    autostart_problems.append(f"'{entry.title}': {word} starts a text tool but also the desktop (no 'nox')")
+    report.expect(not autostart_problems, "grub.autostart", "", "; ".join(autostart_problems))
     needed_args = rules.get("required_arguments", [])
     for argument in needed_args:
         report.expect(
@@ -430,6 +446,8 @@ def check_grub(
             f"no entry passes all of: {argument}",
         )
     titles = [e.title.lower() for e in entries]
+    for wanted in rules.get("required_titles", []):
+        report.expect(wanted.lower() in titles, "grub.required_titles", wanted, f"the boot menu has no entry called '{wanted}'")
     for phrase in rules.get("forbidden_titles", []):
         bad = [t for t in titles if phrase.lower() in t]
         report.expect(not bad, "grub.forbidden_titles", phrase, f"menu entry '{bad[0] if bad else ''}' promises something this kernel cannot do ({phrase}); see iso/image-contract.json")
@@ -624,6 +642,8 @@ def check_squashfs(
             wrong.append(f"{path} is a {entry.kind}, expected {item['type']}")
         elif item.get("executable") and not entry.mode & 0o111 and entry.kind == "file":
             wrong.append(f"{path} is not executable")
+        elif item.get("mode") and entry.mode & 0o7777 != int(item["mode"], 8):
+            wrong.append(f"{path} has mode {entry.mode & 0o7777:04o}, expected {item['mode']}")
     report.expect(not missing, "squashfs.required", "", "missing from the image: " + ", ".join(missing))
     report.expect(not wrong, "squashfs.required_types", "", "; ".join(wrong))
 
