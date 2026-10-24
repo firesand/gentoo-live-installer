@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
+import dataclasses
 import hashlib
 import importlib.util
 import json
@@ -61,6 +62,17 @@ REASON_RE = re.compile(
     r"^(!!! .*|emerge: there are no (ebuilds|binary packages).*|The following (USE|REQUIRED_USE|keyword|license|mask) changes.*"
     r"|\s*- .*\(masked by: .*|\[blocks [Bb]\] .*|\s*The following REQUIRED_USE flag constraints are unsatisfied:.*"
     r"|\s*(any-of|exactly-one-of|at-most-one-of)\b.*|\(dependency required by .*)$")
+
+
+def parse_setting(text: str) -> tuple[str, Any]:
+    """'section.field=value' with true/false and integers converted, as lint-plan's Cell.overrides expects."""
+    key, separator, raw = text.partition("=")
+    if not separator or key.count(".") != 1:
+        raise ValueError(f"--set needs SECTION.FIELD=VALUE, not {text!r}")
+    value: Any = {"true": True, "false": False}.get(raw.lower(), raw)
+    if isinstance(value, str) and re.fullmatch(r"-?[0-9]+", value):
+        value = int(value)
+    return key, value
 
 
 def load_lint() -> Any:
@@ -165,7 +177,9 @@ def run_cell(lint: Any, cell: Any, args: argparse.Namespace, images: dict[str, s
     except Exception as exc:  # noqa: BLE001 - a broken cell must not stop the others
         result.error = f"Could not render the installer configuration: {type(exc).__name__}: {exc}"
         return result
-    result.profile, result.atoms = rendered.profile, list(rendered.atoms)
+    # The kernel stage emerges the plan's drivers on their own, right after the kernel.
+    drivers = [str(atom) for atom in getattr(plan, "driver_atoms", None) or []]
+    result.profile, result.atoms = rendered.profile, list(dict.fromkeys([*rendered.atoms, *drivers]))
     portage_dir = container_config(rendered)
     scratch.mkdir(parents=True, exist_ok=True)
     # The installer's own options (Configurer.emerge/pretend; EMERGE_DEFAULT_OPTS from its make.conf):
@@ -209,6 +223,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tree", type=Path, default=Path("/var/db/repos/gentoo"), help="Gentoo tree to resolve against (read-only)")
     parser.add_argument("--hardware", default="", help="build the hardware plan from tests/hardware/fixtures/NAME")
     parser.add_argument("--no-binhost", action="store_true", help="resolve source-only even when the manifest uses the binary host")
+    parser.add_argument("--set", action="append", default=[], metavar="SECTION.FIELD=VALUE",
+                        help="change a manifest field in every cell, e.g. hardware.gpu_driver=nvidia (true/false/numbers are converted)")
     parser.add_argument("--openrc-image", default=DEFAULT_IMAGES["openrc"])
     parser.add_argument("--systemd-image", default=DEFAULT_IMAGES["systemd"])
     parser.add_argument("--import-systemd-seed", type=Path, help="import this verified stage3-amd64-systemd archive as the systemd image")
@@ -228,7 +244,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 2
     args.tree = args.tree.resolve()
     lint = load_lint()
-    cells = lint.select_cells(args.cells)
+    try:
+        overrides = tuple(parse_setting(item) for item in args.set)
+    except ValueError as exc:
+        print(f"resolve-gate: {exc}", file=sys.stderr)
+        return 2
+    cells = [dataclasses.replace(cell, overrides=cell.overrides + overrides) for cell in lint.select_cells(args.cells)]
     images = {"openrc": args.openrc_image, "systemd": args.systemd_image}
     if args.import_systemd_seed:
         images["systemd"] = import_seed(args.import_systemd_seed.resolve())

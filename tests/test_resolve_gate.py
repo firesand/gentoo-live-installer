@@ -52,3 +52,15 @@ def test_a_cell_result_is_ok_only_when_emerge_exited_zero_without_an_error():
     assert not gate.CellResult("c", "img", returncode=1).ok
     assert not gate.CellResult("c", "img", returncode=0, error="timeout").ok
     assert not gate.CellResult("c", "img").ok
+
+
+def test_settings_become_typed_cell_overrides():
+    assert gate.parse_setting("hardware.gpu_driver=nvidia") == ("hardware.gpu_driver", "nvidia")
+    assert gate.parse_setting("hardware.nvidia_license_accepted=true") == ("hardware.nvidia_license_accepted", True)
+    assert gate.parse_setting("hardware.zram_percent=25") == ("hardware.zram_percent", 25)
+    for bad in ("gpu_driver=nvidia", "hardware.gpu_driver", "a.b.c=1"):
+        try:
+            gate.parse_setting(bad)
+        except ValueError:
+            continue
+        raise AssertionError(bad)
