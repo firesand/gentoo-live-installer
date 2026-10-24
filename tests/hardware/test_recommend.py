@@ -37,12 +37,15 @@ def test_build_jobs_never_exceed_threads_and_survive_zero_input():
 
 
 @pytest.mark.parametrize(("ram_gib", "plain", "zram", "hibernate"), [
-    (1, 2048, 2048, 2048),
-    (2, 4096, 2048, 3072),
-    (4, 4096, 2048, 6144),       # Ubuntu SwapFaq: RAM + sqrt(RAM)
-    (8, 8192, 2048, 11264),
-    (16, 8192, 0, 20480),
-    (48, 8192, 0, 56320),
+    # The Gentoo Handbook table ("What about swap space?"): <=2 GiB 4 GiB; 2-8 GiB = RAM (2x to hibernate); 8-64 GiB 8-16 GiB (1.5x to hibernate);
+    # above 64 GiB 8 GiB and no hibernation.
+    (1, 4096, 2048, 4096),
+    (2, 4096, 2048, 6144),
+    (4, 4096, 2048, 8192),
+    (8, 8192, 2048, 16384),
+    (16, 8192, 0, 24576),
+    (48, 16384, 0, 73728),
+    (96, 8192, 0, 8192),
 ])
 def test_swap_sizes(ram_gib, plain, zram, hibernate):
     total = ram_gib * KIB
@@ -158,7 +161,7 @@ def test_swap_advice():
     assert found(manifest(), profile(ram_gib=16))["rec.swap_size"].suggestion == "8192"
     assert "rec.swap_size" not in found(manifest(storage={"swap_mib": 8192}), profile(ram_gib=16))       # a deliberate value is left alone
     result = found(manifest(hardware={"hibernate": True}), profile(ram_gib=16))
-    assert result["rec.hibernate_swap"].suggestion == "20480" and result["rec.hibernate_swap"].severity == "warning"
+    assert result["rec.hibernate_swap"].suggestion == "24576" and result["rec.hibernate_swap"].severity == "warning"
     assert found(manifest(), profile(ram_gib=4))["rec.swap_size"].suggestion == "2048"   # with zram on a small machine
 
 
@@ -306,3 +309,14 @@ def test_apply_defaults_without_detection_changes_nothing(machine):
     m = InstallManifest()
     rec.apply_defaults(m, machine)    # type: ignore[arg-type]
     assert m == InstallManifest()
+
+
+def test_hibernation_is_advised_up_to_64_gib_only():
+    assert rec.hibernation_advised(64 * KIB) and not rec.hibernation_advised(96 * KIB)
+
+
+def test_a_chosen_swap_choice_is_not_overwritten_by_the_defaults():
+    m = manifest(storage={"swap_choice": "none", "swap_mib": 4096})
+    machine = fixture_dict("asus-desktop-rtx4090")
+    assert "rec.swap_size" not in found(m, machine)
+    assert "storage.swap_mib" not in rec.defaults_for(machine, m)
