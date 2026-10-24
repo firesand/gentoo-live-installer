@@ -10,7 +10,11 @@ from .errors import RescueError
 from .paths import RootFS
 
 MIN_INITRAMFS_BYTES = 1 << 20  # anything smaller is an interrupted write
+MIN_KERNEL_BYTES = 512 << 10  # a bootable x86 kernel image is never this small
 KERNEL_IMAGE_PREFIXES = ("vmlinuz-", "vmlinux-", "kernel-")
+NOT_AN_IMAGE_SUFFIXES = (".old", ".bak", ".sig", ".hmac", ".sha256", ".md5", ".txt", ".orig", ".dpkg-old")
+GENKERNEL_RE = re.compile(r"^genkernel-[^-]+-(.+)$")  # kernel-genkernel-x86_64-6.6.30-gentoo is the image of release 6.6.30-gentoo
+RESCUE_RE = re.compile(r"^0-rescue-[0-9a-f]{32}$")  # Fedora and RHEL keep a generic rescue kernel that has no module tree of its own
 INITRAMFS_PATTERNS = ("initramfs-{v}.img", "initrd.img-{v}", "initrd-{v}", "initramfs-{v}", "initrd-{v}.img", "initramfs-{v}.gz")
 BOOT_TOOLS = (
     "grub-install", "grub2-install", "update-grub", "grub-mkconfig", "grub2-mkconfig", "bootctl", "kernel-install", "dracut", "mkinitcpio", "update-initramfs", "genkernel",
@@ -33,6 +37,14 @@ class KernelInfo:
     @property
     def initramfs_truncated(self) -> bool:
         return bool(self.initramfs) and self.initramfs_size < MIN_INITRAMFS_BYTES
+
+    @property
+    def image_truncated(self) -> bool:
+        return bool(self.image) and self.image_size < MIN_KERNEL_BYTES
+
+    @property
+    def is_rescue(self) -> bool:
+        return bool(RESCUE_RE.match(self.version))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -86,8 +98,8 @@ def _module_versions(fs: RootFS) -> dict[str, str]:
     return result
 
 
-def _find_initramfs(fs: RootFS, version: str, pkgbase: str, boot_names: set[str]) -> str:
-    keys = [version] + ([pkgbase] if pkgbase else [])
+def _find_initramfs(fs: RootFS, version: str, pkgbase: str, boot_names: set[str], aliases: tuple[str, ...] = ()) -> str:
+    keys = [version, *aliases] + ([pkgbase] if pkgbase else [])
     for key in keys:
         for pattern in INITRAMFS_PATTERNS:
             name = pattern.format(v=key)
@@ -100,12 +112,19 @@ def collect_kernels(fs: RootFS) -> list[KernelInfo]:
     boot_names = set(fs.listdir_or("/boot"))
     versions = _module_versions(fs)
     found: dict[str, KernelInfo] = {}
+    aliases: dict[str, tuple[str, ...]] = {}
     for name in sorted(boot_names):
         for prefix in KERNEL_IMAGE_PREFIXES:
-            if name.startswith(prefix) and not name.endswith((".old", ".bak", ".sig")):
+            if name.startswith(prefix) and len(name) > len(prefix) and not name.endswith(NOT_AN_IMAGE_SUFFIXES):
+                if not fs.is_file(f"/boot/{name}"):
+                    continue  # kernel-backup and kernel-configs are directories that tools keep in /boot, not kernels
                 suffix = name[len(prefix):]
                 version = suffix
                 pkgbase = ""
+                genkernel = GENKERNEL_RE.match(suffix) if prefix == "kernel-" else None
+                if genkernel:
+                    version = genkernel.group(1)
+                    aliases[version] = (*aliases.get(version, ()), suffix)
                 for release, base in versions.items():  # Arch names the image after the package base, not the release
                     if base and base == suffix:
                         version, pkgbase = release, base
@@ -117,7 +136,7 @@ def collect_kernels(fs: RootFS) -> list[KernelInfo]:
         if not found[release].image and fs.exists(f"/usr/lib/modules/{release}/vmlinuz") and not boot_names:
             found[release].image = f"/usr/lib/modules/{release}/vmlinuz"
     for info in found.values():
-        info.initramfs = _find_initramfs(fs, info.version, info.pkgbase, boot_names)
+        info.initramfs = _find_initramfs(fs, info.version, info.pkgbase, boot_names, aliases.get(info.version, ()))
         info.initramfs_size = _size(fs, info.initramfs) if info.initramfs else 0
     return sorted(found.values(), key=lambda item: item.version)
 

@@ -320,3 +320,22 @@ def test_the_chroot_can_be_refused_in_an_inspect_only_session(lab_factory) -> No
         manager.plan({"session_id": sid, "action_id": "boot.config"})
     assert err.value.short == "needs_write"
     assert all("noexec" in c[4].split(",") for c in lab.system.commands_named("mount")[1:3] if c[1] == "-t")
+
+
+def test_a_fedora_rescue_kernel_is_not_reported_as_broken(lab_factory) -> None:
+    """Fedora and RHEL keep a generic 0-rescue kernel that has no module tree of its own."""
+    lab, tree = fedora_lab(lab_factory)
+    rescue = "0-rescue-0123456789abcdef0123456789abcdef"
+    fr.put(tree, f"boot/vmlinuz-{rescue}", size=14 << 20)
+    fr.put(tree, f"boot/initramfs-{rescue}.img", size=90 << 20)
+    _manager, _sid, info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    assert [f for f in info["findings"] if f["severity"] == "error"] == []
+
+
+def test_a_truncated_kernel_image_is_an_error_with_the_kernel_reinstall_as_the_fix(lab_factory) -> None:
+    lab, tree = uefi_gentoo_lab(lab_factory)
+    (tree / f"boot/vmlinuz-{fr.GENTOO_KVER}").write_bytes(b"")
+    manager, sid, info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    errors = [f for f in info["findings"] if f["severity"] == "error"]
+    assert [(f["id"], f["actions"]) for f in errors] == [("D01", ["boot.kernel"])] and "incomplete" in errors[0]["title"]
+    assert info["recommended"] == ["boot.kernel"]

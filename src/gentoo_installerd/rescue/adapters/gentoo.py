@@ -12,7 +12,22 @@ from . import base
 from .base import Adapter
 
 DIST_KERNELS = ("sys-kernel/gentoo-kernel-bin", "sys-kernel/gentoo-kernel", "sys-kernel/vanilla-kernel")
+DIST_ECLASSES = frozenset({"kernel-install", "kernel-build"})  # what every distribution kernel inherits, also those from overlays (sys-kernel/cachyos-kernel)
 CPV_RE = re.compile(r"^[a-z0-9]+(?:-[a-z0-9]+)*/[A-Za-z0-9_+-]+$")
+VDB_ENTRY_RE = re.compile(r"^(.+?)-(\d[\w.]*(?:_[a-z]+\d*)*(?:-r\d+)?)$")
+SUFFIX_RANK = {"alpha": -4, "beta": -3, "pre": -2, "rc": -1, "p": 1}
+
+
+def version_key(version: str) -> tuple[Any, ...]:
+    """An ordering of Portage versions that is good enough to pick the newest of several installed kernels (6.10 is newer than 6.9)."""
+    revision = 0
+    match = re.search(r"-r(\d+)$", version)
+    if match:
+        revision, version = int(match.group(1)), version[:match.start()]
+    head, *tail = version.split("_")
+    numbers = tuple(int(item) for item in re.findall(r"\d+", head))
+    suffixes = tuple((SUFFIX_RANK.get(m.group(1), 0), int(m.group(2) or 0)) for m in (re.match(r"([a-z]+)(\d*)", part) for part in tail) if m)
+    return numbers, suffixes or ((0, 0),), revision
 
 
 class GentooAdapter(Adapter):
@@ -26,8 +41,29 @@ class GentooAdapter(Adapter):
     # ---- facts (read from files only) ---------------------------------------------------------------------------------------------
     @staticmethod
     def kernel_packages(view: SessionView) -> dict[str, str]:
-        packages = view.installed_packages()
-        return {f"{name}-{version}": name for name, version in packages.items() if name in DIST_KERNELS}
+        """cpv -> category/name of every installed distribution kernel (several versions can be installed side by side)."""
+        found: dict[str, str] = {}
+        for entry in view.listdir("/var/db/pkg/sys-kernel"):
+            match = VDB_ENTRY_RE.match(entry)
+            if not match:
+                continue
+            atom = f"sys-kernel/{match.group(1)}"
+            inherited = set(view.read(f"/var/db/pkg/sys-kernel/{entry}/INHERITED", 4096).split())
+            if atom in DIST_KERNELS or inherited & DIST_ECLASSES:
+                found[f"{atom}-{match.group(2)}"] = atom
+        return found
+
+    @staticmethod
+    def newest_kernel_package(view: SessionView, packages: dict[str, str]) -> str:
+        """The package of the newest kernel that is installed in /boot, else the newest package."""
+        images = [kernel.version for kernel in view.kernels() if kernel.image]
+
+        def key(cpv: str) -> tuple[Any, ...]:
+            version = cpv[len(packages[cpv]) + 1:]
+            release = re.sub(r"-r\d+$", "", version)
+            return any(image.startswith(release) for image in images), version_key(version)
+
+        return max(packages, key=key)
 
     @staticmethod
     def installkernel_use(view: SessionView) -> str:
@@ -45,13 +81,14 @@ class GentooAdapter(Adapter):
 
     def kernel_kind(self, view: SessionView) -> str:
         """'dist' (sources present, emerge --config works), 'dist-incomplete' (needs a re-merge), 'genkernel' or 'manual'."""
-        packages = view.installed_packages()
-        for name, version in packages.items():
-            if name in DIST_KERNELS:
-                for kernel in view.kernels():
-                    if kernel.version.startswith(version) and view.exists(f"/usr/src/linux-{kernel.version}/include/config/kernel.release"):
-                        return "dist"
-                return "dist-incomplete"
+        packages = self.kernel_packages(view)
+        for cpv, atom in packages.items():
+            release = re.sub(r"-r\d+$", "", cpv[len(atom) + 1:])
+            for kernel in view.kernels():
+                if kernel.version.startswith(release) and view.exists(f"/usr/src/linux-{kernel.version}/include/config/kernel.release"):
+                    return "dist"
+        if packages:
+            return "dist-incomplete"
         return "genkernel" if view.which("genkernel") else "manual"
 
     def active_loader(self, view: SessionView) -> str:
@@ -109,7 +146,7 @@ class GentooAdapter(Adapter):
         if kind in {"genkernel", "manual"} or not packages:
             raise Unsupported("This system uses a manually built or genkernel kernel. Rebuild it in the terminal: cd /usr/src/linux && make modules_install install && genkernel --install initramfs")
         mode = b.choice("mode", {"config", "remerge"}, "config" if kind == "dist" else "remerge")
-        chosen = str(b.params.get("package", "")) or sorted(packages)[-1]
+        chosen = str(b.params.get("package", "")) or self.newest_kernel_package(view, packages)
         if chosen not in packages:
             raise RescueError("bad_request", f"{chosen!r} is not an installed kernel package", param="package")
         atom = f"={chosen}"

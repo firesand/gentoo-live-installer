@@ -70,7 +70,10 @@ def diagnose(view: SessionView, *, hardware_changed: bool = False, efi_state: ef
         elif kernel.initramfs_truncated:
             findings.append(Finding("D03", "error", f"The initramfs of kernel {kernel.version} is incomplete", "The file is smaller than 1 MiB, which means a write was interrupted.",
                                     [f"{kernel.initramfs}: {kernel.initramfs_size} bytes"], ["boot.initramfs"]))
-        if not kernel.modules and any(k.modules for k in boot.kernels) and kernel.version not in {"linux"}:
+        if kernel.image_truncated:
+            findings.append(Finding("D01", "error", f"The kernel {kernel.version} is incomplete", f"{kernel.image} is only {kernel.image_size} bytes, which means a write was interrupted.",
+                                    [f"kernel: {kernel.image}"], ["boot.kernel"]))
+        if not kernel.modules and any(k.modules for k in boot.kernels) and kernel.version not in {"linux"} and not kernel.is_rescue:
             findings.append(Finding("D04", "error", f"Kernel {kernel.version} has no module tree", f"/usr/lib/modules/{kernel.version} is missing, so the kernel cannot load drivers.",
                                     [f"kernel: {kernel.image}"], ["boot.kernel"]))
     findings.extend(_loader_findings(view, boot, esp))

@@ -236,9 +236,11 @@ def _gentoo(root: Path, opts: dict[str, Any]) -> None:
     kvers = opts.get("kernels", [GENTOO_KVER])
     for kver in kvers:
         pkg = kver.split("-")[0]
-        suffix_name = "gentoo-kernel-bin" if kver.endswith("-bin") else "gentoo-kernel"
+        suffix_name = opts.get("kernel_pkg") or ("gentoo-kernel-bin" if kver.endswith("-bin") else "gentoo-kernel")
         put(root, f"var/db/pkg/sys-kernel/{suffix_name}-{pkg}/CATEGORY", "sys-kernel\n")
         put(root, f"var/db/pkg/sys-kernel/{suffix_name}-{pkg}/PF", f"{suffix_name}-{pkg}\n")
+        if opts.get("kernel_pkg"):  # a package from an overlay: only the eclasses it inherited tell that it is a distribution kernel
+            put(root, f"var/db/pkg/sys-kernel/{suffix_name}-{pkg}/INHERITED", "toolchain-funcs linux-info dist-kernel-utils kernel-install kernel-build optfeature\n")
         put(root, f"usr/src/linux-{kver}/include/config/kernel.release", kver + "\n")
     put(root, "var/db/pkg/sys-kernel/installkernel-68-r1/USE", opts.get("installkernel_use", "dracut grub\n"))
     put(root, "var/db/pkg/sys-kernel/installkernel-68-r1/PF", "installkernel-68-r1\n")

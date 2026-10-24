@@ -319,3 +319,59 @@ def test_files_without_live_arguments_are_never_rewritten(lab_factory) -> None:
     unmount(manager, sid)
     assert ((tree / "etc/default/grub").read_text() if (tree / "etc/default/grub").exists() else "") == before
     assert not list((tree / "etc").rglob("*.gentoo-rescue-*"))
+
+
+def vdb(tree: Path, cpv: str, inherited: str = "") -> None:
+    fr.put(tree, f"var/db/pkg/sys-kernel/{cpv}/CATEGORY", "sys-kernel\n")
+    if inherited:
+        fr.put(tree, f"var/db/pkg/sys-kernel/{cpv}/INHERITED", inherited + "\n")
+
+
+def test_a_distribution_kernel_from_an_overlay_is_reinstalled_like_the_standard_ones(lab_factory) -> None:
+    """The author's real kernel is sys-kernel/cachyos-kernel (overlay CachyOS-kernels): it inherits kernel-install and kernel-build, so emerge --config works for it."""
+    kver = "7.3.0-cachyos-dist"
+    lab, tree = uefi_gentoo_lab(lab_factory, kernels=[kver], kernel_pkg="cachyos-kernel")
+    import shutil
+
+    shutil.rmtree(tree / "var/db/pkg/sys-kernel/cachyos-kernel-7.3.0")
+    vdb(tree, "cachyos-kernel-7.3.0-r1", "toolchain-funcs dist-kernel-utils kernel-install kernel-build")  # a revision does not appear in the kernel release
+    manager, sid, info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    assert {a["id"]: a for a in info["actions"]}["boot.kernel"]["available"] is True
+    plan, result, _ = plan_and_run(manager, sid, "boot.kernel")
+    assert ("emerge", "--ask=n", "--config", "=sys-kernel/cachyos-kernel-7.3.0-r1") in chroot_commands(lab) and result["outcome"] == "success"
+
+
+def test_the_newest_installed_kernel_is_the_one_reinstalled(lab_factory) -> None:
+    kernels = ["6.9.12-gentoo-dist", "6.10.1-gentoo-dist"]
+    lab, tree = uefi_gentoo_lab(lab_factory, kernels=kernels)
+    import shutil
+
+    shutil.rmtree(tree / "var/db/pkg/sys-kernel")
+    for cpv in ("gentoo-kernel-6.9.12", "gentoo-kernel-6.10.1", "gentoo-kernel-6.11.2"):  # 6.11.2 was merged but its image is gone from /boot
+        vdb(tree, cpv)
+    fr.put(tree, "var/db/pkg/sys-kernel/installkernel-68-r1/USE", "dracut grub\n")
+    manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    plan = manager.plan({"session_id": sid, "action_id": "boot.kernel", "params": {"mode": "remerge"}})
+    chosen = [arg for step in plan["steps"] for arg in step.get("argv", []) if arg.startswith("=sys-kernel/")]
+    assert chosen == ["=sys-kernel/gentoo-kernel-6.10.1"]  # not 6.9.12 (it sorts last as text) and not 6.11.2 (nothing of it is in /boot)
+
+
+def test_other_packages_of_the_kernel_category_are_not_kernels(lab_factory) -> None:
+    lab, tree = uefi_gentoo_lab(lab_factory, genkernel=True)
+    import shutil
+
+    shutil.rmtree(tree / "var/db/pkg/sys-kernel")
+    for cpv in ("linux-firmware-20261019", "dracut-112", "installkernel-68-r1", "linux-headers-6.18"):
+        vdb(tree, cpv, "toolchain-funcs optfeature")
+    vdb(tree, "scx-1.1.2", "cargo kernel-install-helper")  # a similar name is not the eclass
+    manager, sid, info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    with pytest.raises(RescueError) as err:
+        manager.plan({"session_id": sid, "action_id": "boot.kernel"})
+    assert err.value.short == "unsupported_action" and "genkernel" in err.value.message
+
+
+def test_portage_versions_are_ordered_like_a_person_would() -> None:
+    from gentoo_installerd.rescue.adapters.gentoo import version_key
+
+    ordered = ["6.9.12", "6.10.0_rc1", "6.10.0", "6.10.0-r1", "6.10.0_p1", "6.10.1", "6.11.2", "7.0.0"]
+    assert sorted(reversed(ordered), key=version_key) == ordered
