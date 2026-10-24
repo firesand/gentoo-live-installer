@@ -234,7 +234,7 @@ def recommend(profile: HardwareProfile | Mapping[str, Any] | None, manifest: Ins
 
     # Graphics
     nvidia = [gpu for gpu in hw.gpus if gpu.vendor == "nvidia"]
-    if nvidia and hardware.gpu_driver in ("auto", "open") and not hw.machine.hypervisor:
+    if nvidia and hardware.gpu_driver in ("auto", "nouveau") and not hw.machine.hypervisor:
         branch = data.nvidia_branch_for(nvidia[0].generation)
         if branch:
             out.append(Recommendation("rec.nvidia_proprietary", "info",
@@ -298,7 +298,7 @@ def defaults_for(profile: HardwareProfile | Mapping[str, Any] | None, manifest: 
             if getattr(manifest.hardware, name) == "auto" and scalars.get(key) not in (None, "", "auto"):
                 changes[f"hardware.{name}"] = scalars[key]
         if manifest.hardware.gpu_driver == "auto":
-            changes["hardware.gpu_driver"] = "open"
+            changes["hardware.gpu_driver"] = "nouveau"
     return changes
 
 

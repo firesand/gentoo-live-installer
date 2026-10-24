@@ -119,7 +119,7 @@
      "trim": "weekly",
      "zram": "no"
     },
-    "schema": 1,
+    "schema": 2,
     "services": [],
     "summary": [
      "CPU: 11th Gen Intel Core i7-11800H @ 2.30GHz, 16 threads; Intel microcode",
@@ -281,7 +281,7 @@
      "trim": "weekly",
      "zram": "no"
     },
-    "schema": 1,
+    "schema": 2,
     "services": [],
     "summary": [
      "CPU: 11th Gen Intel Core i7-11800H @ 2.30GHz, 16 threads; Intel microcode",
@@ -431,7 +431,7 @@
      "trim": "off",
      "zram": "no"
     },
-    "schema": 1,
+    "schema": 2,
     "services": [],
     "summary": [
      "CPU: 11th Gen Intel Core i7-11800H @ 2.30GHz, 16 threads; Intel and AMD microcode",
@@ -571,7 +571,7 @@
      "trim": "weekly",
      "zram": "no"
     },
-    "schema": 1,
+    "schema": 2,
     "services": [
      [
       "fstrim.timer",

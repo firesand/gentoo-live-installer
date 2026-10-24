@@ -122,7 +122,7 @@
      "zram": "yes",
      "zram_mib": 2004
     },
-    "schema": 1,
+    "schema": 2,
     "services": [],
     "summary": [
      "CPU: Intel Core Processor (Skylake, IBRS), 4 threads; no microcode",
@@ -261,7 +261,7 @@
      "zram": "yes",
      "zram_mib": 2004
     },
-    "schema": 1,
+    "schema": 2,
     "services": [],
     "summary": [
      "CPU: Intel Core Processor (Skylake, IBRS), 4 threads; no microcode",
@@ -418,7 +418,7 @@
      "trim": "off",
      "zram": "no"
     },
-    "schema": 1,
+    "schema": 2,
     "services": [],
     "summary": [
      "CPU: Intel Core Processor (Skylake, IBRS), 4 threads; no microcode",
@@ -540,7 +540,7 @@
      "zram": "yes",
      "zram_mib": 2004
     },
-    "schema": 1,
+    "schema": 2,
     "services": [],
     "summary": [
      "CPU: Intel Core Processor (Skylake, IBRS), 4 threads; no microcode",

@@ -514,7 +514,7 @@ class ServiceTests(unittest.TestCase):
             self.assertFalse(any(command[2] == "rc-update" for command in runner.commands))
 
     def test_minimal_openrc_without_bluetooth_has_no_desktop_services(self) -> None:
-        adds, _, _ = self.enabled(target_manifest(system={"desktop": "minimal"}, options={"bluetooth": False, "printing": False, "chrony": False, "cron": False, "logger": False}))
+        adds, _, _ = self.enabled(target_manifest(system={"desktop": "minimal"}, options={"bluetooth": False, "printing": False, "chrony": False, "cron": False, "logger": False, "ssh": False}))
         self.assertEqual(adds, [("NetworkManager", "default")])
 
     def test_phases_split_base_and_desktop_services(self) -> None:

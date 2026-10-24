@@ -118,7 +118,7 @@
      "trim": "off",
      "zram": "no"
     },
-    "schema": 1,
+    "schema": 2,
     "services": [],
     "summary": [
      "CPU: Intel Core i7-7700HQ CPU @ 2.80GHz, 8 threads; Intel microcode",
@@ -281,7 +281,7 @@
      "trim": "off",
      "zram": "no"
     },
-    "schema": 1,
+    "schema": 2,
     "services": [],
     "summary": [
      "CPU: Intel Core i7-7700HQ CPU @ 2.80GHz, 8 threads; Intel microcode",
@@ -437,7 +437,7 @@
      "trim": "off",
      "zram": "no"
     },
-    "schema": 1,
+    "schema": 2,
     "services": [],
     "summary": [
      "CPU: Intel Core i7-7700HQ CPU @ 2.80GHz, 8 threads; Intel and AMD microcode",
@@ -578,7 +578,7 @@
      "trim": "off",
      "zram": "no"
     },
-    "schema": 1,
+    "schema": 2,
     "services": [],
     "summary": [
      "CPU: Intel Core i7-7700HQ CPU @ 2.80GHz, 8 threads; Intel microcode",

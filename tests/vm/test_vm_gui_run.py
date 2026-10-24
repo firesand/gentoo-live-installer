@@ -51,7 +51,7 @@ def test_the_defaults_scenario_leaves_firmware_table_and_disk_to_the_gui(lab):
     assert lab.run("--scenario", "defaults", "--install-mode", "gui", "--keep") == 0
     plan = plan_of(lab)
     assert plan["detect"] is True
-    assert set(plan["overrides"]) == {"accounts", "options"}  # credentials and the SSH probe access, nothing else
+    assert set(plan["overrides"]) == {"accounts"}  # credentials only: sshd is on by default, so no option differs
     assert plan["detected"] == {"storage.device": "/dev/vda", "storage.device_id": vm.TARGET_SERIAL, "storage.device_id_kind": "",
                                 "storage.firmware": "uefi", "storage.table": "gpt",
                                 # seeded from the hardware report: recorded, not asserted

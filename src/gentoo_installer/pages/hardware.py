@@ -195,7 +195,7 @@ def _choices(name: str, labels: dict[str, str]) -> tuple[tuple[str, str], ...]:
 
 
 SPECS: tuple[Spec, ...] = (
-    Spec("nvk", "NVK Vulkan driver", "choice", _choices("nvk", {"auto": AUTO, "yes": "On", "no": "Off"}), advanced=True, group="graphics",
+    Spec("nvk", "NVK Vulkan driver", "choice", _choices("nvk", {"auto": AUTO, "on": "On", "off": "Off"}), advanced=True, group="graphics",
          hint="NVK is the open Vulkan driver for NVIDIA cards. It needs the graphics library Mesa to be compiled, which takes 30 to 60 minutes."),
     Spec("prime", "Two graphics cards", "choice", _choices("prime", {"auto": AUTO, "offload": "Install the switching helpers", "off": "Off"}), group="graphics",
          hint="On a laptop with an integrated and a separate card, a program can be started on the faster card when it needs it."),

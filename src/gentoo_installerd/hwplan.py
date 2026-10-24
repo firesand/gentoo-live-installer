@@ -35,7 +35,9 @@ from gentoo_installer import keyboard_data, recommend
 from gentoo_installer.hardware import DiskInfo, GpuInfo, HardwareProfile, gpu_label, is_hybrid, parent_disk_name
 from gentoo_installer.manifest import InstallManifest
 
-PLAN_SCHEMA = 1
+PLAN_SCHEMA = 2
+# Plans saved by an earlier installer (schema 1 has none of the Wave 5 fields) are still read.
+READABLE_PLAN_SCHEMAS = (1, 2)
 PORTAGE_FILE = "installer-hardware"  # name inside /etc/portage/package.{use,license,mask}/
 
 # -- atoms (every one is checked against the pinned tree by tests/hardware/test_tree_evidence.py) --------------------
@@ -123,6 +125,13 @@ class HardwarePlan:
     scalars: dict[str, Any] = field(default_factory=dict)  # resolved choices, JSON-safe
     notes: list[str] = field(default_factory=list)  # why something non-obvious was decided
     warnings: list[Issue] = field(default_factory=list)  # decisions that degrade or surprise
+    # Schema 2 (all empty by default; to_dict leaves an empty one out). See docs/contracts.md.
+    groups: list[str] = field(default_factory=list)  # groups the first user joins (merged into accounts.groups)
+    package_keywords: dict[str, list[str]] = field(default_factory=dict)  # atom -> keywords, /etc/portage/package.accept_keywords/installer-hardware
+    package_unmask: list[str] = field(default_factory=list)  # atoms for /etc/portage/package.unmask/installer-hardware
+    user_services: list[tuple[str, str]] = field(default_factory=list)  # (name, kind) enabled with systemctl --global enable
+    repos: list[str] = field(default_factory=list)  # overlay atoms of the companion repositories
+    first_steps: list[str] = field(default_factory=list)  # lines for the finish page and first-steps.txt
     schema: int = PLAN_SCHEMA
 
     # -- convenience for the consumers -------------------------------------------------------------------------------
@@ -168,7 +177,20 @@ class HardwarePlan:
             "summary": list(self.summary), "notes": list(self.notes),
             "warnings": [issue.to_dict() for issue in self.warnings],
             "scalars": dict(sorted(self.scalars.items())),
+            **self._wave5_dict(),
         }
+
+    def _wave5_dict(self) -> dict[str, Any]:
+        """The schema 2 fields that are not empty (an empty one is left out, so a plain plan reads like a schema 1 plan)."""
+        extra: dict[str, Any] = {
+            "groups": list(self.groups),
+            "package_keywords": {atom: list(words) for atom, words in sorted(self.package_keywords.items())},
+            "package_unmask": list(self.package_unmask),
+            "user_services": [list(item) for item in self.user_services],
+            "repos": list(self.repos),
+            "first_steps": list(self.first_steps),
+        }
+        return {key: value for key, value in extra.items() if value}
 
     @classmethod
     def from_dict(cls, raw: Mapping[str, Any]) -> HardwarePlan:
@@ -190,7 +212,10 @@ class HardwarePlan:
             summary=strings("summary"), notes=strings("notes"),
             warnings=[Issue(str(w.get("code", "")), str(w.get("severity", "info")), str(w.get("message", "")))
                       for w in raw.get("warnings", []) if isinstance(w, Mapping)],
-            scalars=dict(raw.get("scalars", {})))
+            scalars=dict(raw.get("scalars", {})), groups=strings("groups"),
+            package_keywords={str(k): [str(x) for x in v] for k, v in dict(raw.get("package_keywords", {})).items()},
+            package_unmask=strings("package_unmask"), user_services=pairs("user_services"), repos=strings("repos"),
+            first_steps=strings("first_steps"))
 
 
 # ---------------------------------------------------------------------------
@@ -475,9 +500,9 @@ class _Planner:
     def nvk(self) -> bool:
         """NVK (Mesa's Vulkan driver for NVIDIA GPUs) is part of a source build for Turing and newer, or on request."""
         choice = self.m.hardware.nvk
-        if self.proprietary or choice == "no":
+        if self.proprietary or choice == "off":
             result = False
-        elif choice == "yes":
+        elif choice == "on":
             result = bool(self.nvidia_gpus) or self.portable
         else:
             result = not self.binhost and not self.portable and any(g.generation == "turing+" for g in self.nvidia_gpus)
@@ -605,7 +630,7 @@ class _Planner:
                 self.service("fstrim.timer")
             else:
                 self.file("/etc/cron.weekly/fstrim", FSTRIM_CRON, 0o755)
-                if not self.m.options.cron:
+                if not self.m.options.cron_enabled:
                     self.p.required_atoms.append(A_CRONIE)
                     self.service("cronie")
                     self.note("A cron daemon was added to run the weekly TRIM.")

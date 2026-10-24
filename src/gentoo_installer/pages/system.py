@@ -340,7 +340,7 @@ class SystemPage(Page):
             self.secure_boot.setChecked(system.secure_boot)
             self.signing_key.setText(system.secure_boot_key)
             self.signing_cert.setText(system.secure_boot_certificate)
-            self.world_update.setChecked(system.world_update)
+            self.world_update.setChecked(system.world_update == "now")
             self._refresh_bootloaders()
             self._update_boot_rules()
         finally:

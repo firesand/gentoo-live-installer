@@ -21,7 +21,7 @@ from gentoo_installer.manifest import InstallManifest
 from . import __version__
 from .configure import GRUB_EFI_FILES, RECEIPT_PATH, Configurer, ExistingStack, PackageInstallError, grub_efi_target, live_input_problems, render_fstab
 from .events import ErrorCode, Event, EventSink
-from .hwplan import PLAN_SCHEMA, HardwarePlan, blocking_issues
+from .hwplan import READABLE_PLAN_SCHEMAS, HardwarePlan, blocking_issues
 from .hwplan import plan as plan_hardware
 from .inspect import Discovery, Inspection
 from .proxy import proxy_environment
@@ -782,7 +782,7 @@ class Installer:
         except (OSError, ValueError) as exc:
             raise InstallError(f"The saved hardware-specific setup cannot be read ({exc}); start the installation again") from exc
         plan = raw.get("plan") if isinstance(raw, dict) else None
-        if not isinstance(plan, dict) or raw.get("version") != 1 or raw.get("fingerprint") != self.checkpoints.fingerprint or plan.get("schema") != PLAN_SCHEMA:
+        if not isinstance(plan, dict) or raw.get("version") != 1 or raw.get("fingerprint") != self.checkpoints.fingerprint or plan.get("schema") not in READABLE_PLAN_SCHEMAS:
             raise InstallError("The saved hardware-specific setup does not belong to this installation; start the installation again")
         self.log("Using the hardware-specific setup that was decided when this installation started")
         return HardwarePlan.from_dict(plan)

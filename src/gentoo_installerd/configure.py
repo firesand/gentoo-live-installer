@@ -1610,7 +1610,7 @@ class Configurer:
             atoms.append("sys-apps/mlocate")
         if options.shell_completion:
             atoms.append("app-shells/bash-completion")
-        if options.logger:
+        if options.logger_enabled:
             if system.init == "openrc":
                 # syslog-ng writes /var/log/messages forever without a rotator.
                 atoms.extend(("app-admin/syslog-ng", "app-admin/logrotate"))
@@ -1622,7 +1622,7 @@ class Configurer:
 
     def wants_cron(self, manifest: InstallManifest) -> bool:
         """cron runs logrotate, so a ticked OpenRC logger brings a cron daemon with it."""
-        return manifest.options.cron or (manifest.options.logger and manifest.system.init == "openrc")
+        return manifest.options.cron_enabled or (manifest.options.logger_enabled and manifest.system.init == "openrc")
 
     def desktop_atoms(self, manifest: InstallManifest, plan: object | None = None) -> DesktopAtoms:
         system, options = manifest.system, manifest.options
@@ -1922,7 +1922,7 @@ class Configurer:
         if problem:
             result.degraded.append("The companion applications were skipped: " + problem)
             atoms.optional = [atom for atom in atoms.optional if atom not in COMPANION_ATOMS]
-        if manifest.system.world_update:
+        if manifest.system.world_update == "now":
             try:
                 self.emerge(manifest, ("--update", "--deep", "--newuse", "--keep-going", "@world"))
             except RunnerError as exc:
@@ -1983,7 +1983,7 @@ class Configurer:
             base.append(("chronyd", "default", False))
         if self.wants_cron(manifest):
             base.append(("cronie", "default", False))
-        if options.logger and system.init == "openrc":
+        if options.logger_enabled and system.init == "openrc":
             base.append(("syslog-ng", "default", False))
         if network.manager == "netifrc":
             interface = network.interface

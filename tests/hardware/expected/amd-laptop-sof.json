@@ -102,7 +102,7 @@
      "trim": "weekly",
      "zram": "no"
     },
-    "schema": 1,
+    "schema": 2,
     "services": [],
     "summary": [
      "CPU: AMD Ryzen 5 5500U with Radeon Graphics, 12 threads; AMD microcode (linux-firmware)",
@@ -222,7 +222,7 @@
      "trim": "weekly",
      "zram": "no"
     },
-    "schema": 1,
+    "schema": 2,
     "services": [],
     "summary": [
      "CPU: AMD Ryzen 5 5500U with Radeon Graphics, 12 threads; AMD microcode (linux-firmware)",
@@ -366,7 +366,7 @@
      "trim": "off",
      "zram": "no"
     },
-    "schema": 1,
+    "schema": 2,
     "services": [],
     "summary": [
      "CPU: AMD Ryzen 5 5500U with Radeon Graphics, 12 threads; Intel and AMD microcode",
@@ -484,7 +484,7 @@
      "trim": "weekly",
      "zram": "no"
     },
-    "schema": 1,
+    "schema": 2,
     "services": [
      [
       "fstrim.timer",
