@@ -249,6 +249,9 @@ pub struct App {
     pub exec: Executor,
     pub jobs: Vec<Job>,
     pub batches: Vec<Batch>,
+    /// The build directories of the running emerge are private to the portage user, so only emerge's
+    /// own output feeds the live phases (Activity says so).
+    pub build_logs_private: bool,
     /// The admin helper's audit log is not recording (shown in Settings).
     pub audit_note: Option<String>,
     /// The change that can be undone with one click (a multi-file batch that was committed).
@@ -405,6 +408,7 @@ impl App {
             exec,
             jobs: Vec::new(),
             batches: Vec::new(),
+            build_logs_private: false,
             audit_note: None,
             last_change: None,
             recent_changes: None,
@@ -1612,6 +1616,8 @@ impl App {
                 }
             }
         }
+        // Portage makes <PORTAGE_TMPDIR>/portage 0700 portage:portage: other users cannot even look in.
+        self.build_logs_private = dirs.values().any(|d| matches!(std::fs::read_dir(d.join("portage")), Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied));
         for j in self.jobs.iter_mut().filter(|j| j.running()) {
             if let JobKind::Emerge { tracker, .. } = &mut j.kind {
                 let active: Vec<(usize, PathBuf)> = tracker

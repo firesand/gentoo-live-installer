@@ -1155,6 +1155,9 @@ fn activity(app: &mut App, ui: &mut Ui) {
             job_header(app, ui, &job);
             if let JobKind::Emerge { tracker, .. } = &job.kind {
                 tracker_view(app, ui, tracker);
+                if job.running() && app.build_logs_private {
+                    ui.label(w::dim("Build phases come from emerge's own output: Portage keeps its build logs private to the portage user, so they cannot be followed from here (--quiet-build hides the most useful lines)."));
+                }
             }
             ui.add_space(6.0);
             ui.horizontal(|ui| {

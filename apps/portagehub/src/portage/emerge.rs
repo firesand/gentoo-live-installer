@@ -122,7 +122,7 @@ pub const SPECS: &[Spec] = &[
     sw("--keep-going", None, "Keep going after failures", "Continue with the remaining packages when one fails, then report the failures at the end.", Group::Build, false),
     sw("--fetchonly", Some('f'), "Download only", "Fetch all source archives but do not build anything. Good for slow/metered networks.", Group::Build, false),
     sw("--fetch-all-uri", Some('F'), "Download all sources", "Fetch every SRC_URI regardless of USE flags.", Group::Build, true),
-    yn("--quiet-build", "Quiet build", "Hide compiler output (it is still written to the build log). PortageHub shows the build log live either way.", Group::Build, false),
+    yn("--quiet-build", "Quiet build", "Hide compiler output (it is still written to the build log). Activity then has less to go on: the current phase of each package comes from emerge's own output, because the build logs under PORTAGE_TMPDIR are private to the portage user.", Group::Build, false),
     sw("--quiet-fail", None, "Quiet failures", "Do not print the full build log tail when a build fails.", Group::Build, true),
     sw("--skipfirst", None, "Skip first (with resume)", "When resuming, skip the package that failed first.", Group::Build, false),
     // Binary
