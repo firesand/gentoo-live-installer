@@ -28,6 +28,8 @@ HELP_WORDS = frozenset({"?", "h", "help"})
 YES_WORDS = frozenset({"y", "yes"})
 NO_WORDS = frozenset({"n", "no"})
 
+MAX_UNDECODABLE_LINES = 10  # in a row, before the input counts as closed
+
 NBSP = "\u00a0"  # keeps "b = back" together when a line is wrapped; printed as a plain space
 # Typographic characters that the fonts of a Linux text console often lack, and what to print instead.
 ASCII_FALLBACK = str.maketrans({"\u201c": '"', "\u201d": '"', "\u2018": "'", "\u2019": "'", "\u2026": "...", "\u2013": "-", "\u2014": "-", "\u00b7": "-", "\u2192": "->", NBSP: " "})
@@ -82,6 +84,16 @@ def is_tty(stream: object) -> bool:
         return bool(stream.isatty())  # type: ignore[attr-defined]
     except (AttributeError, ValueError, OSError):
         return False
+
+
+def typed_number(text: str) -> int | None:
+    """The number in ``text``, or None when it is not one.
+
+    ``str.isdigit()`` is also true for ², ³, ¹ and ① (a French keyboard has ² next to the 1), which ``int()`` refuses, and
+    ``int()`` refuses a few thousand digits too. A number that is too long to be a menu entry comes back as a huge one."""
+    if not text.isdecimal():
+        return None
+    return int(text) if len(text) <= 9 else 10**9
 
 
 def _int_from(environ: Mapping[str, str], name: str, fallback: int) -> int:
@@ -290,6 +302,7 @@ class Console:
 
     def _read_line(self, prompt: str, *, secret: bool = False) -> str:
         """One line from the user. Ctrl-C asks whether to quit; the end of the input raises InputClosed."""
+        undecodable = 0
         while True:
             try:
                 return self._read_once(prompt, secret)
@@ -297,6 +310,12 @@ class Console:
                 self._write("\n")
                 if self.confirm_quit():
                     raise Quit from None
+            except UnicodeDecodeError:
+                # The terminal sends another character set than the one this program reads (a Latin-1 serial terminal, say).
+                undecodable += 1
+                if undecodable >= MAX_UNDECODABLE_LINES:
+                    raise InputClosed from None  # a stream that never decodes is as good as closed
+                self.say("Some of what you typed could not be read as text. Check that your terminal uses UTF-8, then type it again.")
 
     def confirm_quit(self) -> bool:
         """Ask whether to leave. A second Ctrl-C, or the end of the input, counts as yes."""
@@ -307,6 +326,8 @@ class Console:
         except (KeyboardInterrupt, InputClosed):
             self._write("\n")
             return True
+        except UnicodeDecodeError:
+            return False  # not a "yes"
         return answer.strip().lower() in YES_WORDS
 
     def _help(self, text: str) -> None:
@@ -435,8 +456,9 @@ class Console:
                 return Selection(command=text)
             if not text and default is not None:
                 return Selection(index=default)
-            if text.isdigit() and 1 <= int(text) <= len(options):
-                return Selection(index=int(text) - 1)
+            number = typed_number(text)
+            if number is not None and 1 <= number <= len(options):
+                return Selection(index=number - 1)
             self.say("Please type one of the numbers or letters shown." if commands else "Please type one of the numbers shown.")
 
     def pick(
@@ -485,8 +507,8 @@ class Console:
                     return default
                 self.say("Type a number or part of a name.")
                 continue
-            if text.isdigit():
-                number = int(text)
+            number = typed_number(text)
+            if number is not None:
                 if 1 <= number <= len(window):
                     return window[number - 1]
                 self.say(f"Please type a number from 1 to {len(window)}.")
