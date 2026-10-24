@@ -1,59 +1,11 @@
 //! Drives the real helper binary over its JSON-lines protocol.
 //! Runs unprivileged and only uses read-only commands.
 
-use portagehub::protocol::{Event, Op, Request};
-use std::io::{BufRead, BufReader, Write};
-use std::process::{Command, Stdio};
-use std::sync::mpsc;
-use std::time::Duration;
+mod common;
 
-struct Helper {
-    child: std::process::Child,
-    stdin: std::process::ChildStdin,
-    rx: mpsc::Receiver<Event>,
-}
-
-impl Helper {
-    fn start() -> Helper {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_portagehub-helper"))
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .spawn()
-            .expect("spawn helper");
-        let stdin = child.stdin.take().unwrap();
-        let stdout = child.stdout.take().unwrap();
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
-                let ev: Event = serde_json::from_str(&line).expect("valid event json");
-                if tx.send(ev).is_err() {
-                    break;
-                }
-            }
-        });
-        Helper { child, stdin, rx }
-    }
-
-    fn send(&mut self, id: u64, op: Op) {
-        let s = serde_json::to_string(&Request::new(id, op)).unwrap();
-        writeln!(self.stdin, "{s}").unwrap();
-        self.stdin.flush().unwrap();
-    }
-
-    fn until(&self, mut pred: impl FnMut(&Event) -> bool, secs: u64) -> Vec<Event> {
-        let mut seen = Vec::new();
-        let deadline = std::time::Instant::now() + Duration::from_secs(secs);
-        loop {
-            let left = deadline.saturating_duration_since(std::time::Instant::now());
-            let ev = self.rx.recv_timeout(left).unwrap_or_else(|_| panic!("timeout; saw {seen:?}"));
-            let done = pred(&ev);
-            seen.push(ev);
-            if done {
-                return seen;
-            }
-        }
-    }
-}
+use common::Helper;
+use portagehub::protocol::{Event, Op};
+use std::io::Write;
 
 #[test]
 fn protocol_roundtrip() {

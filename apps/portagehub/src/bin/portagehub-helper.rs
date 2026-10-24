@@ -10,7 +10,7 @@
 //! `/proc/<pid>/fd`, unlike a pipe), and the process at the other end must be
 //! the user polkit authenticated and one of our ancestors.
 
-use portagehub::protocol::{Event, Request};
+use portagehub::protocol::Event;
 use portagehub::server::{Server, Sink};
 use std::io::{BufRead, Write};
 use std::sync::Arc;
@@ -109,13 +109,11 @@ fn main() {
         if line.trim().is_empty() {
             continue;
         }
-        match serde_json::from_str::<Request>(&line) {
+        match portagehub::protocol::parse_request(&line) {
             Ok(req) => server.handle(req, sink.clone()),
-            Err(e) => {
-                // Answer with the request's id so the GUI can fail that request
-                // (e.g. an operation this helper version doesn't know).
-                let id = serde_json::from_str::<serde_json::Value>(&line).ok().and_then(|v| v.get("id").and_then(|i| i.as_u64())).unwrap_or(0);
-                let _ = tx.send(Event::Err { id, msg: format!("unsupported request ({e}); the installed helper may be older than PortageHub — run sudo dist/install.sh") });
+            Err(bad) => {
+                // Answer with the request's id so the GUI can fail that request.
+                let _ = tx.send(Event::Err { id: bad.id, msg: bad.msg });
             }
         }
     }

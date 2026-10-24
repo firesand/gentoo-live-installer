@@ -99,22 +99,73 @@ pub enum Op {
         label: String,
     },
     /// Close a transaction: its changes stay and can be undone later.
+    ///
+    /// The wire key is `tx_id`: a plain `tx` would be swallowed by [`Request::tx`]
+    /// (the request is flattened around the op) and the variant would never parse.
     Commit {
+        #[serde(rename = "tx_id")]
         tx: String,
     },
     /// Restore every file a transaction changed. For a committed transaction
     /// this is refused when one of its files was changed since, unless `force`.
+    /// The transaction id travels as `tx_id` (see [`Op::Commit`]).
     Rollback {
+        #[serde(rename = "tx_id")]
         tx: String,
         #[serde(default)]
         force: bool,
     },
 }
 
+/// Every operation name on the wire (the `op` tag), kept next to [`Op::name`].
+pub const OP_NAMES: &[&str] = &[
+    "ping",
+    "run",
+    "write_file",
+    "delete_file",
+    "mkdir",
+    "rename",
+    "signal",
+    "config_update",
+    "boot_scan",
+    "boot_action",
+    "mark_good",
+    "remove_kernel_leftovers",
+    "clean_build_dirs",
+    "remount",
+    "begin",
+    "commit",
+    "rollback",
+];
+
 /// The only mount points [`Op::Remount`] accepts.
 pub const BOOT_MOUNTPOINTS: &[&str] = &["/boot", "/boot/efi", "/efi"];
 
 impl Op {
+    /// The `op` tag this operation has on the wire (exhaustive on purpose: a new
+    /// variant must be named here and listed in [`OP_NAMES`]).
+    pub fn name(&self) -> &'static str {
+        match self {
+            Op::Ping => "ping",
+            Op::Run { .. } => "run",
+            Op::WriteFile { .. } => "write_file",
+            Op::DeleteFile { .. } => "delete_file",
+            Op::Mkdir { .. } => "mkdir",
+            Op::Rename { .. } => "rename",
+            Op::Signal { .. } => "signal",
+            Op::ConfigUpdate { .. } => "config_update",
+            Op::BootScan => "boot_scan",
+            Op::BootAction { .. } => "boot_action",
+            Op::MarkGood { .. } => "mark_good",
+            Op::RemoveKernelLeftovers { .. } => "remove_kernel_leftovers",
+            Op::CleanBuildDirs => "clean_build_dirs",
+            Op::Remount { .. } => "remount",
+            Op::Begin { .. } => "begin",
+            Op::Commit { .. } => "commit",
+            Op::Rollback { .. } => "rollback",
+        }
+    }
+
     /// Oldest helper version (major, minor) that understands this operation.
     pub fn min_helper(&self) -> (u32, u32) {
         match self {
@@ -131,6 +182,42 @@ pub fn parse_version(v: Option<&str>) -> (u32, u32) {
     let Some(v) = v else { return (0, 1) };
     let mut it = v.split('.').map(|x| x.parse::<u32>().unwrap_or(0));
     (it.next().unwrap_or(0), it.next().unwrap_or(0))
+}
+
+/// A request line the helper could not turn into a [`Request`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BadRequest {
+    /// The request id when it could be recovered (0 otherwise), so the GUI can fail that request.
+    pub id: u64,
+    pub msg: String,
+}
+
+/// The `id` of a request from the start of its line, for lines that are too
+/// long or not valid UTF-8 to parse as a whole. The GUI always writes `id` first.
+pub fn id_from_prefix(line: &[u8]) -> u64 {
+    let head = &line[..line.len().min(256)];
+    let Some(at) = head.windows(5).position(|w| w == b"\"id\":") else { return 0 };
+    let digits: Vec<u8> = head[at + 5..].iter().copied().skip_while(|b| *b == b' ').take_while(u8::is_ascii_digit).collect();
+    std::str::from_utf8(&digits).ok().and_then(|d| d.parse().ok()).unwrap_or(0)
+}
+
+/// Parse one request line. A failure carries the request id and a message that
+/// only blames an old helper when the operation itself is unknown.
+pub fn parse_request(line: &str) -> Result<Request, BadRequest> {
+    let err = match serde_json::from_str::<Request>(line) {
+        Ok(r) => return Ok(r),
+        Err(e) => e,
+    };
+    let value: Option<serde_json::Value> = serde_json::from_str(line).ok();
+    let id = value.as_ref().and_then(|v| v.get("id")).and_then(|i| i.as_u64()).unwrap_or_else(|| id_from_prefix(line.as_bytes()));
+    let msg = match value.as_ref().map(|v| v.get("op").and_then(|o| o.as_str())) {
+        None => format!("request is not valid JSON ({err})"),
+        Some(Some(op)) if !OP_NAMES.contains(&op) => {
+            format!("unsupported request: unknown operation \"{op}\"; the installed helper may be older than PortageHub — run sudo dist/install.sh")
+        }
+        Some(_) => format!("invalid request ({err})"),
+    };
+    Err(BadRequest { id, msg })
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
@@ -357,6 +444,99 @@ mod tests {
         assert!(!valid_kver("7.3/0"));
         assert!(!valid_kver("x7.3"));
         assert!(!valid_kver(""));
+    }
+
+    fn every_op() -> Vec<Op> {
+        vec![
+            Op::Ping,
+            Op::Run { argv: vec!["emerge".into(), "--pretend".into()], env: vec![("FEATURES".into(), "x".into())], cwd: Some("/".into()) },
+            Op::WriteFile { path: "/etc/portage/package.use/x".into(), content: "a/b c\n".into(), backup: true },
+            Op::DeleteFile { path: "/etc/portage/package.use/x".into() },
+            Op::Mkdir { path: "/etc/portage/package.use".into() },
+            Op::Rename { from: "/etc/portage/a".into(), to: "/etc/portage/b".into() },
+            Op::Signal { target: 3, signal: 2 },
+            Op::ConfigUpdate { path: "/etc/._cfg0000_make.conf".into(), accept: true },
+            Op::BootScan,
+            Op::BootAction { action: BootAction::DracutRegen, kver: Some("6.1.0".into()) },
+            Op::MarkGood { kver: "6.1.0".into(), state_dir: "/var/lib/kernel-fallback".into(), backup: true },
+            Op::RemoveKernelLeftovers { kver: "6.1.0".into(), old_only: true },
+            Op::CleanBuildDirs,
+            Op::Remount { target: "/boot".into(), rw: true },
+            Op::Begin { label: "x".into() },
+            Op::Commit { tx: "1-2".into() },
+            Op::Rollback { tx: "1-2".into(), force: true },
+        ]
+    }
+
+    #[test]
+    fn roundtrip_all_ops() {
+        let ops = every_op();
+        let mut names: Vec<&str> = ops.iter().map(Op::name).collect();
+        names.sort_unstable();
+        let mut listed = OP_NAMES.to_vec();
+        listed.sort_unstable();
+        assert_eq!(names, listed, "OP_NAMES and every_op() must list the same operations");
+        for op in ops {
+            for tx in [None, Some("9-9".to_string())] {
+                let req = Request { id: 41, tx: tx.clone(), op: op.clone() };
+                let text = serde_json::to_string(&req).unwrap();
+                let wire: serde_json::Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(wire["op"], op.name(), "{text}");
+                assert_eq!(wire.get("tx").and_then(|t| t.as_str()), tx.as_deref(), "{text}");
+                let back = parse_request(&text).unwrap_or_else(|e| panic!("{} does not parse: {} ({text})", op.name(), e.msg));
+                assert_eq!(back.id, 41);
+                assert_eq!(back.tx, tx, "{text}");
+                assert_eq!(serde_json::to_value(&back).unwrap(), wire, "{text}");
+            }
+        }
+    }
+
+    #[test]
+    fn commit_and_rollback_keep_both_transaction_ids() {
+        // `tx` is the transaction a request belongs to, `tx_id` the one being closed.
+        let r = parse_request(r#"{"id":5,"tx":"A","op":"commit","tx_id":"B"}"#).unwrap();
+        assert_eq!(r.tx.as_deref(), Some("A"));
+        assert!(matches!(r.op, Op::Commit { ref tx } if tx == "B"));
+        let r = parse_request(r#"{"id":6,"op":"rollback","tx_id":"C"}"#).unwrap();
+        assert!(matches!(r.op, Op::Rollback { ref tx, force: false } if tx == "C"));
+        // The old, never parsable spelling is an error that names the problem, not the helper's age.
+        let e = parse_request(r#"{"id":7,"op":"commit","tx":"B"}"#).unwrap_err();
+        assert_eq!(e.id, 7);
+        assert!(e.msg.starts_with("invalid request") && !e.msg.contains("older"), "{}", e.msg);
+    }
+
+    #[test]
+    fn bad_requests_keep_their_id() {
+        let e = parse_request(r#"{"id":6,"op":"does_not_exist"}"#).unwrap_err();
+        assert_eq!(e.id, 6);
+        assert!(e.msg.contains("unsupported") && e.msg.contains("older"), "{}", e.msg);
+        let e = parse_request(r#"{"id":8,"op":"write_file","path":"/etc/portage/x"}"#).unwrap_err();
+        assert_eq!(e.id, 8);
+        assert!(e.msg.contains("content"), "{}", e.msg);
+        let e = parse_request("not json").unwrap_err();
+        assert_eq!(e.id, 0);
+        assert!(e.msg.contains("not valid JSON"));
+        assert_eq!(id_from_prefix(br#"{"id":123,"op":"write_file","path":"/etc/port"#), 123);
+        assert_eq!(id_from_prefix(b"\xff\xfe garbage"), 0);
+    }
+
+    #[test]
+    fn roundtrip_all_events() {
+        let events = vec![
+            Event::Ready { uid: 1000, version: Some("0.4.0".into()) },
+            Event::Data { id: 1, text: "{}".into() },
+            Event::Started { id: 2, pid: 77 },
+            Event::Line { id: 3, stream: StreamKind::Stderr, text: "x".into() },
+            Event::Partial { id: 3, stream: StreamKind::Stdout, text: "50%".into() },
+            Event::Exit { id: 4, code: Some(1), signal: None },
+            Event::Ok { id: 5 },
+            Event::Err { id: 6, msg: "no".into() },
+        ];
+        for ev in events {
+            let text = serde_json::to_string(&ev).unwrap();
+            let back: Event = serde_json::from_str(&text).unwrap();
+            assert_eq!(serde_json::to_string(&back).unwrap(), text);
+        }
     }
 
     #[test]
