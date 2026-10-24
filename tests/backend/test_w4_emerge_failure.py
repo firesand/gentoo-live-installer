@@ -138,6 +138,17 @@ class BuildLogReasonTests(unittest.TestCase):
                 self.assertEqual(diagnosis.kind, "memory")
                 self.assertEqual(diagnosis.summary, f"app-misc/foo-1.0 ran out of memory while compiling: {line}")
 
+    def test_a_killed_rustc_is_found_although_cargo_prints_its_whole_command_line_there(self) -> None:
+        # cargo: the sign of the kill is at the end of a line that holds the full rustc command, a thousand characters or more
+        command = ("/usr/bin/rustc --crate-name wgpu_core --edition=2021 /var/tmp/portage/app-portage/portagehub-0.4.0/work/cargo_home/gentoo/wgpu-core-24.0.0/src/lib.rs "
+                   "--error-format=json --json=diagnostic-rendered-ansi,artifacts,future-incompat --crate-type lib --emit=dep-info,metadata,link -C opt-level=3 "
+                   + "-C metadata=0123456789abcdef --extern naga=/var/tmp/portage/app-portage/portagehub-0.4.0/work/target/release/deps/libnaga-0123456789abcdef.rlib " * 8)
+        log = f"   Compiling wgpu-core v24.0.0\nerror: could not compile `wgpu-core` (lib)\n\nCaused by:\n  process didn't exit successfully: `{command}` (signal: 9, SIGKILL: kill)\n"
+        self.assertGreater(len(command), 1000)
+        diagnosis = self.explain(log)
+        self.assertTrue(diagnosis.out_of_memory)
+        self.assertEqual(diagnosis.summary, "app-misc/foo-1.0 ran out of memory while compiling: error: could not compile `wgpu-core` (lib) (signal: 9, SIGKILL)")
+
     def test_the_word_killed_counts_only_as_the_shell_prints_it(self) -> None:
         self.assertTrue(self.explain("make[2]: *** [CMakeFiles/a.dir/build.make:76: a.o] Killed\n").out_of_memory)
         self.assertFalse(self.explain("test_child_process_killed ... FAILED\nsrc/a.c:1:1: error: boom\n").out_of_memory)

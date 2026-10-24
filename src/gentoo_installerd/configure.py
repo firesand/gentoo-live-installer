@@ -700,13 +700,18 @@ _PHASES = {
 
 def _build_log_findings(text: str) -> tuple[str, str]:
     """(the line that shows the build was killed for lack of memory, the first error line) of the end of a build log; either may be ''."""
-    lines = [_ANSI.sub("", line).strip() for line in text.splitlines()]
-    lines = [line for line in lines if line and len(line) <= _LOG_LINE_CHARS][-_LOG_LINES:]
-    memory = next((line for line in lines if _LOG_MEMORY_PATTERN.search(line)), "")
-    if memory:
+    lines = [line for line in (_ANSI.sub("", line).strip() for line in text.splitlines()) if line][-_LOG_LINES:]
+    short = [line for line in lines if len(line) <= _LOG_LINE_CHARS]  # a longer line is a build command, not a message
+    sign = next((found for found in (_LOG_MEMORY_PATTERN.search(line) for line in lines) if found), None)
+    if sign is not None:
+        memory = sign.string.strip()
+        if len(memory) > _LOG_LINE_CHARS:
+            # cargo ends the line of the whole rustc command with the kill: name the error before it, and the sign
+            before = next((line for line in short if _LOG_ERROR_PATTERNS[0].search(line)), "")
+            memory = f"{before} ({sign.group(0)})" if before else sign.group(0)
         return memory, ""
     for pattern in _LOG_ERROR_PATTERNS:
-        error = next((line for line in lines if pattern.search(line)), "")
+        error = next((line for line in short if pattern.search(line)), "")
         if error:
             return "", error
     return "", ""
