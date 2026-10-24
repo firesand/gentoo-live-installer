@@ -6,8 +6,9 @@ from pathlib import Path
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QPushButton
 
-from ..keyboard import CONSOLE_KEYMAP_CHOICES
+from .. import keymaps
 from ..manifest import InstallManifest
+from ..system_info import SystemInfo
 from ..widgets import Card, Page, wrapped_label
 
 
@@ -36,10 +37,12 @@ def load_locales(path: Path = SUPPORTED_LOCALES) -> list[str]:
 
 class AccountsPage(Page):
     keyboardChangeRequested = Signal()
+    keyboardPicked = Signal(str, str, str)  # XKB layout, variant, console keymap: chosen here, to be applied to the session
 
     def __init__(self, manifest: InstallManifest):
         super().__init__("Personalize your system", "Create your daily account and choose regional settings. Passwords are sent only to the privileged installer and are never written to logs.")
         self.manifest = manifest
+        self.info: SystemInfo | None = None
         account = Card("User accounts")
         form = QFormLayout()
         self.hostname = QLineEdit()
@@ -92,8 +95,10 @@ class AccountsPage(Page):
         self.timezone.setCurrentText("UTC")
         regional_form.addRow("Timezone", self.timezone)
         self.keymap = QComboBox()
-        self.keymap.setEditable(True)
-        self.keymap.addItems(CONSOLE_KEYMAP_CHOICES)
+        self.keymap.setAccessibleName("Console keymap")
+        for console, label in keymaps.console_choices():
+            self.keymap.addItem(f"{label} ({console})", console)
+        self.keymap.activated.connect(self._keymap_picked)
         regional_form.addRow("Console keymap", self.keymap)
         keyboard_row = QHBoxLayout()
         self.keyboard_summary = QLabel()
@@ -105,10 +110,64 @@ class AccountsPage(Page):
         keyboard_row.addWidget(change)
         regional_form.addRow("Keyboard", keyboard_row)
         regional.content.addLayout(regional_form)
-        regional.content.addWidget(wrapped_label("The console keymap is used on the text console and when a disk passphrase is requested at start-up.", muted=True))
+        regional.content.addWidget(wrapped_label("The console keymap is used on the text console and when a disk passphrase is requested at start-up. "
+                                                 "Choosing one here also sets the keyboard layout of the desktop to match.", muted=True))
+        self.keymap_note = wrapped_label("", muted=True)
+        self.keymap_note.hide()
+        regional.content.addWidget(self.keymap_note)
+        self.rtc_local = QCheckBox("The clock keeps local time (for Windows dual boot)")
+        self.rtc_local.setToolTip("Windows keeps local time in the hardware clock, Linux normally keeps UTC. With one choice for both, the time stays right after switching systems.")
+        self.rtc_local.toggled.connect(lambda _=False: self._update_clock_hint())
+        regional.content.addWidget(self.rtc_local)
+        self.clock_hint = wrapped_label("", muted=True)
+        self.clock_hint.hide()
+        regional.content.addWidget(self.clock_hint)
         self.content.addWidget(regional)
         self.advance_on_enter(self.hostname, self.full_name, self.username, self.password, self.password_confirm, self.root_password, self.root_confirm)
         self.load_manifest()
+        self.finish_layout()
+
+    def set_info(self, info: SystemInfo) -> None:
+        """What was found on this computer decides whether the clock advice shows."""
+        self.info = info
+        self._update_clock_hint()
+
+    def _update_clock_hint(self) -> None:
+        """Windows next to Linux is the usual reason for a hardware clock in local time: suggest it, never set it."""
+        info = self.info
+        suggest = False
+        if info is not None and info.hardware:
+            profile = info.profile
+            suggest = bool(profile.firmware.windows_boot_entry) or profile.clock.rtc_mode == "local"
+        shown = suggest and not self.rtc_local.isChecked()
+        self.clock_hint.setText("Windows was found on this computer, or its clock already keeps local time. Tick the box above so both systems show the right time." if shown else "")
+        self.clock_hint.setVisible(shown)
+
+    def _show_keymap(self, keymap: str) -> None:
+        """Show the manifest's console keymap; one that is not in the table is added as a flagged entry, never replaced."""
+        index = self.keymap.findData(keymap)
+        if index < 0:
+            text = "Automatic, from the keyboard layout" if keymap in {"", "auto"} else f"{keymap} (custom value)"
+            self.keymap.addItem(text, keymap)
+            index = self.keymap.count() - 1
+        self.keymap.setCurrentIndex(index)
+
+    def _keymap_picked(self, _index: int = 0) -> None:
+        """The user chose a console keymap: the desktop layout follows, so the passphrase prompt and the session agree."""
+        console = str(self.keymap.currentData())
+        layout, variant = keymaps.xkb_for_console(console)
+        system = self.manifest.system
+        moved = (layout, variant) != (system.keyboard_layout, system.keyboard_variant)
+        system.keymap, system.keyboard_layout, system.keyboard_variant = console, layout, variant
+        self.keyboardPicked.emit(layout, variant, console)
+        note = ""
+        if moved:
+            note = f"The keyboard layout of this session is now {layout}{f' ({variant})' if variant else ''}. Type the passwords on this page again if you typed them before."
+            if self.manifest.storage.luks:
+                note += " The disk passphrase is asked for with this layout at every start: go back to the Storage step and type it again."
+        self.keymap_note.setText(note)
+        self.keymap_note.setVisible(bool(note))
+        self.keyboard_summary.setText(f"Keyboard layout of the installed system: {layout}{f' ({variant})' if variant else ''}. Pick it on the welcome page.")
 
     def _show_passwords(self, shown: bool) -> None:
         mode = QLineEdit.EchoMode.Normal if shown else QLineEdit.EchoMode.Password
@@ -130,7 +189,8 @@ class AccountsPage(Page):
         system = self.manifest.system
         self.locale_box.setCurrentText(system.locale)
         self.timezone.setCurrentText(system.timezone)
-        self.keymap.setCurrentText(system.keymap)
+        self._show_keymap(system.keymap)
+        self.rtc_local.setChecked(system.rtc_local)
         layout = system.keyboard_layout + (f" ({system.keyboard_variant})" if system.keyboard_variant else "")
         self.keyboard_summary.setText(f"Keyboard layout of the installed system: {layout}. Pick it on the welcome page.")
 
@@ -146,7 +206,8 @@ class AccountsPage(Page):
         accounts.ssh_authorized_keys = [line.strip() for line in self.ssh_keys.toPlainText().splitlines() if line.strip()]
         self.manifest.system.locale = self.locale_box.currentText().strip()
         self.manifest.system.timezone = self.timezone.currentText().strip()
-        self.manifest.system.keymap = self.keymap.currentText().strip()
+        self.manifest.system.keymap = str(self.keymap.currentData() or self.manifest.system.keymap)
+        self.manifest.system.rtc_local = self.rtc_local.isChecked()
 
     def validate_page(self) -> tuple[bool, str]:
         self.save_manifest()

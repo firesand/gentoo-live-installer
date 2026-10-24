@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 from .. import daemon_client, diagnostics
 from ..backend import BackendWorker
 from ..manifest import InstallManifest
-from ..widgets import Card, Page, wrapped_label
+from ..widgets import Card, FlowLayout, Page, wrapped_label
 
 # The visible log keeps the newest lines only; the daemon keeps the whole log.
 LOG_MAX_BLOCKS = 5000
@@ -241,6 +241,10 @@ class ProgressPage(Page):
         self._storage_started = False
         self._storage_done = False
         self._retryable: bool | None = None
+        self._resumable: bool | None = None
+        self._bootable = False  # the bootloader step finished: the new system starts even though a later step failed
+        self._degraded: list[str] = []  # optional parts that could not be installed
+        self._warnings: list[str] = []  # things that went wrong after the install itself succeeded (cleanup)
         self._cancelled = False
         self._busy = False
         self._terminal = False
@@ -253,6 +257,8 @@ class ProgressPage(Page):
         self._lines_seen = 0
         self._truncated = False
         self._last_error_line = ""
+        self._failure_message = ""
+        self._failure_stage = ""
         self._exporters: list[QThread] = []
         self.timer = QTimer(self)
         self.timer.setInterval(1000)
@@ -290,7 +296,11 @@ class ProgressPage(Page):
         panel.setContentsMargins(18, 14, 18, 14)
         self.result_hint = wrapped_label("", selectable=True)
         panel.addWidget(self.result_hint)
-        buttons = QHBoxLayout()
+        self.outcome_details = wrapped_label("", selectable=True)
+        self.outcome_details.setAccessibleName("What did not work")
+        self.outcome_details.hide()
+        panel.addWidget(self.outcome_details)
+        buttons = FlowLayout()
         self.retry_button = QPushButton("Try again")
         self.resume_button = QPushButton("Resume installation")
         self.resume_button.setObjectName("primaryButton")
@@ -302,7 +312,6 @@ class ProgressPage(Page):
         self.quit_button = QPushButton("Quit")
         for button in (self.reconnect_button, self.resume_button, self.retry_button, self.settings_button, self.save_log_button, self.diagnostics_button, self.quit_button):
             buttons.addWidget(button)
-        buttons.addStretch()
         panel.addLayout(buttons)
         self.notice = wrapped_label("", muted=True, selectable=True)
         self.notice.hide()
@@ -327,7 +336,7 @@ class ProgressPage(Page):
         self.cancel.clicked.connect(self._cancel)
         actions.addWidget(self.cancel)
         actions.addStretch()
-        self.reboot = QPushButton("Restart into Gentoo")
+        self.reboot = QPushButton("Restart now")
         self.reboot.setObjectName("primaryButton")
         self.reboot.setVisible(False)
         self.reboot.clicked.connect(self.rebootRequested)
@@ -395,6 +404,12 @@ class ProgressPage(Page):
         self._cancelled = False
         self._busy = False
         self._retryable = None
+        self._resumable = None
+        if not keep_log:
+            self._bootable = False  # a resumed run starts from a system that already boots: only the service can say it does not
+        self._degraded = []
+        self._warnings = []
+        self._refresh_outcome_details()
         self._merged_files = 0
         self._last_error_line = ""
         self.elapsed.setText(format_elapsed(0))
@@ -443,16 +458,20 @@ class ProgressPage(Page):
         if kind in {"stage", "progress"}:
             self._stage_event(kind, stage, str(message), data, event)
         elif kind == "status":
-            if data.get("status") == "running" and not self._stage:
+            if data.get("warning") is True and message:
+                self._add_warning(str(message))
+            elif data.get("status") == "running" and not self._stage:
                 self.detail.setText(str(message) or "Connected to the installer")
         elif kind in {"error", "failed"}:
-            retryable = data.get("retryable")
+            retryable, resumable = data.get("retryable"), data.get("resumable")
+            self._absorb_outcome(data)
             self._fail(
                 str(message or event.get("error") or "The installation failed. Review the log for details."),
                 stage=stage,
                 cancelled=event.get("error") == "cancelled" or data.get("code") == "install.cancelled",
                 retryable=retryable if isinstance(retryable, bool) else None,
                 busy=data.get("code") == "install.busy",
+                resumable=resumable if isinstance(resumable, bool) else None,
             )
         elif kind == "completed":
             self._completed(str(message), data)
@@ -474,6 +493,7 @@ class ProgressPage(Page):
             if kind == "stage" and status == "running":
                 self._merged_files = 0
             self._refresh_detail()
+        self._absorb_outcome(data)
         percent = event.get("percent", event.get("progress"))
         stage_progress = data.get("stage_progress")
         if kind == "stage":
@@ -556,19 +576,61 @@ class ProgressPage(Page):
 
     # --- outcome -----------------------------------------------------------------------------------
 
+    @property
+    def bootable(self) -> bool:
+        """The new system can start although the run did not finish cleanly (the bootloader step was done)."""
+        return self._bootable
+
+    def _absorb_outcome(self, data: dict) -> bool:
+        """Take bootable / degraded / warnings out of an event's data. True when something new was learned."""
+        changed = False
+        if data.get("bootable") is True and not self._bootable:
+            self._bootable, changed = True, True
+        elif data.get("bootable") is False and self._bootable:
+            self._bootable, changed = False, True
+        for key, store in (("degraded", self._degraded), ("warnings", self._warnings)):
+            items = data.get(key)
+            for item in items if isinstance(items, list) else []:
+                text = str(item).strip()
+                if text and text not in store:
+                    store.append(text)
+                    changed = True
+        if changed:
+            self._refresh_outcome_details()
+        return changed
+
+    def _add_warning(self, text: str) -> None:
+        """A problem after the installation itself succeeded (cleanup): kept for the result panel and written to the log."""
+        if text not in self._warnings:
+            self._warnings.append(text)
+            self._append_log("NOTE: " + text)
+            self._refresh_outcome_details()
+
+    def _refresh_outcome_details(self) -> None:
+        lines = []
+        if self._degraded:
+            lines.append("Some optional parts could not be installed: " + "; ".join(self._degraded) + ". The system works without them; you can add them later.")
+        lines += [f"Note: {warning}" for warning in self._warnings]
+        self.outcome_details.setText("\n".join(lines))
+        self.outcome_details.setVisible(bool(lines))
+
     def _completed(self, message: str, data: dict) -> None:
         self._terminal = True
         self.flush_log()
+        learned = self._absorb_outcome(data)
         if data.get("success", True) is True and not self._failure_reported:
             self.model.finish()
             self.progress.setRange(0, 100)
             self.progress.setValue(100)
-            self.stage.setText("Gentoo is ready")
-            self.detail.setText(f"{message or 'Installation completed.'} Remove the installation medium, then restart.")
+            self.stage.setText("Installation finished: remove the USB stick, then restart")
+            self.detail.setText(f"{message or 'Gentoo is installed.'} Remove the installation medium (the USB stick or disc) and restart the computer to start Gentoo.")
             self.secondary.hide()
             self.cancel.setVisible(False)
             self.reboot.setVisible(True)
-            self.result_hint.setText("The new system passed its final checks. You can save the log for your records.")
+            self.result_hint.setText(
+                "The new system passed its final checks. You can save the log for your records."
+                if not self._degraded else "The new system works, but some optional parts are missing (see below). You can save the log for your records.")
+            self.resume_button.setText("Resume installation")
             self._set_buttons(save=True)
             self.result_panel.show()
             self.timer.stop()
@@ -576,8 +638,10 @@ class ProgressPage(Page):
             self.finished.emit(True)
         elif not self._failure_reported:
             self._fail(message or "The installation did not complete successfully.")
+        elif learned:
+            self._present_failure()  # the completed event knew more than the error event (the system can start)
 
-    def _fail(self, message: str, *, stage: str = "", cancelled: bool = False, retryable: bool | None = None, busy: bool = False) -> None:
+    def _fail(self, message: str, *, stage: str = "", cancelled: bool = False, retryable: bool | None = None, busy: bool = False, resumable: bool | None = None) -> None:
         self.flush_log()
         first = not self._failure_reported
         self._failure_reported = True
@@ -585,9 +649,24 @@ class ProgressPage(Page):
         self._busy = self._busy or busy
         if retryable is not None:
             self._retryable = retryable
-        failing = stage or self._stage
+        if resumable is not None:
+            self._resumable = resumable
+        self._failure_message, self._failure_stage = message, stage or self._stage
+        self._present_failure()
+        line = "ERROR: " + message
+        if line != self._last_error_line:
+            self._last_error_line = line
+            self._append_log(line)
+            self.flush_log()
+        if first and not self._finished_emitted:
+            self._finished_emitted = True
+            self.finished.emit(False)
+
+    def _present_failure(self) -> None:
+        message, failing = self._failure_message, self._failure_stage
         self.progress.setRange(0, 100)
         self.progress.setValue(min(100, round(self.model.overall)))  # keep how far it got
+        label = STAGE_LABELS.get(failing, "")
         if self._cancelled:
             self.stage.setText("Installation cancelled")
             self.detail.setText(
@@ -597,28 +676,31 @@ class ProgressPage(Page):
         elif self._busy:
             self.stage.setText("An installation is already running")
             self.detail.setText("Another installation is in progress on this computer. Reconnect to follow it.")
+        elif self._bootable:
+            self.stage.setText("Your new system is installed and can start")
+            self.detail.setText(summarize((f"The last step did not finish ({label.lower()}). " if label else "A later step did not finish. ") + message))
         else:
-            label = STAGE_LABELS.get(failing, "")
             self.stage.setText(f"Installation needs attention · {label}" if label and failing != "cleanup" else "Installation needs attention")
             self.detail.setText(summarize(message))
-        line = "ERROR: " + message
-        if line != self._last_error_line:
-            self._last_error_line = line
-            self._append_log(line)
-            self.flush_log()
         self.cancel.setVisible(False)
         self.timer.stop()
         self.secondary.hide()
         self._show_result_panel()
-        if first and not self._finished_emitted:
-            self._finished_emitted = True
-            self.finished.emit(False)
 
     def _show_result_panel(self) -> None:
         changed = self._storage_started
         resumable = self._storage_done and (self._retryable is not False or self._cancelled) and self._manifest is not None and not self._busy
+        bootable = self._bootable and not self._cancelled and not self._busy
+        self.resume_button.setText("Resume installation")
         if self._busy:
             hint = "Nothing was started. The running installation keeps going; reconnect to follow it."
+        elif bootable:
+            step = "the desktop step" if self._failure_stage == "desktop" else "the last step"
+            hint = ("The computer can start the new system now. One later step did not finish, so some programs may be missing. "
+                    f"You can restart now and fix that from the installed system, or retry {step} first.")
+            resumable = self._resumable is not False and self._retryable is not False and self._manifest is not None
+            self.resume_button.setText("Retry the desktop step" if self._failure_stage == "desktop" else "Retry the last step")
+            self.reboot.setVisible(True)
         elif self._cancelled:
             hint = "The installation was cancelled. " + (
                 "Your disk was already modified, so the system on it is incomplete. Resume continues where it stopped without formatting again; Start over erases the disk again."
@@ -635,7 +717,7 @@ class ProgressPage(Page):
         self.result_hint.setText(hint)
         self.retry_button.setText("Start over" if changed else "Try again")
         self._set_buttons(
-            retry=not self._busy, resume=resumable, reconnect=self._busy, settings=True, save=not self._busy,
+            retry=not self._busy and not bootable, resume=resumable, reconnect=self._busy, settings=not bootable, save=not self._busy,
             diagnostics=not self._busy, quit_=True,
         )
         self.result_panel.show()

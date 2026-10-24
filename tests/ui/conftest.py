@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Callable
 
 import pytest
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QSettings, QTimer
 from PySide6.QtWidgets import QApplication
 
 
@@ -45,6 +45,10 @@ def private_user_dirs(monkeypatch, tmp_path_factory):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(home / ".config"))
     monkeypatch.setenv("XDG_CACHE_HOME", str(home / ".cache"))
     monkeypatch.setenv("GENTOO_INSTALLER_DEV", "1")
+    # Qt reads the settings directory once per process: without this the experience mode, the draft and the
+    # window geometry of one test would be restored by the next one.
+    for format_ in (QSettings.Format.NativeFormat, QSettings.Format.IniFormat):
+        QSettings.setPath(format_, QSettings.Scope.UserScope, str(home / ".config"))
     return home
 
 

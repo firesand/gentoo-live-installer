@@ -28,14 +28,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from . import daemon_client, diagnostics, keyboard, system_info
+from . import daemon_client, diagnostics, keyboard, recommend, system_info
 from .backend import DEFAULT_SOCKET, BackendWorker
 from .manifest import SECRET_KEYS, InstallManifest, ManifestError
 from .pages.accounts import AccountsPage
 from .pages.customize import CustomizePage
+from .pages.dialogs import ask_utc_time
 from .pages.progress import ProgressPage
 from .pages.readiness import ReadinessPage
-from .pages.review import ReviewPage, disk_description, format_lines, selection_problems
+from .pages.review import ReviewPage, blocking_problems, disk_description, format_lines, storage_plan_details
 from .pages.storage import StoragePage
 from .pages.system import SystemPage
 from .pages.welcome import WelcomePage
@@ -50,7 +51,7 @@ STEPS = [
     ("Readiness", "Check your hardware and connection"),
     ("Storage", "Choose disks and filesystems"),
     ("Base system", "Init, stage3, kernel, and desktop"),
-    ("Customization", "Portage, networking, and applications"),
+    ("Customization", "Hardware, Portage, networking, and applications"),
     ("Accounts", "Users, locale, and regional settings"),
     ("Review", "Confirm your installation"),
     ("Install", "Build your new Gentoo system"),
@@ -59,14 +60,20 @@ WELCOME, READINESS, STORAGE, SYSTEM, CUSTOMIZE, ACCOUNTS, REVIEW, INSTALL = rang
 # Which wizard page can fix the errors of a validate_sections() section.
 SECTION_PAGES = {
     "storage": STORAGE, "system": SYSTEM, "portage": CUSTOMIZE, "network": CUSTOMIZE, "options": CUSTOMIZE,
-    "accounts": ACCOUNTS, "locale": ACCOUNTS, "hardware": REVIEW, "general": ACCOUNTS,
+    "accounts": ACCOUNTS, "locale": ACCOUNTS, "hardware": CUSTOMIZE, "general": ACCOUNTS,
 }
 SECTION_ORDER = ("general", "storage", "system", "portage", "network", "options", "accounts", "locale", "hardware")
 HANDBOOK_URL = "https://wiki.gentoo.org/wiki/Handbook:AMD64/Full/Installation"
+REPAIR_COMMAND = "sudo gentoo-rescue"
+REPAIR_TERMINALS = (("xfce4-terminal", ["-e", REPAIR_COMMAND]), ("xterm", ["-e", "sudo", "gentoo-rescue"]))
+REPAIR_TERMINAL_TEXT = (
+    "The graphical repair window is not part of this installer image, but the repair tools also work in a terminal.\n\n"
+    f"Open a terminal that runs “{REPAIR_COMMAND}”?"
+)
 REPAIR_MISSING = (
-    "The graphical repair tools are not part of this installer image.\n\n"
+    "The graphical repair tools are not part of this installer image, and a terminal could not be started.\n\n"
     "The repair tools are available from the terminal as 'gentoo-rescue'. "
-    "Open a terminal and run: gentoo-rescue --help"
+    "Open a terminal yourself and run: sudo gentoo-rescue    (for help: gentoo-rescue --help)"
 )
 
 MIN_WINDOW_WIDTH = 800
@@ -136,6 +143,22 @@ def load_draft() -> InstallManifest:
         return InstallManifest()
 
 
+def start_repair_terminal() -> bool:
+    """Open a terminal window that runs the text-mode repair tool."""
+    return any(QProcess.startDetached(program, arguments) for program, arguments in REPAIR_TERMINALS)
+
+
+def offer_terminal_repair(parent: QWidget | None) -> bool:
+    """The graphical repair window is missing: offer the terminal version. True when a terminal was started."""
+    answer = QMessageBox.question(parent, "Repair an existing system", REPAIR_TERMINAL_TEXT)
+    if answer != QMessageBox.StandardButton.Yes:
+        return False
+    if start_repair_terminal():
+        return True
+    QMessageBox.information(parent, "Repair an existing system", REPAIR_MISSING)
+    return False
+
+
 def create_repair_window(socket_path: str) -> QWidget | None:
     """The repair UI (gentoo_installer.rescue_app.RescueWindow), or None when
     this build does not contain it."""
@@ -196,6 +219,7 @@ class InstallerWindow(QMainWindow):
         self._install_succeeded = False
         self._close_after_worker = False
         self._inspect_generation = 0
+        self._seeded: dict[str, tuple[Any, Any]] = {}  # hardware defaults written into the manifest: field -> (before, after)
         self._workers: list[QThread] = []
         self._repair_window: QWidget | None = None
         self.setWindowTitle("Gentoo Installer")
@@ -231,7 +255,7 @@ class InstallerWindow(QMainWindow):
         self.readiness.update_info(self.info)
         self.storage = StoragePage(self.manifest, self.info)
         self.system = SystemPage(self.manifest)
-        self.customize = CustomizePage(self.manifest)
+        self.customize = CustomizePage(self.manifest, self.info)
         self.accounts = AccountsPage(self.manifest)
         self.review = ReviewPage(self.manifest, self.info)
         self.progress = ProgressPage()
@@ -249,9 +273,13 @@ class InstallerWindow(QMainWindow):
         self.readiness.refreshRequested.connect(self.refresh_readiness)
         self.readiness.networkSettingsRequested.connect(self.open_network_settings)
         self.readiness.diagnosticsRequested.connect(lambda: self.save_diagnostics("readiness"))
-        self.readiness.clockSyncRequested.connect(self.sync_clock)
+        self.readiness.clockSyncRequested.connect(self.run_hardware_action)
+        self.readiness.hardwareActionRequested.connect(self.run_hardware_action)
         self.review.importRequested.connect(self.import_settings)
+        self.storage.manual_editor.rescanRequested.connect(self.refresh_readiness)
+        self.storage.rescanRequested.connect(self.refresh_readiness)
         self.accounts.keyboardChangeRequested.connect(lambda: self.go_to(WELCOME))
+        self.accounts.keyboardPicked.connect(self._keyboard_picked)
         self.system.desktopChanged.connect(self.customize.desktop_changed)
         self.progress.rebootRequested.connect(self.reboot)
         self.progress.started.connect(self._install_running)
@@ -425,21 +453,31 @@ class InstallerWindow(QMainWindow):
         if self.current + 1 == REVIEW:
             for earlier in self.pages[:REVIEW]:
                 earlier.save_manifest()
-            owner, error = self._first_manifest_error()
+            section, error = self._first_section_error()
             if error:
                 QMessageBox.warning(self, "Installation settings", error)
-                if owner is not None and owner != self.current:
+                owner = self._page_for_section(section)
+                if owner != self.current:
                     self._show_page(owner)
+                    reveal = getattr(self.pages[owner], "reveal_section", None)
+                    if callable(reveal):
+                        reveal(section)
                 return
         self._show_page(self.current + 1)
 
-    def _first_manifest_error(self) -> tuple[int | None, str]:
-        """The first problem of the whole manifest and the wizard page that owns it."""
+    def _first_section_error(self) -> tuple[str, str]:
+        """(section, message) of the first problem of the whole manifest; the section names the part of the wizard that can fix it."""
         sections = self.manifest.validate_sections()
         for name in SECTION_ORDER:
             if sections.get(name):
-                return self._page_for_section(name), sections[name][0]
-        return None, ""
+                return name, sections[name][0]
+        problems = blocking_problems(self.manifest, self.info)
+        return (problems[0][0], problems[0][1]) if problems else ("", "")
+
+    def _first_manifest_error(self) -> tuple[int | None, str]:
+        """The first problem of the whole manifest and the wizard page that owns it."""
+        section, message = self._first_section_error()
+        return (self._page_for_section(section), message) if message else (None, "")
 
     def _page_for_section(self, section: str) -> int:
         if section == "general":  # a redacted secret: find where it sits
@@ -456,7 +494,8 @@ class InstallerWindow(QMainWindow):
 
     def _mode_changed(self) -> None:
         advanced = self.mode.currentData() == "advanced"
-        self.storage.encryption.setVisible(advanced or self.storage.luks.isChecked())
+        self.storage.set_advanced(advanced)
+        self.customize.set_advanced(advanced)
         suffix = " · All available controls are shown" if advanced else " · Recommended choices are selected for you"
         self.header_subtitle.setText(STEPS[self.current][1] + suffix)
 
@@ -501,8 +540,11 @@ class InstallerWindow(QMainWindow):
         """Make a (new) inspection result visible on every page."""
         self.info = info
         self._seed_firmware()
+        self._seed_hardware_defaults(info)
         self.readiness.update_info(info)
         self.storage.set_info(info)
+        self.customize.set_info(info)
+        self.accounts.set_info(info)
         self.review.set_info(info)
         self._update_navigation()
         self._check_job_state(info)
@@ -523,6 +565,30 @@ class InstallerWindow(QMainWindow):
         if self.firmware_explicit or (storage_page is not None and storage_page.firmware_touched):
             return
         self.manifest.storage.firmware = "uefi" if self.info.uefi else "bios"
+
+    def _seed_hardware_defaults(self, info: SystemInfo) -> None:
+        """Pre-select what the detected hardware suggests (swap size, no Bluetooth without a radio, no microcode in a VM, ...).
+
+        Only values the user did not touch are ever written: the seeding of an earlier inspection is undone first for
+        every field that still holds the seeded value, so "Check again" can correct a first look that saw less. The
+        firmware type of a manifest from the command line, and a firmware the user picked, are left alone."""
+        if not info.hardware:
+            return
+        for dotted, (before, after) in self._seeded.items():
+            section, _, name = dotted.partition(".")
+            target = getattr(self.manifest, section)
+            if getattr(target, name) == after:
+                setattr(target, name, before)
+        storage_page = getattr(self, "storage", None)
+        include_firmware = not (self.firmware_explicit or (storage_page is not None and storage_page.firmware_touched))
+        self._seeded = {}
+        for dotted, value in recommend.defaults_for(info.hardware, self.manifest, include_firmware=include_firmware).items():
+            section, _, name = dotted.partition(".")
+            target = getattr(self.manifest, section)
+            before = getattr(target, name)
+            if before != value:
+                setattr(target, name, value)
+                self._seeded[dotted] = (before, value)
 
     # --- a running or interrupted installation -------------------------------------------------------------
 
@@ -600,39 +666,65 @@ class InstallerWindow(QMainWindow):
         storage = self.manifest.storage
         if not self._service_ready():
             return
-        problems = selection_problems(self.manifest, self.info)
+        problems = blocking_problems(self.manifest, self.info)
         if problems:
-            QMessageBox.warning(self, "Cannot start", problems[0])
+            QMessageBox.warning(self, "Cannot start", problems[0][1])
             return
         resume = self.review.resume_requested() and self.current == REVIEW
         if not resume and storage.mode == "erase":
             disk = self.info.find_disk(storage.device)
             contents = f"\n\nIt holds: {disk.contents_text}." if disk is not None else ""
+            details = storage_plan_details(self.manifest, self.info)
+            layout_text = "\n\nIt will be set up like this:\n" + "\n".join(details) if details else ""
             answer = QMessageBox.warning(
                 self,
                 "Erase the selected disk?",
-                f"This will permanently erase all data on {disk_description(disk, storage.device)}.{contents}\n\n"
+                f"This will permanently erase all data on {disk_description(disk, storage.device)}.{contents}{layout_text}\n\n"
                 "No other disk is selected. Do you want to continue?",
                 QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
                 QMessageBox.StandardButton.Cancel,
             )
             if answer != QMessageBox.StandardButton.Yes:
                 return
-        elif not resume and storage.mode == "manual" and any(partition.format for partition in storage.partitions):
-            lines = [line for line in format_lines(self.manifest, self.info) if line.startswith("FORMAT")]
-            answer = QMessageBox.warning(
-                self,
-                "Format these partitions?",
-                "These partitions will be formatted and everything on them will be lost:\n\n" + "\n".join(lines),
-                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
-                QMessageBox.StandardButton.Cancel,
-            )
-            if answer != QMessageBox.StandardButton.Yes:
+        elif not resume and storage.mode == "manual":
+            if any(partition.format for partition in storage.partitions):
+                lines = [line for line in format_lines(self.manifest, self.info) if line.startswith("FORMAT")]
+                answer = QMessageBox.warning(
+                    self,
+                    "Format these partitions?",
+                    "These partitions will be formatted and everything on them will be lost:\n\n" + "\n".join(lines),
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+                    QMessageBox.StandardButton.Cancel,
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
+            if not self._confirm_overwrite_existing_system():
                 return
         self.banner.dismiss()
         self.install_started = True
         self._show_page(INSTALL)
         self.progress.start(self.manifest, self.socket_path, resume=resume)
+
+    def _confirm_overwrite_existing_system(self) -> bool:
+        """A kept (not formatted) root partition may hold a system: ask before the new one is extracted over it."""
+        storage = self.manifest.storage
+        root = next((row for row in storage.partitions if row.mountpoint == "/"), None)
+        if root is None or root.format or root.filesystem == "none" or storage.overwrite_existing_system:
+            return True
+        answer = QMessageBox.warning(
+            self,
+            "Install over the existing system?",
+            f"{root.device} is kept as it is (it is not formatted), but the new system is installed into it. If it already holds a Linux system, "
+            "its /etc, its accounts and its boot files are replaced. A copy of /etc and of the SSH keys is saved in /root first.\n\n"
+            "To repair that system instead, cancel and choose “Repair an existing system” on the first page.\n\n"
+            "Install over it?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return False
+        storage.overwrite_existing_system = True
+        return True
 
     def _install_running(self) -> None:
         self.install_started = True
@@ -640,7 +732,8 @@ class InstallerWindow(QMainWindow):
         self._update_navigation()
 
     def _install_finished(self, success: bool) -> None:
-        self._install_succeeded = success
+        # A system that can start although a later step failed is not started over by accident: the wizard stays locked.
+        self._install_succeeded = success or self.progress.bootable
         self._update_navigation()
 
     def _worker_stopped(self) -> None:
@@ -658,8 +751,16 @@ class InstallerWindow(QMainWindow):
     # --- keyboard, settings files, repair ---------------------------------------------------------------------
 
     def _keyboard_changed(self, layout: str, variant: str, console_keymap: str) -> None:
+        """A layout was chosen on the Welcome page: the three names of one keyboard are always set together
+        (the passphrase prompt of the installed system only uses the console map when it matches the layout)."""
         system = self.manifest.system
         system.keyboard_layout, system.keyboard_variant, system.keymap = layout, variant, console_keymap
+
+    def _keyboard_picked(self, layout: str, variant: str, console_keymap: str) -> None:
+        """A console keymap was chosen on the Accounts page: apply the matching layout to this session as well."""
+        self._keyboard_changed(layout, variant, console_keymap)
+        keyboard.apply_layout(layout, variant, self.manifest.system.keyboard_options, self.manifest.system.keyboard_model)
+        self.welcome.keyboard.set_selection(layout, variant)
 
     def import_settings(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Import installation settings", "", "JSON files (*.json);;All files (*)")
@@ -672,6 +773,7 @@ class InstallerWindow(QMainWindow):
             return
         for name in ("storage", "system", "portage", "network", "accounts", "options", "hardware"):
             setattr(self.manifest, name, getattr(loaded, name))
+        self._seeded = {}  # imported values are explicit: hardware defaults never overwrite them
         self._seed_firmware()
         self.pages[self.current].load_manifest()
         QMessageBox.information(self, "Settings imported", "The settings were imported. Passwords are never saved in a settings file: enter them again on the Accounts page (and the disk passphrase on the Storage page).")
@@ -684,7 +786,7 @@ class InstallerWindow(QMainWindow):
             QMessageBox.critical(self, "Repair an existing system", f"The repair tools could not be started: {exc}")
             return
         if window is None:
-            QMessageBox.information(self, "Repair an existing system", REPAIR_MISSING)
+            offer_terminal_repair(self)
             return
         window.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         window.destroyed.connect(self._repair_closed)
@@ -723,14 +825,48 @@ class InstallerWindow(QMainWindow):
         if self.current != INSTALL:
             (QMessageBox.information if ok else QMessageBox.warning)(self, "Diagnostics", message)
 
-    def sync_clock(self, action: str) -> None:
-        worker = BackendWorker(None, self.socket_path, self, request={"action": action})
-        worker.finished.connect(self.refresh_readiness)
+    def run_hardware_action(self, action: str) -> None:
+        """A button of a hardware finding: set the clock, set it by hand, or restart into the firmware settings."""
+        if action == "set_time":
+            when = ask_utc_time(self)
+            if when:
+                self.sync_clock("set_time", {"utc": when})
+        elif action == "reboot_firmware":
+            answer = QMessageBox.question(
+                self, "Restart into firmware settings",
+                "The computer restarts now and opens its firmware settings. Nothing has been installed yet. Save anything you want to keep first.")
+            if answer == QMessageBox.StandardButton.Yes:
+                self.sync_clock("reboot_firmware")
+        else:
+            self.sync_clock(action)
+
+    def sync_clock(self, action: str, payload: dict[str, Any] | None = None) -> None:
+        """Run a clock (or other hardware) action of the installer service and show what it answered."""
+        result: dict[str, Any] = {"ok": None, "message": ""}
+        worker = BackendWorker(None, self.socket_path, self, request={"action": action, **(payload or {})})
+        worker.eventReceived.connect(lambda event, box=result: self._action_event(event, box))
+        worker.connectionFailed.connect(lambda message, box=result: box.update(ok=False, message=message))
+        worker.finished.connect(lambda box=result: self._action_finished(action, box))
         worker.finished.connect(lambda w=worker: self._workers.remove(w) if w in self._workers else None)
         worker.finished.connect(worker.deleteLater)
         self._workers.append(worker)
         self.readiness.sync_button.setEnabled(False)
         worker.start()
+
+    @staticmethod
+    def _action_event(event: dict[str, Any], box: dict[str, Any]) -> None:
+        raw = event.get("data")
+        data: dict[str, Any] = raw if isinstance(raw, dict) else {}
+        if event.get("type") == "result" and "ok" in data:
+            box.update(ok=bool(data["ok"]), message=str(data.get("message", "")))
+        elif event.get("type") == "error":
+            box.update(ok=False, message=str(event.get("error") or event.get("message") or "The action failed."))
+
+    def _action_finished(self, action: str, box: dict[str, Any]) -> None:
+        if box["ok"] is not None:
+            what = {"sync_time": "The clock", "set_time": "The clock", "reboot_firmware": "The restart"}.get(action, "The action")
+            self.readiness.show_action_result(bool(box["ok"]), box["message"] or (f"{what} was changed." if box["ok"] else f"{what} could not be changed."))
+        self.refresh_readiness()
 
     # --- launchers --------------------------------------------------------------------------------------------
 
@@ -864,7 +1000,7 @@ def main(argv: list[str] | None = None) -> int:
             QMessageBox.critical(None, "Repair an existing system", f"The repair tools could not be started: {exc}")
             return 1
         if repair is None:
-            QMessageBox.information(None, "Repair an existing system", REPAIR_MISSING)
+            offer_terminal_repair(None)
             return 0
         repair.show()
         return app.exec()

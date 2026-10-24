@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QCompleter,
     QFormLayout,
     QGridLayout,
     QHBoxLayout,
@@ -19,9 +21,15 @@ from PySide6.QtWidgets import (
 from .. import system_info
 from ..manifest import InstallManifest
 from ..widgets import Card, Page, wrapped_label
+from .hardware import HardwareTab, hardware_plan
 from .readiness import proxy_problem
 
 COMPANIONS = ("install_hwmonux", "install_portagehub")
+AUTO_PLACEHOLDER = "Leave empty: chosen for this computer"
+KDE_APPS = (
+    ("core", "Core: file manager, terminal, editor and help"),
+    ("full", "Full: all KDE applications (games, education, multimedia; a long build)"),
+)
 
 
 def auto_jobs() -> int:
@@ -43,18 +51,22 @@ def parse_jobs(make_opts: str) -> int | None:
 
 
 class CustomizePage(Page):
-    def __init__(self, manifest: InstallManifest):
-        super().__init__("Make it yours", "Safe defaults are already selected. Advanced settings use the same Portage and network configuration files described in the Handbook.")
+    def __init__(self, manifest: InstallManifest, info: system_info.SystemInfo | None = None):
+        super().__init__("Make it yours", "Safe defaults are already selected. The Hardware tab shows what was found on this computer; the other tabs use the same Portage and network configuration files described in the Handbook.")
         self.manifest = manifest
         self._loaded_make_opts = ""
         self._cleared_companions: tuple[bool, bool] | None = None
         tabs = QTabWidget()
+        self.hardware = HardwareTab(manifest, info)
+        tabs.addTab(self.hardware, "Hardware")
         tabs.addTab(self._portage_tab(), "Portage")
         tabs.addTab(self._network_tab(), "Network")
         tabs.addTab(self._extras_tab(), "Applications && tools")
         self.tabs = tabs
         self.content.addWidget(tabs)
+        self.hardware.changed.connect(self._hardware_changed)
         self.load_manifest()
+        self.finish_layout()
 
     def _portage_tab(self) -> QWidget:
         page = QWidget()
@@ -81,9 +93,10 @@ class CustomizePage(Page):
         jobs_row.addStretch()
         form.addRow("Parallel build jobs", jobs_row)
         self.cflags = QLineEdit()
-        self.cflags.setToolTip("-march=native can optimize for this computer, but binaries may not run on a different CPU.")
-        form.addRow("CFLAGS", self.cflags)
+        self.cflags.setToolTip("Used for C, C++ and Fortran. -march=native can optimize for this computer, but the programs may not run on a different CPU.")
+        form.addRow("COMMON_FLAGS", self.cflags)
         self.cxxflags = QLineEdit()
+        self.cxxflags.setToolTip("Normally ${CFLAGS}, which follows COMMON_FLAGS.")
         form.addRow("CXXFLAGS", self.cxxflags)
         self.rustflags = QLineEdit()
         form.addRow("RUSTFLAGS", self.rustflags)
@@ -105,9 +118,10 @@ class CustomizePage(Page):
         self.package_use.setTabChangesFocus(True)
         form.addRow("Per-package USE flags", self.package_use)
         self.cpu_flags = QLineEdit()
+        self.cpu_flags.setPlaceholderText(AUTO_PLACEHOLDER)
         form.addRow("CPU_FLAGS_X86", self.cpu_flags)
         self.video_cards = QLineEdit()
-        self.video_cards.setPlaceholderText("Detected automatically when empty")
+        self.video_cards.setPlaceholderText(AUTO_PLACEHOLDER)
         form.addRow("VIDEO_CARDS", self.video_cards)
         card.content.addLayout(form)
         layout.addStretch(1)
@@ -123,9 +137,11 @@ class CustomizePage(Page):
         for label, value in (("NetworkManager — recommended for desktops", "networkmanager"), ("dhcpcd — simple DHCP", "dhcpcd"), ("netifrc — OpenRC network scripts", "netifrc"), ("systemd-networkd — systemd only", "systemd-networkd")):
             self.network_manager.addItem(label, value)
         self.network_manager.currentIndexChanged.connect(self._network_manager_changed)
+        self.network_manager.activated.connect(self._manager_picked)
         form.addRow("Network management", self.network_manager)
         self.interface = QLineEdit()
-        self.interface.setPlaceholderText("enp1s0 (required by netifrc)")
+        self.interface.setPlaceholderText("enp1s0 (needed by netifrc, and for a static address with dhcpcd)")
+        self.interface.setToolTip("The name of the network adapter. Network interface names differ between computers.")
         form.addRow("Network interface", self.interface)
         self.dhcp = QCheckBox("Configure the network automatically with DHCP")
         self.dhcp.toggled.connect(self._network_changed)
@@ -148,7 +164,18 @@ class CustomizePage(Page):
         self.wifi_password = QLineEdit()
         self.wifi_password.setEchoMode(QLineEdit.EchoMode.Password)
         form.addRow("Wi-Fi password", self.wifi_password)
+        self.import_profiles = QCheckBox("Use the Wi-Fi networks saved in this live session")
+        self.import_profiles.setToolTip("Copies the saved network connections, including their passwords, to the installed system.")
+        self.import_profiles.toggled.connect(lambda _=False: self._update_network_notes())
+        form.addRow(self.import_profiles)
         card.content.addLayout(form)
+        self.network_note = wrapped_label("", muted=True)
+        self.network_note.hide()
+        card.content.addWidget(self.network_note)
+        self.import_warning = wrapped_label("", selectable=True)
+        self.import_warning.setStyleSheet("color: #b87818;")
+        self.import_warning.hide()
+        card.content.addWidget(self.import_warning)
         layout.addStretch(1)
         return page
 
@@ -186,11 +213,87 @@ class CustomizePage(Page):
         )
         self.companion_note.hide()
         card.content.addWidget(self.companion_note)
+        self.hardware_note = wrapped_label("", muted=True)
+        self.hardware_note.hide()
+        card.content.addWidget(self.hardware_note)
+        apps_form = QFormLayout()
+        self.kde_apps = QComboBox()
+        for value, label in KDE_APPS:
+            self.kde_apps.addItem(label, value)
+        self.kde_apps.setAccessibleName("KDE applications")
+        apps_form.addRow("KDE applications", self.kde_apps)
+        card.content.addLayout(apps_form)
         self.extra_packages = QLineEdit()
         self.extra_packages.setPlaceholderText("category/package category/other-package")
+        self.extra_packages.setAccessibleName("Extra packages")
         card.content.addWidget(self.extra_packages)
         layout.addStretch(1)
         return page
+
+    # --- the hardware tab ----------------------------------------------------------------------------------
+
+    def set_info(self, info: system_info.SystemInfo) -> None:
+        self.hardware.set_info(info)
+        self.refresh_placeholders()
+        self._update_network_notes()
+        names = sorted({nic.iface for nic in info.profile.nics if nic.iface})
+        if names:
+            self.interface.setCompleter(QCompleter(names, self.interface))
+
+    def set_advanced(self, advanced: bool) -> None:
+        self.hardware.set_advanced(advanced)
+
+    def show_hardware(self) -> None:
+        self.tabs.setCurrentWidget(self.hardware)
+
+    def reveal_section(self, section: str) -> None:
+        """Bring the tab to the front that holds the settings of a validation section."""
+        if section == "hardware":
+            self.show_hardware()
+        elif section == "portage":
+            self.tabs.setCurrentIndex(1)
+        elif section == "network":
+            self.tabs.setCurrentIndex(2)
+        elif section == "options":
+            self.tabs.setCurrentIndex(3)
+
+    def _hardware_changed(self) -> None:
+        """A hardware choice was edited: what 'automatic' means in the Portage tab may have changed."""
+        self.refresh_placeholders()
+        self._update_network_notes()
+
+    def refresh_placeholders(self) -> None:
+        """'Leave empty: chosen for this computer (now: ...)': say what an empty field will become."""
+        info = self.hardware.info
+        make_conf: dict[str, str] = {}
+        plan_scalars: dict[str, Any] = {}
+        if info is not None and info.hardware:
+            plan = hardware_plan(self.hardware.working_manifest(), info.hardware)
+            make_conf = dict(plan.make_conf) if plan is not None else {}
+            plan_scalars = dict(plan.scalars) if plan is not None else {}
+        self._update_hardware_note(info, plan_scalars)
+        for edit, key in ((self.cpu_flags, "CPU_FLAGS_X86"), (self.video_cards, "VIDEO_CARDS")):
+            value = make_conf.get(key, "").replace("${VIDEO_CARDS}", "profile default +")
+            if info is None or not info.hardware:
+                edit.setPlaceholderText(AUTO_PLACEHOLDER)
+            elif value:
+                shown = value if len(value) <= 48 else value[:45] + "..."
+                edit.setPlaceholderText(f"{AUTO_PLACEHOLDER} (now: {shown})")
+            else:
+                edit.setPlaceholderText(f"{AUTO_PLACEHOLDER} (the profile default)")
+
+    def _update_hardware_note(self, info: system_info.SystemInfo | None, scalars: dict[str, Any]) -> None:
+        """Firmware and microcode can be decided by the hardware: say so next to the two tick boxes."""
+        lines = []
+        reasons = scalars.get("firmware_reasons") or []
+        if scalars.get("firmware_forced") and reasons:
+            lines.append("Linux firmware is installed even though it is not ticked, because this computer needs it: " + ", ".join(reasons) + ".")
+        if info is not None and info.hardware and info.profile.machine.hypervisor and self.manifest.options.microcode:
+            lines.append("CPU microcode does nothing in a virtual machine: the host owns it.")
+        elif scalars.get("microcode") == "both":
+            lines.append("Microcode for both Intel and AMD processors is installed, because it is not known which processor will run this system.")
+        self.hardware_note.setText("\n".join(lines))
+        self.hardware_note.setVisible(bool(lines))
 
     # --- reacting to the desktop choice ------------------------------------------------------------------
 
@@ -208,6 +311,7 @@ class CustomizePage(Page):
             options.install_hwmonux, options.install_portagehub = self._cleared_companions
             self._cleared_companions = None
         self._load_checks()
+        self._load_kde_apps()
 
     def _load_checks(self) -> None:
         for key, check in self.checks.items():
@@ -252,10 +356,14 @@ class CustomizePage(Page):
         self.proxy.setText(network.proxy)
         self.wifi_ssid.setText(network.wifi_ssid)
         self.wifi_password.setText(network.wifi_password)
+        self.import_profiles.setChecked(network.import_live_profiles)
         self._load_checks()
+        self._load_kde_apps()
         self.extra_packages.setText(" ".join(self.manifest.options.extra_packages))
         self._network_changed()
         self._network_manager_changed()
+        self.hardware.load_manifest()
+        self.refresh_placeholders()
 
     def save_manifest(self) -> None:
         portage = self.manifest.portage
@@ -292,9 +400,12 @@ class CustomizePage(Page):
         network.proxy = self.proxy.text().strip()
         network.wifi_ssid = self.wifi_ssid.text().strip()
         network.wifi_password = self.wifi_password.text()
+        network.import_live_profiles = self.import_profiles.isChecked()
         for key, check in self.checks.items():
             setattr(self.manifest.options, key, check.isChecked())
+        self.manifest.options.kde_apps = str(self.kde_apps.currentData() or self.manifest.options.kde_apps)
         self.manifest.options.extra_packages = self.extra_packages.text().split()
+        self.hardware.save_manifest()
 
     def validate_page(self) -> tuple[bool, str]:
         self.save_manifest()
@@ -303,7 +414,62 @@ class CustomizePage(Page):
             return False, problem
         sections = self.manifest.validate_sections()
         errors = [error for name in ("portage", "network", "options") for error in sections[name]]
-        return (False, errors[0]) if errors else (True, "")
+        if errors:
+            return False, errors[0]
+        hardware = self.hardware.problems()
+        if hardware:
+            self.show_hardware()
+            return False, hardware[0]
+        return True, ""
+
+    def _load_kde_apps(self) -> None:
+        value = self.manifest.options.kde_apps
+        index = self.kde_apps.findData(value)
+        if index < 0:  # a loaded value this installer does not offer is shown, not replaced
+            self.kde_apps.addItem(f"{value} (custom value)", value)
+            index = self.kde_apps.count() - 1
+        self.kde_apps.setCurrentIndex(index)
+        kde = self.manifest.system.desktop == "kde"
+        self.kde_apps.setEnabled(kde)
+        self.kde_apps.setToolTip("" if kde else "The KDE application set only matters when KDE Plasma is the desktop.")
+
+    def _manager_picked(self, _index: int = 0) -> None:
+        """The user chose another network manager: Wi-Fi settings only exist for NetworkManager, so they are cleared."""
+        if self.network_manager.currentData() != "networkmanager":
+            self.wifi_ssid.clear()
+            self.wifi_password.clear()
+            self.import_profiles.setChecked(False)
+        self._network_manager_changed()
 
     def _network_manager_changed(self) -> None:
-        self.interface.setEnabled(self.network_manager.currentData() == "netifrc")
+        manager = self.network_manager.currentData()
+        self.interface.setEnabled(manager in {"netifrc", "dhcpcd"})
+        networkmanager = manager == "networkmanager"
+        # Fields that already hold a value stay editable, so a wrong combination can always be cleared.
+        for widget in (self.wifi_ssid, self.wifi_password):
+            widget.setEnabled(networkmanager or bool(widget.text()))
+        self.import_profiles.setEnabled(networkmanager or self.import_profiles.isChecked())
+        self._update_network_notes()
+
+    def _portable_target(self) -> bool:
+        """The installed system is meant for other computers: the portable choice, or a removable target disk."""
+        if self.hardware.working_manifest().hardware.target == "portable":
+            return True
+        info = self.hardware.info
+        disk = info.find_disk(self.manifest.storage.device) if info is not None and self.manifest.storage.device else None
+        return bool(disk is not None and disk.removable)
+
+    def _update_network_notes(self) -> None:
+        networkmanager = self.network_manager.currentData() == "networkmanager"
+        self.network_note.setText("" if networkmanager else "Wi-Fi networks can be set up with NetworkManager only.")
+        self.network_note.setVisible(bool(self.network_note.text()))
+        info = self.hardware.info
+        names = list(info.profile.network_profiles) if info is not None else []
+        self.import_profiles.setToolTip(
+            "Copies the saved network connections, including their passwords, to the installed system."
+            + (f" Saved here: {', '.join(names)}." if names else ""))
+        risky = self.import_profiles.isChecked() and self._portable_target()
+        self.import_warning.setText(
+            "The saved Wi-Fi passwords would be copied to a disk that is meant for other computers. Turn this off unless you trust everyone who may use that disk."
+            if risky else "")
+        self.import_warning.setVisible(risky)

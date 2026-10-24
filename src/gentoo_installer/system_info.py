@@ -12,7 +12,6 @@ import email.utils
 import http.client
 import os
 import platform
-import re
 import shutil
 import ssl
 import subprocess
@@ -24,10 +23,20 @@ from pathlib import Path
 from typing import Any, Callable, TypeVar
 from urllib.parse import urlparse
 
-from . import blockdev
+from . import blockdev, layout
 from .daemon_client import DaemonState
+from .hardware import HardwareProfile
 
+# Absolute floor for a disk the wizard offers (the smallest desktop needs more: see minimum_disk_bytes).
 MIN_DISK_BYTES = 16 * 1024**3
+# Filesystem signatures of a disk (or partition) that belongs to a volume group or a RAID set.
+MEMBER_SIGNATURES = {
+    "LVM2_member": "an LVM volume group",
+    "linux_raid_member": "a software RAID array",
+    "isw_raid_member": "an Intel firmware RAID set",
+    "ddf_raid_member": "a firmware RAID set",
+}
+SWAP_MOUNT = "[SWAP]"
 DEFAULT_MIRROR_HOST = "distfiles.gentoo.org"
 BY_PATH_DIR = Path("/dev/disk/by-path")
 # Seconds of clock error that are fine / worth a warning (beyond that TLS and
@@ -68,6 +77,21 @@ PARTTYPE_NAMES = {
 EFI_LABELS = {"efi", "esp", "efi system partition", "efi system"}
 
 
+def smallest_disk_bytes(manifest: Any) -> int:
+    """Smallest disk the installer can use at all: the minimal system (no desktop) with a bare guided layout."""
+    storage = manifest.storage
+    boot = layout.ESP_MIB if storage.firmware == "uefi" else (layout.BIOS_BOOT_MIB if storage.table == "gpt" else 0)
+    extra = 0 if manifest.portage.binhost else layout.SOURCE_BUILD_EXTRA_MIB["minimal"]
+    return (layout.MIN_ROOT_MIB["minimal"] + extra + boot + layout.RESERVED_MIB) * layout.MIB
+
+
+def desktop_disk_bytes(manifest: Any) -> int:
+    """Smallest disk for the chosen desktop with a bare guided layout (no swap, no separate /home)."""
+    storage = manifest.storage
+    boot = layout.ESP_MIB if storage.firmware == "uefi" else (layout.BIOS_BOOT_MIB if storage.table == "gpt" else 0)
+    return (layout.minimum_root_mib(manifest) + boot + layout.RESERVED_MIB) * layout.MIB
+
+
 def format_size(size: int) -> str:
     value = float(size)
     for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
@@ -102,8 +126,22 @@ class PartitionInfo:
         return format_size(self.size)
 
     @property
+    def real_mountpoints(self) -> tuple[str, ...]:
+        """Where the partition is mounted; active swap is not a mount (the daemon turns it off on request)."""
+        return tuple(point for point in self.mountpoints if point != SWAP_MOUNT)
+
+    @property
     def mounted(self) -> bool:
-        return bool(self.mountpoints)
+        return bool(self.real_mountpoints)
+
+    @property
+    def swap_active(self) -> bool:
+        return SWAP_MOUNT in self.mountpoints
+
+    @property
+    def member_of(self) -> str:
+        """'an LVM volume group' when the partition belongs to one ('' otherwise)."""
+        return MEMBER_SIGNATURES.get(self.fstype, "")
 
     @property
     def is_esp(self) -> bool:
@@ -162,6 +200,11 @@ class DiskInfo:
     rotational: bool | None = None
     fstype: str = ""  # a filesystem directly on the whole disk
     active_volumes: list[str] = field(default_factory=list)
+    log_sec: int = 512  # logical sector size (the DOS table limit depends on it)
+    problem: str = ""  # a key of blockdev.TARGET_PROBLEMS when the disk cannot be a target
+    swaps: list[str] = field(default_factory=list)  # devices on this disk that are in use as swap
+    signatures: list[str] = field(default_factory=list)  # LVM / RAID member signatures on the disk or its partitions
+    identity_shared: bool = False  # another disk reports the same serial number or WWN
 
     @property
     def size_text(self) -> str:
@@ -169,7 +212,32 @@ class DiskInfo:
 
     @property
     def has_identity(self) -> bool:
-        return bool(self.serial or self.wwid)
+        """A serial number or WWN that identifies this disk alone."""
+        return bool(self.serial or self.wwid) and not self.identity_shared
+
+    @property
+    def unavailable_reason(self) -> str:
+        """Why this disk cannot be chosen, as a sentence ('' when it can)."""
+        if self.live_medium:
+            return "This disk holds the live installer medium this system was started from."
+        if self.read_only:
+            return "This disk is read-only (a write-protect switch or a broken drive)."
+        if self.problem:
+            return f"This device {blockdev.TARGET_PROBLEMS.get(self.problem, 'cannot be used')}."
+        return ""
+
+    @property
+    def holders(self) -> list[str]:
+        """What is alive on the disk and would have to be switched off: volumes, swap, volume-group and RAID membership."""
+        found = [f"active volume {volume}" for volume in self.active_volumes]
+        found += [f"swap in use on {path}" for path in self.swaps]
+        found += [f"{signature}" for signature in self.member_text]
+        return found
+
+    @property
+    def member_text(self) -> list[str]:
+        """'part of an LVM volume group' style statements for every member signature."""
+        return [f"part of {MEMBER_SIGNATURES[name]}" for name in dict.fromkeys(self.signatures) if name in MEMBER_SIGNATURES]
 
     @property
     def stable_id(self) -> str:
@@ -178,10 +246,12 @@ class DiskInfo:
 
     @property
     def selectable(self) -> bool:
-        return not self.live_medium and not self.read_only and self.size > 0
+        return not self.live_medium and not self.read_only and not self.problem and self.size > 0
 
     @property
     def identity_text(self) -> str:
+        if self.identity_shared:
+            return "serial/WWN shared with another disk"
         if self.serial:
             return f"serial {_tail(self.serial)}"
         if self.wwid:
@@ -221,6 +291,20 @@ class DiskInfo:
         return f"{self.path} · {self.model} · {self.size_text} · {self.identity_text}"
 
 
+@dataclass(frozen=True)
+class ExcludedDevice:
+    """A device that was found but cannot receive an installation (shown in the empty state of the disk list)."""
+
+    path: str
+    model: str
+    size: int
+    problem: str  # a key of blockdev.TARGET_PROBLEMS
+
+    @property
+    def reason(self) -> str:
+        return blockdev.TARGET_PROBLEMS.get(self.problem, "cannot be used")
+
+
 @dataclass
 class SystemInfo:
     architecture: str
@@ -241,6 +325,9 @@ class SystemInfo:
     network_error: str = ""
     daemon: DaemonState | None = None
     missing_for_selection: list[str] = field(default_factory=list)
+    hardware_error: str = ""  # why the service could not describe the hardware (its probe failed)
+    roots: list[blockdev.BlockDevice] = field(default_factory=list)  # the lsblk tree behind `disks`
+    excluded: list[ExcludedDevice] = field(default_factory=list)  # real devices that cannot be a target, with the reason
 
     @classmethod
     def pending(cls) -> SystemInfo:
@@ -254,6 +341,15 @@ class SystemInfo:
     @property
     def usable_disks(self) -> list[DiskInfo]:
         return [disk for disk in self.disks if disk.selectable and disk.size >= MIN_DISK_BYTES]
+
+    @property
+    def profile(self) -> HardwareProfile:
+        """The daemon's hardware profile as an object (an empty one when nothing was detected)."""
+        return profile_of(self.hardware)
+
+    def block_devices(self) -> list[blockdev.BlockDevice]:
+        """The lsblk tree for layout.plan_storage: the real one, or one rebuilt from `disks`."""
+        return self.roots or [device_from_disk(disk) for disk in self.disks]
 
     def find_disk(self, path: str) -> DiskInfo | None:
         wanted = os.path.realpath(path)
@@ -375,22 +471,39 @@ def _partition_info(node: blockdev.BlockDevice, parent: str) -> PartitionInfo:
     )
 
 
-def _skip_disk(node: blockdev.BlockDevice) -> bool:
-    if node.type != "disk" or node.size <= 0:
-        return True  # rom, loop, raid/dm nodes, and empty card readers
-    return bool(re.match(r"^(zram|ram|loop|fd)\d*$", node.name) or re.match(r"^mmcblk\d+(boot\d+|rpmb)$", node.name))
+# Problems that make a device uninteresting: it is not a disk the user could mean (RAM disks, loop devices, a CD drive,
+# hidden eMMC areas, an empty card-reader slot). The others (live medium, read-only) are shown as disabled cards.
+HIDDEN_PROBLEMS = {"virtual", "firmware_area", "not_a_disk", "empty"}
 
 
-def disks_from_roots(roots: list[blockdev.BlockDevice], *, live_keys: set[str] | None = None, by_path: dict[str, str] | None = None) -> list[DiskInfo]:
+def _sector_size(node: blockdev.BlockDevice) -> int:
+    return node.log_sec or 512
+
+
+def _descendants(node: blockdev.BlockDevice) -> list[blockdev.BlockDevice]:
+    """Every device below a disk once (md arrays and LVs repeat under each parent)."""
+    return list({child.key: child for child in node.walk()[1:]}.values())
+
+
+def _non_swap_mount(node: blockdev.BlockDevice) -> bool:
+    return any(point != SWAP_MOUNT for sub in node.walk() for point in sub.mountpoints)
+
+
+def disks_from_roots(roots: list[blockdev.BlockDevice], *, live_keys: set[str] | None = None, by_path: dict[str, str] | None = None,
+                     excluded: list[ExcludedDevice] | None = None) -> list[DiskInfo]:
     live_keys = live_keys or set()
     by_path = by_path or {}
     disks: list[DiskInfo] = []
     for node in roots:
-        if _skip_disk(node):
+        problem = blockdev.install_target_problem(node, live_keys=live_keys)
+        if problem in HIDDEN_PROBLEMS:
+            if excluded is not None and problem == "empty" and node.type == "disk":
+                excluded.append(ExcludedDevice(node.path, node.model or "Block device", node.size, problem))
             continue
-        descendants = list({child.key: child for child in node.walk()[1:]}.values())  # md/LV nodes repeat per parent
+        descendants = _descendants(node)
         partitions = [_partition_info(child, node.path) for child in descendants]
-        volumes = [f"{child.type} {child.path}" for child in descendants if child.type not in {"part", "disk", "loop", "rom"}]
+        volumes = [f"{child.type} {child.path}" for child in descendants if child.type not in blockdev.STRUCTURAL_TYPES]
+        signatures = [sub.fstype for sub in (node, *descendants) if sub.fstype in MEMBER_SIGNATURES]
         disks.append(DiskInfo(
             path=node.path,
             model=node.model or "Block device",
@@ -399,7 +512,7 @@ def disks_from_roots(roots: list[blockdev.BlockDevice], *, live_keys: set[str] |
             wwid=node.wwn,
             removable=node.removable or node.transport == "usb",
             read_only=node.ro,
-            mounted=node.mounted,
+            mounted=_non_swap_mount(node),
             partitions=partitions,
             transport=node.transport,
             by_path=by_path.get(os.path.realpath(node.path), ""),
@@ -408,19 +521,61 @@ def disks_from_roots(roots: list[blockdev.BlockDevice], *, live_keys: set[str] |
             pttype=node.pttype,
             fstype=node.fstype,
             active_volumes=volumes,
+            log_sec=_sector_size(node),
+            problem=problem if problem not in {"live_medium", "read_only"} else "",
+            swaps=blockdev.active_swaps(node),
+            signatures=signatures,
         ))
+    mark_shared_identities(disks)
     return disks
 
 
-def discover_disks() -> list[DiskInfo]:
-    roots = _lsblk_roots()
+def mark_shared_identities(disks: list[DiskInfo]) -> None:
+    """Two disks that report the same serial number or WWN cannot be told apart by it: both need the by-path approval."""
+    seen: dict[str, int] = {}
+    for disk in disks:
+        for value in {disk.serial, disk.wwid} - {""}:
+            seen[value] = seen.get(value, 0) + 1
+    for disk in disks:
+        disk.identity_shared = any(seen.get(value, 0) > 1 for value in (disk.serial, disk.wwid) if value)
+
+
+def device_from_disk(disk: DiskInfo) -> blockdev.BlockDevice:
+    """A BlockDevice tree for a DiskInfo that did not come from lsblk (tests, older callers)."""
+    children = tuple(
+        blockdev.BlockDevice(
+            name=os.path.basename(part.path), path=part.path, type=part.type, size=part.size, fstype=part.fstype, label=part.label,
+            partlabel=part.partlabel, parttype=part.parttype, uuid=part.uuid, partuuid=part.partuuid, mountpoints=part.mountpoints,
+        )
+        for part in disk.partitions
+    )
+    return blockdev.BlockDevice(
+        name=os.path.basename(disk.path), path=disk.path, type="disk", size=disk.size, ro=disk.read_only, removable=disk.removable,
+        transport=disk.transport, model=disk.model if disk.model_raw is None else disk.model_raw, serial=disk.serial, wwn=disk.wwid,
+        fstype=disk.fstype, pttype=disk.pttype, log_sec=disk.log_sec, children=children,
+    )
+
+
+def profile_of(hardware: dict[str, Any] | None) -> HardwareProfile:
+    """The hardware profile of an inspect reply; unknown keys are ignored and missing ones keep their defaults."""
+    return HardwareProfile.from_dict(hardware if isinstance(hardware, dict) else None)
+
+
+def discover(roots: list[blockdev.BlockDevice] | None = None) -> tuple[list[blockdev.BlockDevice], list[DiskInfo], list[ExcludedDevice]]:
+    """(lsblk tree, offered disks, devices that were found but cannot be used)."""
+    roots = _lsblk_roots() if roots is None else roots
     if not roots:
-        return []
+        return [], [], []
     try:
         live_keys = blockdev.live_medium_keys(roots, sources=_mount_sources(), cmdline=_kernel_cmdline())
     except (OSError, ValueError):
         live_keys = set()
-    return disks_from_roots(roots, live_keys=live_keys, by_path=by_path_names())
+    excluded: list[ExcludedDevice] = []
+    return roots, disks_from_roots(roots, live_keys=live_keys, by_path=by_path_names(), excluded=excluded), excluded
+
+
+def discover_disks() -> list[DiskInfo]:
+    return discover()[1]
 
 
 # --- network and clock -----------------------------------------------------------
@@ -533,15 +688,18 @@ def check_network(host: str | None = None, proxy: str | None = None) -> bool:
 def inspect_fast() -> SystemInfo:
     """Architecture, RAM, firmware, disks and tools: no network."""
     tools = {tool: shutil.which(tool) is not None for tool in REQUIRED_TOOLS}
+    roots, disks, excluded = discover()
     return SystemInfo(
         architecture=platform.machine(),
         memory_gib=_memory_gib(),
         uefi=_is_uefi(),
-        disks=discover_disks(),
+        disks=disks,
         network=None,
         synchronized_clock=False,
         missing_tools=[tool for tool, present in tools.items() if not present],
         tools=tools,
+        roots=roots,
+        excluded=excluded,
     )
 
 
@@ -594,8 +752,8 @@ def missing_for_selection(manifest: Any, tools: dict[str, bool] | None = None) -
     return [tool for tool in tools_for_selection(manifest) if tools.get(tool) is False or (tool not in tools and shutil.which(tool) is None)]
 
 
-def disks_from_inspection(raw_disks: list[Any]) -> list[DiskInfo]:
-    """Disk list from the daemon's `inspect` reply (lsblk-shaped dictionaries)."""
+def roots_from_inspection(raw_disks: list[Any]) -> list[blockdev.BlockDevice]:
+    """The lsblk tree from the daemon's `inspect` reply (lsblk-shaped dictionaries)."""
     roots = []
     for item in raw_disks:
         if isinstance(item, dict):
@@ -603,7 +761,12 @@ def disks_from_inspection(raw_disks: list[Any]) -> list[DiskInfo]:
                 roots.append(blockdev.BlockDevice.from_lsblk(item))
             except (TypeError, ValueError):
                 continue
-    return disks_from_roots(roots, by_path=by_path_names())
+    return roots
+
+
+def disks_from_inspection(raw_disks: list[Any]) -> list[DiskInfo]:
+    """Disk list from the daemon's `inspect` reply (lsblk-shaped dictionaries)."""
+    return disks_from_roots(roots_from_inspection(raw_disks), by_path=by_path_names())
 
 
 def merge_inspection(info: SystemInfo, data: dict[str, Any], state: DaemonState | None = None) -> SystemInfo:
@@ -635,6 +798,8 @@ def merge_inspection(info: SystemInfo, data: dict[str, Any], state: DaemonState 
         info.warnings = [item for item in data["warnings"] if isinstance(item, dict)]
     if isinstance(data.get("hardware"), dict):
         info.hardware = data["hardware"]
+    if isinstance(data.get("hardware_error"), str):
+        info.hardware_error = data["hardware_error"]
     if isinstance(data.get("missing_for_selection"), list):
         info.missing_for_selection = [str(item) for item in data["missing_for_selection"]]
     clock = data.get("clock")
@@ -648,7 +813,8 @@ def merge_inspection(info: SystemInfo, data: dict[str, Any], state: DaemonState 
     elif isinstance(info.hardware.get("clock"), dict) and isinstance(info.hardware["clock"].get("ntp_synced"), bool):
         info.synchronized_clock = info.hardware["clock"]["ntp_synced"]
     if not info.disks and isinstance(data.get("disks"), list):
-        info.disks = disks_from_inspection(data["disks"])
+        info.roots = roots_from_inspection(data["disks"])
+        info.disks = disks_from_roots(info.roots, by_path=by_path_names())
     apply_daemon_disk_facts(info, data)
     info.inspected = True
     return info

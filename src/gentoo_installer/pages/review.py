@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+import functools
 import json
+import logging
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import (
     QCheckBox,
     QFileDialog,
     QFormLayout,
-    QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
@@ -16,11 +18,14 @@ from PySide6.QtWidgets import (
     QTableWidgetItem,
 )
 
-from .. import diagnostics
+from .. import diagnostics, layout
 from ..manifest import InstallManifest
 from ..system_info import DiskInfo, SystemInfo, tools_for_selection
-from ..widgets import Card, Page, wrapped_label
+from ..widgets import Card, FlowLayout, Page, wrapped_label
+from .hardware import CAPACITY_CODES, blocking_findings, hardware_plan, plan_lines
 from .system import FAMILY_DESKTOP_SUPPORT, FAMILY_LABELS, UNVERIFIED_FAMILIES, stage_family
+
+LOG = logging.getLogger("gentoo_installer.review")
 
 
 def disk_description(disk: DiskInfo | None, path: str) -> str:
@@ -86,6 +91,7 @@ def manifest_warnings(manifest: InstallManifest, info: SystemInfo | None = None)
     if system.desktop == "minimal" and (options.install_hwmonux or options.install_portagehub):
         warnings.append("HWMonux and PortageHub are graphical applications and cannot start on a minimal system; they only add build time and disk space there.")
     if info is not None:
+        warnings.extend(storage_capacity(manifest, info)[1])
         if manifest.storage.firmware == "bios" and info.uefi:
             warnings.append("Legacy BIOS was chosen on a computer started in UEFI mode: the installed system boots only through the firmware's CSM/legacy mode.")
         if manifest.storage.device_id_kind == "path":
@@ -107,6 +113,93 @@ def selection_problems(manifest: InstallManifest, info: SystemInfo | None) -> li
         if missing:
             problems.append("The live system lacks tools that your choices need: " + ", ".join(sorted(set(missing))) + ". Change the filesystem, encryption or bootloader choice, or use a newer installer image.")
     return problems
+
+
+@functools.lru_cache(maxsize=1)
+def layout_features() -> tuple[bool, bool]:
+    """(Btrfs subvolumes, swap file): what the daemon in this build can really create, so the preview does not promise more."""
+    try:
+        from gentoo_installerd import storage as daemon_storage
+
+        probe = getattr(daemon_storage, "fstab_supports_layout_fields", None)
+        if callable(probe):
+            subvolumes, swap_file = probe()
+            return bool(subvolumes), bool(swap_file)
+    except Exception:  # noqa: BLE001 - a preview must never stop the review
+        LOG.exception("Could not ask the installer service code which layouts it can create")
+    return True, True
+
+
+def storage_plan(manifest: InstallManifest, info: SystemInfo | None) -> layout.StoragePlan | None:
+    """What the installation will do to every disk it touches (None when the plan cannot be built)."""
+    subvolumes, swap_file = layout_features()
+    try:
+        return layout.plan_storage(manifest, info.block_devices() if info is not None else None, btrfs_subvolumes=subvolumes, swap_file=swap_file)
+    except Exception:  # noqa: BLE001
+        LOG.exception("The storage plan could not be built")
+        return None
+
+
+def graphics_driver_text(manifest: InstallManifest, info: SystemInfo | None) -> str:
+    """The graphics driver the installation will use, as the planner decided it (what was asked for when nothing was detected)."""
+    plan = hardware_plan(manifest, info.hardware) if info is not None and info.hardware else None
+    if plan is None:
+        return "NVIDIA proprietary driver" if manifest.hardware.gpu_driver == "nvidia" else "Open-source driver"
+    if plan.scalars.get("gpu_driver") == "nvidia":
+        return f"NVIDIA proprietary driver {plan.scalars.get('nvidia_branch', '')}".strip()
+    if manifest.hardware.gpu_driver == "nvidia":
+        return "Open-source driver (the NVIDIA driver does not fit this computer or these settings)"
+    return "Open-source driver"
+
+
+def storage_plan_text(manifest: InstallManifest, info: SystemInfo | None) -> str:
+    plan = storage_plan(manifest, info)
+    return "\n".join(plan.lines()) if plan is not None else ""
+
+
+def storage_plan_details(manifest: InstallManifest, info: SystemInfo | None) -> list[str]:
+    """The plan's lines for a confirmation dialog: without the first ERASE line the dialog already says in its own words."""
+    plan = storage_plan(manifest, info)
+    if plan is None:
+        return []
+    lines = plan.lines()
+    return lines[1:] if manifest.storage.mode == "erase" and lines and lines[0].startswith("ERASE") else lines
+
+
+def storage_capacity(manifest: InstallManifest, info: SystemInfo | None) -> tuple[list[str], list[str]]:
+    """(errors, warnings) about the room the chosen desktop gets, with the daemon's own arithmetic (layout.capacity_problems)."""
+    storage = manifest.storage
+    if info is None:
+        return [], []
+    if storage.mode == "erase":
+        disk = info.find_disk(storage.device)
+        return layout.capacity_problems(manifest, disk.size, disk.log_sec) if disk is not None else ([], [])
+    root = next((row for row in storage.partitions if row.mountpoint == "/"), None)
+    part = info.find_partition(root.device) if root is not None else None
+    if part is None:
+        return [], []
+    minimum, recommended = layout.minimum_root_mib(manifest) * layout.MIB, layout.recommended_root_mib(manifest) * layout.MIB
+    desktop = "a minimal system" if manifest.system.desktop == "minimal" else manifest.system.desktop.upper()
+    if part.size < minimum:
+        return [f"The root partition {part.path} is {layout.human_size(part.size)}, but {desktop} needs at least {layout.human_size(minimum)}. "
+                "Choose a larger partition or a lighter desktop."], []
+    if part.size < recommended:
+        return [], [f"The root partition {part.path} is {layout.human_size(part.size)}; {recommended // layout.GIB} GiB or more is recommended so updates and builds have room."]
+    return [], []
+
+
+def blocking_problems(manifest: InstallManifest, info: SystemInfo | None) -> list[tuple[str, str]]:
+    """(section, message) of everything that stops the installation and only shows with the final selection."""
+    found: list[tuple[str, str]] = [("storage", message) for message in selection_problems(manifest, info)]
+    if info is not None:
+        found += [("storage", message) for message in storage_capacity(manifest, info)[0]]
+        for section in ("storage", "network", "hardware"):
+            found += [(section, message) for message in blocking_findings(manifest, info.hardware, section, skip=CAPACITY_CODES)]
+    unique: list[tuple[str, str]] = []
+    for section, message in found:
+        if all(message != other for _, other in unique):
+            unique.append((section, message))
+    return unique
 
 
 def save_redacted_copy(manifest: InstallManifest, path: str | Path) -> None:
@@ -140,6 +233,18 @@ class ReviewPage(Page):
         summary_card.content.addWidget(self.summary)
         self.content.addWidget(summary_card)
 
+        plan_card = Card("What will happen to your disks", "Nothing is changed before you confirm below.")
+        self.storage_plan = wrapped_label("", selectable=True)
+        self.storage_plan.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+        self.storage_plan.setAccessibleName("Storage plan")
+        plan_card.content.addWidget(self.storage_plan)
+        self.content.addWidget(plan_card)
+        self.hardware_card = Card("Set-up for this computer", "Chosen from the hardware that was found. Change it on the Hardware tab of the Customization step.")
+        self.hardware_plan = wrapped_label("", selectable=True)
+        self.hardware_plan.setAccessibleName("Hardware set-up")
+        self.hardware_card.content.addWidget(self.hardware_plan)
+        self.content.addWidget(self.hardware_card)
+
         self.warning = QLabel()
         self.warning.setWordWrap(True)
         self.warning.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
@@ -161,14 +266,13 @@ class ReviewPage(Page):
         self.extra_confirmations: list[tuple[str, QLineEdit]] = []
         self.confirm_card.content.addLayout(self.confirm_form)
         self.content.addWidget(self.confirm_card)
-        buttons = QHBoxLayout()
+        buttons = FlowLayout()
         export = QPushButton("Save a redacted copy of these settings")
         export.clicked.connect(self._export)
         buttons.addWidget(export)
         importer = QPushButton("Import settings…")
         importer.clicked.connect(self.importRequested)
         buttons.addWidget(importer)
-        buttons.addStretch()
         self.content.addLayout(buttons)
         self.advance_on_enter(self.confirmation)
 
@@ -194,9 +298,13 @@ class ReviewPage(Page):
         for name, value in values:
             if name == "Disk" and disk is not None:
                 value = f"{disk.describe()} · {storage.mode} · {storage.filesystem}"
+            elif name == "Encryption":
+                value = storage.encryption_summary()  # says what is and is not encrypted, not just "enabled"
             rich.append((name, value))
         if storage.mode == "erase":
             rich.append(("Swap", f"{storage.swap_mib} MiB" if storage.swap_mib else "None"))
+        rich.append(("Installed for", "A portable disk (other computers)" if self.manifest.hardware.target == "portable" else "This computer"))
+        rich.append(("Graphics driver", graphics_driver_text(self.manifest, self.info)))
         rich.append(("Region", f"{self.manifest.system.locale} · {self.manifest.system.timezone} · keyboard {self.manifest.system.keyboard_layout} (console {self.manifest.system.keymap})"))
         self.summary.setRowCount(len(rich))
         for row, (name, value) in enumerate(rich):
@@ -204,6 +312,11 @@ class ReviewPage(Page):
             self.summary.setItem(row, 1, QTableWidgetItem(value))
         self.summary.resizeRowsToContents()
         self.warning.setText(disk_warning(self.manifest, self.info))
+        self.storage_plan.setText(storage_plan_text(self.manifest, self.info))
+        hardware = self.info.hardware if self.info is not None else {}
+        lines = plan_lines(hardware_plan(self.manifest, hardware)) if hardware else []
+        self.hardware_plan.setText("\n".join("• " + line for line in lines))
+        self.hardware_card.setVisible(bool(lines))
         notes = manifest_warnings(self.manifest, self.info)
         self.notes.setText("Good to know:\n• " + "\n• ".join(notes) if notes else "")
         self.notes.setVisible(bool(notes))
@@ -225,9 +338,9 @@ class ReviewPage(Page):
         for expected, got in zip(wanted, typed + [""] * len(wanted)):
             if got != expected:
                 return False, f"Type {expected} exactly to confirm the target disk."
-        problems = selection_problems(self.manifest, self.info)
+        problems = blocking_problems(self.manifest, self.info)
         if problems:
-            return False, problems[0]
+            return False, problems[0][1]
         errors = self.manifest.validate()
         return (False, errors[0]) if errors else (True, "")
 
