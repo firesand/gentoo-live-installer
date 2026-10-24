@@ -1,0 +1,73 @@
+Drive current: -indev '/dist/gentoo-installer-amd64-20261018T124555Z.iso'
+PVD address  : 16s
+Volume Id    : GENTOO_INSTALLER_AMD64
+Volume Set Id: 
+Publisher Id : 
+Preparer Id  : XORRISO-1.5.8 2026.05.22.150001, LIBISOBURN-1.5.8, LIBISOFS-1.5.8, LIBBURN-1.5.8
+App Id       : 
+System Id    : 
+CopyrightFile: 
+Abstract File: 
+Biblio File  : 
+Creation Time: 2026102400405000
+Modif. Time  : 2026102400405000
+Expir. Time  : 0000000000000000
+Eff. Time    : 0000000000000000
+System area options: 0x00004201
+System area summary: MBR protective-msdos-label grub2-mbr cyl-align-off GPT APM
+ISO image size/512 : 5823636
+Partition offset   : 0
+MBR heads per cyl  : 178
+MBR secs per head  : 32
+MBR partition table:   N Status  Type        Start       Blocks
+MBR partition      :   1   0x00  0xee            1      5823635
+MBR partition      :   2   0x80  0x00            0            1
+GPT                :   N  Info
+GPT disk GUID      :      3230323631303244b030303034303530
+GPT entry array    :      20  176  separated
+GPT lba range      :      64  5823590  5823635
+GPT partition name :   1  4700610070003000
+GPT partname local :   1  Gap0
+GPT partition GUID :   1  3230323631303244b031303034303530
+GPT type GUID      :   1  a2a0d0ebe5b9334487c068b6b72699c7
+GPT partition flags:   1  0x1000000000000001
+GPT start and size :   1  64  564
+GPT partition name :   2  450046004900200062006f006f007400200070006100720074006900740069006f006e00
+GPT partname local :   2  EFI boot partition
+GPT partition GUID :   2  3230323631303244b032303034303530
+GPT type GUID      :   2  28732ac11ff8d211ba4b00a0c93ec93b
+GPT partition flags:   2  0x1000000000000001
+GPT start and size :   2  628  5760
+GPT partition path :   2  /efi.img
+GPT partition name :   3  48004600530050004c0055005300
+GPT partname local :   3  HFSPLUS
+GPT partition GUID :   3  3230323631303244b033303034303530
+GPT type GUID      :   3  005346480000aa11aa1100306543ecac
+GPT partition flags:   3  0x1000000000000001
+GPT start and size :   3  6388  5816600
+GPT partition name :   4  4700610070003100
+GPT partname local :   4  Gap1
+GPT partition GUID :   4  3230323631303244b034303034303530
+GPT type GUID      :   4  a2a0d0ebe5b9334487c068b6b72699c7
+GPT partition flags:   4  0x1000000000000001
+GPT start and size :   4  5822988  600
+APM                :   N  Info
+APM block size     :      2048
+APM gap fillers    :      2
+APM partition name :   1  Gap0
+APM partition type :   1  ISO9660_data
+APM start and size :   1  16  1581
+APM partition name :   2  HFSPLUS_Hybrid
+APM partition type :   2  Apple_HFS
+APM start and size :   2  1597  1454150
+APM partition name :   3  Gap1
+APM partition type :   3  ISO9660_data
+APM start and size :   3  1455747  162
+El Torito catalog  : 1782  1
+El Torito cat path : /boot.catalog
+El Torito images   :   N  Pltf  B   Emul  Ld_seg  Hdpt  Ldsiz         LBA
+El Torito boot img :   1  BIOS  y   none  0x0000  0x00      4       48692
+El Torito boot img :   2  UEFI  y   none  0x0000  0x00   5760         157
+El Torito img path :   1  /boot/grub/i386-pc/eltorito.img
+El Torito img opts :   1  boot-info-table grub2-boot-info
+El Torito img path :   2  /efi.img

@@ -1,0 +1,112 @@
+dir boot 0755 0 0
+dir etc 0755 1000 1000
+dir etc/NetworkManager 0755 1000 1000
+file etc/NetworkManager/NetworkManager.conf 0644 1000 1000
+dir etc/init.d 0755 1000 1000
+file etc/init.d/NetworkManager 0755 0 0
+file etc/init.d/acpid 0755 0 0
+file etc/init.d/autoconfig 0755 0 0
+file etc/init.d/chronyd 0755 0 0
+file etc/init.d/dbus 0755 0 0
+file etc/init.d/elogind 0755 0 0
+file etc/init.d/fixinittab 0755 0 0
+file etc/init.d/gentoo-installerd 0755 0 0
+file etc/init.d/local 0755 0 0
+file etc/init.d/sshd 0755 0 0
+file etc/init.d/syslog-ng 0755 0 0
+file etc/init.d/udev 0755 0 0
+file etc/init.d/xdm 0755 1000 1000
+dir etc/lightdm 0755 1000 1000
+file etc/lightdm/lightdm.conf 0644 1000 1000
+dir etc/polkit-1 0755 1000 1000
+dir etc/polkit-1/rules.d 0755 1000 1000
+file etc/polkit-1/rules.d/50-gentoo-live.rules 0644 1000 1000
+dir etc/portage 0755 1000 1000
+file etc/portage/make.conf 0644 0 0
+file etc/portage/make.conf.extra 0644 0 0
+file etc/portage/make.conf.old 0644 1000 1000
+dir etc/portage/package.accept_keywords 0755 1000 1000
+dir etc/portage/package.use 0755 1000 1000
+dir etc/portage/repos.conf 0755 1000 1000
+slink etc/runlevels/boot/binfmt 0777 0 0 /etc/init.d/binfmt
+slink etc/runlevels/boot/bootmisc 0777 0 0 /etc/init.d/bootmisc
+slink etc/runlevels/boot/elogind 0777 0 0 /etc/init.d/elogind
+slink etc/runlevels/boot/fsck 0777 0 0 /etc/init.d/fsck
+slink etc/runlevels/boot/hostname 0777 0 0 /etc/init.d/hostname
+slink etc/runlevels/boot/hwclock 0777 0 0 /etc/init.d/hwclock
+slink etc/runlevels/boot/localmount 0777 0 0 /etc/init.d/localmount
+slink etc/runlevels/boot/loopback 0777 0 0 /etc/init.d/loopback
+slink etc/runlevels/boot/modules 0777 0 0 /etc/init.d/modules
+slink etc/runlevels/boot/mtab 0777 0 0 /etc/init.d/mtab
+slink etc/runlevels/boot/procfs 0777 0 0 /etc/init.d/procfs
+slink etc/runlevels/boot/root 0777 0 0 /etc/init.d/root
+slink etc/runlevels/boot/save-keymaps 0777 0 0 /etc/init.d/save-keymaps
+slink etc/runlevels/boot/save-termencoding 0777 0 0 /etc/init.d/save-termencoding
+slink etc/runlevels/boot/seedrng 0777 0 0 /etc/init.d/seedrng
+slink etc/runlevels/boot/swap 0777 0 0 /etc/init.d/swap
+slink etc/runlevels/boot/sysctl 0777 0 0 /etc/init.d/sysctl
+slink etc/runlevels/boot/systemd-tmpfiles-setup 0777 0 0 /etc/init.d/systemd-tmpfiles-setup
+slink etc/runlevels/boot/termencoding 0777 0 0 /etc/init.d/termencoding
+slink etc/runlevels/default/NetworkManager 0777 0 0 /etc/init.d/NetworkManager
+slink etc/runlevels/default/acpid 0777 0 0 /etc/init.d/acpid
+slink etc/runlevels/default/autoconfig 0777 0 0 /etc/init.d/autoconfig
+slink etc/runlevels/default/dbus 0777 0 0 /etc/init.d/dbus
+slink etc/runlevels/default/fixinittab 0777 0 0 /etc/init.d/fixinittab
+slink etc/runlevels/default/gentoo-installerd 0777 0 0 /etc/init.d/gentoo-installerd
+slink etc/runlevels/default/local 0777 0 0 /etc/init.d/local
+slink etc/runlevels/default/sshd 0777 0 0 /etc/init.d/sshd
+slink etc/runlevels/default/syslog-ng 0777 0 0 /etc/init.d/syslog-ng
+slink etc/runlevels/default/xdm 0777 0 0 /etc/init.d/xdm
+slink etc/runlevels/nonetwork/local 0777 0 0 /etc/init.d/local
+slink etc/runlevels/shutdown/killprocs 0777 0 0 /etc/init.d/killprocs
+slink etc/runlevels/shutdown/mount-ro 0777 0 0 /etc/init.d/mount-ro
+slink etc/runlevels/shutdown/savecache 0777 0 0 /etc/init.d/savecache
+slink etc/runlevels/sysinit/cgroups 0777 0 0 /etc/init.d/cgroups
+slink etc/runlevels/sysinit/devfs 0777 0 0 /etc/init.d/devfs
+slink etc/runlevels/sysinit/dmesg 0777 0 0 /etc/init.d/dmesg
+slink etc/runlevels/sysinit/kmod-static-nodes 0777 0 0 /etc/init.d/kmod-static-nodes
+slink etc/runlevels/sysinit/sysfs 0777 0 0 /etc/init.d/sysfs
+slink etc/runlevels/sysinit/systemd-tmpfiles-setup-dev 0777 0 0 /etc/init.d/systemd-tmpfiles-setup-dev
+slink etc/runlevels/sysinit/udev 0777 0 0 /etc/init.d/udev
+slink etc/runlevels/sysinit/udev-trigger 0777 0 0 /etc/init.d/udev-trigger
+file etc/shadow 0640 0 42
+dir etc/xdg 0755 1000 1000
+dir etc/xdg/autostart 0755 1000 1000
+file etc/xdg/autostart/gentoo-installer.desktop 0644 1000 1000
+dir etc/xdg/xfce4 0755 0 0
+dir etc/xdg/xfce4/panel 0755 0 0
+file etc/xdg/xfce4/panel/default.xml 0644 0 0
+dir etc/xfce4 0755 1000 1000
+file etc/xfce4/helpers.rc 0644 1000 1000
+dir home/gentoo 0700 1000 100
+file home/gentoo/.bashrc 0644 1000 100
+dir mnt 0755 0 0
+dir mnt/gentoo 0755 0 0
+dir opt/rust-bin-1.98.1 0755 0 0
+dir opt/rust-bin-1.98.1/bin 0755 0 0
+dir usr 0755 0 0
+slink usr/bin/gentoo-installer 0777 0 0 ../lib/python-exec/python-exec2
+slink usr/bin/gentoo-installerd 0777 0 0 ../lib/python-exec/python-exec2
+file usr/bin/gparted 0755 0 0
+slink usr/bin/hwmonux 0777 0 0 ../lib/python-exec/python-exec2
+file usr/bin/loadkeys 0755 0 0
+file usr/bin/lsblk 0755 0 0
+file usr/bin/nmcli 0755 0 0
+file usr/bin/nmtui 0755 0 0
+file usr/bin/portagehub 0755 0 0
+file usr/bin/sgdisk 0755 0 0
+file usr/bin/smartctl 0755 0 0
+file usr/bin/testdisk 0755 0 0
+dir usr/include 0755 0 0
+dir usr/lib/firmware 0755 0 0
+dir usr/lib/modules 0755 0 0
+file usr/libexec/portagehub-helper 0755 0 0
+dir usr/share/polkit-1/rules.d 0700 102 0
+dir var/cache/binhost 0755 0 0
+dir var/cache/binhost/gentoo 0755 0 0
+dir var/db/pkg/app-admin/gentoo-live-installer-0.1.0-r4 0755 0 0
+dir var/db/pkg/dev-lang/rust-bin-1.98.1 0755 0 0
+dir var/db/pkg/net-misc/chrony-4.8-r1 0755 0 0
+dir var/db/pkg/sys-fs/lvm2-2.03.39 0755 0 0
+dir var/lib/chrony 0770 123 123
+file var/spool/mail/gentoo 0660 1000 12
