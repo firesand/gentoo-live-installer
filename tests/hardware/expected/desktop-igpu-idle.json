@@ -1,0 +1,453 @@
+{
+ "fixture": "desktop-igpu-idle",
+ "machine": "System Product Name",
+ "scenarios": {
+  "kde-openrc": {
+   "description": "the GUI defaults (KDE, OpenRC, binary packages)",
+   "issues": [],
+   "plan": {
+    "driver_atoms": [],
+    "early_atoms": [
+     "sys-firmware/intel-microcode",
+     "sys-kernel/linux-firmware"
+    ],
+    "files": [
+     [
+      "/etc/cron.weekly/fstrim",
+      "#!/bin/sh\n# Weekly TRIM of mounted solid-state filesystems (written by the Gentoo installer).\nexec /sbin/fstrim --all --quiet-unsupported\n",
+      493
+     ]
+    ],
+    "kernel_cmdline": [],
+    "make_conf": {},
+    "notes": [],
+    "optional_atoms": [],
+    "optional_services": [],
+    "package_license": {
+     "sys-firmware/intel-microcode": [
+      "intel-ucode"
+     ],
+     "sys-kernel/linux-firmware": [
+      "linux-fw-redistributable"
+     ]
+    },
+    "package_mask": [],
+    "package_use": {
+     "media-video/pipewire": [
+      "sound-server"
+     ],
+     "sys-firmware/intel-microcode": [
+      "initramfs"
+     ],
+     "sys-kernel/linux-firmware": [
+      "redistributable"
+     ]
+    },
+    "post_steps": [
+     [
+      "sh",
+      "-c",
+      "if getent group pipewire >/dev/null; then usermod -aG pipewire \"$1\"; fi",
+      "sh",
+      "gentoo"
+     ]
+    ],
+    "required_atoms": [],
+    "scalars": {
+     "btrfs_discard_async": false,
+     "cpu_flags_mode": "profile",
+     "cpu_vendor": "intel",
+     "firmware_forced": false,
+     "firmware_reasons": [
+      "NVIDIA GPU system processor firmware",
+      "Intel graphics",
+      "Wi-Fi",
+      "Bluetooth"
+     ],
+     "form_factor": "desktop",
+     "gpu_driver": "open",
+     "gpu_vendors": [
+      "intel",
+      "nvidia"
+     ],
+     "hidpi": "off",
+     "hybrid": false,
+     "hypervisor": "",
+     "init": "openrc",
+     "luks_allow_discards": false,
+     "microcode": "intel",
+     "nvidia_branch": "",
+     "nvk": "no",
+     "power": "none",
+     "prime": "off",
+     "removable_fallback": "always",
+     "sof_firmware": "no",
+     "target": "this",
+     "thermald": "no",
+     "trim": "weekly",
+     "zram": "no"
+    },
+    "schema": 1,
+    "services": [],
+    "summary": [
+     "CPU: Intel Core i9-14900K, 32 threads; Intel microcode",
+     "Graphics: Intel UHD Graphics 770 - open Intel driver",
+     "Graphics: NVIDIA GeForce RTX 4090 - open driver (nouveau)",
+     "Firmware: Linux firmware (NVIDIA GPU system processor firmware, Intel graphics, Wi-Fi, Bluetooth)",
+     "Storage: weekly TRIM for the solid-state disk (cron)",
+     "Boot: fallback boot path is always written"
+    ],
+    "warnings": []
+   }
+  },
+  "nvidia-this": {
+   "description": "this PC, proprietary NVIDIA driver accepted",
+   "issues": [],
+   "plan": {
+    "driver_atoms": [
+     "x11-drivers/nvidia-drivers"
+    ],
+    "early_atoms": [
+     "sys-firmware/intel-microcode",
+     "sys-kernel/linux-firmware"
+    ],
+    "files": [
+     [
+      "/etc/cron.weekly/fstrim",
+      "#!/bin/sh\n# Weekly TRIM of mounted solid-state filesystems (written by the Gentoo installer).\nexec /sbin/fstrim --all --quiet-unsupported\n",
+      493
+     ]
+    ],
+    "kernel_cmdline": [
+     "nvidia-drm.modeset=1",
+     "nvidia-drm.fbdev=1"
+    ],
+    "make_conf": {
+     "VIDEO_CARDS": "${VIDEO_CARDS} nvidia"
+    },
+    "notes": [
+     "NVIDIA proprietary driver 595 (current, open kernel modules); if it fails to build, the open nouveau driver stays in use."
+    ],
+    "optional_atoms": [],
+    "optional_services": [],
+    "package_license": {
+     "sys-firmware/intel-microcode": [
+      "intel-ucode"
+     ],
+     "sys-kernel/linux-firmware": [
+      "linux-fw-redistributable"
+     ],
+     "x11-drivers/nvidia-drivers": [
+      "NVIDIA-2025"
+     ]
+    },
+    "package_mask": [],
+    "package_use": {
+     "media-video/pipewire": [
+      "sound-server"
+     ],
+     "sys-firmware/intel-microcode": [
+      "initramfs"
+     ],
+     "sys-kernel/linux-firmware": [
+      "redistributable"
+     ],
+     "x11-drivers/nvidia-drivers": [
+      "dist-kernel",
+      "wayland"
+     ]
+    },
+    "post_steps": [
+     [
+      "sh",
+      "-c",
+      "if [ -f /etc/modprobe.d/nvidia.conf ]; then dracut --force --regenerate-all; fi"
+     ],
+     [
+      "sh",
+      "-c",
+      "if getent group pipewire >/dev/null; then usermod -aG pipewire \"$1\"; fi",
+      "sh",
+      "gentoo"
+     ],
+     [
+      "sh",
+      "-c",
+      "set -- /var/db/pkg/app-misc/hwmonux-*; if [ -f /etc/modprobe.d/nvidia.conf ] && [ -d \"$1\" ]; then echo 'app-misc/hwmonux nvidia' > /etc/portage/package.use/installer-hwmonux-nvidia && emerge --oneshot app-misc/hwmonux; fi"
+     ]
+    ],
+    "required_atoms": [],
+    "scalars": {
+     "btrfs_discard_async": false,
+     "cpu_flags_mode": "profile",
+     "cpu_vendor": "intel",
+     "firmware_forced": false,
+     "firmware_reasons": [
+      "Intel graphics",
+      "Wi-Fi",
+      "Bluetooth"
+     ],
+     "form_factor": "desktop",
+     "gpu_driver": "nvidia",
+     "gpu_vendors": [
+      "intel",
+      "nvidia"
+     ],
+     "hidpi": "off",
+     "hybrid": false,
+     "hypervisor": "",
+     "init": "openrc",
+     "luks_allow_discards": false,
+     "microcode": "intel",
+     "nvidia_branch": "595",
+     "nvk": "no",
+     "power": "none",
+     "prime": "off",
+     "removable_fallback": "always",
+     "sof_firmware": "no",
+     "target": "this",
+     "thermald": "no",
+     "trim": "weekly",
+     "zram": "no"
+    },
+    "schema": 1,
+    "services": [],
+    "summary": [
+     "CPU: Intel Core i9-14900K, 32 threads; Intel microcode",
+     "Graphics: Intel UHD Graphics 770 - open Intel driver",
+     "Graphics: NVIDIA GeForce RTX 4090 - proprietary driver 595",
+     "Firmware: Linux firmware (Intel graphics, Wi-Fi, Bluetooth)",
+     "Storage: weekly TRIM for the solid-state disk (cron)",
+     "Boot: fallback boot path is always written"
+    ],
+    "warnings": []
+   }
+  },
+  "portable-nvidia": {
+   "description": "a portable disk with the proprietary NVIDIA driver",
+   "issues": [],
+   "plan": {
+    "driver_atoms": [
+     "x11-drivers/nvidia-drivers"
+    ],
+    "early_atoms": [
+     "sys-firmware/intel-microcode",
+     "sys-kernel/linux-firmware"
+    ],
+    "files": [],
+    "kernel_cmdline": [
+     "nvidia-drm.modeset=1",
+     "nvidia-drm.fbdev=1"
+    ],
+    "make_conf": {
+     "VIDEO_CARDS": "${VIDEO_CARDS} nvidia"
+    },
+    "notes": [
+     "Portable install: both Intel and AMD microcode are installed.",
+     "NVIDIA proprietary driver 595 (current, open kernel modules); if it fails to build, the open nouveau driver stays in use."
+    ],
+    "optional_atoms": [
+     "sys-firmware/sof-firmware"
+    ],
+    "optional_services": [],
+    "package_license": {
+     "sys-firmware/intel-microcode": [
+      "intel-ucode"
+     ],
+     "sys-kernel/linux-firmware": [
+      "linux-fw-redistributable"
+     ],
+     "x11-drivers/nvidia-drivers": [
+      "NVIDIA-2025"
+     ]
+    },
+    "package_mask": [],
+    "package_use": {
+     "media-video/pipewire": [
+      "sound-server"
+     ],
+     "sys-firmware/intel-microcode": [
+      "initramfs"
+     ],
+     "sys-kernel/linux-firmware": [
+      "initramfs",
+      "redistributable"
+     ],
+     "x11-drivers/nvidia-drivers": [
+      "dist-kernel",
+      "wayland"
+     ]
+    },
+    "post_steps": [
+     [
+      "sh",
+      "-c",
+      "if [ -f /etc/modprobe.d/nvidia.conf ]; then dracut --force --regenerate-all; fi"
+     ],
+     [
+      "sh",
+      "-c",
+      "if getent group pipewire >/dev/null; then usermod -aG pipewire \"$1\"; fi",
+      "sh",
+      "gentoo"
+     ],
+     [
+      "sh",
+      "-c",
+      "set -- /var/db/pkg/app-misc/hwmonux-*; if [ -f /etc/modprobe.d/nvidia.conf ] && [ -d \"$1\" ]; then echo 'app-misc/hwmonux nvidia' > /etc/portage/package.use/installer-hwmonux-nvidia && emerge --oneshot app-misc/hwmonux; fi"
+     ]
+    ],
+    "required_atoms": [],
+    "scalars": {
+     "btrfs_discard_async": false,
+     "cpu_flags_mode": "profile",
+     "cpu_vendor": "intel",
+     "firmware_forced": false,
+     "firmware_reasons": [
+      "a portable install can meet any hardware",
+      "Intel graphics",
+      "Wi-Fi",
+      "Bluetooth"
+     ],
+     "form_factor": "desktop",
+     "gpu_driver": "nvidia",
+     "gpu_vendors": [
+      "intel",
+      "nvidia"
+     ],
+     "hidpi": "off",
+     "hybrid": false,
+     "hypervisor": "",
+     "init": "openrc",
+     "luks_allow_discards": false,
+     "microcode": "both",
+     "nvidia_branch": "595",
+     "nvk": "no",
+     "power": "none",
+     "prime": "off",
+     "removable_fallback": "always",
+     "sof_firmware": "yes",
+     "target": "portable",
+     "thermald": "no",
+     "trim": "off",
+     "zram": "no"
+    },
+    "schema": 1,
+    "services": [],
+    "summary": [
+     "CPU: Intel Core i9-14900K, 32 threads; Intel and AMD microcode",
+     "Graphics: Intel UHD Graphics 770 - open Intel driver",
+     "Graphics: NVIDIA GeForce RTX 4090 - proprietary driver 595",
+     "Firmware: Linux firmware (a portable install can meet any hardware, Intel graphics, Wi-Fi, Bluetooth)",
+     "Audio: Sound Open Firmware (many laptop audio chips need it)",
+     "Boot: fallback boot path is always written"
+    ],
+    "warnings": []
+   }
+  },
+  "xfce-systemd-source": {
+   "description": "Xfce on systemd, everything built from source",
+   "issues": [],
+   "plan": {
+    "driver_atoms": [],
+    "early_atoms": [
+     "sys-firmware/intel-microcode",
+     "sys-kernel/linux-firmware"
+    ],
+    "files": [],
+    "kernel_cmdline": [],
+    "make_conf": {
+     "CPU_FLAGS_X86": "aes avx avx2 avx_vnni bmi1 bmi2 f16c fma3 mmx mmxext pclmul popcnt rdrand sha sse sse2 sse3 sse4_1 sse4_2 ssse3 vpclmulqdq",
+     "VIDEO_CARDS": "intel nouveau nvk"
+    },
+    "notes": [],
+    "optional_atoms": [],
+    "optional_services": [],
+    "package_license": {
+     "sys-firmware/intel-microcode": [
+      "intel-ucode"
+     ],
+     "sys-kernel/linux-firmware": [
+      "linux-fw-redistributable"
+     ]
+    },
+    "package_mask": [],
+    "package_use": {
+     "media-libs/mesa": [
+      "vulkan"
+     ],
+     "media-video/pipewire": [
+      "sound-server"
+     ],
+     "sys-firmware/intel-microcode": [
+      "initramfs"
+     ],
+     "sys-kernel/linux-firmware": [
+      "redistributable"
+     ]
+    },
+    "post_steps": [
+     [
+      "sh",
+      "-c",
+      "if getent group pipewire >/dev/null; then usermod -aG pipewire \"$1\"; fi",
+      "sh",
+      "gentoo"
+     ]
+    ],
+    "required_atoms": [],
+    "scalars": {
+     "btrfs_discard_async": false,
+     "cpu_flags_mode": "detect",
+     "cpu_vendor": "intel",
+     "firmware_forced": false,
+     "firmware_reasons": [
+      "NVIDIA GPU system processor firmware",
+      "Intel graphics",
+      "Wi-Fi",
+      "Bluetooth"
+     ],
+     "form_factor": "desktop",
+     "gpu_driver": "open",
+     "gpu_vendors": [
+      "intel",
+      "nvidia"
+     ],
+     "hidpi": "off",
+     "hybrid": false,
+     "hypervisor": "",
+     "init": "systemd",
+     "luks_allow_discards": false,
+     "microcode": "intel",
+     "nvidia_branch": "",
+     "nvk": "yes",
+     "power": "none",
+     "prime": "off",
+     "removable_fallback": "always",
+     "sof_firmware": "no",
+     "target": "this",
+     "thermald": "no",
+     "trim": "weekly",
+     "zram": "no"
+    },
+    "schema": 1,
+    "services": [
+     [
+      "fstrim.timer",
+      "default"
+     ]
+    ],
+    "summary": [
+     "CPU: Intel Core i9-14900K, 32 threads; Intel microcode",
+     "CPU flags: tuned for this CPU (packages are built, not downloaded)",
+     "Graphics: Intel UHD Graphics 770 - open Intel driver",
+     "Graphics: NVIDIA GeForce RTX 4090 - open driver (nouveau + NVK)",
+     "Firmware: Linux firmware (NVIDIA GPU system processor firmware, Intel graphics, Wi-Fi, Bluetooth)",
+     "Storage: weekly TRIM for the solid-state disk (fstrim.timer)",
+     "Boot: fallback boot path is always written"
+    ],
+    "warnings": []
+   }
+  }
+ }
+}

@@ -317,7 +317,7 @@ class HardwareProfile:
             parts.append(f"{self.cpu.threads} threads")
         if self.memory.total_kib:
             parts.append(f"{self.memory.total_kib / 1048576:.0f} GiB")
-        gpus = [_short_gpu_name(gpu) for gpu in self.gpus if gpu.name or gpu.vendor_name]
+        gpus = [gpu_label(gpu) for gpu in self.gpus if gpu.name or gpu.vendor_name]
         if gpus:
             parts.append(" + ".join(gpus))
         kinds = _disk_kinds(self.disks)
@@ -329,7 +329,8 @@ class HardwareProfile:
         return " - ".join(parts)
 
 
-def _short_gpu_name(gpu: GpuInfo) -> str:
+def gpu_label(gpu: GpuInfo) -> str:
+    """Human name of a GPU: the marketing name from pci.ids with its vendor, e.g. 'NVIDIA GeForce RTX 4090'."""
     bracket = re.search(r"\[(.+?)\]", gpu.name)
     name = bracket.group(1) if bracket else gpu.name
     prefix = {"nvidia": "NVIDIA ", "amd": "AMD ", "intel": "Intel "}.get(gpu.vendor, "")
@@ -1262,7 +1263,7 @@ class _Prober:
                                for node in root.children if node.type == "part"]
             disk.live_medium = root.key in live_keys
         if not self.roots:  # no lsblk: still recognise the live medium from the mount table
-            sources = {_parent_disk(os.path.basename(source)) for source in self._live_sources()}
+            sources = {parent_disk_name(os.path.basename(source)) for source in self._live_sources()}
             for disk in disks.values():
                 disk.live_medium = disk.name in sources
         for disk in disks.values():
@@ -1431,8 +1432,8 @@ class _Prober:
         clock.rtc_mode, clock.rtc_delta_s = rtc_mode(rtc, self.now, synced)
 
 
-def _parent_disk(name: str) -> str:
-    """Kernel disk name for a partition name (sda1 -> sda, nvme0n1p2 -> nvme0n1, mmcblk0p1 -> mmcblk0)."""
+def parent_disk_name(name: str) -> str:
+    """Kernel disk name for a partition or disk name (sda1 -> sda, nvme0n1p2 -> nvme0n1, mmcblk0p1 -> mmcblk0, sda -> sda)."""
     match = re.fullmatch(r"(nvme\d+n\d+|mmcblk\d+)p\d+", name) or re.fullmatch(r"((?:sd|vd|hd|xvd)[a-z]+)\d+", name)
     return match.group(1) if match else name
 

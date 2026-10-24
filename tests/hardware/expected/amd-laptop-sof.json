@@ -1,0 +1,456 @@
+{
+ "fixture": "amd-laptop-sof",
+ "machine": "82MF",
+ "scenarios": {
+  "kde-openrc": {
+   "description": "the GUI defaults (KDE, OpenRC, binary packages)",
+   "issues": [],
+   "plan": {
+    "driver_atoms": [],
+    "early_atoms": [
+     "sys-kernel/linux-firmware"
+    ],
+    "files": [
+     [
+      "/etc/cron.weekly/fstrim",
+      "#!/bin/sh\n# Weekly TRIM of mounted solid-state filesystems (written by the Gentoo installer).\nexec /sbin/fstrim --all --quiet-unsupported\n",
+      493
+     ]
+    ],
+    "kernel_cmdline": [],
+    "make_conf": {},
+    "notes": [],
+    "optional_atoms": [
+     "sys-firmware/sof-firmware",
+     "sys-power/power-profiles-daemon"
+    ],
+    "optional_services": [
+     [
+      "power-profiles-daemon",
+      "default"
+     ]
+    ],
+    "package_license": {
+     "sys-kernel/linux-firmware": [
+      "linux-fw-redistributable"
+     ]
+    },
+    "package_mask": [],
+    "package_use": {
+     "media-video/pipewire": [
+      "sound-server"
+     ],
+     "sys-kernel/linux-firmware": [
+      "initramfs",
+      "redistributable"
+     ]
+    },
+    "post_steps": [
+     [
+      "sh",
+      "-c",
+      "if getent group pipewire >/dev/null; then usermod -aG pipewire \"$1\"; fi",
+      "sh",
+      "gentoo"
+     ]
+    ],
+    "required_atoms": [],
+    "scalars": {
+     "btrfs_discard_async": false,
+     "cpu_flags_mode": "profile",
+     "cpu_vendor": "amd",
+     "firmware_forced": false,
+     "firmware_reasons": [
+      "AMD graphics",
+      "Wi-Fi",
+      "Bluetooth",
+      "Ethernet adapter"
+     ],
+     "form_factor": "laptop",
+     "gpu_driver": "open",
+     "gpu_vendors": [
+      "amd"
+     ],
+     "hidpi": "dpi:144",
+     "hybrid": false,
+     "hypervisor": "",
+     "init": "openrc",
+     "luks_allow_discards": false,
+     "microcode": "amd",
+     "nvidia_branch": "",
+     "nvk": "no",
+     "power": "ppd",
+     "prime": "off",
+     "removable_fallback": "always",
+     "sof_firmware": "yes",
+     "target": "this",
+     "thermald": "no",
+     "trim": "weekly",
+     "zram": "no"
+    },
+    "schema": 1,
+    "services": [],
+    "summary": [
+     "CPU: AMD Ryzen 5 5500U with Radeon Graphics, 12 threads; AMD microcode (linux-firmware)",
+     "Graphics: AMD Lucienne - open AMD driver",
+     "Firmware: Linux firmware (AMD graphics, Wi-Fi, Bluetooth, Ethernet adapter)",
+     "Audio: Sound Open Firmware (many laptop audio chips need it)",
+     "Power: power-profiles-daemon",
+     "Storage: weekly TRIM for the solid-state disk (cron)",
+     "Boot: fallback boot path is always written",
+     "Display: 144 dpi interface scale (set per screen by the desktop)"
+    ],
+    "warnings": []
+   }
+  },
+  "nvidia-this": {
+   "description": "this PC, proprietary NVIDIA driver accepted",
+   "issues": [
+    {
+     "code": "hw.nvidia_no_gpu",
+     "message": "The proprietary NVIDIA driver was selected but no NVIDIA graphics card was found in this PC. Choose the open driver, or select 'portable' if the disk will run on another computer.",
+     "severity": "error"
+    }
+   ],
+   "plan": {
+    "driver_atoms": [],
+    "early_atoms": [
+     "sys-kernel/linux-firmware"
+    ],
+    "files": [
+     [
+      "/etc/cron.weekly/fstrim",
+      "#!/bin/sh\n# Weekly TRIM of mounted solid-state filesystems (written by the Gentoo installer).\nexec /sbin/fstrim --all --quiet-unsupported\n",
+      493
+     ]
+    ],
+    "kernel_cmdline": [],
+    "make_conf": {},
+    "notes": [],
+    "optional_atoms": [
+     "sys-firmware/sof-firmware",
+     "sys-power/power-profiles-daemon"
+    ],
+    "optional_services": [
+     [
+      "power-profiles-daemon",
+      "default"
+     ]
+    ],
+    "package_license": {
+     "sys-kernel/linux-firmware": [
+      "linux-fw-redistributable"
+     ]
+    },
+    "package_mask": [],
+    "package_use": {
+     "media-video/pipewire": [
+      "sound-server"
+     ],
+     "sys-kernel/linux-firmware": [
+      "initramfs",
+      "redistributable"
+     ]
+    },
+    "post_steps": [
+     [
+      "sh",
+      "-c",
+      "if getent group pipewire >/dev/null; then usermod -aG pipewire \"$1\"; fi",
+      "sh",
+      "gentoo"
+     ]
+    ],
+    "required_atoms": [],
+    "scalars": {
+     "btrfs_discard_async": false,
+     "cpu_flags_mode": "profile",
+     "cpu_vendor": "amd",
+     "firmware_forced": false,
+     "firmware_reasons": [
+      "AMD graphics",
+      "Wi-Fi",
+      "Bluetooth",
+      "Ethernet adapter"
+     ],
+     "form_factor": "laptop",
+     "gpu_driver": "open",
+     "gpu_vendors": [
+      "amd"
+     ],
+     "hidpi": "dpi:144",
+     "hybrid": false,
+     "hypervisor": "",
+     "init": "openrc",
+     "luks_allow_discards": false,
+     "microcode": "amd",
+     "nvidia_branch": "",
+     "nvk": "no",
+     "power": "ppd",
+     "prime": "off",
+     "removable_fallback": "always",
+     "sof_firmware": "yes",
+     "target": "this",
+     "thermald": "no",
+     "trim": "weekly",
+     "zram": "no"
+    },
+    "schema": 1,
+    "services": [],
+    "summary": [
+     "CPU: AMD Ryzen 5 5500U with Radeon Graphics, 12 threads; AMD microcode (linux-firmware)",
+     "Graphics: AMD Lucienne - open AMD driver",
+     "Firmware: Linux firmware (AMD graphics, Wi-Fi, Bluetooth, Ethernet adapter)",
+     "Audio: Sound Open Firmware (many laptop audio chips need it)",
+     "Power: power-profiles-daemon",
+     "Storage: weekly TRIM for the solid-state disk (cron)",
+     "Boot: fallback boot path is always written",
+     "Display: 144 dpi interface scale (set per screen by the desktop)",
+     "The proprietary NVIDIA driver was not installed because it does not fit this PC or these settings (nvidia_no_gpu). The open driver is used."
+    ],
+    "warnings": [
+     {
+      "code": "hw.nvidia_skipped",
+      "message": "The proprietary NVIDIA driver was not installed because it does not fit this PC or these settings (nvidia_no_gpu). The open driver is used.",
+      "severity": "warning"
+     }
+    ]
+   }
+  },
+  "portable-nvidia": {
+   "description": "a portable disk with the proprietary NVIDIA driver",
+   "issues": [],
+   "plan": {
+    "driver_atoms": [
+     "x11-drivers/nvidia-drivers"
+    ],
+    "early_atoms": [
+     "sys-firmware/intel-microcode",
+     "sys-kernel/linux-firmware"
+    ],
+    "files": [],
+    "kernel_cmdline": [
+     "nvidia-drm.modeset=1",
+     "nvidia-drm.fbdev=1"
+    ],
+    "make_conf": {
+     "VIDEO_CARDS": "${VIDEO_CARDS} nvidia"
+    },
+    "notes": [
+     "Portable install: both Intel and AMD microcode are installed.",
+     "NVIDIA proprietary driver 595 (current, open kernel modules); if it fails to build, the open nouveau driver stays in use."
+    ],
+    "optional_atoms": [
+     "sys-firmware/sof-firmware"
+    ],
+    "optional_services": [],
+    "package_license": {
+     "sys-firmware/intel-microcode": [
+      "intel-ucode"
+     ],
+     "sys-kernel/linux-firmware": [
+      "linux-fw-redistributable"
+     ],
+     "x11-drivers/nvidia-drivers": [
+      "NVIDIA-2025"
+     ]
+    },
+    "package_mask": [],
+    "package_use": {
+     "media-video/pipewire": [
+      "sound-server"
+     ],
+     "sys-firmware/intel-microcode": [
+      "initramfs"
+     ],
+     "sys-kernel/linux-firmware": [
+      "initramfs",
+      "redistributable"
+     ],
+     "x11-drivers/nvidia-drivers": [
+      "dist-kernel",
+      "wayland"
+     ]
+    },
+    "post_steps": [
+     [
+      "sh",
+      "-c",
+      "if [ -f /etc/modprobe.d/nvidia.conf ]; then dracut --force --regenerate-all; fi"
+     ],
+     [
+      "sh",
+      "-c",
+      "if getent group pipewire >/dev/null; then usermod -aG pipewire \"$1\"; fi",
+      "sh",
+      "gentoo"
+     ],
+     [
+      "sh",
+      "-c",
+      "set -- /var/db/pkg/app-misc/hwmonux-*; if [ -f /etc/modprobe.d/nvidia.conf ] && [ -d \"$1\" ]; then echo 'app-misc/hwmonux nvidia' > /etc/portage/package.use/installer-hwmonux-nvidia && emerge --oneshot app-misc/hwmonux; fi"
+     ]
+    ],
+    "required_atoms": [],
+    "scalars": {
+     "btrfs_discard_async": false,
+     "cpu_flags_mode": "profile",
+     "cpu_vendor": "amd",
+     "firmware_forced": false,
+     "firmware_reasons": [
+      "a portable install can meet any hardware",
+      "AMD graphics",
+      "Wi-Fi",
+      "Bluetooth",
+      "Ethernet adapter"
+     ],
+     "form_factor": "laptop",
+     "gpu_driver": "nvidia",
+     "gpu_vendors": [
+      "amd"
+     ],
+     "hidpi": "dpi:144",
+     "hybrid": false,
+     "hypervisor": "",
+     "init": "openrc",
+     "luks_allow_discards": false,
+     "microcode": "both",
+     "nvidia_branch": "595",
+     "nvk": "no",
+     "power": "none",
+     "prime": "off",
+     "removable_fallback": "always",
+     "sof_firmware": "yes",
+     "target": "portable",
+     "thermald": "no",
+     "trim": "off",
+     "zram": "no"
+    },
+    "schema": 1,
+    "services": [],
+    "summary": [
+     "CPU: AMD Ryzen 5 5500U with Radeon Graphics, 12 threads; Intel and AMD microcode",
+     "Graphics: AMD Lucienne - open AMD driver",
+     "Firmware: Linux firmware (a portable install can meet any hardware, AMD graphics, Wi-Fi, Bluetooth, Ethernet adapter)",
+     "Audio: Sound Open Firmware (many laptop audio chips need it)",
+     "Boot: fallback boot path is always written",
+     "Display: 144 dpi interface scale (set per screen by the desktop)"
+    ],
+    "warnings": []
+   }
+  },
+  "xfce-systemd-source": {
+   "description": "Xfce on systemd, everything built from source",
+   "issues": [],
+   "plan": {
+    "driver_atoms": [],
+    "early_atoms": [
+     "sys-kernel/linux-firmware"
+    ],
+    "files": [
+     [
+      "/etc/skel/.config/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml",
+      "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\n<channel name=\"xsettings\" version=\"1.0\">\n  <property name=\"Xft\" type=\"empty\">\n    <property name=\"DPI\" type=\"int\" value=\"144\"/>\n  </property>\n</channel>\n",
+      420
+     ]
+    ],
+    "kernel_cmdline": [],
+    "make_conf": {
+     "CPU_FLAGS_X86": "aes avx avx2 bmi1 bmi2 f16c fma3 mmx mmxext pclmul popcnt rdrand sha sse sse2 sse3 sse4_1 sse4_2 sse4a ssse3",
+     "VIDEO_CARDS": "amdgpu radeonsi"
+    },
+    "notes": [],
+    "optional_atoms": [
+     "sys-firmware/sof-firmware",
+     "sys-power/tlp"
+    ],
+    "optional_services": [
+     [
+      "tlp",
+      "default"
+     ]
+    ],
+    "package_license": {
+     "sys-kernel/linux-firmware": [
+      "linux-fw-redistributable"
+     ]
+    },
+    "package_mask": [],
+    "package_use": {
+     "media-video/pipewire": [
+      "sound-server"
+     ],
+     "sys-kernel/linux-firmware": [
+      "initramfs",
+      "redistributable"
+     ],
+     "sys-power/tlp": [
+      "-ppd"
+     ]
+    },
+    "post_steps": [
+     [
+      "sh",
+      "-c",
+      "if getent group pipewire >/dev/null; then usermod -aG pipewire \"$1\"; fi",
+      "sh",
+      "gentoo"
+     ]
+    ],
+    "required_atoms": [],
+    "scalars": {
+     "btrfs_discard_async": false,
+     "cpu_flags_mode": "detect",
+     "cpu_vendor": "amd",
+     "firmware_forced": false,
+     "firmware_reasons": [
+      "AMD graphics",
+      "Wi-Fi",
+      "Bluetooth",
+      "Ethernet adapter"
+     ],
+     "form_factor": "laptop",
+     "gpu_driver": "open",
+     "gpu_vendors": [
+      "amd"
+     ],
+     "hidpi": "dpi:144",
+     "hybrid": false,
+     "hypervisor": "",
+     "init": "systemd",
+     "luks_allow_discards": false,
+     "microcode": "amd",
+     "nvidia_branch": "",
+     "nvk": "no",
+     "power": "tlp",
+     "prime": "off",
+     "removable_fallback": "always",
+     "sof_firmware": "yes",
+     "target": "this",
+     "thermald": "no",
+     "trim": "weekly",
+     "zram": "no"
+    },
+    "schema": 1,
+    "services": [
+     [
+      "fstrim.timer",
+      "default"
+     ]
+    ],
+    "summary": [
+     "CPU: AMD Ryzen 5 5500U with Radeon Graphics, 12 threads; AMD microcode (linux-firmware)",
+     "CPU flags: tuned for this CPU (packages are built, not downloaded)",
+     "Graphics: AMD Lucienne - open AMD driver",
+     "Firmware: Linux firmware (AMD graphics, Wi-Fi, Bluetooth, Ethernet adapter)",
+     "Audio: Sound Open Firmware (many laptop audio chips need it)",
+     "Power: TLP",
+     "Storage: weekly TRIM for the solid-state disk (fstrim.timer)",
+     "Boot: fallback boot path is always written",
+     "Display: 144 dpi interface scale for Xfce"
+    ],
+    "warnings": []
+   }
+  }
+ }
+}
