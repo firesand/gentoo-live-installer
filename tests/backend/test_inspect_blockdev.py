@@ -87,6 +87,13 @@ class TestParentsAndHolders:
         md = parse_lsblk(TWO_MEMBER_MACHINE)
         assert [h.path for h in insp.holders(md[0])] == ["/dev/md0"]
 
+    def test_the_gui_can_use_the_same_definition_of_an_active_volume(self):
+        disks = parse_lsblk(TWO_MEMBER_MACHINE)
+        assert [d.path for d in blockdev.stacked_devices(disks[1])] == ["/dev/md0"]
+        swapped = parse_lsblk(tree(node("sda", "disk", GiB, maj_min="8:0", children=[node("sda1", "part", GiB, maj_min="8:1", mountpoints=["[SWAP]"])])))
+        assert blockdev.active_swaps(swapped[0]) == ["/dev/sda1"]
+        assert blockdev.active_swaps(disks[0]) == []
+
     def test_a_disk_without_stacked_devices_has_no_holders(self):
         disks = parse_lsblk(tree(node("sda", "disk", GiB, maj_min="8:0", children=[node("sda1", "part", GiB, maj_min="8:1")])))
         assert insp.holders(disks[0]) == []

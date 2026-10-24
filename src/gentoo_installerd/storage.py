@@ -285,6 +285,18 @@ class StorageManager:
             return self._path_identity_ok(disk, approval, disks)
         return self._identity_ok(disk, disks, "serial", approval)
 
+    def _require_unique(self, disk: Disk, disks: Sequence[Disk], kind: str, value: str) -> None:
+        """A serial or WWN that two attached disks share (cheap USB bridges, cloned drives) does not tell them apart."""
+        if kind == "path" or disk.type == "loop":
+            return
+        twins = [other for other in disks if other.type == "disk" and other.key != disk.key and blockdev.identity_matches(other, kind, value)]
+        if twins:
+            raise StorageError(
+                f"{disk.path} cannot be told apart from {', '.join(twin.path for twin in twins)}: they report the same serial number or WWN ({value}). "
+                "Pin the disk by its bus connection instead (storage.device_id_kind \"path\"), or disconnect the other disk",
+                "storage.identity",
+            )
+
     def _identity_error(self, disk: Disk) -> StorageError:
         hint = ""
         if not disk.serial and not disk.wwn and disk.type != "loop":
@@ -308,6 +320,8 @@ class StorageManager:
                 raise self._identity_error(selected)
             if not pin and not override:
                 raise self._identity_error(selected)
+            if pin:
+                self._require_unique(selected, disks, storage.device_id_kind, pin)
             if pin and storage.device_id_kind == "path":
                 by_path[selected.path] = pin.split("|", 1)[0]
         elif not override and not any(self._identity_ok(root, disks, storage.device_id_kind, pin) for root in roots.values()):
@@ -323,6 +337,8 @@ class StorageManager:
                 if self._approval_ok(root, disks, approval):
                     if "|" in approval:
                         by_path[root.path] = approval.split("|", 1)[0]
+                    else:
+                        self._require_unique(root, disks, "serial", approval)
                     break
             else:
                 raise StorageError(
@@ -722,9 +738,9 @@ class StorageManager:
         path = self.target_path(relative)
         if btrfs:
             self._run(("btrfs", "subvolume", "create", str(self.target_path(BTRFS_SWAP_DIRECTORY))))
-            self._run(("btrfs", "filesystem", "mkswapfile", "--size", f"{s.swap_mib}m", "--uuid", "random", str(path)))
+            self._run(("btrfs", "filesystem", "mkswapfile", "--size", f"{s.swap_mib}m", str(path)))
         else:
-            self._run(("mkswap", "--file", "--size", f"{s.swap_mib}MiB", "--uuid", "random", str(path)))
+            self._run(("mkswap", "--file", "--size", f"{s.swap_mib}MiB", str(path)))
         self._run(("swapon", str(path)))
         entry = LayoutEntry(str(path), "", "swap", True, source=relative)
         self.layout.append(entry)
@@ -1113,9 +1129,9 @@ class StorageManager:
     def describe(self, manifest: InstallManifest, disks: Sequence[Disk] | None = None) -> guided_layout.StoragePlan:
         """What this manifest will do to storage (see gentoo_installer.layout.plan_storage)."""
         self.manifest = manifest
-        return guided_layout.plan_storage(manifest, disks, btrfs_subvolumes=self.use_btrfs_subvolumes())
+        return guided_layout.plan_storage(manifest, disks, btrfs_subvolumes=self.use_btrfs_subvolumes(), swap_file=fstab_supports_layout_fields()[1] if guided_layout.swap_in_root(manifest.storage) else True)
 
-    def _run(self, argv: tuple[str, ...], **kwargs: object) -> None:
+    def _run(self, argv: tuple[str, ...], **kwargs: Any) -> None:
         try:
             self.runner.run(argv, **kwargs)
         except RunnerError as exc:

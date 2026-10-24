@@ -234,13 +234,15 @@ def plan_storage(
     inventory: Sequence[blockdev.BlockDevice] | None = None,
     *,
     btrfs_subvolumes: bool = True,
+    swap_file: bool = True,
 ) -> StoragePlan:
     """What the install will do to storage.
 
     ``inventory`` (lsblk roots from blockdev.parse_lsblk) adds model, size, identity and the
     current contents of every disk and partition the plan touches; without it the plan still
     lists the partitions. ``btrfs_subvolumes`` says whether the guided Btrfs layout uses the
-    @ / @home subvolumes (the daemon reports what it will really do).
+    @ / @home subvolumes and ``swap_file`` whether an encrypted install gets its swap file (the
+    daemon reports what it will really do).
     """
     storage = manifest.storage
     roots = list(inventory or [])
@@ -249,11 +251,11 @@ def plan_storage(
     except (LookupError, ValueError):
         selected = None
     if storage.mode == "erase":
-        return _erase_plan(manifest, selected, btrfs_subvolumes)
+        return _erase_plan(manifest, selected, btrfs_subvolumes, swap_file)
     return _manual_plan(manifest, roots, selected)
 
 
-def _erase_plan(manifest: InstallManifest, selected: blockdev.BlockDevice | None, btrfs_subvolumes: bool) -> StoragePlan:
+def _erase_plan(manifest: InstallManifest, selected: blockdev.BlockDevice | None, btrfs_subvolumes: bool, swap_file: bool) -> StoragePlan:
     storage = manifest.storage
     volumes: list[PlannedVolume] = []
     notes: list[str] = []
@@ -271,8 +273,10 @@ def _erase_plan(manifest: InstallManifest, selected: blockdev.BlockDevice | None
     if storage.filesystem == "btrfs" and btrfs_subvolumes:
         root_note = "Btrfs subvolumes @ (/)" + ("" if storage.separate_home else " and @home (/home)")
     volumes.append(PlannedVolume("root", "/", storage.filesystem, 0, "create", encrypted=storage.luks, note=root_note))
-    if swap_in_root(storage):
+    if swap_in_root(storage) and swap_file:
         volumes.append(PlannedVolume("swapfile", "", "swap", storage.swap_mib, "create", encrypted=True, note="a file inside the encrypted root, so swapped-out memory is encrypted too"))
+    elif swap_in_root(storage):
+        notes.append("No swap is set up: swap outside the encrypted root would be stored unencrypted.")
     if storage.luks and storage.lvm:
         notes.append("LVM is created inside the encrypted container.")
     errors: list[str] = []
@@ -280,7 +284,7 @@ def _erase_plan(manifest: InstallManifest, selected: blockdev.BlockDevice | None
     if selected is not None:
         errors, warnings = capacity_problems(manifest, selected.size, selected.log_sec or 512)
         description, current = disk_description(selected), contents_text(selected)
-        extra = [node for node in blockdev.all_nodes([selected]) if node.type not in {"disk", "part"}]
+        extra = blockdev.stacked_devices(selected)
         if extra:
             warnings.append("Active volumes on this disk (" + ", ".join(f"{node.type} {node.path}" for node in extra) + ") are part of what is erased.")
     else:

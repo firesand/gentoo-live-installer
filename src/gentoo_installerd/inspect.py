@@ -31,8 +31,7 @@ PROC_CMDLINE = Path("/proc/cmdline")
 # Where dracut's live and iso-scan modes mount the installer medium (or the device holding its image).
 LIVE_MOUNTPOINTS = ("/run/initramfs/live", "/run/initramfs/isoscan")
 DEFAULT_MIRROR = "https://distfiles.gentoo.org"
-# Stacked devices (LVM, dm-crypt, md, multipath, ...) are everything lsblk lists that is not one of these.
-STRUCTURAL_TYPES = frozenset({"disk", "part", "loop", "rom"})
+STRUCTURAL_TYPES = blockdev.STRUCTURAL_TYPES
 MD_MEMBER_TYPES = frozenset({"linux_raid_member", "isw_raid_member", "ddf_raid_member"})
 LVM_MEMBER_TYPES = frozenset({"LVM2_member"})
 
@@ -135,19 +134,11 @@ def disk_identities(disk: Disk) -> set[str]:
 
 
 def holders(node: Disk) -> list[Disk]:
-    """Stacked devices (LVM, dm-crypt, md, device-mapper, multipath) below ``node``.
+    """Stacked devices (LVM, dm-crypt, md, device-mapper, multipath) below ``node``, children first.
 
-    Listed children-first so they can be torn down in order; a device lsblk repeats
-    under several parents appears once. Mounted ones are refused elsewhere, this finds
-    the active-but-unmounted ones.
+    Mounted ones are refused elsewhere, this finds the active-but-unmounted ones.
     """
-    seen: set[str] = set()
-    found: list[Disk] = []
-    for child in reversed(node.walk()[1:]):
-        if child.type not in STRUCTURAL_TYPES and child.key not in seen:
-            seen.add(child.key)
-            found.append(child)
-    return found
+    return blockdev.stacked_devices(node)
 
 
 # --- by-path links (stable identity for disks without serial/WWN) -----------------------
@@ -438,9 +429,9 @@ def find_volume_sets(runner: Runner, disks: Sequence[Disk], nodes: Sequence[Disk
         ]
         outside_uuid = {sub.path: _md_uuid(runner, sub.path) for sub in outside} if any(uuids.values()) else {}
         for uuid in dict.fromkeys(uuids.values()):
-            members = tuple(device for device, value in uuids.items() if value == uuid)
-            others = tuple(path for path, value in outside_uuid.items() if uuid and value == uuid)
-            sets.append(VolumeSet("md", uuid, members, others))
+            here = tuple(device for device, value in uuids.items() if value == uuid)
+            elsewhere = tuple(path for path, value in outside_uuid.items() if uuid and value == uuid)
+            sets.append(VolumeSet("md", uuid, here, elsewhere))
     return sets
 
 

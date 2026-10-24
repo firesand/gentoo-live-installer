@@ -120,6 +120,28 @@ def path_pin(runner: StatefulRunner, disk: str = "/dev/vda", link: str = "pci-00
     return blockdev.path_identity(node, link).value
 
 
+class TestSharedSerials:
+    def twins(self):
+        return [vda(), FakeDisk("/dev/vdb", 80 * GiB, serial="SER", wwn="WWN-2")]
+
+    def test_a_serial_two_disks_share_cannot_pin_either_of_them(self, tmp_path):
+        runner = StatefulRunner(self.twins())
+        with pytest.raises(StorageError, match="/dev/vda cannot be told apart from /dev/vdb.*device_id_kind"):
+            make_manager(runner, tmp_path).prepare(erase())
+        no_writes(runner)
+
+    def test_the_unique_wwn_of_the_same_disks_still_works(self, tmp_path):
+        runner = StatefulRunner(self.twins())
+        make_manager(runner, tmp_path).prepare(erase(device_id="WWN-1"))
+        assert ("sgdisk", "--zap-all", "/dev/vda") in runner.commands
+
+    def test_the_same_goes_for_manual_approvals(self, tmp_path):
+        disks = machine()
+        disks[1].serial = "SER-A"
+        with pytest.raises(StorageError, match="cannot be told apart"):
+            make_manager(StatefulRunner(disks), tmp_path).prepare(manual(ESP_ROW, ROOT_ON_B, additional_device_ids=["SER-A"]))
+
+
 class TestPathIdentity:
     """Disks without serial or WWN (virtio-blk without serial=, some USB bridges) are pinned by bus path, size and model."""
 

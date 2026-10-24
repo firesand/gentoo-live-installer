@@ -198,8 +198,8 @@ class TestEncryptedSwap:
         runner, manager = self.prepare(tmp_path, monkeypatch)
         swap_file = str(tmp_path / "target" / "swapfile")
         text = commands_text(runner)
-        assert f"mkswap --file --size 4096MiB --uuid random {swap_file}" in text
-        assert text.index("mount /dev/mapper/gentoo-root " + str(tmp_path / "target")) < text.index(f"mkswap --file --size 4096MiB --uuid random {swap_file}") < text.index(f"swapon {swap_file}")
+        assert f"mkswap --file --size 4096MiB {swap_file}" in text
+        assert text.index("mount /dev/mapper/gentoo-root " + str(tmp_path / "target")) < text.index(f"mkswap --file --size 4096MiB {swap_file}") < text.index(f"swapon {swap_file}")
         entry = next(e for e in manager.layout if e.source)
         assert entry == LayoutEntry(swap_file, "", "swap", True, source="/swapfile")
         assert swap_file in manager.owned_swaps
@@ -209,7 +209,7 @@ class TestEncryptedSwap:
         target = str(tmp_path / "target")
         text = commands_text(runner)
         assert f"btrfs subvolume create {target}/swap" in text
-        assert f"btrfs filesystem mkswapfile --size 4096m --uuid random {target}/swap/swapfile" in text
+        assert f"btrfs filesystem mkswapfile --size 4096m {target}/swap/swapfile" in text
         assert next(e for e in manager.layout if e.source).source == "/swap/swapfile"
 
     def test_without_swap_there_is_no_file(self, tmp_path, monkeypatch):

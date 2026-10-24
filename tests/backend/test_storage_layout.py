@@ -148,6 +148,18 @@ class TestPlanDescription:
         assert roles == [("efi", False), ("boot", False), ("root", True), ("swapfile", True)]
         assert "swap file" in "\n".join(plan.lines())
 
+    def test_an_encrypted_plan_says_so_when_the_swap_file_cannot_be_set_up(self):
+        plan = layout.plan_storage(guided(storage__luks=True), machine(), swap_file=False)
+        assert [v.role for v in plan.disks[0].volumes] == ["efi", "boot", "root"]
+        assert any("No swap is set up" in note for note in plan.notes)
+
+    def test_active_volumes_on_the_disk_are_part_of_what_is_erased(self):
+        roots = blockdev.parse_lsblk(json.dumps({"blockdevices": [{"name": "sda", "path": "/dev/sda", "maj:min": "8:0", "type": "disk", "size": 500 * GiB, "children": [
+            {"name": "sda1", "path": "/dev/sda1", "maj:min": "8:1", "type": "part", "size": 400 * GiB, "children": [
+                {"name": "vg0-root", "path": "/dev/mapper/vg0-root", "maj:min": "253:0", "type": "lvm", "size": 300 * GiB}]}]}]}))
+        plan = layout.plan_storage(guided(), roots)
+        assert any("Active volumes on this disk (lvm /dev/mapper/vg0-root)" in w for w in plan.warnings)
+
     def test_capacity_problems_are_part_of_the_plan(self):
         plan = layout.plan_storage(guided(storage__device="/dev/sda"), machine())
         assert plan.errors == ()

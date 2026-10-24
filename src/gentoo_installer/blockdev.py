@@ -283,3 +283,28 @@ def install_target_disks(roots: Sequence[BlockDevice], live_keys: Iterable[str] 
     """The top-level devices that may be offered as installation targets."""
     keys = set(live_keys)
     return [node for node in roots if not install_target_problem(node, live_keys=keys, allow_loop=allow_loop)]
+
+
+# --- what is alive on a disk ------------------------------------------------------
+
+# Everything lsblk lists below a disk that is not one of these is a stacked device (LVM, dm-crypt, md, multipath).
+STRUCTURAL_TYPES = frozenset({"disk", "part", "loop", "rom"})
+
+
+def stacked_devices(node: BlockDevice) -> list[BlockDevice]:
+    """Active LVM / dm-crypt / md / device-mapper devices below ``node``, children first (so they can be stopped in order).
+
+    A device lsblk repeats under several parents is listed once.
+    """
+    seen: set[str] = set()
+    found: list[BlockDevice] = []
+    for child in reversed(node.walk()[1:]):
+        if child.type not in STRUCTURAL_TYPES and child.key not in seen:
+            seen.add(child.key)
+            found.append(child)
+    return found
+
+
+def active_swaps(node: BlockDevice) -> list[str]:
+    """Paths of the devices at or below ``node`` that are in use as swap."""
+    return [sub.path for sub in node.walk() if "[SWAP]" in sub.mountpoints]
