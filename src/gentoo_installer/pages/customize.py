@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+from typing import Any
 
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -212,6 +213,9 @@ class CustomizePage(Page):
         )
         self.companion_note.hide()
         card.content.addWidget(self.companion_note)
+        self.hardware_note = wrapped_label("", muted=True)
+        self.hardware_note.hide()
+        card.content.addWidget(self.hardware_note)
         apps_form = QFormLayout()
         self.kde_apps = QComboBox()
         for value, label in KDE_APPS:
@@ -262,9 +266,12 @@ class CustomizePage(Page):
         """'Leave empty: chosen for this computer (now: ...)': say what an empty field will become."""
         info = self.hardware.info
         make_conf: dict[str, str] = {}
+        plan_scalars: dict[str, Any] = {}
         if info is not None and info.hardware:
             plan = hardware_plan(self.hardware.working_manifest(), info.hardware)
             make_conf = dict(plan.make_conf) if plan is not None else {}
+            plan_scalars = dict(plan.scalars) if plan is not None else {}
+        self._update_hardware_note(info, plan_scalars)
         for edit, key in ((self.cpu_flags, "CPU_FLAGS_X86"), (self.video_cards, "VIDEO_CARDS")):
             value = make_conf.get(key, "").replace("${VIDEO_CARDS}", "profile default +")
             if info is None or not info.hardware:
@@ -274,6 +281,19 @@ class CustomizePage(Page):
                 edit.setPlaceholderText(f"{AUTO_PLACEHOLDER} (now: {shown})")
             else:
                 edit.setPlaceholderText(f"{AUTO_PLACEHOLDER} (the profile default)")
+
+    def _update_hardware_note(self, info: system_info.SystemInfo | None, scalars: dict[str, Any]) -> None:
+        """Firmware and microcode can be decided by the hardware: say so next to the two tick boxes."""
+        lines = []
+        reasons = scalars.get("firmware_reasons") or []
+        if scalars.get("firmware_forced") and reasons:
+            lines.append("Linux firmware is installed even though it is not ticked, because this computer needs it: " + ", ".join(reasons) + ".")
+        if info is not None and info.hardware and info.profile.machine.hypervisor and self.manifest.options.microcode:
+            lines.append("CPU microcode does nothing in a virtual machine: the host owns it.")
+        elif scalars.get("microcode") == "both":
+            lines.append("Microcode for both Intel and AMD processors is installed, because it is not known which processor will run this system.")
+        self.hardware_note.setText("\n".join(lines))
+        self.hardware_note.setVisible(bool(lines))
 
     # --- reacting to the desktop choice ------------------------------------------------------------------
 

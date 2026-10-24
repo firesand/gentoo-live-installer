@@ -220,7 +220,8 @@ class FlowLayout(QLayout):
 def wrap_long_rows(root: QWidget) -> None:
     """Forms below ``root`` put a label above its field when the window is too narrow for both side by side."""
     for form in root.findChildren(QFormLayout):
-        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+        if form.rowWrapPolicy() == QFormLayout.RowWrapPolicy.DontWrapRows:  # a form that always wraps keeps doing so
+            form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
 
 
 def shrinkable_combos(root: QWidget, width: int = 120) -> None:

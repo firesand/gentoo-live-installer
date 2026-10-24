@@ -556,3 +556,39 @@ def test_a_disk_too_small_for_the_desktop_is_refused_before_the_start(make_windo
     window._show_page(6)
     window.review.confirmation.setText("/dev/sda")
     assert window.review.validate_page() == (True, "")
+
+
+# --- the applications tab and the findings list say what the hardware decides --------------------------------------------------------------
+
+
+def test_firmware_that_the_hardware_needs_is_explained_next_to_the_tick_box(make_window):
+    manifest = InstallManifest()
+    manifest.options.firmware = False
+    window = make_window(manifest=manifest, info=machine("amd-laptop-sof"))
+    window._show_page(4)
+    window.customize.tabs.setCurrentIndex(3)
+    note = window.customize.hardware_note
+    assert note.isVisibleTo(window.customize) and "Linux firmware is installed even though it is not ticked" in note.text() and "Wi-Fi" in note.text()
+    window.manifest.options.firmware = True
+    window.customize.load_manifest()
+    assert "Linux firmware is installed even though" not in window.customize.hardware_note.text()
+
+
+def test_microcode_is_explained_in_a_virtual_machine_and_for_a_portable_disk(make_window):
+    window = make_window(info=machine("qemu-q35-virtio"))
+    window.manifest.options.microcode = True
+    window._show_page(4)
+    window.customize.refresh_placeholders()
+    assert "virtual machine" in window.customize.hardware_note.text()
+    portable = InstallManifest()
+    portable.hardware.target = "portable"
+    window = make_window(manifest=portable, info=machine("asus-desktop-rtx4090"))
+    window._show_page(4)
+    assert "both Intel and AMD" in window.customize.hardware_note.text()
+
+
+def test_findings_of_the_service_checks_are_named_for_what_they_are_about():
+    from gentoo_installer.pages.readiness import warning_area
+
+    assert warning_area("preflight.disks") == "Storage" and warning_area("preflight.network") == "Network" and warning_area("preflight.something") == "Installer check"
+    assert warning_area("hw.st_no_disk") == "Storage" and warning_area("hw.gpu_hybrid") == "Graphics" and warning_area("hw.odd_thing") == "Hardware"

@@ -50,8 +50,21 @@ def proxy_problem(proxy: str) -> str:
     return "" if not proxy or PROXY_RE.match(proxy) else PROXY_MESSAGE
 
 
+# The installer service's own checks (codes preflight.<what>) name the part of the computer they are about.
+PREFLIGHT_AREAS = {
+    "disks": "Storage", "memory_unknown": "Memory", "memory_low": "Memory", "network": "Network", "architecture": "Processor", "tools": "Installer tools",
+}
+
+
 def clean_code(code: str) -> str:
     return code[3:] if code.startswith("hw.") else code
+
+
+def warning_area(code: str) -> str:
+    """The row title of a finding: what part of the computer it is about."""
+    if code.startswith("preflight."):
+        return PREFLIGHT_AREAS.get(code.split(".", 1)[1], "Installer check")
+    return WARNING_AREAS.get(clean_code(code).split("_", 1)[0], "Hardware")
 
 
 class ReadinessPage(Page):
@@ -325,7 +338,7 @@ class ReadinessPage(Page):
                 text = f"{message} {ACTION_HELP[action]}"
             else:
                 text = message + (f" ({action.replace('_', ' ')})" if action else "")
-            row = StatusRow(WARNING_AREAS.get(code.split("_", 1)[0], "Hardware"), text)
+            row = StatusRow(warning_area(str(warning.get("code", ""))), text)
             row.set_status({"error": "error", "warning": "warning"}.get(severity, "info"), text)
             if button:
                 row.set_action(button, partial(self.hardwareActionRequested.emit, action))
