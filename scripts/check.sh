@@ -141,8 +141,10 @@ step_pytest() {
 }
 
 step_cargo_test() {
+    # PortageHub's tests that run the real emerge (cancelling a job) cannot work in the sandbox, whose
+    # /var is read-only, and must not touch the host's Portage; the ebuild skips them the same way.
     # shellcheck disable=SC2086
-    cargo test --quiet --manifest-path apps/portagehub/Cargo.toml $cargo_flags
+    SKIP_EMERGE_TESTS=1 cargo test --quiet --manifest-path apps/portagehub/Cargo.toml $cargo_flags
 }
 
 clippy_warnings() {

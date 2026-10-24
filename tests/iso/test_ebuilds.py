@@ -39,6 +39,8 @@ def atoms(depend: str) -> list[str]:
         if token.endswith("?") or token in ("||", "!"):
             continue
         token = re.sub(r"\[[^\]]*\]$", "", token)
+        if re.match(r"[<>=~]", token):  # a versioned atom: >=cat/pkg-1.2.3-r1
+            token = re.sub(r"-[0-9][A-Za-z0-9_.]*(?:-r[0-9]+)?$", "", token)
         token = re.sub(r"^[<>=~!]+", "", token)
         if re.fullmatch(r"[a-z0-9-]+/[A-Za-z0-9_.+-]+", token):
             result.append(token)
@@ -48,7 +50,7 @@ def atoms(depend: str) -> list[str]:
 def test_one_ebuild_per_package_and_no_stale_revision() -> None:
     assert ebuild_of(INSTALLER).name == "gentoo-live-installer-0.1.0-r5.ebuild"
     assert ebuild_of(HWMONUX).name == "hwmonux-1.0.0-r1.ebuild"
-    assert ebuild_of(PORTAGEHUB).name == "portagehub-0.4.0.ebuild"
+    assert ebuild_of(PORTAGEHUB).name == "portagehub-0.4.0-r1.ebuild"
     assert ebuild_of(GROUP).name == "gentoo-installer-0.ebuild"
 
 
@@ -234,7 +236,7 @@ def test_hwmonux_loads_only_the_safe_sensor_module() -> None:
 
 def test_portagehub_licences_and_rust() -> None:
     text = ebuild_of(PORTAGEHUB).read_text()
-    assert "|| ( dev-lang/rust-bin dev-lang/rust )" in variable(text, "BDEPEND")
+    assert "|| ( >=dev-lang/rust-bin-1.95.0 >=dev-lang/rust-1.95.0 )" in variable(text, "BDEPEND")
     licences = variable(text, "LICENSE").split()
     assert "GPL-2+" in licences and len(licences) == len(set(licences)) and len(licences) > 5
     assert not [l for l in licences if "-or-later" in l or "-only" in l], "use Gentoo licence names, not SPDX"
@@ -334,3 +336,88 @@ def test_pkgcheck_finds_only_the_known_and_documented_issues(tmp_path: Path) -> 
         and not (l.startswith("NonsolvableDeps") and "liquidctl" in l)
     ]
     assert not unexpected, unexpected
+
+
+# --- PortageHub: the imported sources, the live CD's patches and what gets installed ----------
+
+APP = ROOT / "apps/portagehub"
+
+
+def test_portagehub_patches_are_applied_by_the_ebuild_and_still_apply_to_the_sources() -> None:
+    """A sync (scripts/sync-portagehub.sh) must keep the live CD's changes: each patch applies and the ebuild uses it."""
+    text = ebuild_of(PORTAGEHUB).read_text()
+    prepare = text.split("src_prepare() {", 1)[1].split("\n}", 1)[0]
+    assert re.search(r"^\s*default$", prepare, re.M), "default also applies the user's patches"
+    patches = sorted((PORTAGEHUB / "files").glob("*.patch"))
+    assert [p.name for p in patches] == ["0001-opengl-renderer-fallback.patch"]
+    for patch in patches:
+        assert f'eapply "${{FILESDIR}}/{patch.name}"' in prepare
+    if shutil.which("patch") is None:
+        pytest.skip("patch is not installed")
+    for patch in patches:
+        result = subprocess.run(["patch", "-p1", "--dry-run", "--silent", "-d", str(APP)], input=patch.read_text(), capture_output=True, text=True, check=False)
+        assert result.returncode == 0, f"{patch.name} no longer applies to apps/portagehub: {result.stdout}{result.stderr}"
+
+
+def test_the_opengl_fallback_patch_is_complete() -> None:
+    """wgpu stays the first choice; glow is only built in so that it can take over (and the lock gains its edge)."""
+    patch = (PORTAGEHUB / "files/0001-opengl-renderer-fallback.patch").read_text()
+    assert '+eframe = { version = "0.36.1", features = ["glow"] }' in patch
+    assert re.search(r'^\+ "glow",$', patch, re.M), "Cargo.lock needs the eframe -> glow edge, or --locked refuses to build"
+    assert "+++ b/src/render.rs" in patch and "PORTAGEHUB_RENDERER" in patch and "WGPU_BACKEND=gl" in patch
+    assert "Renderer::Wgpu" in patch, "wgpu is tried first"
+
+
+def test_the_source_archive_has_everything_the_ebuild_and_cargo_need() -> None:
+    entrypoint = (ROOT / "iso/builder-entrypoint.sh").read_text()
+    packed = re.search(r'-C "\$\{WORKSPACE\}/apps/portagehub" -cf - (.*?) \\\n', entrypoint)
+    assert packed, "prepare_source_archives no longer packs apps/portagehub"
+    members = set(packed.group(1).split())
+    ebuild = ebuild_of(PORTAGEHUB).read_text()
+    needed = {"Cargo.toml", "Cargo.lock", "src", "dist"}
+    for line in re.findall(r"\b(?:dodoc|domenu|doins) ([^\n]+)", ebuild):
+        needed |= set(line.split())
+    for name in sorted(needed):
+        top = name.split("/")[0]
+        assert top in members, f"{name} is installed or built from, but the archive does not contain {top}"
+        assert (APP / top).exists(), f"apps/portagehub/{top} is missing"
+    # Whatever the build reads outside src/ and dist/ must be packed too.
+    if (APP / "build.rs").exists():
+        assert "build.rs" in members
+    for source in (APP / "src").rglob("*.rs"):
+        for path in re.findall(r'include_(?:bytes|str)!\(\s*"([^"]+)"', source.read_text()):
+            target = (source.parent / path).resolve()
+            assert target.is_relative_to(APP / "src") or target.is_relative_to(APP / "dist"), f"{source.name} includes {path}, which the archive lacks"
+    for assets in ("assets", "fonts"):
+        assert not (APP / assets).exists() or assets in members
+    required = (ROOT / "scripts/build-iso.sh").read_text()
+    for name in ("README.md", "SECURITY.md", "UPSTREAM"):
+        assert f"apps/portagehub/{name}" in required, f"build-iso.sh should insist on {name}"
+
+
+def test_the_installed_files_and_the_live_polkit_rule_agree() -> None:
+    """The live user's rule names the action; the policy must keep that id and point at the helper the ebuild installs."""
+    policy = ElementTree.parse(APP / "dist/org.portagehub.helper.policy").getroot()
+    action = policy.find("action")
+    assert action is not None and action.get("id") == "org.portagehub.helper"
+    annotate = {a.get("key"): a.text for a in action.findall("annotate")}
+    assert annotate["org.freedesktop.policykit.exec.path"] == "/usr/libexec/portagehub-helper"
+    rule = (ROOT / "iso/root_overlay/etc/polkit-1/rules.d/50-gentoo-live.rules").read_text()
+    assert f'action.id == "{action.get("id")}"' in rule
+    ebuild = ebuild_of(PORTAGEHUB).read_text()
+    assert "dobin target/release/portagehub\n" in ebuild
+    assert re.search(r"exeinto /usr/libexec\n\s+doexe target/release/portagehub-helper\n", ebuild)
+    assert "insinto /usr/share/polkit-1/actions\n\tdoins dist/org.portagehub.helper.policy" in ebuild
+    assert "domenu dist/portagehub.desktop" in ebuild
+    desktop = configparser.ConfigParser(delimiters=("=",), interpolation=None)
+    desktop.optionxform = str
+    desktop.read_string((APP / "dist/portagehub.desktop").read_text())
+    assert desktop["Desktop Entry"]["Exec"] == "portagehub"
+    fsscript = (ROOT / "iso/fsscript-stage2.sh").read_text()
+    assert "/usr/bin/portagehub" in fsscript and "/usr/libexec/portagehub-helper" in fsscript
+
+
+def test_the_imported_sources_say_where_they_come_from() -> None:
+    fields = dict(line.split(": ", 1) for line in (APP / "UPSTREAM").read_text().splitlines())
+    assert re.fullmatch(r"[0-9a-f]{40}", fields["commit"]) and fields["subject"] and fields["date"] and fields["source"].startswith("/")
+    assert not (APP / ".github").exists() and not (APP / "dist/gentoo").exists()
