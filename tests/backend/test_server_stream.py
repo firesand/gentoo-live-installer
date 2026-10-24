@@ -271,6 +271,26 @@ class StreamingTests(DaemonCase):
         self.assertTrue(wait_for(lambda: not self.manager.listeners))
         self.assertEqual(self.manager.snapshot()["status"], "completed")
 
+    def test_a_client_that_is_gone_before_the_first_event_leaves_no_listener_behind(self) -> None:
+        release = threading.Event()
+        self.use_installer(scripted(lambda installer: (release.wait(10), finishing(installer))[1]))
+        original = server_module.Channel.send
+
+        def refuse_first_status(channel, event):
+            if event.type == "status" and event.data.get("status") == "running":
+                raise server_module.ChannelClosed("gone")
+            return original(channel, event)
+
+        try:
+            with patch.object(server_module.Channel, "send", refuse_first_status):
+                events = self.call(self.start_request())
+            self.assertEqual(events, [])
+            self.assertTrue(self.manager.is_running(), "the install itself must go on")
+            self.assertTrue(wait_for(lambda: not self.manager.listeners), "the listener of the vanished client leaked")
+        finally:
+            release.set()
+        self.assertTrue(wait_for(lambda: self.manager.status == "completed"))
+
     def test_a_stalled_reader_does_not_break_the_stream_and_gets_the_terminal_events_later(self) -> None:
         # D3: the 30 s request timeout used to stay armed on a streaming connection.
         total = 50000

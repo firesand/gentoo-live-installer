@@ -779,10 +779,16 @@ def _non_negative_int(request: dict, key: str, default: int = 0) -> int:
     return value
 
 
-def stream_job(channel: Channel, manager: Any, listener: Any) -> None:
-    """Forward a job's events to the client until its ``completed`` event, whatever the client does."""
+def stream_job(channel: Channel, manager: Any, listener: Any, opening: Event | None = None) -> None:
+    """Forward a job's events to the client until its ``completed`` event, whatever the client does.
+
+    ``opening`` is sent first, inside the same protected block: a client that is already gone
+    must not leave its listener registered.
+    """
     finished = getattr(manager, "job_finished", None)
     try:
+        if opening is not None:
+            channel.send(opening)
         while True:
             try:
                 event = listener.get(timeout=STREAM_POLL_SECONDS)
@@ -833,8 +839,7 @@ def handle_start(request: dict, channel: Channel) -> None:
     listener = manager.start(manifest, resume)
     job_id = getattr(getattr(manager, "installer", None), "job_id", "") or ""
     LOG.info("Installation started by uid %s (job %s, resume=%s)", _peer_uid(channel), job_id, resume)
-    channel.send(Event("status", job_id=job_id, message="Installation started", data={"status": "running", "job_id": job_id}))
-    stream_job(channel, manager, listener)
+    stream_job(channel, manager, listener, Event("status", job_id=job_id, message="Installation started", data={"status": "running", "job_id": job_id}))
 
 
 def handle_attach(request: dict, channel: Channel) -> None:
