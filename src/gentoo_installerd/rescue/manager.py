@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import secrets
 import threading
 import time
@@ -34,6 +35,7 @@ from .stack import StackManager
 
 POOL_VERSION = 1
 KEEP_SCANS = 3
+ROOTFLAGS_RE = re.compile(r"subvolid=\d{1,10}")
 
 
 class RescueManager:
@@ -228,6 +230,8 @@ class RescueManager:
             except LookupError as exc:
                 raise RescueError("not_found", f"{device} was not found", device=device) from exc
             rootflags = str(params.get("rootflags", ""))
+            if rootflags and not (found.fstype == "btrfs" and ROOTFLAGS_RE.fullmatch(rootflags)):
+                raise RescueError("bad_request", "The root flags must be empty or subvolid=NUMBER (btrfs only)", rootflags=rootflags)
             candidate = {"id": candidate_id(found.uuid, rootflags, found.path), "device": found.path, "fstype": found.fstype, "uuid": found.uuid, "label": found.label, "rootflags": rootflags,
                          "os": {}, "subvol": None, "kind": "root"}
         try:
@@ -376,6 +380,10 @@ class RescueManager:
     def session_summary(self, sid: str = "") -> dict[str, Any]:
         if sid:
             return self.session(sid).info()
+        if self.auto_adopt:  # without a daemon every command is a new process: the systems mounted by earlier commands are sessions, not leftovers
+            for item in self.orphans():
+                if item["sid"] and item["state"] == "alive":
+                    self.adopt(item["sid"])
         with self.lock:
             sessions = [session.info() for session in self.sessions.values()]
         return {"sessions": sessions, "orphans": self.orphans(), "pool": [entry.to_dict() for entry in self.pool_ledger]}

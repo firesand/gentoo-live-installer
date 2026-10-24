@@ -11,6 +11,7 @@ from .cli import (
 from .client import RescueClientError
 
 MENU = (
+    ("0", "Fix everything recommended", "repair.recommended"),
     ("1", "Fix the disk list (fstab)", "fstab.fix"),
     ("2", "Regenerate the boot menu", "boot.config"),
     ("3", "Reinstall the boot loader", "boot.bootloader"),

@@ -143,7 +143,10 @@ class LocalTransport:
             yield event
 
     def shell(self, request: dict[str, Any]) -> tuple[dict[str, Any], int]:
-        status = self.api.manager.run_shell_here(request)
+        try:
+            status = self.api.manager.run_shell_here(request)
+        except RescueError as exc:  # the daemon form reports these as error events; the console form must not end in a traceback
+            raise rescue_error_to_client(exc) from exc
         return {"exit": status}, -1
 
 

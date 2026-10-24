@@ -23,14 +23,17 @@ from .flow import uefi_gentoo_lab
 class Run:
     """One invocation of the CLI against a lab; every invocation gets a fresh manager that adopts saved sessions (--local)."""
 
-    def __init__(self, lab) -> None:
+    def __init__(self, lab, shell_spawn=None) -> None:
         self.lab = lab
+        self.shell_spawn = shell_spawn
 
     def __call__(self, *argv: str, answers: list[str] | None = None, secrets: list[str] | None = None, interactive: bool = False, stdin: str | None = None, monkeypatch=None):
         out, err = io.StringIO(), io.StringIO()
         scripted, hidden = list(answers or []), list(secrets or [])
         console = cli.Console(out=out, err=err, ask=lambda _p: scripted.pop(0) if scripted else "", secret=lambda _p: hidden.pop(0) if hidden else "", interactive=interactive)
-        transport = LocalTransport(RescueApi(self.lab.manager(auto_adopt=True)))
+        manager = self.lab.manager(auto_adopt=True)
+        manager.shell_spawn = self.shell_spawn
+        transport = LocalTransport(RescueApi(manager))
         if stdin is not None and monkeypatch is not None:
             monkeypatch.setattr("sys.stdin", io.StringIO(stdin))
         code = cli.main(list(argv), transport=transport, console=console)
@@ -145,8 +148,12 @@ def test_interactive_confirmation(lab_factory) -> None:
 
 def test_exit_codes(lab_factory) -> None:
     lab, tree, run = prepared(lab_factory)
-    assert run("status", "r000000")[0] == 5 or run("diagnose", "r000000")[0] == 5
-    assert run("mount", "/dev/sdb1:subvolid=x")[0] in {1, 2, 5, 7}
+    code, out, err = run("status", "r000000")
+    assert code == 5 and "There is no repair session r000000" in err
+    assert run("diagnose", "r000000")[0] == 5
+    code, out, err = run("mount", "/dev/sdb1:subvolid=x", "--yes")
+    assert code == 2 and "subvolid=NUMBER" in err and "Traceback" not in out + err and not lab.system.mounted_targets()
+    assert run("mount", "/dev/sdb1:subvolid=256", "--yes")[0] == 2  # an ext4 file system has no subvolumes
     assert run("mount", "not-a-system")[0] == 2
     assert run("scan", "--bogus")[0] == 2
     assert run()[0] == 2  # no command and not interactive
@@ -157,7 +164,7 @@ def test_exit_codes(lab_factory) -> None:
     assert run("plan", sid, "fstab.fix")[0] == 7  # nothing to fix on a healthy system: reported as not applicable
     assert run("plan", sid, "session.leave_write")[0] == 7
     code, _, err = run("mount", "/dev/sdb1", "--yes")
-    assert code in {0, 6}
+    assert code == 0, err
 
 
 def test_a_live_medium_is_refused_with_exit_3(lab_factory) -> None:
@@ -240,7 +247,7 @@ def test_logs_and_the_journal_confirmation(lab_factory) -> None:
     code, out, _ = run("diagnose", sid)
     assert code == 0 and "Diagnosis" in out
     code, out, _ = run("actions", sid)
-    assert code == 0 and "boot.bootloader" in out and "enable repairs" in out.lower() or "session.enter_write" in out
+    assert code == 0 and "boot.bootloader" in out and "session.enter_write" in out and "Enable repairs" in out
 
 
 def test_unmount_reports_what_keeps_it_busy(lab_factory) -> None:
@@ -259,7 +266,7 @@ def test_cleanup_releases_what_a_crashed_run_left(lab_factory) -> None:
     lab, tree, run = prepared(lab_factory)
     sid = mount(run)
     code, out, _ = run("status")
-    assert code == 0 and sid in out or "1 session" in out
+    assert code == 0 and "1 session(s) mounted." in out and sid in out and "leftover" not in out  # a session of an earlier command is not a leftover
     # a new process: the session exists only in its state file
     code, out, _ = run("cleanup")
     assert code == 0 and "released" in out and lab.system.mounted_targets() == [] and not any(lab.system.ro.values())
@@ -319,3 +326,80 @@ def test_old_daemons_are_reported_clearly() -> None:
     out, err = io.StringIO(), io.StringIO()
     code = cli.main(["scan"], transport=Old(), console=cli.Console(out=out, err=err, interactive=False))
     assert code == 1 and "does not support repair mode" in err.getvalue()
+
+
+def test_mount_auto_picks_the_only_system_and_refuses_when_there_are_several(lab_factory) -> None:
+    lab, _, run = prepared(lab_factory)  # Gentoo on the NVMe disk and a Debian on the second disk
+    code, out, err = run("mount", "--auto", "--yes")
+    assert code == 2 and "Several systems were found" in err and "/dev/nvme0n1p5" in out and "/dev/sdb1" in out and not lab.system.mounted_targets()
+    code, out, err = run("mount", "--yes")
+    assert code == 2 and "Say which system to mount" in err
+    single = lab_factory(lf.plain_sata_mbr())
+    single.add_tree("/dev/sda1", "gentoo")
+    code, out, err = Run(single)("mount", "--auto", "--yes")
+    assert code == 0, err
+    assert "Mounted at" in out and single.system.mounted_targets()
+
+
+def test_mount_auto_explains_an_empty_scan(lab_factory) -> None:
+    lab = lab_factory(lf.windows_only())
+    code, out, err = Run(lab)("mount", "--auto", "--yes")
+    assert code == 5 and "No installed system was found" in err and "unlock" in err and not lab.system.mounted_targets()
+
+
+class SpawnedShell:
+    """Stands in for subprocess.Popen: the terminal of a session is a program on the console, never started by a test."""
+
+    def __init__(self) -> None:
+        self.calls: list[list[str]] = []
+
+    def __call__(self, argv, **kwargs):
+        self.calls.append(list(argv))
+
+        class Process:
+            pid = 4321
+            returncode = 0
+
+            def wait(self_inner):
+                return 0
+
+        return Process()
+
+
+def test_chroot_and_umount_are_other_names_for_shell_and_unmount(lab_factory, capsys) -> None:
+    lab, tree, _ = prepared(lab_factory)
+    spawned = SpawnedShell()
+    run = Run(lab, shell_spawn=spawned)
+    sid = mount(run)
+    code, out, err = run("chroot", sid)
+    assert code == 4 and "Type nvme0n1p5 to confirm" in err and not spawned.calls  # a terminal needs the typed device name, like the daemon form
+    code, out, err = run("chroot", sid, "--typed", "nvme0n1p5")
+    assert code == 0, err
+    argv = spawned.calls[0]
+    assert argv[:3] == ["setsid", "--ctty", "script"] and "READ-ONLY" in capsys.readouterr().out  # the console form prints its banner on the terminal itself
+    assert "rescue-chroot --userspec=0:0 --groups=" in argv[argv.index("--command") + 1]
+    code, out, err = run("umount", sid)
+    assert code == 0 and "Unmounted" in out and lab.system.mounted_targets() == []
+
+
+def test_grub_repair_is_the_bootloader_plan_with_the_usual_confirmation(lab_factory) -> None:
+    lab, tree, run = prepared(lab_factory)
+    sid = mount(run)
+    code, out, err = run("grub-repair", sid)
+    digest = re.search(r"digest ([0-9a-f]{64})", out).group(1)
+    assert code == 4 and "grub-install" in out and "--typed nvme0n1p5" in err and not lab.system.chroot_calls
+    code, out, err = run("grub-repair", sid, "--confirm-plan", digest, "--typed", "nvme0n1p5")
+    assert code == 0, err
+    assert any(command[0] == "grub-install" for _root, _env, command in lab.system.chroot_calls) and "Done." in out
+    code, out, err = run("grub-repair", sid, "--param", "firmware=bios")
+    assert code == 4 and "--target=i386-pc" in out  # the parameters of the action are passed through
+
+
+def test_the_wizard_offers_one_fix_for_everything_that_was_found(lab_factory) -> None:
+    lab, tree, run = prepared(lab_factory, initramfs=False)
+    (tree / "boot/grub/grub.cfg").unlink()
+    code, out, err = run("wizard", answers=["1", "y", "0", "y", "u"], interactive=True)
+    assert code == 0, err
+    assert "0) Fix everything recommended *" in out and "Fix everything recommended   [risk: MEDIUM]" in out
+    assert "dracut --force --regenerate-all" in out and "grub-mkconfig -o /boot/grub/grub.cfg" in out and "Done." in out
+    assert (tree / "boot/grub/grub.cfg").exists() and (tree / f"boot/initramfs-{fr.GENTOO_KVER}.img").exists() and lab.system.mounted_targets() == []

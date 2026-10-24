@@ -85,6 +85,18 @@ def test_errors_are_one_error_event_and_a_failed_completed(lab_factory) -> None:
     assert quick.error_event["error"] == "rescue.not_found" and quick.completed["data"]["success"] is False
 
 
+def test_mount_by_device_validates_the_root_flags(lab_factory) -> None:
+    lab, _ = uefi_gentoo_lab(lab_factory)
+    registry, _api = registered(lab)
+    for flags in ("subvolid=x", "subvol=@", "subvolid=1;rm", "ro", "subvolid=256"):  # the last one: an ext4 file system has no subvolumes
+        channel = registry.call("rescue.mount", {"device": "/dev/nvme0n1p5", "rootflags": flags, "dry_run": True, "request_id": "f1"})
+        assert channel.error_event["error"] == "rescue.bad_request" and channel.completed["data"]["success"] is False, flags
+        assert "Traceback" not in json.dumps(channel.events)
+    assert not lab.system.mounted_targets()
+    ok = registry.call("rescue.mount", {"device": "/dev/nvme0n1p5", "dry_run": True})
+    assert ok.result["mount_plan"]["root"]["device"] == "/dev/nvme0n1p5"
+
+
 def test_unexpected_exceptions_become_proto_internal(lab_factory) -> None:
     lab, _ = uefi_gentoo_lab(lab_factory)
     registry, api = registered(lab)

@@ -29,7 +29,7 @@ EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_REFUSED, EXIT_CONFIRM, EXIT_NOT_FOUND, EX
 CODE_EXIT = {
     "safety_violation": EXIT_REFUSED, "live_medium": EXIT_REFUSED, "path_escape": EXIT_REFUSED, "needs_confirmation": EXIT_CONFIRM, "not_found": EXIT_NOT_FOUND, "busy": EXIT_BUSY,
     "busy_install": EXIT_BUSY, "mounted_elsewhere": EXIT_BUSY, "unsupported_action": EXIT_UNSUPPORTED, "unsupported_fs": EXIT_UNSUPPORTED, "unsupported_system": EXIT_UNSUPPORTED,
-    "bad_request": EXIT_USAGE,
+    "bad_request": EXIT_USAGE, "ambiguous": EXIT_USAGE,
 }
 BOOL_PARAMS = {"generic", "unlock", "expire", "make_default", "all_disks", "no_entry", "confirm_exec", "kernel", "hardware_changed"}
 LIST_PARAMS = {"order", "kernels"}
@@ -223,7 +223,23 @@ class Context:
         self.transport = transport
 
 
+def auto_choice(ctx: Context) -> str:
+    """``mount --auto``: the one installed system that was found, or a clear explanation why none was chosen."""
+    scan = ctx.client.result("rescue.scan", probe=True)
+    roots = [item for item in scan.get("candidates", []) if item.get("kind") != "snapshot"]
+    if len(roots) == 1:
+        return roots[0]["id"]
+    if not roots:
+        raise RescueClientError("rescue.not_found", "No installed system was found. Unlock encrypted volumes ('gentoo-rescue unlock DEVICE') or activate LVM/RAID first, then try again.")
+    render_systems(ctx.console, scan)
+    raise RescueClientError("rescue.ambiguous", "Several systems were found. Choose one and give its id (for example c1a2b3c4d) or its device.")
+
+
 def resolve_system(ctx: Context, text: str, args: argparse.Namespace) -> dict[str, Any]:
+    if not text and getattr(args, "auto", False):
+        text = auto_choice(ctx)
+    if not text:
+        raise RescueClientError("rescue.bad_request", "Say which system to mount: an id from 'scan', a device such as /dev/sda2, or --auto when there is only one")
     if CANDIDATE_RE.match(text):
         scan = ctx.client.result("rescue.scan", probe=True)
         if not any(item["id"] == text for item in scan.get("candidates", [])):
@@ -423,6 +439,12 @@ def cmd_run(ctx: Context, args: argparse.Namespace, secrets: dict[str, str] | No
     return EXIT_OK if result.get("outcome") in {"success", "warning"} else EXIT_FAILED
 
 
+def cmd_grub_repair(ctx: Context, args: argparse.Namespace) -> int:
+    args.action = "boot.bootloader"
+    args.choose = None
+    return cmd_run(ctx, args)
+
+
 def cmd_password(ctx: Context, args: argparse.Namespace) -> int:
     args.action = "acct.password"
     args.param = [f"username={args.user}"] + (["expire=true"] if args.expire else [])
@@ -598,7 +620,8 @@ def build_parser() -> argparse.ArgumentParser:
     activate.add_argument("--degraded", action="store_true")
 
     mount = sub.add_parser("mount", help="mount a system read-only")
-    mount.add_argument("system", help="system id from 'scan', or a device such as /dev/sda2[:subvolid=256]")
+    mount.add_argument("system", nargs="?", help="system id from 'scan', or a device such as /dev/sda2[:subvolid=256]")
+    mount.add_argument("--auto", action="store_true", help="use the one installed system that was found (refuses when there are several)")
     mount.add_argument("--inspect-only", action="store_true", help="never allow repairs: no program of the system can run")
     mount.add_argument("--mount", action="append", metavar="MP=DEV", help="mount DEV at MP below the system")
     mount.add_argument("--with-data", action="append", metavar="MP", help="also mount this data directory")
@@ -633,6 +656,14 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--typed", help="the root device name (high-risk plans)")
     run.add_argument("--i-have-a-backup", action="store_true", help="required for plans that can destroy data")
     run.add_argument("--yes-i-reviewed", action="store_true", help=argparse.SUPPRESS)
+
+    grub = sub.add_parser("grub-repair", help="reinstall the boot loader (the same as: run SESSION boot.bootloader)")
+    grub.add_argument("session")
+    grub.add_argument("--param", action="append", metavar="KEY=VALUE", help="for example firmware=bios, removable=yes, loader=systemd-boot")
+    grub.add_argument("--confirm-plan", metavar="DIGEST")
+    grub.add_argument("--typed")
+    grub.add_argument("--i-have-a-backup", action="store_true")
+    grub.add_argument("--yes-i-reviewed", action="store_true", help=argparse.SUPPRESS)
 
     efi = sub.add_parser("efi", help="UEFI boot entries")
     efi_sub = efi.add_subparsers(dest="efi_command", required=True)
@@ -696,14 +727,14 @@ def build_parser() -> argparse.ArgumentParser:
     logs.add_argument("--pstore", action="store_true")
     logs.add_argument("--live", action="store_true", help="show this live session's own kernel warnings")
 
-    shell = sub.add_parser("shell", help="a terminal in the system")
+    shell = sub.add_parser("shell", aliases=["chroot"], help="a terminal in the system (also called chroot)")
     shell.add_argument("session")
     shell.add_argument("--writable", action="store_true")
     shell.add_argument("--host", action="store_true", help="a live-system shell in the mount directory (nothing of the system runs)")
     shell.add_argument("--typed", help="the root device name")
     shell.add_argument("--i-have-a-backup", action="store_true")
 
-    unmount = sub.add_parser("unmount", help="release a session (or the stored volumes when no session is given)")
+    unmount = sub.add_parser("unmount", aliases=["umount"], help="release a session (or the stored volumes when no session is given)")
     unmount.add_argument("session", nargs="?")
     unmount.add_argument("--force", action="store_true")
     unmount.add_argument("--no-report", action="store_true")
@@ -719,7 +750,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 COMMANDS: dict[str, Callable[[Context, argparse.Namespace], int]] = {
     "scan": cmd_scan, "unlock": cmd_unlock, "activate": cmd_activate, "mount": cmd_mount, "status": cmd_status, "actions": cmd_actions, "diagnose": cmd_diagnose, "plan": cmd_plan,
-    "run": cmd_run, "efi": cmd_efi, "fstab": cmd_fstab, "fsck": cmd_fsck, "password": cmd_password, "logs": cmd_logs, "shell": cmd_shell, "unmount": cmd_unmount, "audit": cmd_audit,
+    "run": cmd_run, "grub-repair": cmd_grub_repair, "chroot": cmd_shell, "umount": cmd_unmount, "efi": cmd_efi, "fstab": cmd_fstab, "fsck": cmd_fsck, "password": cmd_password, "logs": cmd_logs, "shell": cmd_shell, "unmount": cmd_unmount, "audit": cmd_audit,
     "cleanup": cmd_cleanup,
 }
 
