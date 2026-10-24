@@ -1,0 +1,15 @@
+
+ Welcome to the Gentoo installer and rescue disc.
+
+   Install Gentoo ............  gentoo-installer  (starts with the desktop)
+   Repair a broken system ....  gentoo-rescue     (finds, mounts and repairs)
+   Network ...................  nmtui             (text menu) or nmcli
+   Hardware report ...........  sudo lshw -short ; sudo dmidecode -t system
+   Disk health ...............  sudo smartctl -a /dev/sda
+                                sudo nvme smart-log /dev/nvme0
+
+ You are the user "gentoo" (no password, sudo works). Nothing on your disks
+ is changed until you start an installation or a repair. This disc is for
+ 64-bit x86 PCs; Secure Boot has to be off (see SECURE-BOOT-OFF.txt).
+ Browser for the handbook: links https://wiki.gentoo.org/wiki/Handbook
+

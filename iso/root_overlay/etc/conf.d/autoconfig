@@ -1,0 +1,36 @@
+#
+# These are the default settings for autoconfig.
+# They determine which functions will be automatically started on our
+# live cds.
+# These settings can all be overridden from the boot command line.
+#
+# ACPI is "no" on purpose. With "yes" autoconfig starts acpid, whose power button
+# handler shuts the PC down without asking logind's inhibitor locks. elogind and
+# xfce4-power-manager own the power, sleep and lid keys on this disc, and the ACPI
+# kernel modules are loaded by udev from their modaliases. Boot with acpi=on to
+# get the old behaviour.
+#
+ACPI="no"
+ALSA="yes"
+APM="no"
+BRLTTY="no"
+COLDPLUG="yes"
+DETECT="yes"
+DHCP="yes"
+DMRAID="yes"
+FIREWIRE="yes"
+GPM="yes"
+IDEDMA="yes"
+LVM="no"
+MDADM="yes"
+NET="yes"
+NFS="no"
+PASSWD="yes"
+PATA="yes"
+PCMCIA="yes"
+SATA="yes"
+SCSI="no"
+SPEAKUP="no"
+SSHD="no"
+USB="yes"
+X11="yes"
