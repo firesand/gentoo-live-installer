@@ -254,7 +254,7 @@ def test_failure_screenshots_capture_only_live_vms_and_keep_qmp_errors(tmp_path)
         def screendump(self, output):
             if self.error:
                 raise RuntimeError(self.error)
-            output.write_bytes(b"P6\\n1 1\\n255\\x00\\x00\\x00")
+            output.write_bytes(b"P6\n1 1\n255\n\x00\x00\x00")
             return output
 
     runner.vms = [Guest("live", None), Guest("target", None, "QMP unavailable"), Guest("stopped", 0)]
@@ -263,7 +263,7 @@ def test_failure_screenshots_capture_only_live_vms_and_keep_qmp_errors(tmp_path)
         {"vm": "live", "path": str(tmp_path / "failure-live.ppm"), "success": "true"},
         {"vm": "target", "success": "false", "error": "QMP unavailable"},
     ]
-    assert (tmp_path / "failure-live.ppm").read_bytes().startswith(b"P6")
+    assert (tmp_path / "failure-live.ppm").read_bytes().startswith(b"P6\n1 1\n255\n")
     assert json.loads((tmp_path / "failure-screenshots.json").read_text()) == captures
 
 

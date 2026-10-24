@@ -5,11 +5,15 @@ from __future__ import annotations
 
 import argparse
 import base64
+import functools
+import hashlib
 import ipaddress
 import json
+import os
 import re
 import shlex
 import shutil
+import signal
 import socket
 import subprocess
 import sys
@@ -27,7 +31,10 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from gentoo_installer.manifest import InstallManifest  # noqa: E402
-from vm_qmp import TEST_LUKS_PASSPHRASE, screendump as qmp_screendump, type_luks_passphrase as qmp_type_luks_passphrase  # noqa: E402
+from vm_qmp import (  # noqa: E402
+    SUN_PATH_MAX, TEST_LUKS_PASSPHRASE, connect_unix, screen_digest, screendump as qmp_screendump,
+    type_luks_passphrase as qmp_type_luks_passphrase,
+)
 
 VM_ROOT = PROJECT_ROOT / "build" / "vm"
 TARGET_DEVICE = "/dev/vda"
@@ -37,6 +44,14 @@ TEST_PASSWORD = "vmtest-only-password"
 TEST_ROOT_PASSWORD = "vmtest-only-root-password"
 SCENARIOS = ("openrc", "systemd", "uefi-luks", "bios", "defaults")
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
+# The passphrase prompt of both unlock paths, matched case-insensitively:
+#   systemd-cryptsetup: "Please enter passphrase for disk root (gentoo-root):"
+#   dracut 70crypt:     "Password (/dev/disk/by-uuid/...) [1/3]:"
+LUKS_PROMPT_RE = r"(?:passphrase|password)\b[^\r\n]{0,200}:"
+# The installed kernel has no serial console unless the manifest asks for one.
+# ttyS0 comes last so /dev/console, where both prompts are asked, is the serial port.
+SERIAL_CONSOLE_ARGUMENTS = "console=tty0 console=ttyS0,115200n8"
+SOCKET_NAMES = ("serial.sock", "qmp.sock")
 GUI_DISPLAY_PROBE = r"""
 import json, os, pwd, re, stat
 from pathlib import Path
@@ -74,6 +89,42 @@ raise SystemExit('No readable local XFCE display and Xauthority found for gentoo
 
 class HarnessError(RuntimeError):
     pass
+
+
+class TerminationRequested(KeyboardInterrupt):
+    """SIGTERM or SIGHUP, raised in the main thread so the finally blocks stop QEMU."""
+
+    def __init__(self, signum: int) -> None:
+        super().__init__(f"terminated by signal {signum}")
+        self.signum = signum
+
+
+def install_termination_handlers() -> dict[int, object]:
+    """Turn SIGTERM/SIGHUP into TerminationRequested; return the previous handlers."""
+    def handler(signum: int, _frame: object) -> None:
+        raise TerminationRequested(signum)
+
+    previous: dict[int, object] = {}
+    for name in ("SIGTERM", "SIGHUP"):
+        number = getattr(signal, name)
+        previous[number] = signal.signal(number, handler)
+    return previous
+
+
+def die_with_parent(parent_pid: int | None = None) -> None:
+    """preexec hook: QEMU gets SIGKILL when the harness dies without running its cleanup.
+
+    PR_SET_PDEATHSIG follows the thread that started QEMU, which is the main
+    thread. ``parent_pid`` closes the race where the harness already died
+    before the flag was set.
+    """
+    try:
+        import ctypes
+        ctypes.CDLL(None, use_errno=True).prctl(1, int(signal.SIGKILL), 0, 0, 0)  # PR_SET_PDEATHSIG
+        if parent_pid is not None and os.getppid() != parent_pid:
+            os._exit(1)
+    except Exception:
+        pass
 
 
 @dataclass(frozen=True)
@@ -171,10 +222,12 @@ def build_manifest(scenario: Scenario, ssh_public_key: str, companions: str = "b
     manifest.system.stage_variant = f"amd64-{scenario.init}"
     manifest.system.profile = "default/linux/amd64/23.0" + ("/systemd" if scenario.init == "systemd" else "")
     manifest.system.desktop = "minimal"
-    manifest.system.profile = "default/linux/amd64/23.0" + ("/systemd" if scenario.init == "systemd" else "")
     manifest.system.kernel = "gentoo-kernel-bin"
     manifest.system.initramfs = "dracut"
     manifest.system.bootloader = "grub"
+    if scenario.luks:
+        # Without it the unlock prompt only exists on the emulated VGA screen.
+        manifest.system.kernel_cmdline_extra = SERIAL_CONSOLE_ARGUMENTS
     manifest.portage.binhost = True
     manifest.portage.features = ["getbinpkg"]
     manifest.portage.make_opts = f"-j{build_jobs}"
@@ -312,12 +365,23 @@ def qemu_command(
         "-vga", "virtio",
         "-display", "none",
         "-monitor", "none",
-        "-chardev", f"socket,id=serial0,path={run_dir / 'serial.sock'},server=on,wait=off",
+        "-chardev", f"socket,id=serial0,path={socket_argument(run_dir, SOCKET_NAMES[0])},server=on,wait=off",
         "-serial", "chardev:serial0",
-        "-qmp", f"unix:{run_dir / 'qmp.sock'},server=on,wait=off",
+        "-qmp", f"unix:{socket_argument(run_dir, SOCKET_NAMES[1])},server=on,wait=off",
         "-no-reboot",
     ])
     return args
+
+
+def socket_argument(run_dir: Path, name: str) -> str:
+    """Absolute socket path for the QEMU argv, or the bare name when it would not fit sun_path.
+
+    The absolute path stays in the argv whenever it fits because operator
+    tooling identifies the VM by it; VMProcess runs QEMU in ``run_dir`` so the
+    bare name resolves there for deep checkouts.
+    """
+    absolute = run_dir / name
+    return str(absolute) if len(os.fsencode(absolute)) <= SUN_PATH_MAX else name
 
 
 def validate_loopback(host: str) -> str:
@@ -337,6 +401,8 @@ def ssh_base_arguments(args: argparse.Namespace, known_hosts: Path, user: str) -
         raise HarnessError(f"Invalid SSH username: {user}")
     return [
         args.ssh_binary,
+        # Ignore the invoking user's ssh_config (ControlMaster, ProxyJump, Host * rules).
+        "-F", "/dev/null",
         "-i", str(args.ssh_private_key),
         "-p", str(args.ssh_port),
         "-o", "BatchMode=yes",
@@ -348,6 +414,14 @@ def ssh_base_arguments(args: argparse.Namespace, known_hosts: Path, user: str) -
         "-o", f"UserKnownHostsFile={known_hosts}",
         "-o", "ConnectTimeout=10",
         "-o", "ConnectionAttempts=1",
+        "-o", "ControlMaster=no",
+        "-o", "ControlPath=none",
+        # No "Permanently added ..." line in output that probes compare exactly.
+        "-o", "LogLevel=ERROR",
+        # Notice a dead peer, but tolerate a guest that thrashes for many minutes under
+        # memory pressure (the r18 OpenRC stall): 30 s x 60 = 30 minutes of silence.
+        "-o", "ServerAliveInterval=30",
+        "-o", "ServerAliveCountMax=60",
         f"{user}@{args.ssh_host}",
     ]
 
@@ -568,7 +642,7 @@ def parse_cancel_regression(returncode: int, output: str) -> dict:
     errors = [event for event in events if event.get("type") == "error"]
     completions = [event for event in events if event.get("type") == "completed"]
     gui = [event for event in events if event.get("type") == "gui_result"]
-    success = (returncode == 0 and storage_completed and cleanup_completed and stage3_started == 1 and len(errors) == 1 and
+    success = (returncode == 0 and storage_completed and cleanup_completed and stage3_started == 1 and
                len(errors) == 1 and errors[0].get("error") == "cancelled" and
                len(completions) == 1 and completions[0].get("data", {}).get("success") is False and
                len(gui) == 1 and gui[0].get("success") is False and
@@ -795,12 +869,119 @@ def run_logged(argv: Sequence[str], log: Path, timeout: int, *, stdin: bytes | N
     return result.returncode
 
 
+def serial_console_configured(cmdline: str) -> bool:
+    """Whether a kernel command line sends /dev/console to ttyS0 (where the serial socket listens)."""
+    return re.search(r"(?:^|\s)console=ttyS0(?:[,\s]|$)", cmdline) is not None
+
+
+def unlock_over_serial(serial: "SerialChannel", passphrase: str, timeout: int,
+                       ssh_ready: Callable[[int], bool], *, attempts: int = 3, settle: int = 60,
+                       reprompt_wait: float = 5.0) -> dict:
+    """Answer the LUKS prompt on the serial console, and again whenever it is shown again.
+
+    A wrong or garbled answer makes dracut ask again ("[2/3]"). Every new prompt past the
+    previous match is answered, up to ``attempts`` times, until SSH comes up. When the
+    answer was not followed by another prompt the passphrase was accepted and the boot is
+    merely slow, so the caller's normal SSH wait takes over.
+    """
+    deadline = time.monotonic() + timeout
+    offset = serial.wait_for(LUKS_PROMPT_RE, max(1, int(deadline - time.monotonic())))
+    matched = serial.last_match
+    for attempt in range(1, attempts + 1):
+        serial.send_line(passphrase)
+        if ssh_ready(settle):
+            return {"method": "serial", "attempts": attempt, "matched_text": matched}
+        try:
+            offset = serial.wait_for(LUKS_PROMPT_RE, max(1, int(reprompt_wait)), since=offset)
+        except HarnessError:
+            return {"method": "serial", "attempts": attempt, "matched_text": matched}
+        matched = serial.last_match
+    raise HarnessError(f"The installed system did not come up after {attempts} LUKS passphrase answers on the serial console")
+
+
+class ScreenWatcher:
+    """Heuristic for 'the guest is sitting at a prompt', from successive screendump digests.
+
+    Keystrokes sent before the kernel is up land in the GRUB menu, so the passphrase is only
+    typed once the screen has changed several times (firmware, GRUB, kernel messages) and
+    then stopped changing. GRUB's countdown repaints every second, which keeps it from
+    looking idle. This is a heuristic: the serial console is the reliable way.
+    """
+
+    def __init__(self, *, min_changes: int = 3, stable_seconds: float = 8.0, min_elapsed: float = 20.0,
+                 clock: Callable[[], float] = time.monotonic) -> None:
+        self.min_changes = min_changes
+        self.stable_seconds = stable_seconds
+        self.min_elapsed = min_elapsed
+        self.clock = clock
+        self.started = clock()
+        self.changes = 0
+        self.digest = ""
+        self.changed_at = self.started
+
+    def observe(self, digest: str) -> bool:
+        now = self.clock()
+        if digest != self.digest:
+            self.digest = digest
+            self.changes += 1
+            self.changed_at = now
+            return False
+        return (self.changes >= self.min_changes and now - self.started >= self.min_elapsed
+                and now - self.changed_at >= self.stable_seconds)
+
+    def rearm(self) -> None:
+        """After typing: the screen has to sit still for ``stable_seconds`` again before the next try."""
+        self.changes = max(self.changes, self.min_changes)
+        self.changed_at = self.clock()
+
+
+def unlock_over_qmp(guest: "VMProcess", passphrase: str, timeout: int, ssh_ready: Callable[[int], bool],
+                    run_dir: Path, *, attempts: int = 3, settle: int = 60, poll: float = 2.0,
+                    watcher: ScreenWatcher | None = None,
+                    sleep: Callable[[float], None] = time.sleep,
+                    clock: Callable[[], float] = time.monotonic) -> dict:
+    """Type the test passphrase as keystrokes once the screen looks like an idle prompt.
+
+    Used when the installed kernel has no serial console. Evidence screenshots are kept:
+    ``luks-prompt-observation.ppm`` (the stable screen that triggered typing) and
+    ``luks-after-typing.ppm`` (the screen after the last answer).
+    """
+    watcher = watcher or ScreenWatcher(clock=clock)
+    deadline = clock() + timeout
+    frame = run_dir / "luks-screen-current.ppm"
+    for attempt in range(1, attempts + 1):
+        while True:
+            try:
+                guest.screendump(frame)
+                ready = watcher.observe(screen_digest(frame))
+            except (OSError, RuntimeError, ValueError):
+                ready = False  # QMP is not up yet, or the display is mid-modeset
+            if ready:
+                break
+            if clock() >= deadline:
+                raise HarnessError(f"The screen never settled at a LUKS passphrase prompt within {timeout}s; "
+                                   f"see {frame}")
+            sleep(poll)
+        shutil.copyfile(frame, run_dir / "luks-prompt-observation.ppm")
+        guest.type_test_luks_passphrase()
+        if ssh_ready(settle):
+            return {"method": "qmp", "attempts": attempt}
+        try:
+            guest.screendump(run_dir / "luks-after-typing.ppm")
+        except (OSError, RuntimeError, ValueError):
+            pass
+        watcher.rearm()
+    raise HarnessError(f"The installed system did not come up after {attempts} LUKS passphrase keystroke answers")
+
+
 class SerialChannel:
-    def __init__(self, path: Path, log: Path) -> None:
+    def __init__(self, path: Path, log: Path, process: subprocess.Popen | None = None) -> None:
         self.path = path
         self.log = log
+        self.process = process
         self.socket: socket.socket | None = None
         self.buffer = ""
+        self.last_match = ""
         self.condition = threading.Condition()
         self.closed = False
         self.thread: threading.Thread | None = None
@@ -808,18 +989,17 @@ class SerialChannel:
     def connect(self, timeout: int = 30) -> None:
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
+            if self.process is not None and self.process.poll() is not None:
+                raise HarnessError(f"QEMU exited with status {self.process.returncode} before the serial socket "
+                                   f"appeared; see the qemu-*.log next to {self.path}")
             try:
-                client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-                client.settimeout(0.5)
-                client.connect(str(self.path))
-                self.socket = client
-                self.thread = threading.Thread(target=self._reader, daemon=True)
-                self.thread.start()
-                return
+                self.socket = connect_unix(self.path, timeout=0.5)
             except OSError:
-                if 'client' in locals():
-                    client.close()
                 time.sleep(0.2)
+                continue
+            self.thread = threading.Thread(target=self._reader, daemon=True)
+            self.thread.start()
+            return
         raise HarnessError(f"Could not connect to VM serial socket {self.path}")
 
     def _reader(self) -> None:
@@ -840,11 +1020,20 @@ class SerialChannel:
                     self.buffer += data.decode(errors="replace")
                     self.condition.notify_all()
 
-    def wait_for(self, pattern: str, timeout: int) -> None:
+    def wait_for(self, pattern: str, timeout: int, since: int = 0) -> int:
+        """Wait for a match at or after buffer offset ``since``; return the offset just past it.
+
+        The buffer accumulates for the whole boot, so a caller that answers a prompt more than
+        once passes the previous return value to skip text it has already answered.
+        """
         regex = re.compile(pattern, re.IGNORECASE)
         deadline = time.monotonic() + timeout
         with self.condition:
-            while not regex.search(self.buffer):
+            while True:
+                match = regex.search(self.buffer, since)
+                if match:
+                    self.last_match = match.group(0)
+                    return match.end()
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     raise HarnessError(f"Timed out waiting for LUKS passphrase prompt; see {self.log}")
@@ -881,20 +1070,23 @@ class VMProcess:
         self.serial_log = run_dir / f"serial-{label}.log"
 
     def start(self) -> None:
-        for name in ("serial.sock", "qmp.sock"):
+        for name in SOCKET_NAMES:
             (self.run_dir / name).unlink(missing_ok=True)
         with self.log.open("ab") as stream:
             stream.write((f"$ {shlex.join(self.argv)}\n").encode())
             stream.flush()
             try:
+                # cwd=run_dir so a bare socket name (deep checkouts) resolves there; the
+                # preexec hook makes the kernel kill QEMU if the harness itself is killed.
                 self.process = subprocess.Popen(
                     self.argv, stdin=subprocess.DEVNULL, stdout=stream,
-                    stderr=subprocess.STDOUT, start_new_session=True,
+                    stderr=subprocess.STDOUT, start_new_session=True, cwd=self.run_dir,
+                    preexec_fn=functools.partial(die_with_parent, os.getpid()),
                 )
             except OSError as exc:
                 raise HarnessError(f"Could not start QEMU: {exc}") from exc
         (self.run_dir / f"qemu-{self.label}.pid").write_text(f"{self.process.pid}\n")
-        self.serial = SerialChannel(self.run_dir / "serial.sock", self.serial_log)
+        self.serial = SerialChannel(self.run_dir / SOCKET_NAMES[0], self.serial_log, self.process)
         self.serial.connect()
 
     def wait(self, timeout: int) -> int:
@@ -906,11 +1098,9 @@ class VMProcess:
             raise HarnessError(f"VM did not shut down within {timeout}s") from None
 
     def qmp(self, command: str) -> None:
-        path = self.run_dir / "qmp.sock"
+        path = self.run_dir / SOCKET_NAMES[1]
         try:
-            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
-                client.settimeout(3)
-                client.connect(str(path))
+            with connect_unix(path, timeout=3) as client:
                 stream = client.makefile("rwb")
                 stream.readline()
                 for request in ({"execute": "qmp_capabilities"}, {"execute": command}):
@@ -921,10 +1111,10 @@ class VMProcess:
             pass
 
     def screendump(self, output: Path) -> Path:
-        return qmp_screendump(self.run_dir / "qmp.sock", output)
+        return qmp_screendump(self.run_dir / SOCKET_NAMES[1], output)
 
     def type_test_luks_passphrase(self) -> None:
-        qmp_type_luks_passphrase(self.run_dir / "qmp.sock", TEST_LUKS_PASSPHRASE)
+        qmp_type_luks_passphrase(self.run_dir / SOCKET_NAMES[1], TEST_LUKS_PASSPHRASE)
 
     def cleanup(self) -> None:
         if self.process is not None and self.process.poll() is None:
@@ -979,8 +1169,9 @@ class ScenarioRunner:
         code = run_logged(ssh_command(self.args, known_hosts, user, remote), log, timeout, stdin=stdin)
         return code, log
 
-    def wait_for_ssh(self, user: str, phase: str, vm: VMProcess) -> None:
-        deadline = time.monotonic() + self.args.boot_timeout
+    def wait_for_ssh(self, user: str, phase: str, vm: VMProcess, timeout: int | None = None) -> None:
+        limit = timeout or self.args.boot_timeout
+        deadline = time.monotonic() + limit
         log = self.run_dir / f"ssh-{phase}-wait.log"
         command = ssh_command(self.args, self.run_dir / f"known_hosts.{phase}", user, "true")
         while time.monotonic() < deadline:
@@ -990,10 +1181,10 @@ class ScenarioRunner:
             if code == 0:
                 return
             time.sleep(3)
-        raise HarnessError(f"SSH did not become ready within {self.args.boot_timeout}s; see {log}")
+        raise HarnessError(f"SSH did not become ready within {limit}s; see {log}")
 
     def gui_environment(self) -> dict[str, str]:
-        timeout = min(getattr(self.args, "boot_timeout", 900), 120)
+        timeout = min(getattr(self.args, "boot_timeout", 900), getattr(self.args, "gui_timeout", 120))
         return poll_gui_environment(
             lambda attempt, command_timeout: self.ssh(
                 self.args.ssh_user,
@@ -1002,6 +1193,46 @@ class ScenarioRunner:
             ),
             timeout=timeout, command_timeout=self.args.command_timeout, run_dir=self.run_dir,
         )
+
+    def unlock_luks(self, target: VMProcess) -> dict:
+        """Unlock the encrypted target boot and write luks-unlock-receipt.json.
+
+        ``serial`` answers on the serial socket and needs ``console=ttyS0`` on the installed
+        kernel command line (the harness adds it to LUKS manifests); without it no prompt can
+        appear there, so the keystroke method takes over. ``qmp`` types the fixed test
+        passphrase through the emulated keyboard. ``external`` leaves it to an operator.
+        """
+        requested = getattr(self.args, "luks_unlock", "serial")
+        cmdline = InstallManifest.load(self.run_dir / "manifest.json").system.kernel_cmdline_extra
+        method, note = requested, ""
+        if requested == "serial" and not serial_console_configured(cmdline):
+            method = "qmp"
+            note = "the installed kernel command line has no console=ttyS0, so no prompt can appear on the serial socket"
+            print(f"LUKS unlock: {note}; typing the passphrase through QMP instead", flush=True)
+        timeout = getattr(self.args, "luks_timeout", 180)
+
+        def ssh_ready(seconds: int) -> bool:
+            try:
+                self.wait_for_ssh(TEST_USERNAME, "target", target, timeout=seconds)
+            except HarnessError:
+                if target.process is not None and target.process.poll() is not None:
+                    raise  # QEMU is gone: waiting longer cannot help
+                return False
+            return True
+
+        if method == "external":
+            self.prepare_external_luks_unlock(target)
+            receipt: dict = {"method": "external"}
+        elif method == "serial":
+            if target.serial is None:
+                raise HarnessError("Serial LUKS unlock requested but QEMU serial channel is unavailable")
+            receipt = unlock_over_serial(target.serial, TEST_LUKS_PASSPHRASE, timeout, ssh_ready)
+            receipt["serial_log_sha256"] = hashlib.sha256(target.serial_log.read_bytes()).hexdigest()
+        else:
+            receipt = unlock_over_qmp(target, TEST_LUKS_PASSPHRASE, timeout, ssh_ready, self.run_dir)
+        receipt.update(requested=requested, note=note, timestamp=datetime.now(timezone.utc).isoformat())
+        (self.run_dir / "luks-unlock-receipt.json").write_text(json.dumps(receipt, indent=2) + "\n")
+        return receipt
 
     def prepare_external_luks_unlock(self, target: VMProcess) -> None:
         screenshot = target.screendump(self.run_dir / "luks-unlock-screen.ppm")
@@ -1109,7 +1340,6 @@ class ScenarioRunner:
             (self.run_dir / "cancel-result.json").write_text(json.dumps(cancel_result, indent=2) + "\n")
             if not cancel_result["success"]:
                 raise HarnessError(f"GUI cancellation regression failed: {cancel_result['error']}; see {log} and {self.run_dir / 'cancel-result.json'}")
-            result = parse_install_result(code, output)
         else:
             result = parse_install_result(code, output)
             (self.run_dir / "install-result.json").write_text(json.dumps(asdict(result), indent=2) + "\n")
@@ -1201,7 +1431,7 @@ class ScenarioRunner:
     def run(self) -> dict:
         result = {"scenario": self.scenario.name, "success": False, "run_dir": str(self.run_dir),
                   "companions": None, "companion_probes": [], "disabled_companion_probes": [],
-                  "probes": [], "resume": None, "cancel": None}
+                  "probes": [], "resume": None, "cancel": None, "luks_unlock": None}
         try:
             validate_command_paths(self.iso, self.disk, self.run_dir)
             if self.disk.exists():
@@ -1232,13 +1462,7 @@ class ScenarioRunner:
 
             target = self.start_vm(live=False)
             if self.scenario.luks:
-                if self.args.luks_unlock == "serial":
-                    if target.serial is None:
-                        raise HarnessError("Serial LUKS unlock requested but QEMU serial channel is unavailable")
-                    target.serial.wait_for(r"passphrase.*(?:for|:)|password.*luks", self.args.luks_timeout)
-                    target.serial.send_line(TEST_LUKS_PASSPHRASE)
-                else:
-                    self.prepare_external_luks_unlock(target)
+                result["luks_unlock"] = self.unlock_luks(target)
             self.wait_for_ssh(TEST_USERNAME, "target", target)
             probes = self.verify()
             result["probes"] = [asdict(probe) for probe in probes]
@@ -1249,8 +1473,10 @@ class ScenarioRunner:
                 raise HarnessError("Target verification failed: " + "; ".join(failures))
             result["success"] = True
             return result
-        except Exception as exc:
+        except BaseException as exc:
             result["error"] = str(exc)
+            if isinstance(exc, KeyboardInterrupt):
+                result["interrupted"] = getattr(exc, "signum", int(signal.SIGINT))
             raise
         finally:
             saved_manifest_path = self.run_dir / "manifest.json"
@@ -1276,6 +1502,52 @@ class ScenarioRunner:
                 for name in ("disk.qcow2", "OVMF_VARS.fd"):
                     (self.run_dir / name).unlink(missing_ok=True)
             (self.run_dir / "result.json").write_text(json.dumps(result, indent=2) + "\n")
+
+
+def find_stale_qemu(vm_root: Path | None = None, proc_root: Path = Path("/proc")) -> list[tuple[Path, int]]:
+    """(pid file, pid) of live QEMU processes that earlier harness runs left behind.
+
+    A pid file only counts when /proc/<pid> is a qemu-system process owned by this user whose
+    command line names that run directory and the harness's ``-name gentoo-installer-*``, so a
+    recycled pid never matches an unrelated process.
+    """
+    root = (vm_root or VM_ROOT)
+    found: list[tuple[Path, int]] = []
+    for pid_file in sorted(root.glob("*/qemu-*.pid")):
+        try:
+            pid = int(pid_file.read_text().strip())
+            process = proc_root / str(pid)
+            argv = [part.decode(errors="replace") for part in (process / "cmdline").read_bytes().split(b"\0") if part]
+            owner = process.stat().st_uid
+        except (OSError, ValueError):
+            continue
+        run_dir = str(pid_file.parent)
+        named = any(arg.startswith("gentoo-installer-") for arg in argv)
+        if (argv and Path(argv[0]).name.startswith("qemu-system") and named
+                and any(run_dir in arg for arg in argv) and owner == os.getuid()):
+            found.append((pid_file, pid))
+    return found
+
+
+def cleanup_stale(vm_root: Path | None = None, proc_root: Path = Path("/proc"), *,
+                  kill: Callable[[int, int], None] = os.kill, sleep: Callable[[float], None] = time.sleep,
+                  grace: float = 10.0) -> list[int]:
+    """Terminate stale harness QEMU processes (SIGTERM, then SIGKILL after ``grace``)."""
+    stopped: list[int] = []
+    for pid_file, pid in find_stale_qemu(vm_root, proc_root):
+        try:
+            kill(pid, signal.SIGTERM)
+            waited = 0.0
+            while (proc_root / str(pid)).exists() and waited < grace:
+                sleep(0.5)
+                waited += 0.5
+            if (proc_root / str(pid)).exists():
+                kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+        pid_file.unlink(missing_ok=True)
+        stopped.append(pid)
+    return stopped
 
 
 def public_key_from_private(ssh_keygen: str, private_key: Path, timeout: int = 30) -> str:
@@ -1337,8 +1609,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     selection = parser.add_mutually_exclusive_group(required=True)
     selection.add_argument("--scenario", choices=SCENARIOS)
-    selection.add_argument("--all", action="store_true")
-    parser.add_argument("--iso", type=Path, required=True)
+    selection.add_argument("--all", action="store_true", help="Run the fast scenarios (see docs/TESTING.md)")
+    selection.add_argument("--cleanup-stale", action="store_true",
+                           help="Stop QEMU processes left behind by an earlier harness run (found through build/vm/*/qemu-*.pid) and exit")
+    parser.add_argument("--iso", type=Path, help="The (test-key) live ISO to boot")
     parser.add_argument("--ssh-host", help="Loopback address of the QEMU SSH forward (normally 127.0.0.1)")
     parser.add_argument("--ssh-port", type=positive_int, help="Unused host TCP port forwarded to guest SSH")
     parser.add_argument("--ssh-private-key", type=Path, help="Ephemeral key already authorized in the test ISO")
@@ -1354,9 +1628,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--install-timeout", type=positive_int, default=21600)
     parser.add_argument("--shutdown-timeout", type=positive_int, default=120)
     parser.add_argument("--command-timeout", type=positive_int, default=120)
+    parser.add_argument("--gui-timeout", type=positive_int, default=120,
+                        help="Seconds to wait for the live XFCE session after SSH is up (raise it when QEMU falls back to TCG)")
     parser.add_argument("--luks-timeout", type=positive_int, default=180)
-    parser.add_argument("--luks-unlock", choices=("serial", "external"), default="serial",
-                        help="Unlock a LUKS test VM via serial (default) or operator-controlled VGA/QMP")
+    parser.add_argument("--luks-unlock", choices=("serial", "qmp", "external"), default="serial",
+                        help="Unlock a LUKS test VM on the serial console (default; falls back to qmp when the installed "
+                             "kernel has no console=ttyS0), by typing the test passphrase through QMP, or by an operator")
     parser.add_argument("--check-resume", action="store_true",
                         help="Rerun the successful install with --resume and verify storage identities remain unchanged")
     parser.add_argument("--cancel-then-resume", action="store_true",
@@ -1373,8 +1650,24 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
+    """Exit status: 0 all passed, 1 a scenario failed, 2 usage/preflight, 128+N killed by signal N."""
+    previous = install_termination_handlers()
+    try:
+        return _main(argv)
+    finally:
+        for number, handler in previous.items():
+            signal.signal(number, handler)
+
+
+def _main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    if args.cleanup_stale:
+        stopped = cleanup_stale()
+        print(f"Stopped {len(stopped)} stale QEMU process(es)" + (": " + ", ".join(map(str, stopped)) if stopped else ""))
+        return 0
+    if args.iso is None:
+        parser.error("--iso is required")
     if args.cancel_then_resume and args.check_resume:
         parser.error("--cancel-then-resume cannot be combined with --check-resume")
     if args.cancel_then_resume and args.install_mode != "gui":
@@ -1406,9 +1699,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 if excerpt:
                     print(f"--- {log} (last lines) ---\n{excerpt}", file=sys.stderr)
             print(f"Artifacts retained at {runner.run_dir}", file=sys.stderr)
-        except KeyboardInterrupt:
-            print(f"Interrupted; harness-owned QEMU processes cleaned up. Artifacts: {runner.run_dir}", file=sys.stderr)
-            return 130
+        except KeyboardInterrupt as exc:
+            signum = getattr(exc, "signum", int(signal.SIGINT))
+            print(f"Interrupted (signal {signum}); harness-owned QEMU processes cleaned up. Artifacts: {runner.run_dir}",
+                  file=sys.stderr)
+            return 128 + signum
     return 1 if failures else 0
 
 
