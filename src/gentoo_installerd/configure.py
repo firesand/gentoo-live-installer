@@ -1322,16 +1322,29 @@ class Configurer:
         if atoms:
             self.emerge(manifest, ("--noreplace", *atoms))
 
-    def install_essential(self, manifest: InstallManifest, plan: object | None = None) -> None:
+    def install_essential(self, manifest: InstallManifest, plan: object | None = None, attempts: int = 3) -> None:
+        """Install the base system packages; this must succeed or the disk is not bootable.
+
+        A dropped download is retried, a build that ran out of memory is retried with one compile
+        job, anything else is reported at once.
+        """
         atoms = self.essential_atoms(manifest, plan)
         if not atoms:
             return
-        try:
-            self.emerge(manifest, ("--noreplace", *atoms))
-        except RunnerError as exc:
-            diagnosis = explain_emerge_failure(exc.output)
-            raise PackageInstallError(f"The base system packages could not be installed: {diagnosis.summary}",
-                                      resolution=diagnosis.resolution) from exc
+        environment: dict[str, str] = {}
+        for attempt in range(1, attempts + 1):
+            try:
+                self.emerge(manifest, ("--noreplace", *atoms), environment=environment)
+                return
+            except RunnerError as exc:
+                diagnosis = explain_emerge_failure(exc.output)
+                if diagnosis.kind in {"resolution", "build"} or attempt == attempts:
+                    raise PackageInstallError(f"The base system packages could not be installed: {diagnosis.summary}",
+                                              resolution=diagnosis.resolution) from exc
+                if diagnosis.kind == "memory":
+                    environment = {"MAKEOPTS": "-j1"}
+                self.notify(f"Base system packages: {diagnosis.summary[:160]}; trying again ({attempt + 1}/{attempts})")
+                self.sleep(5.0 * attempt)
 
     def emerge_keep_going(self, manifest: InstallManifest, atoms: Sequence[str], *, label: str, attempts: int = 3) -> KeepGoingResult:
         """Emerge atoms with --keep-going and retry what is still missing when a retry can help.

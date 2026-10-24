@@ -396,6 +396,25 @@ class StageInstallTests(unittest.TestCase):
         with self.assertRaisesRegex(PackageInstallError, "base system packages could not be installed.*qtpositioning"):
             self.c.install_essential(m)
 
+    def test_essential_packages_survive_a_dropped_download(self) -> None:
+        self.runner.script("chroot", ("fail", "!!! Fetch failed for sudo-1.9.tar.gz, continuing..."))
+        self.c.install_essential(target_manifest())
+        self.assertEqual(len(self.emerges()), 2)
+        self.assertTrue(any("trying again (2/3)" in note for note in self.notes))
+
+    def test_essential_packages_are_not_rebuilt_after_a_compile_error(self) -> None:
+        self.runner.script("chroot", ("fail", " * The following 1 packages failed to build:\n * 1) app-admin/sudo-1.9::gentoo (/log)\n"))
+        with self.assertRaisesRegex(PackageInstallError, "failed to build: app-admin/sudo-1.9"):
+            self.c.install_essential(target_manifest())
+        self.assertEqual(len(self.emerges()), 1)
+
+    def test_essential_packages_give_up_after_three_attempts(self) -> None:
+        for _ in range(3):
+            self.runner.script("chroot", ("fail", "Temporary failure in name resolution"))
+        with self.assertRaises(PackageInstallError):
+            self.c.install_essential(target_manifest())
+        self.assertEqual(len(self.emerges()), 3)
+
     def test_desktop_retries_what_is_still_missing_and_then_succeeds(self) -> None:
         m = target_manifest(system={"desktop": "xfce"}, options={"bluetooth": False, "pipewire": False, "printing": False})
         self.runner.script("chroot", ("fail", "!!! Fetch failed for lightdm-1.32.tar.xz, continuing..."))
