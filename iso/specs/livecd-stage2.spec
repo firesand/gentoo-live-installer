@@ -51,11 +51,16 @@ livecd/unmerge:
 	dev-lang/rust-bin
 # Download and documentation caches. Man and info pages stay for the rescue console.
 # Static Qt libraries (about 270 MiB) are only needed to link against Qt privately.
+# make.conf.old (written by livecd_update) and make.conf.extra (part of portage_confdir) hold
+# the builder's job counts and caches; the wrapper reads the extra settings from the build
+# directory, not from this copy, and appends the live-safe subset to the final make.conf.
 livecd/rm:
 	/var/cache/binhost
 	/usr/share/doc
 	/usr/share/gtk-doc
 	/usr/lib64/libQt6*.a
+	/etc/portage/make.conf.old
+	/etc/portage/make.conf.extra
 livecd/empty:
 	/var/db/repos
 	/usr/src

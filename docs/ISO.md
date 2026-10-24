@@ -136,6 +136,7 @@ Measured on the accepted r19 image (ISO 2,981,701,632 bytes; `image.squashfs` 2,
 | `dev-lang/rust-bin` (nothing installed depends on it at run time: `/var/db/pkg` checked) | 676 MiB | unmerged |
 | `/usr/lib64/libQt6*.a` (private static libraries) | 273 MiB | removed |
 | `/usr/share/doc`, `/usr/share/gtk-doc` | 76 + 30 MiB | removed; man and info pages stay |
+| `/etc/portage/make.conf.old` and `.extra` | 4 KiB | removed (`livecd/rm`); they hold the builder's job counts and caches |
 | `/usr/lib/firmware` | 1.9 GiB | kept: Wi-Fi, GPU and sound firmware is what makes other PCs work |
 | `/usr/lib/llvm` | 573 MiB | kept: Mesa's drivers link libLLVM |
 | `/usr/include`, other `.a` | 132 + 22 MiB | kept: users compile on the live system |

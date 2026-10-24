@@ -186,3 +186,24 @@ def test_livecd_keys_are_valid_for_catalyst_4_2() -> None:
         missing = set(target.required_values) - keys - {"boot/kernel"} if target is livecd_stage2 else set()
         assert not missing, missing
     assert "boot/kernel" in spec(STAGE2)
+
+
+def test_everything_the_contract_forbids_is_removed_by_the_spec() -> None:
+    """Drift guard: a forbidden path that no spec key removes makes the last step of a long build fail."""
+    import json
+
+    contract = json.loads((ROOT / "iso/image-contract.json").read_text())
+    values = spec(STAGE2)
+    removed = [p.lstrip("/") for p in verify.spec_list(values, "livecd/rm")]
+    emptied = [p.lstrip("/") for p in verify.spec_list(values, "livecd/empty")]
+    unmerged_files = {"opt/rust-bin*": "dev-lang/rust-bin"}  # removed by emerge -C, not by a path
+    for item in contract["squashfs"]["forbidden"]:
+        pattern = item if isinstance(item, str) else item["pattern"]
+        accounted = (
+            any(pattern in (r, r + "*", r + "/*") for r in removed)
+            or any(pattern == e + "/*" for e in emptied)
+            or (pattern in unmerged_files and unmerged_files[pattern] in verify.spec_list(values, "livecd/unmerge"))
+        )
+        assert accounted, f"image-contract.json forbids {pattern}, but nothing in livecd-stage2.spec removes it"
+    # the removal list itself must be consistent with the weight-reduction promise of the docs
+    assert "etc/portage/make.conf.old" in removed and "etc/portage/make.conf.extra" in removed
