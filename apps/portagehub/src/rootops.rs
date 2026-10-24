@@ -181,8 +181,32 @@ fn io_err(what: impl std::fmt::Display) -> impl Fn(std::io::Error) -> String {
     move |e| format!("{what}: {e}")
 }
 
+/// The /boot files that make up a kernel, in the order they are backed up.
+fn kernel_files(kver: &str) -> [String; 5] {
+    [format!("vmlinuz-{kver}"), format!("kernel-{kver}"), format!("initramfs-{kver}.img"), format!("config-{kver}"), format!("System.map-{kver}")]
+}
+
+/// Free bytes available to unprivileged writers on the filesystem holding `path`.
+pub fn free_bytes(path: &Path) -> Option<u64> {
+    let c = std::ffi::CString::new(path.as_os_str().as_encoded_bytes()).ok()?;
+    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+    (unsafe { libc::statvfs(c.as_ptr(), &mut st) } == 0).then(|| st.f_bavail as u64 * st.f_frsize as u64)
+}
+
+fn human_size(bytes: u64) -> String {
+    format!("{:.1} MiB", bytes as f64 / (1 << 20) as f64)
+}
+
+/// Slack kept free on /boot after a backup (a kernel update needs room too).
+const BACKUP_SLACK: u64 = 16 << 20;
+
 /// Record a known-good kernel, rotating last-good into previous-good.
 pub fn mark_good(root: &Path, kver: &str, state_dir: &str, backup: bool, log: &dyn Fn(String)) -> Result<(), String> {
+    mark_good_with(root, kver, state_dir, backup, log, &free_bytes)
+}
+
+/// [`mark_good`] with the free-space probe injected (tests).
+pub fn mark_good_with(root: &Path, kver: &str, state_dir: &str, backup: bool, log: &dyn Fn(String), free: &dyn Fn(&Path) -> Option<u64>) -> Result<(), String> {
     if !valid_kver(kver) {
         return Err(format!("invalid kernel version {kver}"));
     }
@@ -194,19 +218,64 @@ pub fn mark_good(root: &Path, kver: &str, state_dir: &str, backup: bool, log: &d
     }
     let dir = state_dir_handle(root, state_dir)?;
     let last = dir.read(Path::new("last-good")).ok().flatten().map(|b| String::from_utf8_lossy(&b).trim().to_string()).unwrap_or_default();
+    let mut previous = dir.read(Path::new("previous-good")).ok().flatten().map(|b| String::from_utf8_lossy(&b).trim().to_string()).unwrap_or_default();
     if !last.is_empty() && last != kver {
         dir.write_atomic(Path::new("previous-good"), format!("{last}\n").as_bytes()).map_err(io_err(format!("{state_dir}/previous-good")))?;
         log(format!("previous-good = {last}"));
+        previous = last;
     }
     dir.write_atomic(Path::new("last-good"), format!("{kver}\n").as_bytes()).map_err(io_err(format!("{state_dir}/last-good")))?;
     log(format!("last-good = {kver}"));
     if backup {
-        let boot = Beneath::open(&at(root, "/boot")).map_err(io_err("/boot"))?;
-        for f in [format!("vmlinuz-{kver}"), format!("kernel-{kver}"), format!("initramfs-{kver}.img"), format!("config-{kver}"), format!("System.map-{kver}")] {
-            let Some(mut src) = boot.open_file(Path::new(&f)).map_err(io_err(format!("/boot/{f}")))? else { continue };
-            let dst = Path::new("kernel-backup").join(kver).join(&f);
-            boot.write_atomic_from(&dst, &mut src, None).map_err(io_err(format!("/boot/{}", dst.display())))?;
+        backup_kernel(root, kver, &previous, log, free)?;
+    }
+    Ok(())
+}
+
+/// Copy a kernel's /boot files to /boot/kernel-backup/<kver> and drop the backups of every other
+/// kernel but the previous known-good one. Not having room is not an error (the marking itself
+/// matters more): the backup is skipped and the log says so. A copy that fails half way leaves
+/// no partial directory behind.
+fn backup_kernel(root: &Path, kver: &str, previous: &str, log: &dyn Fn(String), free: &dyn Fn(&Path) -> Option<u64>) -> Result<(), String> {
+    let boot = Beneath::open(&at(root, "/boot")).map_err(io_err("/boot"))?;
+    let mut sources = Vec::new();
+    for f in kernel_files(kver) {
+        if let Some(src) = boot.open_file(Path::new(&f)).map_err(io_err(format!("/boot/{f}")))? {
+            let size = src.metadata().map_err(io_err(format!("/boot/{f}")))?.len();
+            sources.push((f, src, size));
+        }
+    }
+    let needed: u64 = sources.iter().map(|s| s.2).sum::<u64>() + BACKUP_SLACK;
+    if let Some(available) = free(&at(root, "/boot"))
+        && available < needed
+    {
+        log(format!("backup skipped: not enough space on /boot ({} free, {} needed)", human_size(available), human_size(needed)));
+        return Ok(());
+    }
+    // The initramfs may hold secrets (a LUKS keyfile): keep the backups to root.
+    let dest = Path::new("kernel-backup").join(kver);
+    boot.mkdirs_mode(Path::new("kernel-backup"), 0o700).map_err(io_err("/boot/kernel-backup"))?;
+    boot.mkdirs_mode(&dest, 0o700).map_err(io_err(format!("/boot/{}", dest.display())))?;
+    let copied = (|| -> Result<(), String> {
+        for (f, mut src, _) in sources {
+            let mode = src.metadata().map(|m| std::os::unix::fs::PermissionsExt::mode(&m.permissions()) & 0o7777).map_err(io_err(format!("/boot/{f}")))?;
+            let to = dest.join(&f);
+            boot.write_atomic_from(&to, &mut src, Some(mode)).map_err(io_err(format!("/boot/{}", to.display())))?;
             log(format!("backed up /boot/{f} → /boot/kernel-backup/{kver}"));
+        }
+        Ok(())
+    })();
+    if let Err(e) = copied {
+        let _ = boot.remove_tree(&dest);
+        return Err(e);
+    }
+    // Only the new last-good and the previous known-good are worth their space.
+    for e in std::fs::read_dir(at(root, "/boot/kernel-backup")).into_iter().flatten().flatten() {
+        let name = e.file_name().to_string_lossy().to_string();
+        if name != kver && name != previous && e.file_type().is_ok_and(|t| t.is_dir()) {
+            if boot.remove_tree(&Path::new("kernel-backup").join(&name)).is_ok() {
+                log(format!("removed the old backup /boot/kernel-backup/{name}"));
+            }
         }
     }
     Ok(())
@@ -286,6 +355,11 @@ pub fn remove_kernel_leftovers(root: &Path, kver: &str, old_only: bool, log: &dy
         for suf in ["", ".img", ".old", ".img.old"] {
             remove_boot_file(format!("{p}-{kver}{suf}"))?;
         }
+    }
+    if boot.is_dir(&Path::new("kernel-backup").join(kver)).unwrap_or(false) {
+        boot.remove_tree(&Path::new("kernel-backup").join(kver)).map_err(io_err(format!("/boot/kernel-backup/{kver}")))?;
+        log(format!("removed /boot/kernel-backup/{kver}/"));
+        removed += 1;
     }
     for (parent, name) in [("/lib/modules", kver.to_string()), ("/usr/src", format!("linux-{kver}"))] {
         let Ok(b) = Beneath::open(&at(root, parent)) else { continue };
