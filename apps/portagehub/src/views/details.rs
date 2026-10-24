@@ -418,14 +418,12 @@ fn overview(app: &mut App, ui: &mut Ui, d: &PkgDetail, installed: &[vdb::Install
                     kv(ui, "Version", RichText::new(format!("{}  (slot {}, from ::{})", i.ver, i.slot, i.repo)).color(WHITE));
                 }
                 kv(ui, "Built", format!("{} ({})", crate::fmt::date(i.build_time), crate::fmt::ago(i.build_time)));
-                let cflags = i.read("CFLAGS");
-                if !cflags.is_empty() {
-                    kv(ui, "CFLAGS", RichText::new(cflags).monospace().size(12.0));
+                if let Some(meta) = d.installed_for(&i.ver) {
+                    if !meta.cflags.is_empty() {
+                        kv(ui, "CFLAGS", RichText::new(meta.cflags.clone()).monospace().size(12.0));
+                    }
+                    kv(ui, "Built with", RichText::new(meta.built_with().join(" ")).monospace().size(12.0).color(GREEN_TEXT));
                 }
-                let use_ = i.read("USE");
-                let iuse: HashSet<String> = i.read("IUSE").split_whitespace().map(|f| f.trim_start_matches(['+', '-']).to_string()).collect();
-                let on: Vec<&str> = use_.split_whitespace().filter(|f| iuse.contains(*f)).collect();
-                kv(ui, "Built with", RichText::new(on.join(" ")).monospace().size(12.0).color(GREEN_TEXT));
             });
             let mut world = app.data.vdb.as_ref().is_some_and(|v| v.in_world(&d.key));
             ui.add_space(6.0);
@@ -686,8 +684,7 @@ fn use_flags(app: &mut App, ui: &mut Ui, d: &PkgDetail, installed: &[vdb::Instal
     let cfg = app.data.config.clone();
     let env = app.data.env.clone();
     let user = cfg.as_ref().map(|c| edits::user_use_state(c, &d.cat, &d.pn)).unwrap_or_default();
-    let inst = installed.iter().rev().find(|i| i.ver == v.ver).or(installed.last());
-    let inst_use: Option<HashSet<String>> = inst.map(|i| i.read("USE").split_whitespace().map(String::from).collect());
+    let inst_use: Option<HashSet<String>> = d.installed_for(&v.ver).map(|m| m.use_flags.iter().cloned().collect());
     let global: HashSet<String> = env.as_ref().map(|e| e.global_use().into_iter().collect()).unwrap_or_default();
     let cap_tag = format!("use:{}", v.cpv(&d.key));
     let effective: Option<BTreeMap<String, bool>> = app.captures.get(&cap_tag).filter(|c| c.done).map(|c| {
@@ -888,9 +885,8 @@ fn deps(app: &mut App, ui: &mut Ui, d: &PkgDetail, installed: &[vdb::Installed])
         w::toggle(ui, &mut app.detail.deps_active);
     });
     let enabled: HashSet<String> = {
-        let inst = installed.iter().rev().find(|i| i.ver == v.ver).or(installed.last());
-        match inst {
-            Some(i) => i.read("USE").split_whitespace().map(String::from).collect(),
+        match d.installed_for(&v.ver) {
+            Some(m) => m.use_flags.iter().cloned().collect(),
             None => {
                 let mut s: HashSet<String> = app.data.env.as_ref().map(|e| e.global_use().into_iter().collect()).unwrap_or_default();
                 for (f, def) in v.meta.iuse() {

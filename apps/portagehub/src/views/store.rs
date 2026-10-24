@@ -28,6 +28,7 @@ pub struct State {
     pub repo_filter: Option<String>,
     cache_key: String,
     results: Vec<usize>,
+    cat_desc: crate::portage::catalog::DescriptionCache,
 }
 
 pub fn show(app: &mut App, ui: &mut Ui) {
@@ -494,7 +495,7 @@ fn categories(app: &mut App, ui: &mut Ui) {
                 ui.label(w::dim(format!("{} packages", idx.len())));
             });
             if let Some(repo_loc) = cat.repo_location("gentoo")
-                && let Some(d) = crate::portage::catalog::category_description(repo_loc, &c)
+                && let Some(d) = app.store.cat_desc.get(repo_loc, &c, &|p| std::fs::read_to_string(p).ok())
             {
                 ui.label(w::dim(d));
             }

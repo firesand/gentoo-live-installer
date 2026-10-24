@@ -133,7 +133,10 @@ pub struct Job {
     pub kind: JobKind,
     pub privilege: Priv,
     pub argv: Vec<String>,
-    pub lines: Vec<(bool, String)>,
+    /// Output lines (is it stderr?, text). Shared with the views: appending copies only if one still holds it.
+    pub lines: Arc<Vec<(bool, String)>>,
+    /// How many of the oldest lines were dropped to keep the log bounded.
+    pub dropped_lines: usize,
     pub partial: Option<String>,
     pub started: Instant,
     pub ended: Option<Instant>,
@@ -155,7 +158,7 @@ impl Job {
 
     pub fn output(&self) -> String {
         let mut s = String::new();
-        for (_, l) in &self.lines {
+        for (_, l) in self.lines.iter() {
             s.push_str(l);
             s.push('\n');
         }
@@ -302,6 +305,7 @@ fn empty_detail(key: &str) -> PkgDetail {
         xml: Default::default(),
         pkg_dir: None,
         files: Vec::new(),
+        installed_meta: Vec::new(),
     }
 }
 
@@ -474,7 +478,8 @@ impl App {
             kind: JobKind::Emerge { opts, tracker },
             privilege: Priv::User,
             argv: vec!["emerge".into(), "@demo".into()],
-            lines: Vec::new(),
+            lines: Arc::default(),
+            dropped_lines: 0,
             partial: None,
             started: Instant::now(),
             ended: None,
@@ -830,7 +835,8 @@ impl App {
             kind,
             privilege,
             argv,
-            lines: Vec::new(),
+            lines: Arc::default(),
+            dropped_lines: 0,
             partial: None,
             started: Instant::now(),
             ended: None,
@@ -922,7 +928,7 @@ impl App {
         match ev {
             Event::Started { .. } | Event::Ready { .. } | Event::Notice { .. } => {}
             Event::Data { text, .. } => {
-                job.lines.push((false, text));
+                Arc::make_mut(&mut job.lines).push((false, text));
             }
             Event::Ok { .. } => {
                 // Helper operations (not programs) finish with Ok.
@@ -935,9 +941,11 @@ impl App {
                     tracker.feed(&text, &history, at);
                 }
                 job.partial = None;
-                job.lines.push((stream == portagehub::protocol::StreamKind::Stderr, text));
-                if job.lines.len() > 60_000 {
-                    job.lines.drain(..10_000);
+                let lines = Arc::make_mut(&mut job.lines);
+                lines.push((stream == portagehub::protocol::StreamKind::Stderr, text));
+                if lines.len() > 60_000 {
+                    lines.drain(..10_000);
+                    job.dropped_lines += 10_000;
                 }
             }
             Event::Partial { text, .. } => {
@@ -1366,7 +1374,8 @@ impl App {
                     kind,
                     privilege: Priv::Root,
                     argv: vec![format!("helper: {label}")],
-                    lines: Vec::new(),
+                    lines: Arc::default(),
+            dropped_lines: 0,
                     partial: None,
                     started: Instant::now(),
                     ended: None,
