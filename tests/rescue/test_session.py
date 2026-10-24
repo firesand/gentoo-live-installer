@@ -441,3 +441,21 @@ def test_the_lines_of_a_running_command_are_forwarded_while_it_runs(lab_factory)
     streaming.live_output = forwarded.append
     streaming.runner.execute(("udevadm", "settle"))
     assert snapshots[-1] == ["first line", "second line"] and forwarded == ["first line", "second line"]  # before the command returned; the command echo and redacted lines are dropped
+
+
+def test_a_saved_session_keeps_everything_a_later_process_needs(lab_factory) -> None:
+    """In --local mode every command is a new process that adopts the session from its state file."""
+    lab = lab_factory(lf.xfs_external_log())
+    lab.add_tree("/dev/sda2", "gentoo", firmware="uefi", fstab=f"UUID={fr.ROOT_UUID} / xfs noatime 0 1\n")
+    lab.system.external_logs["/dev/sda2"] = "/dev/sdb1"
+    session = lab.session("/dev/sda2", candidate={"id": "cTEST", "os": {"id": "gentoo", "family": "gentoo"}, "subvol": {"id": 256, "path": "root"}, "kind": "root"})
+    session.mount_ro(lab.graph_obj)
+    session.readonly_md = ["/dev/md127"]
+    session.stack_args = {"luks_uuid": fr.LUKS_UUID, "lvm_vg": "vg0", "md_uuid": "aaaa1111:bbbb2222:cccc3333:44445555"}
+    session.persist()
+    adopted = session_from_state(lab.session_env(), json.loads(session.state_path.read_text()))
+    assert adopted.plan.root.options == ["logdev=/dev/sdb1"] and adopted.plan.root.extra_devices == ["/dev/sdb1"] and adopted.plan.devices() == session.plan.devices() == ["/dev/sda2", "/dev/sdb1"]
+    assert adopted.candidate["subvol"] == {"id": 256, "path": "root"} and adopted.stack_args == session.stack_args and adopted.readonly_md == ["/dev/md127"]
+    assert [step.display for step in adopted.enter_write_steps(with_virtual=False)] == [step.display for step in session.enter_write_steps(with_virtual=False)]  # the same commands, md arrays included
+    assert adopted.plan.digest == session.plan.digest
+    assert adopted.release().complete and not any(lab.system.ro.values())

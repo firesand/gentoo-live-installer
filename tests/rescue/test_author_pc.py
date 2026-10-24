@@ -179,3 +179,17 @@ def test_a_damaged_machine_gets_one_plan_with_only_what_is_broken(lab_factory, t
     unmount(manager, sid)
     assert (root / f"boot/initramfs-{LATEST}.img").stat().st_size > 1 << 20 and (root / "boot/grub/grub.cfg").stat().st_size > 1024
     assert (esp / "EFI/gentoo/grubx64.efi").exists()
+
+
+def test_a_later_process_knows_the_btrfs_subvolume_of_the_root(lab_factory, tmp_path: Path) -> None:
+    """Every gentoo-rescue command is a new process in --local mode; the command line made for the chroot must still say rootflags=subvol=root."""
+    from gentoo_installerd.rescue.session import session_from_state
+
+    lab, _root, _esp = author_lab(lab_factory, tmp_path)
+    manager, sid, _info = mount(lab)
+    session = manager.session(sid)
+    expected = session.derive_cmdline().text
+    assert expected == f"{CMDLINE} root=UUID={ROOT_UUID} ro rootflags=subvol=root"  # the arguments of /etc/default/grub plus what grub-mkconfig adds: what the machine really booted with
+    adopted = session_from_state(lab.session_env(), json.loads(session.state_path.read_text()))
+    assert adopted.derive_cmdline().text == expected
+    unmount(manager, sid)

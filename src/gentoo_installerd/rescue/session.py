@@ -24,7 +24,7 @@ from gentoo_installerd.runner import Runner
 
 from . import cmdline as cmdline_mod
 from .audit import AuditLog
-from .devices import DeviceGraph, DeviceNode
+from .devices import MD_MEMBER_FS, DeviceGraph, DeviceNode
 from .errors import RescueError
 from .fsprobe import mount_readonly, mount_type
 from .hostenv import Host
@@ -92,6 +92,8 @@ class RescueSession:
         self.allow_degraded = allow_degraded
         self.depends = list(depends)
         self.readonly_md = list(readonly_md)
+        self.pool_devices = list(pool_devices)
+        self.stack_args: dict[str, str] = {}  # what the root stands on, as boot programs want it on their command line (rd.luks.uuid, rd.lvm.vg, rd.md.uuid)
         self.created = env.clock()
         self.generation = 0
         self.state = "init"
@@ -169,8 +171,9 @@ class RescueSession:
     def to_state(self) -> dict[str, Any]:
         return {
             "version": STATE_VERSION, "sid": self.sid, "created": self.created, "pid": self.env.pid, "mode": self.mode, "allow_write": self.allow_write, "state": self.state,
-            "generation": self.generation, "root": {"candidate": self.candidate.get("id", ""), "device": self.plan.root.device, "fstype": self.plan.root.fstype, "uuid": self.plan.root.uuid,
-                                                      "rootflags": self.plan.root.rootflags, "path": self.root, "os": self.candidate.get("os", {}), "label": self.candidate.get("label", "")},
+            "generation": self.generation, "root": self.plan.root.identity() | {"candidate": self.candidate.get("id", ""), "path": self.root, "os": self.candidate.get("os", {}),
+                                                                                 "label": self.candidate.get("label", "")},
+            "candidate_info": self.candidate, "stack": self.stack_args, "readonly_md": self.readonly_md, "pool_devices": self.pool_devices,
             "items": [item.to_dict() | {"device": item.device, "extra_devices": item.extra_devices} for item in self.plan.items], "depends": self.depends,
             "ledger": self.ledger.to_state(), "audit": str(self.audit.path or ""), "cmdline": str(self.cmdline_path), "resolv": str(self.resolv_path),
         }
@@ -200,6 +203,7 @@ class RescueSession:
         os.makedirs(self.env.state_dir / "sessions", mode=0o700, exist_ok=True)
         self.state = "mounting"
         self.audit.record("mount", message="session started", root=self.plan.root.device, items=[item.mountpoint for item in self.plan.selected], sync=True)
+        self._remember_stack(graph)
         try:
             emit("stage", "Protecting the other disks", stage="protect")
             self._protect_disks(graph)
@@ -240,6 +244,29 @@ class RescueSession:
             if sibling.ro or sibling.live_medium or sibling.key in mounted_nodes:
                 continue
             self._flag_ro(sibling.path, "protect")
+
+    def _remember_stack(self, graph: DeviceGraph) -> None:
+        """Note what the root file system stands on (encryption, LVM, RAID); it is saved with the session, so a later process builds the same command line."""
+        try:
+            root_node = graph.find(self.plan.root.device)
+        except LookupError:
+            return
+        args: dict[str, str] = {}
+        for node in graph.stack_of(root_node):
+            if node.type == "crypt":
+                for parent in graph.parents_of(node):
+                    if parent.fstype == "crypto_LUKS" and parent.uuid:
+                        args.setdefault("luks_uuid", parent.uuid)
+            elif node.type == "lvm":
+                match = LVM_NAME_RE.match(node.name)
+                if match:
+                    args.setdefault("lvm_vg", match.group(1).replace("--", "-"))
+            elif node.type.startswith("raid"):
+                for parent in graph.parents_of(node):
+                    digits = parent.uuid.replace("-", "").lower()
+                    if parent.fstype in MD_MEMBER_FS and len(digits) == 32:
+                        args.setdefault("md_uuid", ":".join(digits[i:i + 8] for i in range(0, 32, 8)))  # the form mdadm and dracut use
+        self.stack_args = args
 
     def _flag_selected(self, graph: DeviceGraph) -> None:
         for path in self.plan.devices():
@@ -551,24 +578,12 @@ class RescueSession:
 
     def derive_cmdline(self, graph: DeviceGraph | None = None) -> cmdline_mod.DerivedCmdline:
         spec = self.plan.root
-        luks_uuid = lvm_vg = md_uuid = ""
         subvol = (self.candidate.get("subvol") or {}).get("path", "") if spec.subvolid is not None else ""
         if graph is not None:
-            try:
-                root_node = graph.find(spec.device)
-            except LookupError:
-                root_node = None
-            for node in graph.stack_of(root_node) if root_node is not None else []:
-                if node.type == "crypt":
-                    for parent in graph.parents_of(node):
-                        if parent.fstype == "crypto_LUKS":
-                            luks_uuid = luks_uuid or parent.uuid
-                elif node.type == "lvm":
-                    match = LVM_NAME_RE.match(node.name)
-                    if match:
-                        lvm_vg = lvm_vg or match.group(1).replace("--", "-")
+            self._remember_stack(graph)
+        stack = self.stack_args
         with self.fs() as fs:
-            return cmdline_mod.derive(fs, spec.uuid, subvol_path=subvol, luks_uuid=luks_uuid, lvm_vg=lvm_vg, md_uuid=md_uuid)
+            return cmdline_mod.derive(fs, spec.uuid, subvol_path=subvol, luks_uuid=stack.get("luks_uuid", ""), lvm_vg=stack.get("lvm_vg", ""), md_uuid=stack.get("md_uuid", ""))
 
     def _bind_cmdline(self, runner: RescueRunner) -> str:
         derived = self.derive_cmdline()
@@ -705,8 +720,10 @@ def session_from_state(env: SessionEnv, raw: dict[str, Any], graph: DeviceGraph 
     items = [MountItem(item["mountpoint"], item["device"], item["fstype"], [o for o in item.get("options", "").split(",") if o], int(item["tier"]), item.get("source", "fstab"),
                        selected=item.get("selected", True), needs_mkdir=item.get("needs_mkdir", False), extra_devices=item.get("extra_devices", [])) for item in raw.get("items", [])]
     plan = MountPlan(spec, items, allow_write=raw.get("allow_write", True))
-    candidate = {"id": root.get("candidate", ""), "os": root.get("os", {}), "label": root.get("label", "")}
-    session = RescueSession(env, raw["sid"], plan, candidate, graph, allow_write=raw.get("allow_write", True), depends=raw.get("depends", []))
+    candidate = dict(raw.get("candidate_info") or {"id": root.get("candidate", ""), "os": root.get("os", {}), "label": root.get("label", "")})
+    session = RescueSession(env, raw["sid"], plan, candidate, graph, allow_write=raw.get("allow_write", True), depends=raw.get("depends", []), pool_devices=raw.get("pool_devices", []),
+                            readonly_md=raw.get("readonly_md", []))
+    session.stack_args = dict(raw.get("stack", {}))
     session.created = raw.get("created", session.created)
     if raw.get("audit"):  # keep appending to the log the previous process wrote
         session.audit = AuditLog(Path(raw["audit"]), raw["sid"], clock=env.clock)
