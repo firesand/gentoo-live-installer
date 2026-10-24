@@ -39,8 +39,9 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from gentoo_installer.manifest import InstallManifest  # noqa: E402
+from gentoo_installer.manifest import InstallManifest, Partition  # noqa: E402
 import vm_guard  # noqa: E402
+import vm_guest  # noqa: E402
 import vm_hw  # noqa: E402
 from vm_hw import VMHardware  # noqa: E402
 from vm_qmp import (  # noqa: E402
@@ -173,6 +174,7 @@ class Scenario:
     guest_tools: str = "none"        # "none" keeps the validated scenarios free of hypervisor tooling
     hardware: VMHardware = VMHardware()
     decoy: bool = False              # extra disks are decoys: marker + checksum before, unchanged after
+    manual: bool = False             # partition the disk first and install in manual mode
     reinstall: bool = False          # install a second time over the first installation
     expect_refusal: str = ""         # regex the installer's refusal must match (nothing may be written)
     disk_gib: int = 0                # 0 = use --disk-size
@@ -232,6 +234,9 @@ SCENARIO_MAP = {
     "vmware-guest": Scenario("vmware-guest", "openrc", "uefi", guest_tools="auto", in_all=False,
                              hardware=_hw(smbios="vmware", vga="vmware", nic="e1000e"),
                              note="hypervisor detection from VMware's DMI strings (run with --memory 2048)"),
+    "manual-two-disks": Scenario("manual-two-disks", "openrc", "uefi", manual=True, decoy=True, in_all=False,
+                                 hardware=_hw(extra_disks=(256,)),
+                                 note="manual partitioning of one disk next to a disk with data that must survive"),
     "reinstall": Scenario("reinstall", "openrc", "uefi", reinstall=True, in_all=False,
                           note="installs twice onto the same disk (stale signatures at reused offsets)"),
     "small-disk": Scenario("small-disk", "openrc", "uefi", disk_gib=6, in_all=False,
@@ -281,6 +286,14 @@ def companion_selection(manifest: InstallManifest) -> dict[str, bool]:
     }
 
 
+def manual_partitions(device: str, firmware: str) -> list[Partition]:
+    """What `vm_guest.py partition-manual` creates on ``device``, as manual-mode manifest rows."""
+    rows = [Partition(device=vm_guest.partition_path(device, 2), mountpoint="/", filesystem="ext4", format=True)]
+    if firmware == "uefi":
+        rows.insert(0, Partition(device=vm_guest.partition_path(device, 1), mountpoint="/efi", filesystem="vfat", format=True))
+    return rows
+
+
 def build_manifest(scenario: Scenario, ssh_public_key: str, companions: str = "both", *,
                    build_jobs: int | None = None, swap_mib: int | None = None,
                    device: str = TARGET_DEVICE, device_id: str = TARGET_SERIAL,
@@ -324,6 +337,9 @@ def build_manifest(scenario: Scenario, ssh_public_key: str, companions: str = "b
     manifest.storage.table = scenario.resolved_table
     manifest.storage.filesystem = scenario.filesystem
     manifest.storage.lvm = scenario.lvm
+    if scenario.manual:
+        manifest.storage.mode = "manual"
+        manifest.storage.partitions = manual_partitions(device, scenario.firmware)
     manifest.storage.swap_mib = swap_mib
     manifest.storage.luks = scenario.luks
     manifest.storage.luks_passphrase = TEST_LUKS_PASSPHRASE if scenario.luks else ""
@@ -1932,6 +1948,10 @@ class ScenarioRunner:
         """Install onto the guarded disk; returns the refusal report for a scenario that must be refused."""
         self.run_guard("guest-disk-guard.log", blank=not reinstall)
         device, device_id, device_id_kind = self.disk_identity()
+        if self.scenario.manual and not reinstall:
+            disk = self.guard_report["target"]  # type: ignore[index]
+            self.guest_tool("partition-manual", {"role": "target", "path": disk["path"], "size": disk["size"],
+                                                 "firmware": self.scenario.firmware}, "partition-manual.log")
         swap_mib = getattr(self.args, "swap_mib", None)
         if reinstall:  # a different layout over the first one: stale signatures at reused offsets
             swap_mib = (512 if swap_mib is None else swap_mib) + 256

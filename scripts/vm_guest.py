@@ -4,6 +4,7 @@ Each sub-command takes one JSON argument and prints one JSON line:
 
   decoy-prepare   give an extra disk a GPT, an ext4 filesystem and a marker file, report its sha256
   decoy-check     report whether an extra disk still has the sha256 it had
+  partition-manual  give the target disk the partitions a manual-mode install is pointed at (nothing is formatted)
   rescue-break    damage the installed system on the target disk, from the live system, so a
                   repair tool has something to repair (grub.cfg, initramfs or the fstab UUID)
 
@@ -101,6 +102,29 @@ def decoy_check(args: dict, runner=run) -> dict:
     return {"path": path, "size": size, "sha256": digest, "unchanged": digest == args["sha256"]}
 
 
+# --- a layout for manual-mode installs ---------------------------------------------------------------
+
+def partition_manual(args: dict, runner=run) -> dict:
+    """GPT with an EFI System Partition (UEFI) or a BIOS-boot partition, then one partition for the rest.
+
+    The installer formats and mounts them in manual mode. Numbering: 1 = ESP or BIOS boot, 2 = root.
+    """
+    path, size, firmware = args["path"], int(args["size"]), args["firmware"]
+    if firmware not in {"uefi", "bios"}:
+        raise GuestError(f"Unknown firmware {firmware!r}")
+    if not str(args.get("role", "")).startswith("target"):
+        raise GuestError("Only the target disk is partitioned for manual mode")
+    verify_disk(path, size, runner)
+    runner(["sgdisk", "--zap-all", path])
+    first = ("--new=1:0:+512MiB", "--typecode=1:EF00", "--change-name=1:EFI") if firmware == "uefi" else (
+        "--new=1:0:+3MiB", "--typecode=1:EF02", "--change-name=1:BIOS")
+    runner(["sgdisk", *first, path])
+    runner(["sgdisk", "--new=2:0:0", "--typecode=2:8300", "--change-name=2:root", path])
+    runner(["partprobe", path], check=False)
+    runner(["udevadm", "settle", "--timeout=15"], check=False)
+    return {"path": path, "boot": partition_path(path, 1), "root": partition_path(path, 2)}
+
+
 # --- breaking an installed system -----------------------------------------------------------------
 
 def choose_partitions(lsblk: dict, disk: str) -> dict:
@@ -180,7 +204,8 @@ def rescue_break(args: dict, runner=run) -> dict:
     return {"mode": mode, **layout, **changes, **proof}
 
 
-COMMANDS = {"decoy-prepare": decoy_prepare, "decoy-check": decoy_check, "rescue-break": rescue_break}
+COMMANDS = {"decoy-prepare": decoy_prepare, "decoy-check": decoy_check, "partition-manual": partition_manual,
+            "rescue-break": rescue_break}
 
 
 def main(argv: list[str]) -> int:

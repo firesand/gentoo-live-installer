@@ -329,3 +329,15 @@ def test_scenario_listing_names_every_scenario(capsys):
     assert vm.main(["--list-scenarios"]) == 0
     listing = capsys.readouterr().out
     assert all(name in listing for name in vm.SCENARIO_MAP) and "nvme" in listing
+
+
+@pytest.mark.parametrize(("device", "boot", "root"), [("/dev/vda", "/dev/vda1", "/dev/vda2"),
+                                                       ("/dev/nvme0n1", "/dev/nvme0n1p1", "/dev/nvme0n1p2")])
+def test_the_manual_scenario_names_the_partitions_the_guest_tool_creates(device, boot, root):
+    manifest = vm.build_manifest(vm.SCENARIO_MAP["manual-two-disks"], PUBLIC_KEY, device=device)
+    assert manifest.validate() == []
+    assert manifest.storage.mode == "manual" and manifest.storage.device == device
+    assert [(p.device, p.mountpoint) for p in manifest.storage.partitions] == [(boot, "/efi"), (root, "/")]
+    bios = vm.apply_overrides(vm.SCENARIO_MAP["manual-two-disks"], vm.build_parser().parse_args(
+        ["--scenario", "manual-two-disks", "--iso", "x.iso", "--firmware", "bios"]))
+    assert [p.mountpoint for p in vm.build_manifest(bios, PUBLIC_KEY).storage.partitions] == ["/"]

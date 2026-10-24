@@ -70,11 +70,13 @@ def guest_tool_answer(remote: str, run_dir: Path) -> str:
     import shlex
     words = shlex.split(remote)
     command, payload = words[-2], json.loads(words[-1])
-    index = int(payload["role"].rsplit("-", 1)[1]) if payload.get("role") else 1
+    index = int(payload["role"].rsplit("-", 1)[1]) if payload.get("role", "").startswith("decoy-") else 1
     image = run_dir / f"extra-{index}.img"
     digest = hashlib.sha256(image.read_bytes()).hexdigest() if image.exists() else ""
     if command == "decoy-prepare":
         report = {"path": payload["path"], "partition": payload["path"] + "1", "size": payload["size"], "sha256": digest}
+    elif command == "partition-manual":
+        report = {"path": payload["path"], "boot": payload["path"] + "1", "root": payload["path"] + "2"}
     elif command == "decoy-check":
         report = {"path": payload["path"], "size": payload["size"], "sha256": digest, "unchanged": digest == payload["sha256"]}
     else:

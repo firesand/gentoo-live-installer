@@ -214,3 +214,31 @@ def test_the_guest_program_compiles_as_a_single_command_argument():
     source = Path(vm_guest.__file__).read_text()
     compile(source, "vm_guest", "exec")
     assert len(source) < 100_000  # one ssh command argument
+
+
+# --- partitioning for manual mode -------------------------------------------------------------------
+
+def test_a_manual_layout_is_a_gpt_with_an_esp_and_a_root_and_nothing_is_formatted():
+    recorder = Recorder(size=500)
+    report = vm_guest.partition_manual({"role": "target", "path": "/dev/vda", "size": 500, "firmware": "uefi"}, recorder)
+    assert report == {"path": "/dev/vda", "boot": "/dev/vda1", "root": "/dev/vda2"}
+    assert recorder.commands[1] == ["sgdisk", "--zap-all", "/dev/vda"]
+    assert ["sgdisk", "--new=1:0:+512MiB", "--typecode=1:EF00", "--change-name=1:EFI", "/dev/vda"] in recorder.commands
+    assert ["sgdisk", "--new=2:0:0", "--typecode=2:8300", "--change-name=2:root", "/dev/vda"] in recorder.commands
+    assert not any(command[0].startswith("mkfs") or command[0] in {"mkswap", "mount", "wipefs"} for command in recorder.commands)
+
+
+def test_a_bios_layout_has_a_bios_boot_partition_and_nvme_names_get_a_p():
+    recorder = Recorder(size=500)
+    report = vm_guest.partition_manual({"role": "target", "path": "/dev/nvme0n1", "size": 500, "firmware": "bios"}, recorder)
+    assert report["boot"] == "/dev/nvme0n1p1" and report["root"] == "/dev/nvme0n1p2"
+    assert ["sgdisk", "--new=1:0:+3MiB", "--typecode=1:EF02", "--change-name=1:BIOS", "/dev/nvme0n1"] in recorder.commands
+
+
+def test_only_the_target_is_partitioned_and_only_with_a_known_firmware():
+    with pytest.raises(vm_guest.GuestError, match="Only the target disk"):
+        vm_guest.partition_manual({"role": "decoy-1", "path": "/dev/vdb", "size": 500, "firmware": "uefi"}, Recorder(size=500))
+    with pytest.raises(vm_guest.GuestError, match="Unknown firmware"):
+        vm_guest.partition_manual({"role": "target", "path": "/dev/vda", "size": 500, "firmware": "coreboot"}, Recorder(size=500))
+    with pytest.raises(vm_guest.GuestError, match="not a VM disk name"):
+        vm_guest.partition_manual({"role": "target", "path": "/dev/sda1", "size": 500, "firmware": "uefi"}, Recorder(size=500))

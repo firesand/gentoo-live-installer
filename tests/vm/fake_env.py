@@ -76,7 +76,7 @@ def guest_rules(vm, scenario_name: str, *, guard: str = "vm_disk_guard", install
         target_ready,
         {"user": "^vmtest$", "match": "^true$", "rc": 255},
         {"user": "^root$", "match": guard, "guard": guard_options},
-        {"user": "^root$", "match": r"decoy-(?:prepare|check) '\{", "guest_tool": True},
+        {"user": "^root$", "match": r"(?:decoy-prepare|decoy-check|partition-manual) '\{", "guest_tool": True},
         {"user": "^root$", "match": r"^cat > /run/gentoo-installer-vm-manifest\.json$", "stdin_to": "manifest.json"},
         {"user": "^root$", "match": r"^gentoo-installerd --manifest \S+ --yes$", "events": install or EVENT_STREAM},
         {"user": "^root$", "match": r"^gentoo-installerd --manifest \S+ --yes --resume$", "events": RESUME_STREAM},

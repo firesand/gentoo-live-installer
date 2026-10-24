@@ -193,3 +193,18 @@ def test_firmware_can_be_overridden_per_run(lab):
 def test_listing_scenarios_does_not_need_an_iso_or_a_lab(capsys):
     assert vm.main(["--list-scenarios"]) == 0
     assert "uefi-fresh-nvram" in capsys.readouterr().out
+
+
+def test_manual_mode_partitions_the_target_first_and_leaves_the_second_disk_alone(lab):
+    lab.rules = guest_rules(vm, "manual-two-disks")
+    assert lab.run("--scenario", "manual-two-disks", "--keep") == 0
+    run = lab.run_dir()
+    storage = uploaded(run)["storage"]
+    assert storage["mode"] == "manual" and storage["device"] == "/dev/vda" and storage["device_id"] == vm.TARGET_SERIAL
+    assert [(row["device"], row["mountpoint"], row["filesystem"], row["format"]) for row in storage["partitions"]] == [
+        ("/dev/vda1", "/efi", "vfat", True), ("/dev/vda2", "/", "ext4", True)]
+    remote = [call["remote"] for call in lab.ssh_calls() if call["user"] == "root"]
+    partition = next(i for i, text in enumerate(remote) if "partition-manual '{" in text)
+    upload = next(i for i, text in enumerate(remote) if text.startswith("cat > /run/gentoo-installer-vm"))
+    assert partition < upload  # the manifest names partitions that exist
+    assert lab.result()["decoys"]["decoy-1"]["sha256"]  # and the other disk was guarded and checked like in decoy-disk

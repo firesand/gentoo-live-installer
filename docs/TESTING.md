@@ -126,6 +126,7 @@ them and even when the harness is killed with SIGKILL (the kernel sends QEMU SIG
 | `uefi-4kn` | NVMe with 4096-byte sectors |
 | `laptop-smbios` | notebook DMI strings and chassis type, a named CPU model, guest tools `auto` |
 | `vmware-guest` | hypervisor detection from VMware's DMI strings; run with `--memory 2048` |
+| `manual-two-disks` | manual mode on a disk partitioned beforehand, next to a disk with data that must survive |
 | `reinstall` | installing twice onto the same disk with a different layout |
 | `small-disk` | a 6 GiB disk must be refused before anything is written |
 | `btrfs-root`, `xfs-root`, `lvm-root`, `systemd-boot` | filesystem, LVM and bootloader variants |
