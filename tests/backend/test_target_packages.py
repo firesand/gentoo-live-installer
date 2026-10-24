@@ -524,6 +524,14 @@ class StageInstallTests(unittest.TestCase):
         self.assertIn("companion applications were skipped", result.degraded[0])
         self.assertEqual([e for e in self.emerges() if "hwmonux" in e or "portagehub" in e], [])
 
+    def test_apply_hardware_writes_the_files_and_runs_the_steps(self) -> None:
+        plan = FakePlan(files=[("etc/modprobe.d/blacklist-nouveau.conf", "blacklist nouveau\n", 0o644)], post_steps=[["usermod", "-aG", "video", "gentoo"]])
+        self.runner.script("*usermod", ("fail", "no such group"))
+        warnings = self.c.apply_hardware(plan)
+        self.assertEqual(read(self.root, "etc/modprobe.d/blacklist-nouveau.conf"), "blacklist nouveau\n")
+        self.assertEqual(len(warnings), 1)
+        self.assertIn("usermod -aG video gentoo failed", warnings[0])
+
     def test_chroot_commands_run_as_root_when_the_runner_supports_it(self) -> None:
         self.c.chroot(("true",))
         self.assertEqual(self.runner.root_identity, [True])

@@ -1551,6 +1551,11 @@ class Configurer:
                 warnings.append(f"{' '.join(argv)[:80]} failed: {str(exc)[-160:]}")
         return warnings
 
+    def apply_hardware(self, plan: object | None = None) -> list[str]:
+        """Write the plan's files and run its post-install steps; returns warnings for steps that failed."""
+        self.write_plan_files(plan)
+        return self.run_plan_steps(plan)
+
     def write_plan_files(self, plan: object | None = None) -> None:
         """Files the hardware plan wants on the target (written as root:root)."""
         for item in _plan_list(self._plan(plan), "files"):
