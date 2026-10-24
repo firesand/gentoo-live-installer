@@ -6,14 +6,31 @@ import pytest
 
 from gentoo_installer import recommend
 from gentoo_installer.recommend import Recommendation
+from gentoo_installer.textui.console import Console
+from gentoo_installer.textui.daemon import Daemon
 from gentoo_installer.textui.inventory import MachineView
 from gentoo_installer.textui.summary import HWMONUX_LOW_MEMORY, build_summary
+from gentoo_installer.textui.wizard import Wizard
 
-from tests.textui.support import inspect_reply, valid_manifest
-from tests.textui.test_wizard_steps import start  # noqa: F401 - a fixture
+from tests.textui.support import FakeHost, FakeInstaller, Script, inspect_reply, valid_manifest
 
 NOTE = "HWMonux needs PySide6, which is compiled from source: about 40 minutes and up to 4 GiB of memory per compile job."
 SERIALS = {"/dev/vda": "VDA-SERIAL-0001"}
+
+
+@pytest.fixture
+def start(installer, host: FakeHost):
+    """``start(steps, reply=None)`` -> (wizard, script, fake service); the default machine is the 4 GiB virtual machine."""
+
+    def make(steps, reply=None):
+        fake: FakeInstaller = installer(reply if reply is not None else inspect_reply("qemu-q35-virtio", serials=SERIALS))
+        script = Script(steps)
+        console = Console(script.stdin, script.out, environ={"TERM": "dumb"})
+        daemon = Daemon(fake.path)
+        wizard = Wizard(console, host, daemon, view=MachineView(fake.reply, local_by_path=host.by_path_names()), state=daemon.probe())
+        return wizard, script, fake
+
+    return make
 
 
 def test_the_text_is_the_agreed_sentence() -> None:

@@ -2,13 +2,45 @@
 
 from __future__ import annotations
 
+import pytest
+
 from gentoo_installer import blockdev
+from gentoo_installer.textui.console import Console
+from gentoo_installer.textui.daemon import Daemon
 from gentoo_installer.textui.inventory import MachineView
+from gentoo_installer.textui.wizard import Wizard
 
-from tests.textui.test_w3_clients_holders import GIB, node, reply_with, start  # noqa: F401 - start is a fixture
+from tests.textui.support import FakeHost, FakeInstaller, Script, device_number, inspect_reply
 
+GIB = 1024**3
 POOL = "6b1d4c52-2f0a-4c55-9b1e-0a3c1f2e9d77"
 OTHER = "0e7a2f90-91d5-4a57-8d55-5b1c6c9a41e3"
+
+
+@pytest.fixture
+def start(installer, host: FakeHost):
+    """``start(steps, reply)`` -> (wizard, script, fake service)."""
+
+    def make(steps, reply):
+        fake: FakeInstaller = installer(reply)
+        script = Script(steps)
+        console = Console(script.stdin, script.out, environ={"TERM": "dumb"})
+        daemon = Daemon(fake.path)
+        wizard = Wizard(console, host, daemon, view=MachineView(fake.reply, local_by_path=host.by_path_names()), state=daemon.probe())
+        return wizard, script, fake
+
+    return make
+
+
+def node(name: str, type: str = "part", size: int = 10 * GIB, **kwargs) -> blockdev.BlockDevice:
+    return blockdev.BlockDevice(name=name, path=f"/dev/{name}", type=type, size=size, maj_min=device_number(name), **kwargs)
+
+
+def reply_with(*disks: dict) -> dict:
+    """The reply of the 4 GiB virtual machine with its own disk replaced by ``disks``."""
+    reply = inspect_reply("qemu-q35-virtio", serials={"/dev/vda": "VDA-SERIAL-0001"})
+    reply["disks"] = [disk for disk in reply["disks"] if disk["path"] != "/dev/vda"] + list(disks)
+    return reply
 
 
 def pool_disk(name: str, serial: str, *, fstype: str = "btrfs", uuid: str = POOL) -> dict:
