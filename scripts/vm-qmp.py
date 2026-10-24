@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Operator-controlled QMP tools for a disposable VM test run."""
+"""Operator-controlled QMP tools for a disposable VM test run.
+
+This is the command line (screendump, type the test LUKS passphrase). The importable library
+behind it, which scripts/test-vm.py uses directly, is vm_qmp.py (underscore).
+"""
 from __future__ import annotations
 
 import argparse

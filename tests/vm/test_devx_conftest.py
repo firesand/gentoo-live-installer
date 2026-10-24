@@ -172,3 +172,23 @@ def test_qt_is_offscreen_even_when_the_environment_asks_for_a_real_platform(proj
     assert result.returncode == 0, result.stdout
     opted_in, _ = run_pytest(project, env={"QT_QPA_PLATFORM": "wayland", "GENTOO_TEST_QT_PLATFORM": "xcb"})
     assert "AssertionError" in opted_in.stdout  # the override was honoured, not offscreen
+
+
+def test_the_backend_worker_regression_that_hung_pytest_now_ends_the_run(project):
+    """tests/ui/test_backend.py with BackendWorker.run broken: its non-daemon accept() thread used to keep pytest alive forever."""
+    root = Path(__file__).resolve().parents[2]
+    (project / "tests" / "test_backend.py").write_bytes((root / "tests" / "ui" / "test_backend.py").read_bytes())
+    driver = (
+        "from gentoo_installer.backend import BackendWorker\n"
+        "BackendWorker.run = lambda self: None\n"   # the simulated regression: the client never connects
+        "import pytest\n"
+        "raise SystemExit(pytest.main(['-q', '-p', 'no:cacheprovider', '-p', 'no:timeout',\n"
+        "                               'tests/test_backend.py::test_backend_worker_sends_manifest_and_reads_events']))\n")
+    started = time.monotonic()
+    result = subprocess.run([sys.executable, "-c", driver], cwd=project, text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            timeout=60, check=False,
+                            env={"PATH": os.environ["PATH"], "HOME": str(project), "PYTHONDONTWRITEBYTECODE": "1",
+                                 "PYTHONPATH": str(root / "src")})
+    assert time.monotonic() - started < 40, result.stdout
+    assert result.returncode == 1 and "1 failed" in result.stdout, result.stdout
+    assert "non-daemon thread" in result.stdout

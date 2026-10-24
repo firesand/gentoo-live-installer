@@ -1,5 +1,11 @@
 #!/usr/bin/env python3
-"""QEMU end-to-end checks using an explicitly provisioned, key-only SSH channel."""
+"""QEMU end-to-end checks using an explicitly provisioned, key-only SSH channel.
+
+Installs Gentoo into disposable virtual machines (different disk buses, sector sizes, firmware,
+network cards, laptop identities), checks that the installed system boots, and can damage an
+installed system to test the rescue tools. Every disk is a file below build/vm/ and the only host
+access of a VM is a loopback SSH forward. See docs/TESTING.md.
+"""
 
 from __future__ import annotations
 
@@ -1726,7 +1732,14 @@ class ScenarioRunner:
         elif method == "serial":
             if target.serial is None:
                 raise HarnessError("Serial LUKS unlock requested but QEMU serial channel is unavailable")
-            receipt = unlock_over_serial(target.serial, TEST_LUKS_PASSPHRASE, timeout, ssh_ready)
+            try:
+                receipt = unlock_over_serial(target.serial, TEST_LUKS_PASSPHRASE, timeout, ssh_ready)
+            except HarnessError as exc:
+                if "passphrase prompt" in str(exc):
+                    raise HarnessError(f"{exc}. If the serial log shows no kernel messages, the installed kernel does not have "
+                                       f"console=ttyS0: check that system.kernel_cmdline_extra ({cmdline!r}) reached "
+                                       "/etc/kernel/cmdline and GRUB_CMDLINE_LINUX") from None
+                raise
             receipt["serial_log_sha256"] = hashlib.sha256(target.serial_log.read_bytes()).hexdigest()
         else:
             receipt = unlock_over_qmp(target, TEST_LUKS_PASSPHRASE, timeout, ssh_ready, self.run_dir)
