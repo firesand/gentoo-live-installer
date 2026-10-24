@@ -84,7 +84,7 @@ class DiagnosisPage(RescuePage):
         self.look_card.content.addWidget(self.terminal_button)
         self.terminal_text = wrapped_label("", muted=True)
         self.look_card.content.addWidget(self.terminal_text)
-        self.writable_terminal_button = QPushButton("Open a terminal that can &change files…")
+        self.writable_terminal_button = QPushButton("Open a terminal that can chan&ge files…")
         self.writable_terminal_button.setObjectName("rescueTerminalWritable")
         self.writable_terminal_button.clicked.connect(lambda: self._ask_terminal(True))
         self.look_card.content.addWidget(self.writable_terminal_button)
@@ -97,7 +97,7 @@ class DiagnosisPage(RescuePage):
 
         self.refresh_button = self.add_button("&Check again", "rescueRefresh", right=False, tip="Run the checks again")
         self.refresh_button.clicked.connect(self.refreshRequested)
-        self.finish_button = self.add_button("&Finish…", "rescueFinish", tip="Close the system safely and leave the repair tool")
+        self.finish_button = self.add_button("Fi&nish…", "rescueFinish", tip="Close the system safely and leave the repair tool")
         self.finish_button.clicked.connect(self.finishRequested)
 
     # ---- showing a system -----------------------------------------------------------------------------------------------------------

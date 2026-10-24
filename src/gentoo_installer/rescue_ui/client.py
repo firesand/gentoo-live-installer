@@ -152,25 +152,33 @@ class ProbeCall(QThread):
         self.done.emit(daemon_client.probe(self.socket_path))
 
 
+_STRANDED: list[QObject] = []  # calls whose thread outlived the window: Qt aborts the program when a running QThread is deleted
+
+
 class RescueClient(QObject):
     """Creates calls, keeps them alive until they end and ends them when the window closes."""
 
     def __init__(self, socket_path: str, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self.socket_path = socket_path
+        self.stopping = False  # set by abort_all(): nothing new is started after that
         self._calls: list[Call] = []
         self._probes: list[ProbeCall] = []
 
     def request(self, action: str, params: dict[str, Any] | None = None) -> Call:
         call = Call(self.socket_path, action, params, self)
+        if self.stopping:  # the window is closing: answer nothing, start nothing
+            call.aborted = call.done = True
+            return call
         self._calls.append(call)
         call.finished.connect(lambda c=call: self._forget(c))
         return call.start()
 
     def probe(self) -> ProbeCall:
         probe = ProbeCall(self.socket_path, self)
-        self._probes.append(probe)
-        probe.start()
+        if not self.stopping:
+            self._probes.append(probe)
+            probe.start()
         return probe
 
     def _forget(self, call: Call) -> None:
@@ -183,14 +191,21 @@ class RescueClient(QObject):
         return any(call.is_running() for call in self._calls)
 
     def abort_all(self) -> None:
+        self.stopping = True
         for call in list(self._calls):
             call.abort()
 
     def wait_all(self, msecs: int = 3000) -> bool:
-        """Wait for every thread to end (after abort_all). True when none is left."""
+        """Wait for every thread to end (after abort_all). True when none is left; a thread that does not end is kept alive, outside the window."""
         ended = True
         for call in list(self._calls):
-            ended = call.wait(msecs) and ended
+            if not call.wait(msecs):
+                ended = False
+                call.setParent(None)
+                _STRANDED.append(call)
         for probe in list(self._probes):
-            ended = probe.wait(msecs) and ended
+            if not probe.wait(msecs):
+                ended = False
+                probe.setParent(None)
+                _STRANDED.append(probe)
         return ended

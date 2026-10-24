@@ -14,9 +14,6 @@ from .client import Call, RescueClient
 from .find_page import clear_layout
 
 
-OWN_SESSIONS = "/mnt/rescue/"  # where the engine opens systems (docs/contracts.md); a device mounted there is already ours
-
-
 class MountPage(RescuePage):
     title = "Open the system"
     subtitle = "Nothing is changed yet. The system is opened for looking only."
@@ -34,6 +31,7 @@ class MountPage(RescuePage):
         self.mount_plan: dict[str, Any] = {}
         self._call: Call | None = None
         self._busy = False
+        self._not_adopted_text = ""
 
         self.summary = wrapped_label("")
         self.summary.setObjectName("cardTitle")
@@ -132,15 +130,14 @@ class MountPage(RescuePage):
         self._set_busy(False)
         self._draw()
         details = model.error_details(data)
-        if code == "rescue.mounted_elsewhere" and str(details.get("mountpoint", "")).startswith(OWN_SESSIONS):
-            self.notice.show_message("info", "This system is already open in a repair session. Continuing with it…")
-            self.adoptRequested.emit(str(self.candidate.get("device", "")))
-            return
         if code == "rescue.mounted_elsewhere":
             where = details.get("mountpoint", "another place")
-            text = (f"The disk {details.get('device', '')} is already open at {where}. The file manager probably opened it.\n"
-                    "Close it there (use the eject button next to the disk), then press “Check again”.")
-            self.again_button.show()
+            self._not_adopted_text = (f"The disk {details.get('device', '')} is already open at {where}. The file manager probably opened it.\n"
+                                      "Close it there (use the eject button next to the disk), then press “Check again”.")
+            # The mount may be the tool's own: a session that an earlier window left open. The window looks for it before blaming the file manager.
+            self.notice.show_message("info", "Checking whether this system is already open in a repair session…")
+            self.adoptRequested.emit(str(self.candidate.get("device", "")))
+            return
         self.notice.show_message("error", text)
 
     def _lost(self, text: str) -> None:
@@ -257,12 +254,13 @@ class MountPage(RescuePage):
     def _lost_while_opening(self, text: str) -> None:
         """The answer never arrived, but the system may be open: look for the session before anything is tried twice."""
         self._set_busy(False)
+        self._not_adopted_text = "The system was not opened. Press “Open read-only” to try again."
         self.notice.show_message("warning", text + " Checking whether the system was opened…")
         self.adoptRequested.emit(str(self.candidate.get("device", "")))
 
     def not_adopted(self) -> None:
-        """No session was found after a lost connection: nothing is open, the person can open the system again."""
-        self.notice.show_message("warning", "The system was not opened. Press “Open read-only” to try again.")
+        """No session of the daemon holds this system: what to do instead (the message set by whoever asked)."""
+        self.notice.show_message("error" if "file manager" in self._not_adopted_text else "warning", self._not_adopted_text)
         self.again_button.show()
 
     def focus_first(self) -> None:

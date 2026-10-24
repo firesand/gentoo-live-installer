@@ -110,7 +110,7 @@ def test_a_disk_the_file_manager_opened_must_be_closed_first_and_the_plan_is_mad
     page.group.set_value(page.candidates[0]["id"])
     page.continue_button.click()
     mount = window.mount_page
-    qtbot.waitUntil(lambda: mount.notice.isVisibleTo(mount), timeout=20000)
+    qtbot.waitUntil(lambda: mount.again_button.isVisibleTo(mount), timeout=20000)  # after the look for a session of the tool's own
     assert str(media) in plain(mount.notice.text.text()) and "eject" in mount.notice.text.text() and mount.again_button.isVisibleTo(mount) and not mount.open_button.isEnabled()
     state["mounted"] = False  # the person ejects the disk in the file manager
     mount.again_button.click()

@@ -203,12 +203,16 @@ class RescueWindow(QMainWindow):
     # ---- starting ---------------------------------------------------------------------------------------------------------------
     def start(self) -> None:
         """Ask the daemon what it can do (status and capabilities, off the GUI thread); scan when it can repair."""
+        if self.client.stopping:
+            return
         self.find_page.show_connecting()
         self.show_page(FIND)
         probe = self.client.probe()
         probe.done.connect(self._probed)
 
     def _probed(self, state: Any) -> None:
+        if self.client.stopping:
+            return
         if not state.reachable:
             self._show_service(UNREACHABLE_TITLE, messages.describe_daemon_problem(state.kind, state.message))
         elif not state.supports("rescue.v1"):
