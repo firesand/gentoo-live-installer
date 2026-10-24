@@ -76,6 +76,7 @@ class DiskEntry:
     disk: blockdev.BlockDevice
     problem: str = ""
     by_path: str = ""
+    shared_identity: bool = False  # another disk reports the same serial number or WWN (cheap USB adapters do)
 
     @property
     def usable(self) -> bool:
@@ -83,7 +84,8 @@ class DiskEntry:
 
     @property
     def has_identity(self) -> bool:
-        return bool(self.disk.serial or self.disk.wwn)
+        """Whether a serial number or WWN tells this disk from every other one."""
+        return bool(self.disk.serial or self.disk.wwn) and not self.shared_identity
 
 
 class MachineView:
@@ -100,6 +102,8 @@ class MachineView:
         self._local_by_path = {os.path.realpath(path): name for path, name in (local_by_path or {}).items()}
         self._by_path = self._collect_by_path()
         self.live_keys = self._live_keys()
+        reported = [value for node in self.roots for value in {node.serial, node.wwn} if value]
+        self._shared = {value for value in reported if reported.count(value) > 1}
 
     # --- plain facts ---------------------------------------------------------------------
 
@@ -178,7 +182,7 @@ class MachineView:
             problem = blockdev.TARGET_PROBLEMS[key] if key else (
                 f"is smaller than {system_info.format_size(system_info.MIN_DISK_BYTES)}, the least a Gentoo installation needs"
                 if node.size < system_info.MIN_DISK_BYTES else "")
-            entry = DiskEntry(node, problem, self.by_path_for(node))
+            entry = DiskEntry(node, problem, self.by_path_for(node), bool({node.serial, node.wwn} & self._shared))
             (refused if problem else usable).append(entry)
         return usable + refused
 
@@ -195,12 +199,13 @@ def apply_disk(storage: Storage, entry: DiskEntry, *, approve_path: bool = False
     Returns "serial", "wwn" or "path"; raises ValueError when the disk cannot be identified safely.
     """
     disk = entry.disk
-    if disk.wwn or disk.serial:
+    if entry.has_identity:
         storage.device, storage.device_id, storage.device_id_kind = disk.path, disk.wwn or disk.serial, ""
         return "wwn" if disk.wwn else "serial"
+    why = "has the same serial number as another disk" if entry.shared_identity else "has no serial number or WWN"
     if not entry.by_path:
-        raise ValueError(f"{disk.path} has no serial number and no stable hardware path, so the installer cannot make sure it is the same disk later.")
+        raise ValueError(f"{disk.path} {why} and no stable hardware path, so the installer cannot make sure it is the same disk later.")
     if not approve_path:
-        raise ValueError(f"{disk.path} has no serial number or WWN; it must be approved explicitly.")
+        raise ValueError(f"{disk.path} {why}; it must be approved explicitly.")
     storage.device, storage.device_id, storage.device_id_kind = disk.path, blockdev.path_identity(disk, entry.by_path).value, "path"
     return "path"

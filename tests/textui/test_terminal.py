@@ -249,3 +249,36 @@ def test_ctrl_c_on_a_terminal_asks_and_then_leaves_with_130(installer, terminal)
     shell.type("y")
     assert shell.finish() == 130
     assert not [request for request in fake.requests if request["action"] == "start"]
+
+
+def test_a_hangup_or_terminate_leaves_cleanly_with_the_echo_restored(installer, terminal) -> None:
+    fake = installer(inspect_reply("qemu-q35-virtio", serials={"/dev/vda": "VDA-SERIAL-0001"}))
+    shell = terminal(fake)
+    shell.expect("Step 1 of 9: Keyboard")
+    shell.expect("Your choice")
+    shell.type("1")
+    shell.expect("Step 2 of 9")
+    shell.expect("Your choice")
+    shell.proc.send_signal(signal.SIGHUP)  # the terminal went away
+    assert shell.finish() == 128 + signal.SIGHUP
+    assert not [request for request in fake.requests if request["action"] == "start"]
+
+
+def test_the_terminal_echo_is_back_on_when_the_program_is_stopped_while_a_password_is_asked(installer, terminal) -> None:
+    fake = installer(inspect_reply("qemu-q35-virtio", serials={"/dev/vda": "VDA-SERIAL-0001"}))
+    shell = terminal(fake)
+    for prompt, answer in (
+        ("Step 1 of 9: Keyboard", "1"), ("Step 2 of 9: Network", ""), ("Step 3 of 9: This computer", ""), ("Step 4 of 9: Disk", "1"), ("Step 5 of 9", ""),
+        ("Encrypt the system disk", "n"), ("Step 6 of 9", ""), ("Which init system", ""), ("Computer name", "mybox"), ("Your user name", "alice"),
+    ):
+        shell.expect(prompt)
+        shell.expect(":" if prompt in {"Computer name", "Your user name"} else "Your choice" if prompt != "Encrypt the system disk" else "[y/N]")
+        shell.type(answer)
+    shell.expect("Password for alice")
+    deadline = time.monotonic() + 5
+    while not shell.echo_is_off() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    assert shell.echo_is_off()
+    shell.proc.send_signal(signal.SIGTERM)
+    assert shell.finish() == 128 + signal.SIGTERM
+    assert termios.tcgetattr(shell.master)[3] & termios.ECHO  # the program switched the echo back on before it left

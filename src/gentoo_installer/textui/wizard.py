@@ -506,12 +506,16 @@ class Wizard:
         if entry.has_identity:
             apply_disk(self.manifest.storage, entry)
             return False
+        if entry.shared_identity:
+            reason = f"{disk.path} reports a serial number that another disk reports too (some USB adapters do), so the serial number cannot tell them apart."
+        else:
+            reason = f"{disk.path} reports neither a serial number nor a WWN (a virtual disk or a USB adapter, for example)."
         if not entry.by_path:
-            c.error(f"{disk.path} has no serial number and no stable hardware path, so the installer cannot make sure it is the same disk later. {NO_IDENTITY_HINT}")
+            c.error(f"{disk.path} cannot be told apart from other disks by a serial number, and has no stable hardware path either, so the installer cannot make sure it is the same disk later. {NO_IDENTITY_HINT}"
+                    if not entry.shared_identity else f"{reason} It has no stable hardware path either, so the installer cannot make sure it is the same disk later. Disconnect the other disk and try again.")
             raise GoBack
         c.para(
-            f"{disk.path} reports neither a serial number nor a WWN (a virtual disk or a USB adapter, for example). "
-            f"It will be recognised by its hardware path {entry.by_path}, its size ({disk.size} bytes) and its model, "
+            f"{reason} It will be recognised by its hardware path {entry.by_path}, its size ({disk.size} bytes) and its model, "
             "and the installer refuses to continue if any of them changes. Check that this is really the disk you want."
         )
         if not c.confirm("Is this the disk to install on?", default=False, detail=f"{disk.path}: {disk.model or 'unnamed disk'}, {human_size(disk.size)}"):

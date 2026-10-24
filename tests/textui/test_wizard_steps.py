@@ -256,11 +256,10 @@ def test_a_mounted_disk_is_refused_with_advice(start) -> None:
 
 
 def test_a_scan_picks_up_a_disk_that_was_plugged_in(start) -> None:
-    wizard, script, fake = start([("Which disk", "r"), ("Which disk", "2")])
-    fake.reply = with_disks(fake.reply, disk_dict("sdc", serial="NEW-1"))
-    fake.reply["disks"].append(disk_dict("sdc", serial="NEW-1"))
+    wizard, script, fake = start([("Which disk", "r"), ("Which disk", "1")])
+    fake.reply = with_disks(fake.reply, disk_dict("sdc", serial="NEW-1"))  # the disk appears after the first scan
     wizard.step_disk()
-    assert wizard.manifest.storage.device == "/dev/sdc"
+    assert wizard.manifest.storage.device == "/dev/sdc" and "/dev/sdc - " in script.text
 
 
 def test_a_disk_without_a_serial_number_needs_explicit_approval_and_gets_a_path_identity(start) -> None:
@@ -611,3 +610,15 @@ def test_a_layout_on_several_disks_is_refused_when_the_second_name_is_wrong_thre
     wizard.console = Console(script.stdin, script.out, environ={"TERM": "dumb"})
     result = wizard.review()
     assert type(result).__name__ == "Refused" and "another disk" in result.reason
+
+
+def test_a_disk_whose_serial_number_is_shared_needs_the_hardware_path(start) -> None:
+    reply = inspect_reply("qemu-q35-virtio")
+    reply["disks"] = [d for d in reply["disks"] if d["path"] != "/dev/vda"] + [disk_dict("sdc", serial="0000000000"), disk_dict("sdd", serial="0000000000")]
+    for item in ("sdc", "sdd"):
+        reply["hardware"]["disks"].append({"path": "/dev/" + item, "by_path": f"pci-0000:00:14.0-usb-0:{item}", "serial": "0000000000"})
+    wizard, script, _ = start([("Which disk", "1"), ("another disk reports too", "y")], reply)
+    wizard.step_disk()
+    storage = wizard.manifest.storage
+    assert storage.device_id_kind == "path" and storage.device_id.startswith("pci-0000:00:14.0-usb-0:sdc|")
+    assert "cannot tell them apart" in script.flat

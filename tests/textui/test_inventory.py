@@ -184,3 +184,17 @@ def test_the_uefi_flag_falls_back_to_the_hardware_profile() -> None:
     reply.pop("uefi")
     assert MachineView(reply).uefi is False
     assert MachineView(copy.deepcopy(inspect_reply("qemu-q35-virtio"))).uefi is True
+
+
+def test_two_disks_with_the_same_serial_number_are_told_apart_by_their_hardware_path() -> None:
+    reply = {"disks": [node("sda", serial="0000000000").to_dict(), node("sdb", serial="0000000000").to_dict(), node("sdc", serial="UNIQUE-1").to_dict()]}
+    by_name = {entry.disk.name: entry for entry in MachineView(reply).disk_entries()}
+    assert by_name["sda"].shared_identity and by_name["sdb"].shared_identity and not by_name["sdc"].shared_identity
+    assert not by_name["sda"].has_identity and by_name["sdc"].has_identity
+    storage = Storage()
+    with pytest.raises(ValueError, match="same serial number as another disk"):
+        apply_disk(storage, DiskEntry(by_name["sda"].disk, by_path="pci-1", shared_identity=True))
+    assert apply_disk(storage, DiskEntry(by_name["sda"].disk, by_path="pci-1", shared_identity=True), approve_path=True) == "path"
+    assert apply_disk(Storage(), by_name["sdc"]) == "serial"
+    with pytest.raises(ValueError, match="same serial number as another disk and no stable hardware path"):
+        apply_disk(Storage(), DiskEntry(by_name["sda"].disk, shared_identity=True), approve_path=True)

@@ -19,11 +19,13 @@ from __future__ import annotations
 
 import argparse
 import json
+import signal
 import sys
+import threading
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Iterator, Mapping, Sequence, TextIO
+from typing import Any, Callable, Iterator, Mapping, Sequence, TextIO
 
 from .. import __version__, daemon_client
 from ..daemon_client import DaemonState
@@ -408,6 +410,24 @@ def run(ctx: Context) -> int:
     return run_wizard(ctx)
 
 
+def leave_cleanly_on_hangup_and_terminate() -> Callable[[], None]:
+    """SIGHUP (the terminal went away) and SIGTERM end the program through SystemExit, so that the terminal's echo is switched
+    back on and the installation, which runs in the service, is left alone. Returns the function that undoes it."""
+    if threading.current_thread() is not threading.main_thread():
+        return lambda: None
+
+    def leave(signum: int, _frame: object) -> None:
+        raise SystemExit(128 + signum)
+
+    previous = {signum: signal.signal(signum, leave) for signum in (signal.SIGHUP, signal.SIGTERM)}
+
+    def restore() -> None:
+        for signum, handler in previous.items():
+            signal.signal(signum, handler if handler is not None else signal.SIG_DFL)
+
+    return restore
+
+
 def main(
     argv: Sequence[str] | None = None,
     *,
@@ -438,6 +458,7 @@ def main(
         except ImportError:
             pass
     ctx = Context(args, console, host if host is not None else Host(), Daemon(args.socket), out if json_mode else None)
+    restore_signals = leave_cleanly_on_hangup_and_terminate()
     try:
         return run(ctx)
     except Quit:
@@ -458,6 +479,8 @@ def main(
         console.error(f"The installer stopped because of an unexpected problem ({type(exc).__name__}: {exc}). Nothing more was done; "
                       "the details above help when you report it. If an installation was started it keeps running: follow it with gentoo-installer-text --attach")
         return EXIT_FAILED
+    finally:
+        restore_signals()
 
 
 if __name__ == "__main__":
