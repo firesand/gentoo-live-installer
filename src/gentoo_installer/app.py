@@ -220,6 +220,7 @@ class InstallerWindow(QMainWindow):
         self._close_after_worker = False
         self._inspect_generation = 0
         self._seeded: dict[str, tuple[Any, Any]] = {}  # hardware defaults written into the manifest: field -> (before, after)
+        self._overwrite_consent: tuple[str, str] | None = None  # (root partition, its filesystem UUID) the user said "install over it" for
         self._workers: list[QThread] = []
         self._repair_window: QWidget | None = None
         self.setWindowTitle("Gentoo Installer")
@@ -709,7 +710,15 @@ class InstallerWindow(QMainWindow):
         """A kept (not formatted) root partition may hold a system: ask before the new one is extracted over it."""
         storage = self.manifest.storage
         root = next((row for row in storage.partitions if row.mountpoint == "/"), None)
-        if root is None or root.format or root.filesystem == "none" or storage.overwrite_existing_system:
+        if root is None or root.format or root.filesystem == "none":
+            return True
+        # The consent is for this partition with this filesystem on it. A flag that came from a saved draft or a settings file,
+        # or that was given for another root partition (or another disk that now has the same name), does not count: the question
+        # is asked. The flag itself is left alone until the answer is Yes, because the job fingerprint contains it and a resume
+        # has to send the settings of the run it continues (a resume never asks).
+        found = self.info.find_partition(root.device)
+        consent = (root.device, found.uuid if found is not None else "")
+        if storage.overwrite_existing_system and consent == self._overwrite_consent:
             return True
         answer = QMessageBox.warning(
             self,
@@ -724,6 +733,7 @@ class InstallerWindow(QMainWindow):
         if answer != QMessageBox.StandardButton.Yes:
             return False
         storage.overwrite_existing_system = True
+        self._overwrite_consent = consent
         return True
 
     def _install_running(self) -> None:
@@ -863,6 +873,7 @@ class InstallerWindow(QMainWindow):
             box.update(ok=False, message=str(event.get("error") or event.get("message") or "The action failed."))
 
     def _action_finished(self, action: str, box: dict[str, Any]) -> None:
+        self.readiness.sync_button.setEnabled(True)  # sync_clock() switched it off for the attempt, whichever action it was
         if box["ok"] is not None:
             what = {"sync_time": "The clock", "set_time": "The clock", "reboot_firmware": "The restart"}.get(action, "The action")
             self.readiness.show_action_result(bool(box["ok"]), box["message"] or (f"{what} was changed." if box["ok"] else f"{what} could not be changed."))

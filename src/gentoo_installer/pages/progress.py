@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import re
 import time
@@ -25,6 +26,8 @@ from .. import daemon_client, diagnostics
 from ..backend import BackendWorker
 from ..manifest import InstallManifest
 from ..widgets import Card, FlowLayout, Page, wrapped_label
+
+LOG = logging.getLogger("gentoo_installer.progress")
 
 # The visible log keeps the newest lines only; the daemon keeps the whole log.
 LOG_MAX_BLOCKS = 5000
@@ -166,10 +169,14 @@ class _FileJob(QThread):
         raise NotImplementedError
 
     def run(self) -> None:
+        # Nothing may leave run(): an exception that does freezes PySide6 on Python 3.14 (the window stops answering).
         try:
             self.done.emit(True, self.work())
         except OSError as exc:
             self.done.emit(False, f"Could not write {self.path}: {exc.strerror or exc}")
+        except Exception as exc:  # noqa: BLE001 - whatever went wrong is reported, never raised out of the thread
+            LOG.exception("Writing %s failed", self.path)
+            self.done.emit(False, f"Could not write {self.path}: {type(exc).__name__}: {exc}")
 
 
 class LogExporter(_FileJob):
@@ -214,7 +221,7 @@ class DiagnosticsExporter(_FileJob):
 
     def work(self) -> str:
         diagnostics.write_bundle(self.path, self.collect())
-        return f"Saved diagnostics to {self.path}. Review it before sharing; serial numbers are shortened and passwords removed."
+        return f"Saved diagnostics to {self.path}. Review it before sharing; serial numbers and other identifiers are shortened or removed, and passwords are removed."
 
 
 class ProgressPage(Page):
@@ -247,6 +254,7 @@ class ProgressPage(Page):
         self._warnings: list[str] = []  # things that went wrong after the install itself succeeded (cleanup)
         self._cancelled = False
         self._busy = False
+        self._blocked = False  # a repair session holds the disks: the start was refused, no installation is running
         self._terminal = False
         self._failure_reported = False
         self._finished_emitted = False
@@ -403,6 +411,7 @@ class ProgressPage(Page):
         self._finished_emitted = False
         self._cancelled = False
         self._busy = False
+        self._blocked = False
         self._retryable = None
         self._resumable = None
         if not keep_log:
@@ -465,12 +474,14 @@ class ProgressPage(Page):
         elif kind in {"error", "failed"}:
             retryable, resumable = data.get("retryable"), data.get("resumable")
             self._absorb_outcome(data)
+            refused = data.get("code") == "install.busy" and data.get("blocked") is True  # install.busy for a repair session, not a job
             self._fail(
                 str(message or event.get("error") or "The installation failed. Review the log for details."),
                 stage=stage,
                 cancelled=event.get("error") == "cancelled" or data.get("code") == "install.cancelled",
                 retryable=retryable if isinstance(retryable, bool) else None,
-                busy=data.get("code") == "install.busy",
+                busy=data.get("code") == "install.busy" and not refused,
+                blocked=refused,
                 resumable=resumable if isinstance(resumable, bool) else None,
             )
         elif kind == "completed":
@@ -641,12 +652,14 @@ class ProgressPage(Page):
         elif learned:
             self._present_failure()  # the completed event knew more than the error event (the system can start)
 
-    def _fail(self, message: str, *, stage: str = "", cancelled: bool = False, retryable: bool | None = None, busy: bool = False, resumable: bool | None = None) -> None:
+    def _fail(self, message: str, *, stage: str = "", cancelled: bool = False, retryable: bool | None = None, busy: bool = False, blocked: bool = False,
+              resumable: bool | None = None) -> None:
         self.flush_log()
         first = not self._failure_reported
         self._failure_reported = True
         self._cancelled = self._cancelled or cancelled
         self._busy = self._busy or busy
+        self._blocked = self._blocked or blocked
         if retryable is not None:
             self._retryable = retryable
         if resumable is not None:
@@ -669,13 +682,18 @@ class ProgressPage(Page):
         label = STAGE_LABELS.get(failing, "")
         if self._cancelled:
             self.stage.setText("Installation cancelled")
-            self.detail.setText(
-                "The disk is partially installed; choose Resume or Back to settings."
-                if self._storage_started else "No disk has been changed. Choose Try again or Back to settings."
-            )
+            if not self._storage_started:
+                self.detail.setText("No disk has been changed. Choose Try again or Back to settings.")
+            elif self._can_resume():
+                self.detail.setText("The disk is partially installed; choose Resume or Back to settings.")
+            else:
+                self.detail.setText("The disk is partially installed; choose Start over or Back to settings.")
         elif self._busy:
             self.stage.setText("An installation is already running")
             self.detail.setText("Another installation is in progress on this computer. Reconnect to follow it.")
+        elif self._blocked:
+            self.stage.setText("The installation cannot start yet")
+            self.detail.setText(summarize(message))  # the service's own words: what holds the disks, and what to do
         elif self._bootable:
             self.stage.setText("Your new system is installed and can start")
             self.detail.setText(summarize((f"The last step did not finish ({label.lower()}). " if label else "A later step did not finish. ") + message))
@@ -687,13 +705,19 @@ class ProgressPage(Page):
         self.secondary.hide()
         self._show_result_panel()
 
+    def _can_resume(self) -> bool:
+        """Whether the Resume button is offered: the storage stage finished (it is checkpointed) and the failure can be retried."""
+        return self._storage_done and (self._retryable is not False or self._cancelled) and self._manifest is not None and not self._busy
+
     def _show_result_panel(self) -> None:
         changed = self._storage_started
-        resumable = self._storage_done and (self._retryable is not False or self._cancelled) and self._manifest is not None and not self._busy
+        resumable = self._can_resume()
         bootable = self._bootable and not self._cancelled and not self._busy
         self.resume_button.setText("Resume installation")
         if self._busy:
             hint = "Nothing was started. The running installation keeps going; reconnect to follow it."
+        elif self._blocked:
+            hint = "Nothing was started and nothing on your disks was changed. Close the repair tool (or unmount what it holds), then try again."
         elif bootable:
             step = "the desktop step" if self._failure_stage == "desktop" else "the last step"
             hint = ("The computer can start the new system now. One later step did not finish, so some programs may be missing. "
@@ -703,7 +727,9 @@ class ProgressPage(Page):
             self.reboot.setVisible(True)
         elif self._cancelled:
             hint = "The installation was cancelled. " + (
-                "Your disk was already modified, so the system on it is incomplete. Resume continues where it stopped without formatting again; Start over erases the disk again."
+                "Your disk was already modified, so the system on it is incomplete. "
+                + ("Resume continues where it stopped without formatting again; " if resumable else "")
+                + "Start over erases the disk again."
                 if changed else "Nothing on your disks was changed."
             )
         elif changed:
@@ -772,6 +798,8 @@ class ProgressPage(Page):
         box.setWindowTitle("Cancel the installation?")
         if self._storage_done:
             box.setText("The disk has already been modified. Cancelling leaves a partially installed system that cannot boot; you can resume later or start over.")
+        elif self._storage_started:
+            box.setText("The disk is being changed right now. Cancelling stops this half-way and leaves the disk half-prepared, so it cannot boot; you can only start over.")
         else:
             box.setText("No disk has been changed yet. The installation will stop at the next safe point.")
         keep = box.addButton("Keep installing", QMessageBox.ButtonRole.RejectRole)

@@ -146,6 +146,15 @@ def _unredact(value: Any) -> Any:
     return "" if value == REDACTED else value
 
 
+def _cannot_be_stored(secret: str) -> bool:
+    """Whether a password cannot be written to a command's input: a terminal in another character set leaves a lone surrogate."""
+    try:
+        secret.encode("utf-8")
+    except UnicodeEncodeError:
+        return True
+    return False
+
+
 def _wifi_errors(ssid: str, password: str) -> list[str]:
     errors: list[str] = []
     if ssid:
@@ -663,6 +672,8 @@ class InstallManifest:
                     errors.append("This guided DOS layout needs more than four primary partitions; use GPT or reduce the layout")
         if storage.luks and len(storage.luks_passphrase) < 8:
             errors.append("The LUKS passphrase must contain at least 8 characters")
+        if storage.luks and _cannot_be_stored(storage.luks_passphrase):
+            errors.append("The LUKS passphrase contains a character that cannot be stored; type it again")
         if storage.raid_level and storage.raid_level not in {"0", "1", "5", "6", "10"}:
             errors.append("Unsupported RAID level")
         elif storage.raid_problem():
@@ -789,6 +800,10 @@ class InstallManifest:
         if any(c in secret for secret in (self.accounts.password, self.accounts.root_password) for c in "\n\r\0"):
             # chpasswd reads "user:password" lines; a newline would set a second account.
             errors.append("Passwords cannot contain line breaks or NUL characters")
+        if _cannot_be_stored(self.accounts.password):
+            errors.append("The user password contains a character that cannot be stored; type it again")
+        if not self.accounts.disable_root_login and _cannot_be_stored(self.accounts.root_password):
+            errors.append("The root password contains a character that cannot be stored; type it again")
         return errors
 
     def _validate_network(self) -> list[str]:

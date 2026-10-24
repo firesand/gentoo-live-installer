@@ -7,6 +7,7 @@ daemon_client and are re-exported here so callers have a single import.
 from __future__ import annotations
 
 import json
+import logging
 import socket
 import threading
 from typing import Any
@@ -29,6 +30,8 @@ from .daemon_client import (  # noqa: F401  (re-exported)
     status,
 )
 from .manifest import InstallManifest
+
+LOG = logging.getLogger("gentoo_installer.backend")
 
 
 class BackendWorker(QThread):
@@ -105,6 +108,9 @@ class BackendWorker(QThread):
             self.connectionFailed.emit(daemon_client.describe_os_error(exc, self.socket_path)[1])
         except ValueError as exc:
             self.connectionFailed.emit(str(exc))
+        except Exception as exc:  # noqa: BLE001 - nothing may leave run(): an exception that does freezes PySide6 on Python 3.14
+            LOG.exception("The connection to the installer service failed unexpectedly")
+            self.connectionFailed.emit(f"An unexpected error stopped the connection to the installer service ({type(exc).__name__}: {exc}).")
         finally:
             if self._socket:
                 self._socket.close()

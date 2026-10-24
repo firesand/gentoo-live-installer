@@ -416,7 +416,8 @@ def _is_uefi() -> bool:
 
 def _lsblk_roots() -> list[blockdev.BlockDevice]:
     try:
-        result = subprocess.run(list(blockdev.lsblk_argv()), capture_output=True, text=True, check=True, timeout=10)
+        # A model name or label can hold bytes that are not UTF-8: replace them instead of finding no disks at all.
+        result = subprocess.run(list(blockdev.lsblk_argv()), capture_output=True, text=True, errors="replace", check=True, timeout=10)
         return blockdev.parse_lsblk(result.stdout)
     except (OSError, subprocess.SubprocessError, ValueError):
         return []
@@ -429,7 +430,7 @@ def _mount_sources() -> list[str]:
         try:
             result = subprocess.run(
                 ["findmnt", "--noheadings", "--output", "SOURCE", "--target", target],
-                capture_output=True, text=True, check=False, timeout=5,
+                capture_output=True, text=True, errors="replace", check=False, timeout=5,
             )
         except (OSError, subprocess.SubprocessError):
             continue
@@ -538,6 +539,16 @@ def mark_shared_identities(disks: list[DiskInfo]) -> None:
             seen[value] = seen.get(value, 0) + 1
     for disk in disks:
         disk.identity_shared = any(seen.get(value, 0) > 1 for value in (disk.serial, disk.wwid) if value)
+
+
+def holder_reasons_of(node: blockdev.BlockDevice) -> list[str]:
+    """What is alive on a disk (or partition) and would be switched off to erase it: volumes, swap, volume-group and RAID membership.
+
+    The graphical and the text installer show the same list."""
+    reasons = [f"{volume.type} volume {volume.path}" for volume in blockdev.stacked_devices(node)]
+    reasons += [f"swap in use on {path}" for path in blockdev.active_swaps(node)]
+    reasons += [f"{sub.path} is part of {MEMBER_SIGNATURES[sub.fstype]}" for sub in node.walk() if sub.fstype in MEMBER_SIGNATURES]
+    return list(dict.fromkeys(reasons))
 
 
 def device_from_disk(disk: DiskInfo) -> blockdev.BlockDevice:

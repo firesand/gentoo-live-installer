@@ -96,7 +96,7 @@ def test_a_failure_reports_the_error_the_stage_and_whether_it_can_be_resumed(ins
 
 
 def test_resumable_comes_from_the_status_when_the_events_do_not_say(installer, host: FakeHost) -> None:
-    fake = installer(jobs=[[stage("storage", 5), error("boom", resumable=False), completed(False)]])
+    fake = installer(jobs=[[stage("storage", 5), error("boom"), completed(False)]])  # no resumable key in either event (an older service)
     fake.resumable_override = True
     follower, _ = follower_for(fake, host)
     assert follower.run(start_request()).resumable is True

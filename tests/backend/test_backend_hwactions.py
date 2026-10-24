@@ -15,6 +15,29 @@ from gentoo_installerd.server import ActionError, ActionRegistry, load_plugins
 from tests.backend.helpers import FakeRunner
 
 EPOCH = calendar.timegm((2026, 10, 24, 12, 30, 5))
+# `chronyc -c tracking` as chronyd 4.x prints it (14 fields: reference id, name, stratum, reference time, system time offset, ...).
+SYNCED = "C0A80101,192.168.1.1,3,1792800000.123456789,0.000123456,0.000012345,0.000234567,12.345,0.012,0.123,0.012345,0.001234,64.5,Normal"
+# A chronyd that has not found a time server yet (a network that blocks NTP): stratum 0, "Not synchronised".
+NOT_SYNCED = "00000000,,0,0.000000000,0.000000000,0.000000000,0.000000000,0.000,0.000,0.000,0.000000,0.000000,0.0,Not synchronised"
+# chronyd tracks a server and sees the clock far off (it has not stepped it yet).
+SYNCED_BUT_OFF = "C0A80101,192.168.1.1,3,1792800000.123456789,7199.000123456,0.000012345,0.000234567,12.345,0.012,0.123,0.012345,0.001234,64.5,Normal"
+
+
+class TrackingRunner(FakeRunner):
+    """A FakeRunner that also answers `chronyc -c tracking` like chronyd does: one scripted line per call, the last one repeats."""
+
+    def __init__(self, *tracking: str) -> None:
+        super().__init__()
+        self.tracking = list(tracking) or [SYNCED]
+        self.polls = 0
+
+    def run(self, argv, **kwargs):  # type: ignore[no-untyped-def]
+        if tuple(argv) == ("chronyc", "-c", "tracking"):
+            self.polls += 1
+            line = self.tracking.pop(0) if len(self.tracking) > 1 else self.tracking[0]
+            self.responses = [item for item in self.responses if item[0] != "chronyc -c tracking"]
+            self.respond("chronyc -c tracking", line)
+        return super().run(argv, **kwargs)
 
 
 class Channel:
@@ -31,19 +54,16 @@ class Channel:
 def clock(monkeypatch):
     """The clock the probe reports; tests change .state, the fake runner records the commands."""
     class Fixture:
-        runner = FakeRunner()
-        state = hardware.ClockInfo(chrony_running=True, ntp_synced=False, offset_s=7200.0, rtc_mode="utc", year=2026)
-        after = hardware.ClockInfo(chrony_running=True, ntp_synced=True, offset_s=0.2, rtc_mode="utc", year=2026)
-        reads = 0
+        runner = TrackingRunner()
+        # What the probe reports before the action: chronyd runs and has found no server (the real probe gives no offset then).
+        state = hardware.ClockInfo(chrony_running=True, ntp_synced=False, offset_s=None, rtc_mode="utc", year=2026)
+        sleeps: list[float] = []
 
     fixture = Fixture()
-
-    def read():
-        fixture.reads += 1
-        return fixture.state if fixture.reads == 1 else fixture.after
-
-    monkeypatch.setattr(hwactions, "read_clock", read)
+    fixture.sleeps = []
+    monkeypatch.setattr(hwactions, "read_clock", lambda: fixture.state)
     monkeypatch.setattr(hwactions, "make_runner", lambda: fixture.runner)
+    monkeypatch.setattr(hwactions, "_sleep", fixture.sleeps.append)  # the waits for chrony take no time in a test
     return fixture
 
 
@@ -70,11 +90,11 @@ class TestRegistration:
 
 
 class TestSyncTime:
-    def test_a_running_chrony_is_told_to_step_the_clock(self, clock):
+    def test_a_running_chrony_is_told_to_step_the_clock_and_asked_whether_it_worked(self, clock):
         channel = Channel()
         hwactions.handle_sync_time({}, channel)
-        assert clock.runner.commands == [("chronyc", "makestep")]
-        assert clock.runner.options == [{"timeout": 60.0, "capture": False, "root_identity": False}]
+        assert clock.runner.commands == [("chronyc", "makestep"), ("chronyc", "-c", "tracking")]
+        assert clock.runner.options[0] == {"timeout": 60.0, "capture": False, "root_identity": False}
         assert reply(channel) == (True, "The clock was set from the network.")
 
     def test_without_chrony_a_one_shot_chronyd_does_it(self, clock):
@@ -90,7 +110,7 @@ class TestSyncTime:
         assert not ok and "Check the network connection" in message
 
     def test_a_command_that_succeeds_without_fixing_the_clock_is_not_reported_as_success(self, clock):
-        clock.after = hardware.ClockInfo(chrony_running=True, ntp_synced=False, offset_s=7199.0, rtc_mode="utc", year=2026)
+        clock.runner = TrackingRunner(SYNCED_BUT_OFF)
         channel = Channel()
         hwactions.handle_sync_time({}, channel)
         ok, message = reply(channel)

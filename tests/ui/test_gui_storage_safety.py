@@ -330,10 +330,13 @@ def test_a_formatted_root_or_an_earlier_consent_asks_nothing(kept_root, monkeypa
     window.start_installation()
     assert [title for title, _ in shown] == ["Format these partitions?"]
     window.manifest.storage.partitions[1].format = False
-    window.manifest.storage.overwrite_existing_system = True
+    shown = ask(monkeypatch, {"Install over the existing system?": QMessageBox.StandardButton.Yes})
+    window.install_started = False
+    window.start_installation()  # the consent is asked once ...
+    assert [title for title, _ in shown] == ["Install over the existing system?"]
     window.install_started = False
     shown.clear()
-    window.start_installation()
+    window.start_installation()  # ... and covers this partition from then on (a flag that only came from a file does not: see test_w3_clients_storage.py)
     assert shown == [] and window.install_started
 
 

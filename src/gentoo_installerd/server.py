@@ -553,7 +553,8 @@ class InstallManager:
                 LOG.exception("The busy check failed")
                 reason = f"Cannot tell whether another operation holds the disks: {exc}"
         if reason:
-            raise InstallBusy(str(reason))
+            # `blocked`: this is a refusal (a repair session holds the disks), not another installation that could be followed.
+            raise InstallBusy(str(reason), blocked=True)
         with self.lock:
             if self.is_running():
                 raise InstallBusy("An installation is already running")
