@@ -15,8 +15,8 @@ from tests.vm.helpers import load_vm_module
 
 vm = load_vm_module()
 
-EXPECTED = ["defaults", "rescue-gentoo", "uefi-nvme-luks-openrc", "systemd", "openrc", "uefi-luks", "uefi-manual-two-disks", "bios", "bios-sata-minimal",
-            "text-install", "rescue-fedora", "rescue-ubuntu", "rescue-debian", "rescue-arch"]
+EXPECTED = ["defaults", "rescue-gentoo", "uefi-nvme-luks-openrc", "systemd", "openrc", "uefi-luks", "uefi-luks-lvm", "uefi-manual-two-disks", "bios",
+            "bios-sata-minimal", "text-install", "rescue-fedora", "rescue-ubuntu", "rescue-debian", "rescue-arch"]
 
 
 # --- the data -----------------------------------------------------------------------------------------------------
@@ -24,7 +24,7 @@ EXPECTED = ["defaults", "rescue-gentoo", "uefi-nvme-luks-openrc", "systemd", "op
 def test_wave3_has_every_scenario_the_plan_names_and_each_exactly_once():
     wave3 = vm_matrix.MATRICES["wave3"]
     assert [entry.name for entry in wave3.entries] == EXPECTED and len({entry.name for entry in wave3.entries}) == len(wave3.entries)
-    wanted = {"defaults", "bios-sata-minimal", "uefi-nvme-luks-openrc", "uefi-manual-two-disks", "openrc", "systemd", "uefi-luks", "bios",
+    wanted = {"defaults", "bios-sata-minimal", "uefi-nvme-luks-openrc", "uefi-manual-two-disks", "openrc", "systemd", "uefi-luks", "uefi-luks-lvm", "bios",
               "rescue-debian", "rescue-ubuntu", "rescue-fedora", "rescue-arch", "rescue-gentoo"}
     assert wanted <= {entry.scenario for entry in wave3.entries}
     assert all(entry.scenario in vm.SCENARIO_MAP for entry in wave3.entries)

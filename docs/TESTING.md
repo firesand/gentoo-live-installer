@@ -147,6 +147,7 @@ them and even when the harness is killed with SIGKILL (the kernel sends QEMU SIG
 | `btrfs-root`, `xfs-root`, `lvm-root`, `systemd-boot` | filesystem, LVM and bootloader variants |
 | `bios-sata-minimal` | an old PC: SeaBIOS, SATA (`sda`), Intel NIC, standard VGA, MBR partition table |
 | `uefi-nvme-luks-openrc` | an encrypted OpenRC laptop: NVMe, QXL display, passphrase on the serial console; swap must be a file inside the encrypted root |
+| `uefi-luks-lvm` | guided LUKS with LVM inside on OpenRC: the container is `gentoo-crypt` (`rd.luks.name=<uuid>=gentoo-crypt`), the root logical volume `gentoo-root` (`rd.lvm.lv=gentoo/root`); dracut unlocks and activates both. Never booted before the Wave 3 matrix |
 | `uefi-manual-two-disks` | a manual layout across two disks (ESP and root on the first, swap and `/home` on the second) next to a third disk that must stay byte for byte as it was |
 | `text-install` | the console installer: the ISO's text entry, then `gentoo-installer-text` with a device confirmation |
 | `rescue-debian` | Debian 13 cloud image: menu file deleted, repaired from the live ISO, booted with UEFI and BIOS |
@@ -208,7 +209,7 @@ Information (`world-drift`) is kept in `result.json` and is neither.
 |---|---|---|
 | `init`, `hostname`, `user`, `network`, `dns`, `portage` | the basics boot and work; `network-static` for the static-address scenarios | failure |
 | `hwmonux`, `portagehub` or `disabled-*-absent`, `desktop` | the companions and desktop the manifest asked for are installed and run; those it declined are absent | failure |
-| `firmware`, `cmdline`, `root-source` | booted in the firmware mode it was installed for; a stable `root=` (UUID, PARTUUID, label or mapper name) and the encryption argument, nothing of the live system, the requested extra arguments; root on `/dev/mapper` for LUKS and LVM | failure |
+| `firmware`, `cmdline`, `root-source` | booted in the firmware mode it was installed for; a stable `root=` (UUID, PARTUUID, label or mapper name) and the encryption argument, nothing of the live system, the requested extra arguments; in a guided install the container name of `rd.luks.name` (`gentoo-root`, or `gentoo-crypt` when LVM sits inside) and `rd.lvm.lv=gentoo/root` for LVM; root on `/dev/mapper` for LUKS and LVM | failure |
 | `swap` | a swap of the requested size is active (zram does not count). An encrypted install keeps swap in a **file** inside the encrypted root: a raw swap partition is a failure | failure |
 | `receipt` | `/etc/gentoo-live-installer/install.json` exists and agrees with the manifest: firmware, bootloader, init, kernel, initramfs, UKI, Secure Boot, profile, ESP mount point, root file system and UUID, LUKS UUID, LVM, RAID, separate `/boot` | missing: finding; wrong: failure |
 | `efi-fallback` | UEFI installs that must have it leave a non-empty EFI program at `EFI/BOOT/BOOTX64.EFI` on the ESP (read with `sudo`, the ESP is mounted with umask 0077) | failure; no sudo: finding |
@@ -475,6 +476,7 @@ caller (ISO, SSH key, timeouts, image directory) are passed to every job.
 | `systemd` | `systemd`: re-acceptance, the guided erase sequence changed in Wave 1 | 4 GiB | 2 | 40 |
 | `openrc` | `openrc`: re-acceptance | 4 GiB | 2 | 40 |
 | `uefi-luks` | `uefi-luks`: re-acceptance | 4 GiB | 2 | 50 |
+| `uefi-luks-lvm` | `uefi-luks-lvm`: LUKS with LVM inside, a combination that no VM has booted yet | 4 GiB | 2 | 55 |
 | `uefi-manual-two-disks` | `uefi-manual-two-disks` | 4 GiB | 2 | 45 |
 | `bios` | `bios`: re-acceptance | 4 GiB | 2 | 40 |
 | `bios-sata-minimal` | `bios-sata-minimal` | 4 GiB | 2 | 40 |

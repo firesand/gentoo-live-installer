@@ -184,3 +184,12 @@ def test_the_defaults_scenario_probes_the_default_desktop_and_both_companions():
     assert [name for name, _, _ in vm.desktop_probe_plan(manifest)] == ["desktop"]
     probes = {probe[0] for probe in vm.installed_system_probes(manifest, vm.SCENARIO_MAP["defaults"])}
     assert {"firmware", "cmdline", "root-source", "swap"} <= probes
+
+
+def test_luks_with_lvm_inside_is_a_valid_guided_install_that_can_be_unlocked_on_the_serial_console():
+    scenario = vm.SCENARIO_MAP["uefi-luks-lvm"]
+    manifest = vm.build_manifest(scenario, PUBLIC_KEY)
+    assert manifest.validate() == [] and (manifest.storage.luks, manifest.storage.lvm, manifest.storage.mode) == (True, True, "erase")
+    assert (scenario.firmware, scenario.init, scenario.in_all) == ("uefi", "openrc", False)
+    assert vm.serial_console_configured(manifest.system.kernel_cmdline_extra) and manifest.storage.luks_passphrase == vm.TEST_LUKS_PASSPHRASE
+    assert "lvm" in vm.list_scenarios().split("uefi-luks-lvm", 1)[1].splitlines()[0]

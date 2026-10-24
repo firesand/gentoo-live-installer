@@ -14,6 +14,7 @@ import sys
 import types
 from pathlib import Path
 
+from gentoo_installer.layout import luks_mapper_name
 from tests.vm.helpers import PUBLIC_KEY
 
 FAKES = Path(__file__).resolve().parent / "fakes"
@@ -157,13 +158,15 @@ def guest_rules(vm, scenario_name: str, *, guard: str = "vm_disk_guard", install
     ]
     uuid = "0a1b2c3d-1111-2222-3333-444455556666"
     cmdline = f"BOOT_IMAGE=/vmlinuz-6.12 root=UUID={uuid} ro quiet"
-    if scenario.luks:
-        cmdline += f" rd.luks.uuid={uuid} rd.luks.name={uuid}=gentoo-root console=tty0 console=ttyS0,115200n8"
+    if scenario.luks:  # the names configure_initramfs gives a guided root: gentoo-root, or gentoo-crypt when LVM sits inside the container
+        cmdline += f" rd.luks.uuid={uuid} rd.luks.name={uuid}={luks_mapper_name(scenario_manifest(vm, scenario_name, firmware).storage)} console=tty0 console=ttyS0,115200n8"
+    if scenario.lvm:
+        cmdline += " rd.lvm.lv=gentoo/root"
     rules += [
         {"user": "^vmtest$", "match": r"^test -d /sys/firmware/efi", "stdout": scenario.firmware + "\n"},
         {"user": "^vmtest$", "match": r"^cat /proc/cmdline$", "stdout": cmdline + "\n"},
         {"user": "^vmtest$", "match": r"^findmnt -no SOURCE /$",
-         "stdout": ("/dev/mapper/gentoo-root" if scenario.luks else "/dev/vda2") + "\n"},
+         "stdout": ("/dev/mapper/gentoo-root" if scenario.luks or scenario.lvm else "/dev/vda2") + "\n"},
         {"user": "^vmtest$", "match": r"^swapon --noheadings --bytes", "stdout": (f"/swapfile file {swap_mib * 2**20}\n" if scenario.luks
                                                                           else f"/dev/vda3 partition {swap_mib * 2**20 - 4096}\n")},
         {"user": "^vmtest$", "match": r"^cat /etc/gentoo-live-installer/install\.json$", "stdout": receipt_for(vm, scenario_name, firmware)},

@@ -107,6 +107,50 @@ def test_a_manual_install_is_compared_with_its_root_row_and_its_esp_mount():
     assert "root.fstype" in vm_probes.parse_receipt_probe(0, json.dumps(receipt | {"root": receipt["root"] | {"fstype": "ext4"}}), manifest).error
 
 
+# --- the command line of the installed kernel ---------------------------------------------------------------------------
+
+# /proc/cmdline of the first real encrypted install (uefi-nvme-luks-openrc)
+REAL_LUKS_CMDLINE = ("BOOT_IMAGE=/vmlinuz-6.18.57-gentoo-dist-bin root=UUID=c29723df-cc13-4a09-9106-7fac70da20a9 ro "
+                     "rd.luks.uuid=e1d07902-57c2-4bc7-9223-289102723d3f rd.luks.name=e1d07902-57c2-4bc7-9223-289102723d3f=gentoo-root "
+                     "console=tty0 console=ttyS0,115200n8")
+
+
+def test_the_command_line_of_a_real_encrypted_install_passes():
+    result = vm.parse_cmdline_probe(0, REAL_LUKS_CMDLINE + "\n", manifest_of("uefi-nvme-luks-openrc"))
+    assert result.success, result.error
+
+
+def test_the_container_must_carry_the_name_the_storage_stage_gave_it():
+    manifest = manifest_of("uefi-nvme-luks-openrc")
+    renamed = vm.parse_cmdline_probe(0, REAL_LUKS_CMDLINE.replace("=gentoo-root ", "=gentoo-crypt "), manifest)
+    assert not renamed.success and "rd.luks.name=<uuid>=gentoo-root" in renamed.error
+    unnamed = vm.parse_cmdline_probe(0, REAL_LUKS_CMDLINE.replace("rd.luks.name=e1d07902-57c2-4bc7-9223-289102723d3f=gentoo-root ", ""), manifest)
+    assert not unnamed.success and "rd.luks.name=<uuid>=gentoo-root" in unnamed.error
+
+
+def test_with_lvm_inside_the_container_dracut_names_the_mapping_gentoo_crypt_and_activates_the_volume():
+    manifest = manifest_of("uefi-luks-lvm")
+    good = REAL_LUKS_CMDLINE.replace("=gentoo-root ", "=gentoo-crypt ") + " rd.lvm.lv=gentoo/root"
+    assert vm.parse_cmdline_probe(0, good, manifest).success
+    old_name = vm.parse_cmdline_probe(0, REAL_LUKS_CMDLINE + " rd.lvm.lv=gentoo/root", manifest)
+    assert not old_name.success and "rd.luks.name=<uuid>=gentoo-crypt" in old_name.error and "gentoo-root" in old_name.error
+    no_volume = vm.parse_cmdline_probe(0, good.replace(" rd.lvm.lv=gentoo/root", ""), manifest)
+    assert not no_volume.success and "rd.lvm.lv=gentoo/root" in no_volume.error
+
+
+def test_lvm_without_encryption_needs_its_volume_activated_too():
+    manifest = manifest_of("lvm-root")
+    plain = "BOOT_IMAGE=/vmlinuz-6.18.57-gentoo-dist-bin root=UUID=c29723df-cc13-4a09-9106-7fac70da20a9 ro"
+    assert "rd.lvm.lv=gentoo/root" in vm.parse_cmdline_probe(0, plain, manifest).error
+    assert vm.parse_cmdline_probe(0, plain + " rd.lvm.lv=gentoo/root", manifest).success
+    assert vm.parse_cmdline_probe(0, plain, manifest_of("openrc")).success  # a plain install has nothing to activate
+
+
+def test_a_manual_layout_is_not_held_to_the_names_of_the_guided_one():
+    manifest = manifest_of("uefi-nvme-luks-openrc", storage__mode="manual")
+    assert vm.parse_cmdline_probe(0, REAL_LUKS_CMDLINE.replace("=gentoo-root ", "=my-own-name "), manifest).success
+
+
 # --- swap ----------------------------------------------------------------------------------------------------------
 
 MIB = 1 << 20

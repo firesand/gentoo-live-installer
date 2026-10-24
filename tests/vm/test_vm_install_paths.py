@@ -247,6 +247,21 @@ def test_an_encrypted_install_with_a_swap_partition_fails_the_run(lab):
     assert "swap: an encrypted install has a raw swap partition (/dev/vda3)" in lab.result()["error"]
 
 
+def test_luks_with_lvm_inside_is_unlocked_installed_and_checked_with_the_names_the_storage_stage_gives(lab):
+    lab.rules = guest_rules(vm, "uefi-luks-lvm")
+    lab.qemu_config.update(serial_text_target="Please enter passphrase for disk root (gentoo-crypt): (press TAB for no echo)", unlock_line=vm.TEST_LUKS_PASSPHRASE)
+    assert lab.run("--scenario", "uefi-luks-lvm", "--keep") == 0
+    run, result = lab.run_dir(), lab.result()
+    storage = json.loads((run / "fake-guest" / "manifest.json").read_text())["storage"]
+    assert (storage["luks"], storage["lvm"], storage["mode"]) == (True, True, "erase")
+    probes = {probe["name"]: probe for probe in result["probes"]}
+    assert "=gentoo-crypt" in probes["cmdline"]["output"] and "rd.lvm.lv=gentoo/root" in probes["cmdline"]["output"]
+    assert probes["root-source"]["output"] == "/dev/mapper/gentoo-root"  # the logical volume, not the container under it
+    assert all(probes[name]["success"] for name in ("cmdline", "root-source", "swap", "receipt")), [p for p in probes.values() if not p["success"]]
+    assert result["luks_unlock"]["method"] == "serial" and (run / "luks-unlock-receipt.json").is_file()
+    assert json.loads(probes["receipt"]["output"])["root"]["lvm"] is True
+
+
 def test_a_missing_fallback_boot_file_fails_the_run(lab):
     lab.rules = guest_rules(vm, "openrc", extra=[{"user": "^vmtest$", "match": r"BOOTX64\.EFI$", "rc": 1, "stdout": json.dumps({"path": "/efi/EFI/BOOT/BOOTX64.EFI", "error": "No such file"})}])
     assert lab.run("--scenario", "openrc") == 1

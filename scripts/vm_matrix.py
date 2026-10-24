@@ -60,6 +60,8 @@ WAVE3 = Matrix("wave3", "Wave 3 acceptance: other hardware, other disks, other d
     MatrixEntry("systemd", "systemd", 4096, 2, (*STRICT, *UEFI), 40, "re-acceptance: the guided erase sequence changed in Wave 1"),
     MatrixEntry("openrc", "openrc", 4096, 2, (*STRICT, *UEFI), 40, "re-acceptance"),
     MatrixEntry("uefi-luks", "uefi-luks", 4096, 2, (*STRICT, *UEFI), 50, "re-acceptance: LUKS on systemd, unlocked on the serial console"),
+    MatrixEntry("uefi-luks-lvm", "uefi-luks-lvm", 4096, 2, (*STRICT, *UEFI), 55,
+                "LUKS with LVM inside on OpenRC: the container is gentoo-crypt, the root volume gentoo-root; never booted before"),
     MatrixEntry("uefi-manual-two-disks", "uefi-manual-two-disks", 4096, 2, (*STRICT, *UEFI), 45,
                 "manual partitioning across two disks next to a decoy disk that must stay byte for byte as it was"),
     MatrixEntry("bios", "bios", 4096, 2, STRICT, 40, "re-acceptance: SeaBIOS, MBR, static network configuration"),

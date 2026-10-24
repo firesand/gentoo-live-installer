@@ -39,6 +39,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from gentoo_installer.layout import luks_mapper_name  # noqa: E402
 from gentoo_installer.manifest import InstallManifest, Partition  # noqa: E402
 import vm_guard  # noqa: E402
 import vm_guest  # noqa: E402
@@ -273,6 +274,8 @@ SCENARIO_MAP = {
     "uefi-nvme-luks-openrc": Scenario("uefi-nvme-luks-openrc", "openrc", "uefi", luks=True, in_all=False,
                                       hardware=_hw(disk_bus="nvme", vga="qxl"),
                                       note="an encrypted OpenRC laptop: NVMe, QXL display, passphrase prompt on the serial console"),
+    "uefi-luks-lvm": Scenario("uefi-luks-lvm", "openrc", "uefi", luks=True, lvm=True, in_all=False,
+                              note="guided LUKS with LVM inside: the container is gentoo-crypt, the root volume gentoo-root; dracut unlocks and activates both"),
     "uefi-manual-two-disks": Scenario("uefi-manual-two-disks", "openrc", "uefi", manual=True, decoy=True, extra_roles=("data", "decoy"), in_all=False,
                                       hardware=_hw(extra_disks=(4096, 256)),
                                       note="manual layout across two disks (ESP and root on one, swap and /home on the other) next to a third disk that must survive"),
@@ -1231,8 +1234,18 @@ def parse_cmdline_probe(returncode: int, output: str, manifest: InstallManifest)
         problems.append("no stable root= argument (UUID=, PARTUUID=, LABEL= or a /dev/mapper name)")
     if any(UNSTABLE_ROOT_RE.fullmatch(token) for token in roots):
         problems.append("root= names a kernel device (it breaks when the disks are enumerated in another order)")
-    if manifest.storage.luks and not any(token.startswith("rd.luks.uuid=") for token in tokens):
-        problems.append("the encrypted root has no rd.luks.uuid= argument")
+    storage = manifest.storage
+    guided = storage.mode == "erase"  # a manual layout names its volumes itself
+    if storage.luks:
+        containers = [token.partition("=")[2] for token in tokens if token.startswith("rd.luks.uuid=")]
+        mapper = luks_mapper_name(storage)
+        if not containers:
+            problems.append("the encrypted root has no rd.luks.uuid= argument")
+        elif guided and not any(f"rd.luks.name={uuid}={mapper}" in tokens for uuid in containers):
+            problems.append(f"the encrypted container is not named by rd.luks.name=<uuid>={mapper}"
+                            + (" (with LVM inside, the volume is gentoo-root, so the container needs another name)" if storage.lvm else ""))
+    if storage.lvm and guided and "rd.lvm.lv=gentoo/root" not in tokens:
+        problems.append("the LVM root has no rd.lvm.lv=gentoo/root argument, so the initramfs would not activate it")
     for wanted in manifest.system.kernel_cmdline_extra.split():
         if wanted not in tokens:
             problems.append(f"the requested argument {wanted} is missing")
@@ -3238,7 +3251,7 @@ def list_scenarios() -> str:
         hw = scenario.hardware
         shape = f"{hw.disk_bus}{'/4Kn' if hw.sector_size == 4096 else ''}{'' if hw.disk_serial else '/no-serial'}, {hw.nic}, {hw.vga}"
         extras = [text for text in (f"smbios={hw.smbios}" if hw.smbios != "qemu" else "", f"cpu={hw.cpu}" if hw.cpu else "",
-                                    f"machine={hw.machine}" if hw.machine != "q35" else "", "luks" if scenario.luks else "",
+                                    f"machine={hw.machine}" if hw.machine != "q35" else "", "luks" if scenario.luks else "", "lvm" if scenario.lvm else "",
                                     f"+{len(hw.extra_disks)} extra disk(s)" if hw.extra_disks else "",
                                     "fresh NVRAM on the target boot" if hw.ovmf_vars == "fresh-on-target" else "",
                                     f"{scenario.install_mode} installer" if scenario.install_mode else "",
