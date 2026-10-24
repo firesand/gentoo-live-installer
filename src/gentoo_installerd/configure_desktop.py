@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from gentoo_installer import desktops
 from gentoo_installer.manifest import InstallManifest
 
 from .configure_base import _plan_list
@@ -43,16 +44,8 @@ class DesktopMixin(PackagesMixin):
         plan = self._plan(plan)
         graphical = system.desktop != "minimal"
         result = DesktopAtoms()
-        if system.desktop == "kde":
-            result.required.extend((
-                "kde-plasma/plasma-meta", "kde-apps/kde-apps-meta" if options.kde_apps == "full" else "kde-apps/kdecore-meta",
-                "gui-apps/sddm", "x11-base/xorg-server"))
-        elif system.desktop == "gnome":
-            result.required.extend(("gnome-base/gnome", "gnome-base/gdm", "x11-base/xorg-server"))
-        elif system.desktop == "xfce":
-            # The panel's polkit agent is not pulled in on every profile.
-            result.required.extend(("xfce-base/xfce4-meta", "x11-base/xorg-server", "x11-misc/lightdm",
-                                    "x11-misc/lightdm-gtk-greeter", "gnome-extra/polkit-gnome"))
+        if graphical:
+            result.required.extend(desktops.required_atoms(system.desktop, system.init, options.kde_apps))
         if graphical and system.init == "openrc":
             result.required.append("gui-libs/display-manager-init")
         result.required.extend(str(atom) for atom in _plan_list(plan, "required_atoms"))

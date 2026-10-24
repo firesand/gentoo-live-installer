@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from gentoo_installer import keymaps
+from gentoo_installer import desktops, keymaps
 from gentoo_installer.manifest import InstallManifest, System
 
 from .configure_base import _plan_list, ConfigurationError, ConfigurerBase, shell_value

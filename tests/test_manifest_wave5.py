@@ -215,7 +215,11 @@ def test_new_desktops_are_accepted_on_every_family(desktop, stage):
     m = valid_manifest()
     m.system.stage_variant, m.system.desktop = stage, desktop
     m.system.multilib = "nomultilib" not in stage
-    assert m.validate() == []
+    if desktop == "cinnamon" and ("hardened" in stage or "nomultilib" in stage):
+        # Cinnamon needs the desktop/gnome profile, which those families lack (the registry says so).
+        assert any("desktop/gnome" in error for error in m.validate())
+    else:
+        assert m.validate() == []
 
 
 def test_gaming_rules():
