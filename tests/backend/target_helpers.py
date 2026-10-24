@@ -56,7 +56,7 @@ class ScriptedRunner:
                     return CommandResult(args, 0, outcome)
                 return CommandResult(args, 0, "")
         for prefix, stdout in self.outputs.items():
-            if line.startswith(prefix):
+            if (prefix[1:] in line) if prefix.startswith("*") else line.startswith(prefix):
                 return CommandResult(args, 0, stdout)
         return CommandResult(args, 0, "")
 

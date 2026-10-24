@@ -6,7 +6,7 @@ import os
 import threading
 import uuid
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 from gentoo_installer.manifest import InstallManifest
 
@@ -295,7 +295,7 @@ class Installer:
             return
         self.target_root.mkdir(parents=True, exist_ok=True)
         self.stage3.notify = self.log
-        extra: dict[str, object] = {"allowed_existing": [entry.mountpoint for entry in self.storage.layout if entry.mountpoint]}
+        extra: dict[str, Any] = {"allowed_existing": [entry.mountpoint for entry in self.storage.layout if entry.mountpoint]}
         if self.manifest.network.proxy:
             extra["proxy"] = self.manifest.network.proxy
         if self.manifest.portage.mirror_fallbacks:
@@ -455,6 +455,11 @@ class Installer:
         warnings = [*result.degraded, *self.configurer.configure_services(self.manifest, plan, phase="desktop")]
         self.configurer.configure_desktop_session(self.manifest)
         warnings.extend(self.configurer.run_plan_steps(plan))
+        drift = self.configurer.world_drift(self.manifest)
+        if drift:
+            # Visible in install.log; the next @world update will rebuild these with the configured USE.
+            self.log(f"NOTE: {len(drift)} installed package(s) differ from the configured USE flags: {', '.join(drift[:12])}"
+                     + (", ..." if len(drift) > 12 else ""))
         if warnings:
             self.degraded.extend(warnings)
             for warning in warnings:

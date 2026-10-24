@@ -16,7 +16,7 @@ import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
-from typing import Callable, Mapping, MutableMapping, Sequence
+from typing import Any, Callable, Mapping, MutableMapping, Sequence
 
 from gentoo_installer import __version__ as INSTALLER_VERSION
 from gentoo_installer import keymaps
@@ -432,6 +432,59 @@ def render_dconf_keyboard(system: System) -> str:
     return "\n".join(lines) + "\n"
 
 
+# --- checks on the live system, for the daemon's preflight --------------------------------------------
+
+
+def check_secure_boot_material(runner: Runner, system: System) -> list[str]:
+    """Is the Secure Boot signing key readable and does the certificate belong to it?"""
+    key, certificate = Path(system.secure_boot_key), Path(system.secure_boot_certificate)
+    problems: list[str] = []
+    for label, path in (("signing key", key), ("certificate", certificate)):
+        if not path.is_file() or not os.access(path, os.R_OK):
+            problems.append(f"The Secure Boot {label} is missing or not readable: {path}")
+    if problems:
+        return problems
+    try:
+        public_from_certificate = runner.run(("openssl", "x509", "-noout", "-pubkey", "-in", str(certificate))).stdout.strip()
+        public_from_key = runner.run(("openssl", "pkey", "-pubout", "-in", str(key))).stdout.strip()
+    except RunnerError as exc:
+        return [f"The Secure Boot key or certificate cannot be parsed: {str(exc)[-200:]}"]
+    if public_from_certificate and public_from_key and public_from_certificate != public_from_key:
+        problems.append("The Secure Boot certificate does not belong to the signing key")
+    return problems
+
+
+def live_input_problems(manifest: InstallManifest, *, root: str | Path = "/", runner: Runner | None = None) -> list[str]:
+    """Choices that this live system can already tell are unusable.
+
+    The daemon's preflight runs this before any disk is touched, so a typo in a time zone, keymap or
+    locale (or a wrong Secure Boot key) stops the installation at the start instead of after the
+    disk was wiped. Lists that the live image does not have are not checked.
+    """
+    base = Path(root)
+    system = manifest.system
+    problems: list[str] = []
+    zones = base / "usr/share/zoneinfo"
+    if zones.is_dir() and not (zones / system.timezone).is_file():
+        problems.append(f"The time zone {system.timezone!r} does not exist on this system")
+    available = keymaps.list_console_keymaps((base / "usr/share/keymaps", base / "usr/share/kbd/keymaps"))
+    wanted = system.keymap if system.keymap not in {"", "auto"} else keymaps.console_keymap_for(system.keyboard_layout, system.keyboard_variant)
+    if available and wanted not in available:
+        close = ", ".join(keymaps.near_matches(wanted, sorted(available))) or "none"
+        problems.append(f"The console keymap {wanted!r} does not exist (similar: {close})")
+    supported = base / "usr/share/i18n/SUPPORTED"
+    if supported.is_file() and system.locale not in {"C", "C.UTF-8", "POSIX"}:
+        names = {line.split()[0] for line in supported.read_text(errors="replace").splitlines() if line.strip() and not line.startswith("#")}
+        if names and system.locale not in names:
+            problems.append(f"The locale {system.locale!r} is not available (see /usr/share/i18n/SUPPORTED)")
+    fonts = base / "usr/share/consolefonts"
+    if system.console_font and fonts.is_dir() and not list(fonts.glob(f"{system.console_font}.*")) and not system.console_font.startswith("ter-"):
+        problems.append(f"The console font {system.console_font!r} is not installed")
+    if system.secure_boot and runner is not None:
+        problems.extend(check_secure_boot_material(runner, system))
+    return problems
+
+
 # --- explaining a failed emerge ---------------------------------------------------------------------
 
 
@@ -647,7 +700,7 @@ class Configurer:
 
     def chroot(self, argv: Sequence[str], *, stdin: str | None = None, secret: bool = False,
                env: Mapping[str, str] | None = None) -> CommandResult:
-        extra: dict[str, object] = {}
+        extra: dict[str, Any] = {}
         if env:
             extra["env"] = env
         if self._root_identity:
@@ -1186,6 +1239,23 @@ class Configurer:
                     self.sleep(5.0 * attempt)
         return remaining, reason
 
+    def world_drift(self, manifest: InstallManifest) -> list[str]:
+        """Installed packages that a USE change would rebuild; a drift between make.conf and the system.
+
+        Informational: failures are ignored, and plain version upgrades (the tree may be newer than the
+        stage3) are not drift.
+        """
+        try:
+            output = self.emerge(manifest, ("--pretend", "--update", "--deep", "--newuse", "--usepkg=n", "--getbinpkg=n", "@world")).stdout
+        except RunnerError:
+            return []
+        rebuilds: list[str] = []
+        for line in output.splitlines():
+            match = re.match(r"\[ebuild\s+([A-Za-z ]*?)\s*\]\s+(\S+)", line)
+            if match and "R" in match.group(1) and "U" not in match.group(1) and "N" not in match.group(1):
+                rebuilds.append(match.group(2))
+        return rebuilds
+
     def install_desktop(self, manifest: InstallManifest, plan: object | None = None) -> DesktopResult:
         """Desktop environment first (must succeed), then every optional package on its own terms."""
         plan = self._plan(plan)
@@ -1561,22 +1631,7 @@ class Configurer:
 
     def secure_boot_problems(self, manifest: InstallManifest) -> list[str]:
         """Problems with the signing key and certificate on the live system (readable, matching pair)."""
-        system = manifest.system
-        key, certificate = Path(system.secure_boot_key), Path(system.secure_boot_certificate)
-        problems: list[str] = []
-        for label, path in (("signing key", key), ("certificate", certificate)):
-            if not path.is_file() or not os.access(path, os.R_OK):
-                problems.append(f"The Secure Boot {label} is missing or not readable: {path}")
-        if problems:
-            return problems
-        try:
-            public_from_certificate = self.runner.run(("openssl", "x509", "-noout", "-pubkey", "-in", str(certificate))).stdout.strip()
-            public_from_key = self.runner.run(("openssl", "pkey", "-pubout", "-in", str(key))).stdout.strip()
-        except RunnerError as exc:
-            return [f"The Secure Boot key or certificate cannot be parsed: {str(exc)[-200:]}"]
-        if public_from_certificate and public_from_key and public_from_certificate != public_from_key:
-            problems.append("The Secure Boot certificate does not belong to the signing key")
-        return problems
+        return check_secure_boot_material(self.runner, manifest.system)
 
     def _stage_signing_material(self, system: object) -> tuple[str, str]:
         """Copy key and certificate into a root-only directory of the live tmpfs, never onto the target disk."""

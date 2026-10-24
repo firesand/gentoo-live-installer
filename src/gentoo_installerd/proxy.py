@@ -7,7 +7,11 @@ written to the target's ``make.conf`` and never appear in logs.
 
 from __future__ import annotations
 
+import email.utils
+import time
+import urllib.error
 import urllib.request
+from typing import Callable
 from urllib.parse import SplitResult, urlsplit
 
 NO_PROXY = "localhost,127.0.0.1,::1"
@@ -66,3 +70,23 @@ def build_opener(proxy: str = "") -> urllib.request.OpenerDirector:
     if not proxy:
         return urllib.request.build_opener()
     return urllib.request.build_opener(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+
+
+def mirror_clock_skew(mirror: str, proxy: str = "", *, timeout: float = 10.0,
+                      now: Callable[[], float] = time.time) -> float | None:
+    """Seconds this computer's clock is ahead (+) of or behind (-) the mirror; None when unknown.
+
+    TLS certificates and the stage3 signature checks fail confusingly on a machine whose clock is
+    off (a dead RTC battery), so the daemon's preflight asks the mirror for the time first.
+    """
+    request = urllib.request.Request(mirror.rstrip("/") + "/", method="HEAD", headers={"User-Agent": "gentoo-live-installer/0.1"})
+    try:
+        before = now()
+        with build_opener(proxy).open(request, timeout=timeout) as response:
+            header = response.headers.get("Date", "")
+        parsed = email.utils.parsedate_to_datetime(header) if header else None
+    except (urllib.error.URLError, OSError, ValueError, TypeError):
+        return None
+    if parsed is None:
+        return None
+    return before - parsed.timestamp()
