@@ -1,14 +1,16 @@
 """Hardware actions of the daemon (feature ``hardware.v1``): put the clock right before an install.
 
 A PC with a dead clock battery starts in the wrong year and cannot verify a single HTTPS certificate, and a
-PC without a network cannot ask for the time. These two actions fix the clock from the installer window:
+PC without a network cannot ask for the time. These actions help from the installer window:
 
 * ``sync_time`` (no arguments) asks the network, with chrony.
 * ``set_time`` (``{"utc": "YYYY-MM-DD HH:MM:SS"}``) sets it by hand; the hardware clock is written too, but only
   when it is known to keep UTC (a Windows dual-boot PC keeps local time there and must not be touched).
+* ``reboot_firmware`` (no arguments) sets bit 0 of the UEFI variable OsIndications and restarts, so the PC opens its firmware
+  settings (the fix the readiness page offers next to a Secure Boot or RAID finding). It works on OpenRC too.
 
 Each reply is one ``result`` event with ``data = {"ok": bool, "message": str}`` followed by ``completed``.
-Neither action runs while an installation is running, or while a repair operation is: a clock that jumps under emerge
+None of the actions runs while an installation is running, or while a repair operation is: a clock that jumps under emerge
 breaks timestamps.
 """
 
@@ -125,13 +127,17 @@ def handle_reboot_firmware(request: dict, channel: Channel) -> None:
         _reply(channel, False, "This computer cannot be told to open its firmware settings from here. Restart it and press the firmware key "
                                "(often F2, F10, Del or Esc) while it starts.")
         return
+    runner = make_runner()
+    try:
+        runner.run(("chattr", "-i", str(OS_INDICATIONS_PATH)), timeout=COMMAND_TIMEOUT_SECONDS)  # efivarfs files are immutable by default
+    except RunnerError:
+        pass  # already writable, or no chattr: the write below tells
     try:
         _ask_for_firmware_setup()
     except OSError as exc:
         LOG.warning("Could not set OsIndications: %s", exc)
         _reply(channel, False, "The firmware did not accept the request. Restart the computer and press the firmware key (often F2, F10, Del or Esc) while it starts.")
         return
-    runner = make_runner()
     for argv in REBOOT_COMMANDS:
         try:
             runner.run(argv, timeout=COMMAND_TIMEOUT_SECONDS, capture=False)

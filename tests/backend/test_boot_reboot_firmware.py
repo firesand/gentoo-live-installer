@@ -38,7 +38,8 @@ def test_it_sets_the_firmware_setup_bit_and_restarts(firmware):
     hwactions.handle_reboot_firmware({}, channel)
     data = firmware.variable.read_bytes()
     assert data[:4] == bytes([7, 0, 0, 0]) and int.from_bytes(data[4:], "little") == 0x5  # the other bits are kept
-    assert firmware.runner.commands and firmware.runner.commands[0] == ("loginctl", "reboot")
+    commands = firmware.runner.commands
+    assert commands[0][:2] == ("chattr", "-i") and commands[1] == ("loginctl", "reboot")  # immutable efivarfs file first
     assert channel.sent[0].data["ok"] is True
 
 

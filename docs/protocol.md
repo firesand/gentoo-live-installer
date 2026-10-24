@@ -154,7 +154,7 @@ the table of the current job, `capabilities.stages` the default one):
 
 ### Hardware (feature `hardware.v1`)
 
-Neither action runs while an installation runs or while a repair operation is running
+None of the actions runs while an installation runs or while a repair operation is running
 (`install.busy`; a repair session that only holds a mounted system does not count, the repair
 may need the right clock first). Each reply is one `result` event
 `data = {ok: bool, message: str}`, then `completed` (`success` = `ok`).
@@ -170,6 +170,9 @@ may need the right clock first). Each reply is one `result` event
 * `set_time {"utc": "YYYY-MM-DD HH:MM:SS"}` (years 2020 to 2100, `T` and `Z` accepted):
   `date -u -s`, and `hwclock --systohc` only when the hardware clock is known to keep UTC.
   A bad time is `proto.bad_request`.
+* `reboot_firmware` (no arguments): sets bit 0 of the UEFI variable `OsIndications` (after
+  `chattr -i`, efivarfs files are immutable) and restarts, so the PC opens its firmware settings. `ok: false`
+  with a plain message when the firmware does not support it. Works on OpenRC (no `systemctl --firmware-setup`).
 
 ### Rescue (feature `rescue.v1`)
 
