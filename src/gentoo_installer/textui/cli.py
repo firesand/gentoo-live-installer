@@ -427,15 +427,15 @@ def main(
     try:
         return run(ctx)
     except Quit:
-        console.say(" ".join(part for part in ("You left the installer.", console.quit_note) if part))
+        console.para(" ".join(part for part in ("You left the installer.", console.quit_note) if part))
         return EXIT_INTERRUPTED
     except InputClosed:
         console.say()
-        console.say(" ".join(part for part in ("The input ended, so the installer stops.", console.quit_note) if part))
+        console.para(" ".join(part for part in ("The input ended, so the installer stops.", console.quit_note) if part))
         return EXIT_INTERRUPTED
     except KeyboardInterrupt:
         console.say()
-        console.say(" ".join(part for part in ("Interrupted.", console.quit_note) if part))
+        console.para(" ".join(part for part in ("Interrupted.", console.quit_note) if part))
         return EXIT_INTERRUPTED
     except BrokenPipeError:
         return EXIT_INTERRUPTED

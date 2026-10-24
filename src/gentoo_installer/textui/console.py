@@ -18,7 +18,7 @@ import os
 import sys
 import textwrap
 from dataclasses import dataclass
-from typing import Any, Callable, Mapping, Sequence, TextIO
+from typing import Callable, Mapping, Sequence, TextIO
 
 BACK = "<"
 BACK_WORDS = frozenset({"b", "back", BACK})
@@ -143,7 +143,7 @@ class Console:
         first = " " * indent
         later = " " * (indent if hanging is None else hanging)
         lines: list[str] = []
-        for paragraph in text.split("\n"):
+        for paragraph in text.translate(ASCII_FALLBACK).split("\n"):  # before wrapping: "..." is longer than the one character it replaces
             if not paragraph.strip():
                 lines.append("")
                 continue
@@ -160,22 +160,33 @@ class Console:
         self.say(self.style(text, "bold"))
         self.say(self.style("=" * min(len(text), self.width), "dim"))
 
+    def wrap_labelled(self, label: str, text: str, *, styles: Sequence[str] = (), indent: int = 0) -> list[str]:
+        """``label`` + ``text`` wrapped under the label; only the label is coloured (colour codes would upset the line width)."""
+        lines = self.wrap(label + text, indent=indent, hanging=indent + len(label))
+        if lines:
+            lines[0] = lines[0].replace(label, self.style(label, *styles), 1)
+        return lines
+
     def good(self, text: str) -> None:
-        self.para(self.style("OK: ", "green") + text, hanging=4)
+        for line in self.wrap_labelled("OK: ", text, styles=("green",)):
+            self.say(line)
 
     def note(self, text: str) -> None:
-        self.para(self.style("Note: ", "cyan") + text, hanging=6)
+        for line in self.wrap_labelled("Note: ", text, styles=("cyan",)):
+            self.say(line)
 
     def warn(self, text: str) -> None:
-        self.para(self.style("Warning: ", "yellow") + text, hanging=9)
+        for line in self.wrap_labelled("Warning: ", text, styles=("yellow",)):
+            self.say(line)
 
     def error(self, text: str) -> None:
-        self.para(self.style("Error: ", "red", "bold") + text, hanging=7)
+        for line in self.wrap_labelled("Error: ", text, styles=("red", "bold")):
+            self.say(line)
 
     def kv_lines(self, label: str, value: str, *, label_width: int = 14) -> list[str]:
         """'  Disk          /dev/sda (...)' with the value wrapped under itself."""
         head = f"  {label:<{label_width}} "
-        lines = textwrap.wrap(value, max(20, self.width - len(head)), break_on_hyphens=False) or [""]
+        lines = textwrap.wrap(value.translate(ASCII_FALLBACK), max(20, self.width - len(head)), break_on_hyphens=False) or [""]
         return [head + lines[0], *(" " * len(head) + line for line in lines[1:])]
 
     def kv(self, label: str, value: str, *, label_width: int = 14) -> None:
@@ -487,9 +498,6 @@ class Console:
 
 def clip(text: str, width: int) -> str:
     """``text`` cut to ``width`` characters, ending in '...' when something was removed."""
+    text = text.translate(ASCII_FALLBACK)
     return text if len(text) <= width else text[: max(0, width - 3)] + "..."
 
-
-def plain(value: Any) -> str:
-    """Text for a value that may be None."""
-    return "" if value is None else str(value)

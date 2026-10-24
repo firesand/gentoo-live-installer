@@ -50,9 +50,6 @@ class Host:
     def sleep(self, seconds: float) -> None:
         time.sleep(seconds)
 
-    def monotonic(self) -> float:
-        return time.monotonic()
-
     def now(self) -> float:
         return time.time()
 

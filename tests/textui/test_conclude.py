@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import stat
-from pathlib import Path
 
 from gentoo_installer.textui.conclude import conclude, describe, tell_how_to_resume
 from gentoo_installer.textui.console import Console
@@ -11,7 +10,7 @@ from gentoo_installer.textui.daemon import Daemon
 from gentoo_installer.textui.follow import Outcome
 
 from tests.textui.support import (
-    FakeHost, FakeInstaller, Script, completed, error, failing_job, good_job, inspect_reply, progress, run_main, stage, walk_to_review,
+    FakeHost, FakeInstaller, Script, failing_job, good_job, inspect_reply, run_main, walk_to_review,
 )
 
 VDA = {"/dev/vda": "VDA-SERIAL-0001"}

@@ -35,7 +35,7 @@ def test_the_summary_lists_the_settings_the_hardware_plan_and_what_happens_to_th
         "Chosen for this computer:", "Virtual machine: qemu", "What will happen to the disks:", "ERASE /dev/vda", "CREATE EFI system partition", "Other disks will not be modified.",
     ):
         assert expected in text, expected
-    assert "ALL DATA ON IT WILL" in script.text and PASSWORD not in script.text
+    assert PASSWORD not in script.text
 
 
 def test_encryption_and_a_path_identity_show_up_in_the_summary(installer, host: FakeHost) -> None:

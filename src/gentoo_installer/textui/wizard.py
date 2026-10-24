@@ -14,8 +14,9 @@ import copy
 from dataclasses import dataclass
 from typing import Callable, Sequence
 
-from .. import hardware, keymaps, layout, recommend
+from .. import blockdev, hardware, keymaps, layout, recommend
 from ..daemon_client import DaemonState
+from ..diagnostics import redact_url_userinfo
 from ..hardware import NicInfo
 from ..layout import human_size
 from ..manifest import KEYMAP_RE, InstallManifest
@@ -49,6 +50,7 @@ FILESYSTEMS = (
     ("btrfs", "Btrfs", "Snapshots and compression. Somewhat more complex."),
 )
 BUS_NAMES = {"nvme": "NVMe", "sata": "SATA", "ata": "SATA", "usb": "USB", "sas": "SAS", "scsi": "SCSI", "virtio": "virtual"}
+STAGE_FAMILIES = ("amd64", "amd64-desktop", "amd64-nomultilib", "amd64-hardened")
 TIMEZONE_REGIONS = ("Africa", "America", "Antarctica", "Arctic", "Asia", "Atlantic", "Australia", "Europe", "Indian", "Pacific")
 # The language that goes with a keyboard layout: offered as the default when the locale is still the stock one.
 LOCALE_FOR_LAYOUT = {
@@ -331,7 +333,7 @@ class Wizard:
             lines.append("Network adapters: " + ("" if nics else "none were found. Plug in a network cable or a USB network adapter, then check again."))
             lines.extend(f"  {nic_text(nic)}" for nic in nics)
             if self.manifest.network.proxy:
-                lines.append(f"Download proxy: {self.manifest.network.proxy}")
+                lines.append(f"Download proxy: {redact_url_userinfo(self.manifest.network.proxy)}")
             if not connected:
                 lines.append("For Wi-Fi press n: it opens nmtui, a text menu where you pick the network and type its password.")
             for line in lines:
@@ -363,12 +365,15 @@ class Wizard:
 
     def _ask_proxy(self) -> None:
         network = self.manifest.network
-        self.console.para("A download proxy looks like http://proxy.example:3128. Type none if the network needs no proxy.")
+        current = network.proxy
+        self.console.para("A download proxy looks like http://proxy.example:3128. Type none if the network needs no proxy"
+                          + (f", or keep to leave {redact_url_userinfo(current)} as it is." if current else "."))
         value = self.console.ask(
-            "Download proxy", default=network.proxy or "none",
-            validate=lambda text: "" if text.lower() in {"none", "-"} else first_problem(field_errors("network", lambda m: setattr(m.network, "proxy", text))),
+            "Download proxy", default="keep" if current else "none",
+            validate=lambda text: "" if text.lower() in {"none", "-", "keep"} else first_problem(field_errors("network", lambda m: setattr(m.network, "proxy", text))),
         )
-        network.proxy = "" if value.lower() in {"none", "-"} else value
+        if value.lower() != "keep":
+            network.proxy = "" if value.lower() in {"none", "-"} else value
 
     def _ask_import_profiles(self) -> None:
         profiles = self.view.profile.network_profiles
@@ -420,10 +425,8 @@ class Wizard:
         return lines
 
     def _finding_lines(self, finding: Finding) -> list[str]:
-        c = self.console
-        label = {"error": c.style("Error: ", "red", "bold"), "warning": c.style("Warning: ", "yellow"), "info": "Note: "}[finding.severity]
-        indent = {"error": 7, "warning": 9, "info": 6}[finding.severity]
-        return [f"  {line}" for line in c.wrap(label + finding.message, hanging=indent)]
+        label, styles = {"error": ("Error: ", ("red", "bold")), "warning": ("Warning: ", ("yellow",)), "info": ("Note: ", ())}[finding.severity]
+        return self.console.wrap_labelled(label, finding.message, styles=styles, indent=2)
 
     def _clock_finding(self) -> Finding | None:
         return next((f for f in self.view.findings if f.action in {"sync_time", "set_time"} or "clock" in f.code), None)
@@ -451,7 +454,17 @@ class Wizard:
 
     # --- 4. disk ---------------------------------------------------------------------------------------------------
 
+    def keeps_own_partitions(self) -> bool:
+        """A settings file can describe your own partitions (manual mode). This program cannot create such a layout, so it must not touch it."""
+        if self.manifest.storage.mode != "manual":
+            return False
+        self.console.para("These settings use your own partitions (manual mode), which this text installer cannot set up or change. "
+                          "The disk and partition choices stay exactly as the settings file says; use the graphical installer to change them.")
+        return True
+
     def step_disk(self) -> None:
+        if self.keeps_own_partitions():
+            return
         self.substeps(self._choose_disk, self._approve_disk, self._ask_portable)
 
     def _choose_disk(self) -> bool:
@@ -520,6 +533,8 @@ class Wizard:
     # --- 5. filesystem and encryption --------------------------------------------------------------------------------
 
     def step_storage(self) -> None:
+        if self.keeps_own_partitions():
+            return
         self.substeps(self._ask_filesystem, self._ask_encryption, self._ask_passphrase)
 
     def _ask_filesystem(self) -> bool:
@@ -585,6 +600,9 @@ class Wizard:
         self.substeps(self._ask_desktop, self._ask_init)
 
     def _desktop_problem(self, desktop: str) -> str:
+        if desktop == "kde" and any(word in self.manifest.system.stage_variant for word in ("nomultilib", "hardened")):
+            return ("KDE Plasma needs a Standard or Desktop stage3: the Hardened and No-multilib profiles do not enable the desktop USE flags Plasma requires, "
+                    "so the package step would fail after your disk was erased. Choose another desktop, or the graphical installer for another stage3.")
         entry = self.current_disk()
         if entry is None:
             return ""
@@ -640,8 +658,11 @@ class Wizard:
         choice = self.console.menu([Option(label, detail) for _, label, detail in INITS], title="Which init system do you want? (It starts and stops the programs on the computer.)",
                                    default=current, help="If you do not know, take OpenRC: it is the Gentoo default.")
         system.init = INITS[choice.index][0]
-        # One standard stage3 archive per init system; with an empty profile the installer derives the matching Portage profile.
-        system.stage_variant, system.profile, system.multilib = f"amd64-{system.init}", "", True
+        # The stage3 archive follows the init system and keeps its family (a settings file may name a hardened or no-multilib one);
+        # with an empty profile the installer derives the matching Portage profile.
+        family = system.stage_variant.rsplit("-", 1)[0]
+        family = family if family in STAGE_FAMILIES else "amd64"
+        system.stage_variant, system.profile, system.multilib = f"{family}-{system.init}", "", "nomultilib" not in family
         return True
 
     # --- 7. accounts ------------------------------------------------------------------------------------------------------
@@ -793,7 +814,8 @@ class Wizard:
     def review(self) -> StartPlan | Jump | Refused:
         c = self.console
         manifest = self.manifest
-        device = manifest.storage.device
+        storage = manifest.storage
+        device = storage.device
         self.fill_missing_secrets()
         self.ensure_identity()
         wrong = 0
@@ -807,20 +829,27 @@ class Wizard:
         help_text = "c = change a setting, r = check this computer again, b = back, q = quit"
         summary = build_summary(manifest, self.view, require_identity=True)
         render_summary(c, summary)
+        confirmed: list[str] = []
         while True:
             if summary.problems:
                 c.para("Fix the problems above (c = change a setting, r = check this computer again), or quit.")
                 text = c.ask("Your choice", allow_empty=True, help=help_text)
             else:
-                what = f"continue the installation on {device} (nothing is erased again)" if resume else f"erase {device} and install Gentoo on it"
-                c.para(f"To {what}, type the disk name exactly as it is written here: {device}")
+                if storage.mode == "manual":
+                    what = "continue the installation (nothing is formatted again)" if resume else "install Gentoo on the partitions listed above"
+                    c.para(f"To {what}, type the name of the main disk exactly as it is written here: {device}")
+                else:
+                    what = f"continue the installation on {device} (nothing is erased again)" if resume else f"erase {device} and install Gentoo on it"
+                    c.para(f"To {what}, type the disk name exactly as it is written here: {device}")
                 text = c.ask("Type the disk name to start", allow_empty=True, help=help_text)
             word = text.strip().lower()
             if text.strip() == device:
                 if summary.problems:
                     c.warn("The problems above must be fixed first.")
                     continue
-                return StartPlan(resume=resume)
+                if self._confirm_other_disks(confirmed):
+                    return StartPlan(resume=resume)
+                return Refused("The name of another disk that the layout changes was typed wrongly.")
             if word in {"b", "back"}:
                 raise GoBack
             if word in {"q", "quit"}:
@@ -843,6 +872,34 @@ class Wizard:
             c.warn(f"That is not {device}. Nothing has been changed.")
             if wrong >= MAX_WRONG_CONFIRMATIONS:
                 return Refused("The disk name was typed wrongly too often.")
+
+    def required_disks(self) -> list[str]:
+        """Every disk the installation changes: the target, and for your own partitions the disk of each partition."""
+        storage = self.manifest.storage
+        wanted = [storage.device]
+        if storage.mode == "manual":
+            for row in storage.partitions:
+                try:
+                    node = blockdev.find(self.view.roots, row.device)
+                except (LookupError, ValueError):
+                    continue
+                wanted.extend(disk.path for disk in blockdev.parent_disks(self.view.roots, node) if disk.path not in wanted)
+        return wanted
+
+    def _confirm_other_disks(self, confirmed: list[str]) -> bool:
+        """The first disk was typed; a layout on several disks needs every one of them typed (like the graphical installer)."""
+        for path in self.required_disks()[1:]:
+            if path in confirmed:
+                continue
+            self.console.para(f"This layout also changes {path}. Type its name to confirm.")
+            for _ in range(MAX_WRONG_CONFIRMATIONS):
+                if self.console.ask(f"Type {path}", allow_empty=True).strip() == path:
+                    confirmed.append(path)
+                    break
+                self.console.warn(f"That is not {path}. Nothing has been changed.")
+            else:
+                return False
+        return True
 
     def _resumable(self) -> bool:
         status = self.state.status if self.state is not None else {}

@@ -55,7 +55,7 @@ class _Input:
             raise ScriptExhausted(f"The program wants more input than the script has.\n--- printed since the last answer ---\n{shown}\n--- whole session ---\n{text}")
         expected, answer = script.steps.pop(0)
         script.answered.append(answer if isinstance(answer, str) else repr(answer))
-        if expected and expected not in shown:
+        if expected and expected not in shown and expected not in " ".join(shown.split()):  # a sentence may have been wrapped onto two lines
             raise AssertionError(f"Expected {expected!r} before the answer {answer!r}.\n--- printed since the last answer ---\n{shown}\n--- whole session ---\n{text}")
         if answer is CTRL_C:
             raise KeyboardInterrupt
@@ -113,9 +113,6 @@ class FakeHost(Host):
 
     def sleep(self, seconds: float) -> None:
         self.slept.append(seconds)
-
-    def monotonic(self) -> float:
-        return self.clock
 
     def now(self) -> float:
         return self.clock

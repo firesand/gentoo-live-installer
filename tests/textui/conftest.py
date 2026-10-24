@@ -13,10 +13,15 @@ from tests.textui.support import FakeHost, FakeInstaller
 
 
 class _NoSubprocess:
-    """Stands in for ``subprocess`` inside textui.host: a test that reaches a real program has a bug."""
+    """Stands in for ``subprocess`` inside textui.host: a test that reaches a real program has a bug.
 
-    SubprocessError = Exception
-    TimeoutExpired = TimeoutError
+    Its exception classes are its own, so the AssertionError below is not swallowed by ``except subprocess.SubprocessError``."""
+
+    class SubprocessError(Exception):
+        pass
+
+    class TimeoutExpired(SubprocessError):
+        pass
 
     @staticmethod
     def run(*args: object, **kwargs: object) -> None:

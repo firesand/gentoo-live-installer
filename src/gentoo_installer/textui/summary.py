@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from .. import keymaps, layout, recommend
+from ..diagnostics import redact_url_userinfo
 from ..manifest import InstallManifest
 from .console import Console
 from .inventory import MachineView
@@ -61,13 +62,13 @@ def settings_rows(manifest: InstallManifest, view: MachineView) -> list[tuple[st
     return [
         ("Disk", f"{disk}. ALL DATA ON IT WILL BE ERASED." if storage.mode == "erase" else f"{disk}, your own partitions (manual mode)"),
         ("Boot mode", f"{'UEFI' if storage.firmware == 'uefi' else 'Legacy BIOS'}, {storage.table.upper()} partition table"),
-        ("Filesystem", f"{storage.filesystem}, {swap}"),
+        ("Filesystem", f"{storage.filesystem}, {swap}") if storage.mode == "erase" else ("Partitions", f"{len(storage.partitions)} chosen by you, listed below"),
         ("Encryption", storage.encryption_summary()),
         ("System", f"{INIT_NAMES.get(system.init, system.init)} with {desktop}; {'binary packages' if manifest.portage.binhost else 'built from source'}"),
         ("Boot loader", f"{system.bootloader}, kernel {system.kernel}"),
         ("Account", f"{accounts.username} on a computer named {accounts.hostname}; {root}"),
         ("Region", f"{system.timezone}, {system.locale}; keyboard {keyboard_label(manifest)} (console {system.keymap})"),
-        ("Network", manifest.network.manager + (f", proxy {manifest.network.proxy}" if manifest.network.proxy else "")),
+        ("Network", manifest.network.manager + (f", proxy {redact_url_userinfo(manifest.network.proxy)}" if manifest.network.proxy else "")),
     ]
 
 

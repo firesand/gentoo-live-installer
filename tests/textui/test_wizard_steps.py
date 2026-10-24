@@ -12,7 +12,7 @@ from gentoo_installer.textui.daemon import Daemon
 from gentoo_installer.textui.inventory import MachineView
 from gentoo_installer.textui.wizard import Wizard
 
-from tests.textui.support import END, FakeHost, FakeInstaller, Script, device_number, inspect_reply
+from tests.textui.support import FakeHost, FakeInstaller, Script, device_number, inspect_reply
 
 GIB = 1024**3
 PASSWORD = "correct-horse-1"
@@ -526,3 +526,88 @@ def test_the_boot_mode_follows_the_machine_even_without_a_hardware_report(start)
     assert wizard.manifest.storage.firmware == "bios"
     from_file, _, _ = start([], inspect_reply("old-bios-sata-radeon"), from_file=True)
     assert from_file.manifest.storage.firmware == "uefi"  # a settings file is never changed behind the user's back
+
+
+def test_a_proxy_with_a_password_is_shown_without_it_and_kept_on_enter(start) -> None:
+    wizard, script, fake = start([("", "p"), ("Download proxy", "http://me:topsecret-1@proxy.example:3128"), ("Download proxy: http://me:<redacted>@proxy.example:3128", "p"), ("keep", ""), ("", "")])
+    wizard.step_network()
+    assert wizard.manifest.network.proxy == "http://me:topsecret-1@proxy.example:3128"  # Enter kept the real value
+    assert script.text.count("topsecret-1") == 1  # only the echo of what the user typed; the program itself never prints it
+    sent = [request for request in fake.requests if request["action"] == "inspect"]
+    assert sent[-1]["manifest"]["network"]["proxy"] == "http://me:topsecret-1@proxy.example:3128"
+
+
+# --- settings files with their own partitions or another stage3 family ------------------------------------------------------------------------------------
+
+
+def test_the_stage3_family_of_a_settings_file_is_kept_when_the_init_system_changes(start) -> None:
+    wizard, _, _ = start([("Which init system", "2")], from_file=True)
+    wizard.manifest.system.stage_variant = "amd64-hardened-openrc"
+    wizard._ask_init()
+    assert (wizard.manifest.system.stage_variant, wizard.manifest.system.multilib) == ("amd64-hardened-systemd", True)
+    wizard2, _, _ = start([("Which init system", "2")], from_file=True)
+    wizard2.manifest.system.stage_variant, wizard2.manifest.system.multilib = "amd64-nomultilib-openrc", False
+    wizard2._ask_init()
+    assert (wizard2.manifest.system.stage_variant, wizard2.manifest.system.multilib) == ("amd64-nomultilib-systemd", False)
+    assert wizard2.manifest.validate_sections()["system"] == []
+
+
+def test_kde_is_refused_on_a_hardened_or_no_multilib_stage3(start) -> None:
+    wizard, script, _ = start([("Which desktop", "1"), ("Hardened and No-multilib", "2"), ("Which init system", "")], from_file=True)
+    wizard.manifest.system.stage_variant = "amd64-hardened-openrc"
+    wizard.step_system()
+    assert wizard.manifest.system.desktop == "gnome" and "KDE Plasma needs a Standard or Desktop stage3" in script.flat
+
+
+def manual_manifest(**extra) -> InstallManifest:
+    from gentoo_installer.manifest import Partition
+
+    manifest = InstallManifest()
+    manifest.storage.mode, manifest.storage.device, manifest.storage.device_id = "manual", "/dev/vda", "VDA-SERIAL-0001"
+    manifest.storage.additional_device_ids = ["VDB-SERIAL-0002"]
+    manifest.storage.partitions = [
+        Partition("/dev/vda1", "/efi", "vfat", format=False), Partition("/dev/vda2", "/", "ext4", format=True), Partition("/dev/vdb1", "/home", "ext4", format=False),
+    ]
+    manifest.accounts.password = manifest.accounts.root_password = "correct-horse-1"
+    return manifest
+
+
+def two_disk_reply() -> dict:
+    from gentoo_installer import blockdev
+
+    def disk(name: str, serial: str, parts: list[tuple[str, str, int]]) -> dict:
+        children = tuple(blockdev.BlockDevice(name=n, path="/dev/" + n, type="part", size=size, fstype=fs, maj_min=device_number(n)) for n, fs, size in parts)
+        return blockdev.BlockDevice(name=name, path="/dev/" + name, type="disk", size=100 * GIB, serial=serial, maj_min=device_number(name), children=children).to_dict()
+
+    reply = inspect_reply("qemu-q35-virtio", serials={"/dev/vda": "VDA-SERIAL-0001"})
+    reply["disks"] = [disk("vda", "VDA-SERIAL-0001", [("vda1", "vfat", GIB), ("vda2", "ext4", 60 * GIB)]), disk("vdb", "VDB-SERIAL-0002", [("vdb1", "ext4", 90 * GIB)]),
+                      *[d for d in reply["disks"] if d["path"] == "/dev/sdb"]]
+    return reply
+
+
+def test_the_disk_and_filesystem_steps_leave_your_own_partitions_alone(start) -> None:
+    wizard, script, _ = start([], two_disk_reply(), manifest=manual_manifest(), from_file=True)
+    before = wizard.manifest.to_dict()
+    wizard.step_disk()
+    wizard.step_storage()
+    assert wizard.manifest.to_dict() == before and wizard.manifest.storage.mode == "manual"
+    assert script.flat.count("use your own partitions (manual mode)") == 2
+
+
+def test_every_disk_that_a_manual_layout_changes_must_be_typed(start) -> None:
+    wizard, script, _ = start([], two_disk_reply(), manifest=manual_manifest(), from_file=True)
+    assert wizard.required_disks() == ["/dev/vda", "/dev/vdb"]
+    s = Script([("type the name of the main disk", "/dev/vda"), ("also changes /dev/vdb", "/dev/vdc"), ("That is not /dev/vdb", "/dev/vdb")])
+    wizard.console = Console(s.stdin, s.out, environ={"TERM": "dumb"})
+    plan = wizard.review()
+    assert plan.resume is False and "ERASE" not in s.text and "USE    /dev/vda" in s.text and "USE    /dev/vdb" in s.text
+    assert "FORMAT /dev/vda2 -> / (ext4" in s.flat and "KEEP /dev/vdb1 -> /home" in s.flat
+    assert "Partitions 3 chosen by you, listed below" in s.flat and "install Gentoo on the partitions listed above" in s.flat and "erase /dev/vda" not in s.flat
+
+
+def test_a_layout_on_several_disks_is_refused_when_the_second_name_is_wrong_three_times(start) -> None:
+    wizard, _, _ = start([], two_disk_reply(), manifest=manual_manifest(), from_file=True)
+    script = Script([("type the name of the main disk", "/dev/vda"), ("also changes /dev/vdb", "x"), ("That is not", "y"), ("That is not", "z")])
+    wizard.console = Console(script.stdin, script.out, environ={"TERM": "dumb"})
+    result = wizard.review()
+    assert type(result).__name__ == "Refused" and "another disk" in result.reason

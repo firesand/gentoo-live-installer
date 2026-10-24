@@ -16,7 +16,7 @@ from gentoo_installer.textui import cli
 from gentoo_installer.textui.follow import Outcome
 
 from tests.textui.support import (
-    END, FakeHost, FakeInstaller, Script, completed, error, failing_job, good_job, inspect_reply, run_main, stage, valid_manifest,
+    END, FakeHost, FakeInstaller, Script, failing_job, good_job, inspect_reply, run_main, valid_manifest,
 )
 
 VDA_SERIAL = {"/dev/vda": "VDA-SERIAL-0001"}
@@ -270,9 +270,7 @@ def test_without_a_service_the_wizard_offers_to_try_again_and_ends_with_exit_4(s
 def test_a_running_installation_is_offered_for_watching_instead_of_the_questions(installer, host: FakeHost) -> None:
     fake = serial_installer(installer)
     cli_script = Script([("already running", ""), ("What now", "4")])
-    fake.jobs = [good_job()]
     # the job ran before this session, so the service can replay it
-    run_main(["--manifest", "x", "--yes"], Script(), host)  # usage error only: keeps the helper honest about the options
     fake.current = fake._numbered(good_job())
     fake.state.update(status="running", seq=len(good_job()), stage="base", progress=40.0)
     result = run_main(["--socket", fake.path], cli_script, host)
@@ -348,3 +346,30 @@ def test_leaving_while_an_installation_runs_does_not_claim_that_nothing_changed(
     result = run_main(["--socket", fake.path], script, host)
     assert result.code == 130 and "Nothing has been changed" not in script.text and "gentoo-installer-text --attach" in script.text
     assert "You left the installer. The installation keeps running" in script.flat
+
+
+# --- credentials ----------------------------------------------------------------------------------------------------------------------------------------
+
+
+def test_the_password_of_a_proxy_is_never_printed(tmp_path: Path, installer, host: FakeHost) -> None:
+    fake = serial_installer(installer)
+    manifest = valid_manifest()
+    manifest.network.proxy = "http://proxyuser:proxy-secret-9@proxy.example:3128"
+    path = write_manifest(tmp_path, manifest)
+    script = Script()
+    result = run_main(["--manifest", path, "--dry-run", "--socket", fake.path], script, host)
+    assert result.code == 0 and "proxy-secret-9" not in result.out + result.err and "proxyuser:<redacted>@proxy.example:3128" in result.out
+    as_json = run_main(["--manifest", path, "--dry-run", "--json-events", "--socket", fake.path], Script(), host)
+    assert "proxy-secret-9" not in as_json.out + as_json.err
+    assert any("proxyuser:<redacted>@" in row["value"] for row in json.loads(as_json.out)["settings"])
+    unattended = run_main(["--manifest", path, "--yes", "--confirm-device", "/dev/vda", "--socket", fake.path], Script(), host)
+    assert unattended.code == 0 and "proxy-secret-9" not in unattended.out
+    assert fake.manifests[0]["network"]["proxy"] == "http://proxyuser:proxy-secret-9@proxy.example:3128"  # the service gets the real value
+
+
+def test_programs_cannot_run_in_tests() -> None:
+    from gentoo_installer.textui.host import Host
+
+    for call in (lambda: Host().loadkeys("us"), lambda: Host().reboot(), lambda: Host().run_interactive(["nmtui"])):
+        with pytest.raises(AssertionError, match="real program"):
+            call()

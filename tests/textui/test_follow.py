@@ -6,8 +6,6 @@ import io
 import json
 from typing import Any, Iterator
 
-import pytest
-
 from gentoo_installer.textui.console import Console
 from gentoo_installer.textui.daemon import Daemon
 from gentoo_installer.textui.follow import DEFAULT_LOG_PATH, InstallFollower, JsonSink, Outcome, TextSink

@@ -15,7 +15,6 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Deque, TextIO
 
-from .. import daemon_client
 from ..daemon_client import event_data
 from ..layout import human_size
 from .console import Console, GoBack, Option, Quit, clip
