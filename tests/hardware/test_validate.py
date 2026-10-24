@@ -41,6 +41,7 @@ def test_a_sane_default_install_has_no_errors_on_the_authors_pc():
     (disk(signatures=["isw_raid_member"]), {}, "hw.st_raid_member", "warning"),
     (disk(signatures=["LVM2_member"]), {}, "hw.st_lvm_member", "warning"),
     (disk("/dev/sdb", bus="usb", hotplug=True), {"device": "/dev/sdb"}, "hw.st_removable_target", "info"),
+    (disk("/dev/mmcblk0", bus="sd", hotplug=True), {"device": "/dev/mmcblk0"}, "hw.st_removable_target", "info"),
     (disk(serial=""), {}, "hw.st_no_serial", "info"),
 ])
 def test_storage_findings(device, storage, code, severity):
@@ -56,6 +57,7 @@ def test_storage_findings(device, storage, code, severity):
     (disk(), {}, "hw.nvme_bios"),
     (disk(signatures=["ext4"]), {}, "hw.st_raid_member"),
     (disk(serial="", wwn="x"), {}, "hw.st_no_serial"),
+    (disk("/dev/mmcblk0", bus="sd"), {"device": "/dev/mmcblk0"}, "hw.st_removable_target"),      # soldered eMMC is not removable
     (disk(serial=""), {"device_id_kind": "path", "device_id": "pci-0000:00:1d.0|1|x"}, "hw.st_no_serial"),   # already approved
 ])
 def test_storage_findings_that_must_not_fire(device, storage, code):

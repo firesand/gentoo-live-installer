@@ -570,7 +570,7 @@ class _Planner:
     def storage(self) -> None:
         choice, luks = self.m.hardware.trim, self.m.storage.luks
         disks = _target_disks(self.m, self.hw)
-        flash = [d for d in disks if d.rota is False and d.bus not in ("usb", "sd") and not d.removable]
+        flash = [d for d in disks if d.rota is False and not d.external]  # not USB sticks or SD cards: TRIM is often unsupported there
         if choice == "weekly":
             weekly = True
         elif choice == "off":
@@ -820,7 +820,7 @@ def resolve_removable_fallback(manifest: InstallManifest, hw: HardwareProfile) -
     if manifest.hardware.target == "portable" or hw.firmware.mode == "bios":
         return "always"
     disks = _target_disks(manifest, hw)
-    if any(disk.hotplug or disk.removable or disk.bus in ("usb", "sd") for disk in disks):
+    if any(disk.external for disk in disks):
         return "always"
     if storage.mode == "manual":
         esp = next((p for p in storage.partitions if p.mountpoint in ("/efi", "/boot/efi")), None)
@@ -956,7 +956,7 @@ def _disk_issues(m: InstallManifest, hw: HardwareProfile, disk: DiskInfo) -> lis
         out.append(Issue("hw.st_raid_member", "warning", "This disk is part of a firmware or software RAID volume. Erasing it destroys the volume and everything on it, including any Windows installation."))
     if "LVM2_member" in signatures:
         out.append(Issue("hw.st_lvm_member", "warning", "This disk holds LVM volumes. Erasing it destroys every logical volume on it."))
-    if (disk.hotplug or disk.removable or disk.bus in ("usb", "sd")) and m.hardware.target == "this":
+    if disk.external and m.hardware.target == "this":
         out.append(Issue("hw.st_removable_target", "info", "The selected disk is removable. Choose 'portable' if you will start it on other computers."))
     if not disk.serial and not disk.wwn and storage.device_id_kind != "path":
         out.append(Issue("hw.st_no_serial", "info", "This disk has no serial number or WWN. It must be identified by its bus connection, size and model, which you have to approve."))

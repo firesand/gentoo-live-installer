@@ -453,7 +453,8 @@ def trim_files(result):
     (disk("/dev/sda", bus="sata", rota=False), True),
     (disk("/dev/sda", bus="sata", rota=True), False),               # a spinning disk gains nothing
     (disk("/dev/sdb", bus="usb", rota=False, hotplug=True), False),  # USB sticks: TRIM is often unsupported or wears the medium
-    (disk("/dev/mmcblk0", bus="sd", rota=False, hotplug=True), False),
+    (disk("/dev/mmcblk0", bus="sd", rota=False, hotplug=True), False),                 # an SD card in a reader (removable)
+    (disk("/dev/mmcblk0", bus="sd", rota=False), True),                                  # soldered eMMC (not removable)
     (disk("/dev/vda", bus="virtio", rota=True), False),
     (disk(rota=None), False),                                        # unknown: do nothing rather than guess
 ])

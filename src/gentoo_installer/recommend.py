@@ -184,7 +184,7 @@ def recommend(profile: HardwareProfile | Mapping[str, Any] | None, manifest: Ins
                                       "portage.make_opts", recommend_make_opts(hw.cpu.threads, hw.memory.available_kib, manifest.storage.swap_mib)))
 
     # Target disk
-    if disk is not None and (disk.hotplug or disk.removable or disk.bus in ("usb", "sd")) and hardware.target == "this":
+    if disk is not None and disk.external and hardware.target == "this":
         out.append(Recommendation("rec.portable_target", "info",
                                   "The selected disk is removable. If you will start it on other computers, choose 'portable': no CPU tuning, both microcode families, "
                                   "all firmware, and a fallback boot entry.", "hardware.target", "portable"))

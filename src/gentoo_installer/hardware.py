@@ -200,6 +200,11 @@ class DiskInfo:
     installable: bool = True
     blocker: str = ""  # "" | read-only | live-medium | empty
 
+    @property
+    def external(self) -> bool:
+        """A USB disk, SD card or other removable medium (internal eMMC is not)."""
+        return self.hotplug or self.removable or self.bus == "usb"
+
 
 @dataclass
 class NicInfo:
