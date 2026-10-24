@@ -432,6 +432,7 @@ def test_repairing_a_multi_device_btrfs_makes_every_member_writable_and_restores
 def test_xfs_repair_names_the_external_log(lab_factory) -> None:
     lab = lab_factory(lf.xfs_external_log())
     lab.add_tree("/dev/sda2", "gentoo", firmware="uefi", fstab=f"UUID={fr.ROOT_UUID} / xfs noatime 0 1\n")
+    lab.system.external_logs["/dev/sda2"] = "/dev/sdb1"
     manager, sid, _info = mount_through_the_manager(lab, candidate_device="/dev/sda2")
     plan = manager.plan({"session_id": sid, "action_id": "fs.check", "params": {"mode": "repair"}})
     commands = [step["argv"] for step in plan["steps"] if step.get("argv") and step["argv"][0] == "xfs_repair"]

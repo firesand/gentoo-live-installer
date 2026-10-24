@@ -66,6 +66,22 @@ def test_the_separate_boot_and_the_esp_are_mounted_with_the_system(lab_factory) 
     assert not any(lab.system.ro.values())
 
 
+def test_an_xfs_root_with_an_external_log_is_found_by_naming_the_log(lab_factory) -> None:
+    lab = lab_factory(lf.xfs_external_log())
+    tree = lab.add_tree("/dev/sda2", "gentoo", firmware="uefi", fstab=f"UUID={fr.ROOT_UUID} / xfs noatime 0 1\n")
+    (tree / "efi").mkdir(exist_ok=True)
+    lab.system.external_logs["/dev/sda2"] = "/dev/sdb1"
+    lab.add_plain_tree("/dev/sdc1", {"data/readme.txt": "files"})
+    result = run_scan(lab)
+    assert list(by_device(result)) == ["/dev/sda2"]  # the log partition and the XFS share one UUID; only the file system is a system
+    probe = [argv for argv in lab.system.commands_named("mount") if argv[-2] == "/dev/sda2"][0]
+    assert "logdev=/dev/sdb1" in probe[4].split(",") and not [argv for argv in lab.system.commands_named("mount") if argv[-2] == "/dev/sdb1"]  # the log is not mounted on its own
+    manager, sid, info = mount_through_the_manager(lab, candidate_device="/dev/sda2")
+    assert [m["mountpoint"] for m in info["mounts"]][:1] == ["/"] and info["state"] == "mounted_ro"
+    unmount(manager, sid)
+    assert not any(lab.system.ro.values())
+
+
 # ---- an assembled RAID1 holds the root ----------------------------------------------------------------------------------------------------
 def test_root_on_an_assembled_raid_is_found_through_the_array(lab_factory) -> None:
     lab = lab_factory(lf.md_raid1_root())

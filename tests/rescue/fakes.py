@@ -91,6 +91,7 @@ class FakeSystem:
         self.mounts: dict[str, MountRec] = {}
         self.device_trees: dict[str, Path] = {}
         self.subvolumes: dict[str, dict[int, str]] = {}  # device -> {subvolume id: path inside the top-level tree}
+        self.external_logs: dict[str, str] = {}  # xfs device -> its log device: mounting without logdev=<that> fails like the kernel does
         self.btrfs_text: dict[str, str] = {}
         self.btrfs_default: dict[str, str] = {}
         self.btrfs_ro: dict[str, bool] = {}
@@ -252,6 +253,8 @@ class FakeSystem:
             return 32, f"mount: {target}: unknown filesystem type '{fstype}'."
         if device in self.fail_mount:
             return 32, self.fail_mount[device]
+        if device in self.external_logs and f"logdev={self.external_logs[device]}" not in options.split(","):
+            return 32, f"mount: {target}: wrong fs type, bad option, bad superblock on {device}, missing codepage or helper program, or other error."
         if not os.path.isdir(target):
             return 32, f"mount: {target}: mount point does not exist."
         if device not in self.device_trees:

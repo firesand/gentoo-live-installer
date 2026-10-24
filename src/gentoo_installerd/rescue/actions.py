@@ -353,7 +353,7 @@ def probe_esp_candidates(manager: RescueManager, session: RescueSession, view: S
             continue
         try:
             runner = manager.pool_runner()
-            with probe_mounted(runner, manager.env.host, manager.env.probe_root, node, sleep=manager.env.sleep) as (target, _rung):
+            with probe_mounted(runner, manager.env.host, manager.env.probe_root, node, sleep=manager.env.sleep, graph=view.graph) as (target, _rung):
                 from .paths import RootFS
 
                 with RootFS(target) as fs:

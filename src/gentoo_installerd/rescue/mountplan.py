@@ -168,9 +168,7 @@ def _node_unusable_reason(node: DeviceNode) -> str:
 
 
 def _external_logs(node: DeviceNode, graph: DeviceGraph) -> list[DeviceNode]:
-    if node.fstype != "xfs" or not node.uuid:
-        return []
-    return [log for log in graph.by_uuid(node.uuid, include_logs=True) if log.fstype == "xfs_external_log" and log.path != node.path]
+    return graph.external_logs(node)
 
 
 def _present_device_options(carried: list[str], graph: DeviceGraph, node: DeviceNode, warnings: list[str], where: str) -> list[str]:

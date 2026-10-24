@@ -186,6 +186,12 @@ class DeviceGraph:
         wanted = uuid.lower()
         return [node for node in self if node.uuid and node.uuid.lower() == wanted and (include_logs or node.fstype != "xfs_external_log")]
 
+    def external_logs(self, node: DeviceNode) -> list[DeviceNode]:
+        """The XFS external log devices of a file system (they carry its UUID, which is why UUID lookups skip them)."""
+        if node.fstype != "xfs" or not node.uuid:
+            return []
+        return [log for log in self.by_uuid(node.uuid, include_logs=True) if log.fstype == "xfs_external_log" and log.path != node.path]
+
     def by_label(self, label: str) -> list[DeviceNode]:
         return [node for node in self if node.label and node.label == label]
 

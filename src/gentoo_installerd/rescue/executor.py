@@ -171,7 +171,7 @@ class PlanExecutor:
             from .fsprobe import mount_readonly
 
             spec = self.session.plan.root
-            rung = mount_readonly(self.session.runner, spec.device, spec.fstype, self.session.root, subvolid=spec.subvolid, noexec=not self.session.allow_write,
+            rung = mount_readonly(self.session.runner, spec.device, spec.fstype, self.session.root, extra=spec.options, subvolid=spec.subvolid, noexec=not self.session.allow_write,
                                   available=self.manager.env.host.filesystems() or None)
             self.session.ledger.add("mount", path=self.session.root, mountpoint="/", device=spec.device, fs=spec.fstype, tier=1, rw=False, rung=rung, recursive=False)
             for item in self.session.plan.selected:

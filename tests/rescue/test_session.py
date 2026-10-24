@@ -193,6 +193,7 @@ def test_executing_the_write_transition_switches_to_read_write(lab_factory) -> N
 def test_every_member_device_of_the_root_is_unprotected_and_made_writable_together(lab_factory) -> None:
     lab = lab_factory(lf.xfs_external_log())
     lab.add_tree("/dev/sda2", "gentoo", firmware="uefi", fstab=f"UUID={fr.ROOT_UUID} / xfs noatime 0 1\n")
+    lab.system.external_logs["/dev/sda2"] = "/dev/sdb1"  # the kernel refuses to mount this file system unless its log is named
     session = lab.session("/dev/sda2")
     session.mount_ro(lab.graph_obj)
     flagged = {entry.data["device"]: entry.data["purpose"] for entry in session.ledger.of_kind("blockro")}

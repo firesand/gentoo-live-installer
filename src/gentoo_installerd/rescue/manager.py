@@ -258,7 +258,7 @@ class RescueManager:
         candidate, node = self._candidate(params, graph)
         rootflags = candidate.get("rootflags", "")
         spec = RootSpec(node.path, node.fstype, node.uuid, rootflags, node.id)
-        with probe_mounted(runner, self.env.host, self.env.probe_root, node, subvolid=spec.subvolid, sleep=self.env.sleep) as (target, rung):
+        with probe_mounted(runner, self.env.host, self.env.probe_root, node, subvolid=spec.subvolid, sleep=self.env.sleep, graph=graph) as (target, rung):
             with RootFS(target) as fs:
                 plan = plan_mounts(
                     spec, fs, Fstab.parse(fs.read_text_or("/etc/fstab")), parse_crypttab(fs.read_text_or("/etc/crypttab")), graph, include_tier4=params.get("include_tier4", []),

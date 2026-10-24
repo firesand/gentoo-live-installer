@@ -104,10 +104,12 @@ def load_graph(runner: RescueRunner, ctx: PolicyContext, host: Host) -> DeviceGr
 
 
 @contextlib.contextmanager
-def probe_mounted(runner: RescueRunner, host: Host, probe_root: Path, node: DeviceNode, *, subvolid: int | None = None, sleep: Callable[[float], None] = time.sleep) -> Iterator[tuple[str, int]]:
+def probe_mounted(runner: RescueRunner, host: Host, probe_root: Path, node: DeviceNode, *, subvolid: int | None = None, sleep: Callable[[float], None] = time.sleep,
+                  graph: DeviceGraph | None = None) -> Iterator[tuple[str, int]]:
     """Mount a device read-only (nodev, nosuid, noexec, no journal replay) in a private directory and always undo it.
 
-    The kernel read-only flag is set around the mount and restored afterwards; yields (directory, ladder rung).
+    The kernel read-only flag is set around the mount and restored afterwards; yields (directory, ladder rung). An XFS file system
+    with an external log cannot be mounted without ``logdev=``, so the log found in ``graph`` is named.
     """
     was_ro = runner.execute(("blockdev", "--getro", node.path), timeout=10).stdout.strip() == "1"
     if not was_ro:
@@ -116,8 +118,9 @@ def probe_mounted(runner: RescueRunner, host: Host, probe_root: Path, node: Devi
     target.mkdir(parents=True, exist_ok=True, mode=0o700)
     mounted = False
     try:
+        logs = graph.external_logs(node) if graph is not None else []
         rung = mount_readonly(runner, node.path, node.fstype, str(target), subvolid=subvolid if subvolid is not None else (5 if node.fstype == "btrfs" else None),
-                              available=host.filesystems() or None)
+                              extra=[f"logdev={logs[0].path}"] if len(logs) == 1 else [], available=host.filesystems() or None)
         mounted = True
         yield str(target), rung
     finally:
@@ -221,7 +224,7 @@ class Scanner:
         if busy:
             return self._probe_mounted_elsewhere(node, graph, busy)
         try:
-            with probe_mounted(self.runner, self.host, self.probe_root, node, sleep=self.sleep) as (target, rung):
+            with probe_mounted(self.runner, self.host, self.probe_root, node, sleep=self.sleep, graph=graph) as (target, rung):
                 return self._identify_mounted(node, graph, target, rung)
         except RescueError as exc:
             node.probe_error = exc.short
