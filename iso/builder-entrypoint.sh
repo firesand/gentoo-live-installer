@@ -346,15 +346,19 @@ build_stage1() {
 
 publish_iso() {
 	local built="${CATALYST_STORE}/builds/23.0-default/${ISO_NAME}"
-	local verified="${BUILD_DIR}/verify-iso.json" packages="${BUILD_DIR}/packages.txt" size
+	local verified="${BUILD_DIR}/verify-iso.json" packages="${BUILD_DIR}/packages.txt" size previous=()
 	[[ -s ${built} ]] || die "Catalyst completed without producing ${built}"
 	size=$(stat -c %s "${built}")
 	((size > 10000000)) || die "Catalyst ISO is implausibly small"
 	isoinfo -d -i "${built}" > /dev/null
+	# An earlier build of the same ISO name is the reference for the "grew by more than 20
+	# percent" warning; it is replaced only after the checks have passed.
+	[[ ! -f ${DIST}/${ISO_NAME}.manifest.json ]] || previous=(--previous-manifest "${DIST}/${ISO_NAME}.manifest.json")
 	log "Verifying the finished ISO (${ISO_FLAVOR})"
 	python3 "${WORKSPACE}/scripts/verify-iso.py" "${built}" --flavor "${ISO_FLAVOR}" --workspace "${WORKSPACE}" \
 		--spec "${BUILD_DIR}/livecd-stage2.spec" \
 		--json "${verified}" --packages-out "${packages}" --workdir "${BUILD_DIR}/verify-iso" \
+		${previous[@]+"${previous[@]}"} \
 		|| die "the ISO failed the image checks; nothing was published"
 	rm -rf -- "${BUILD_DIR}/verify-iso"
 	install -m 0644 "${built}" "${DIST}/.${ISO_NAME}.partial"

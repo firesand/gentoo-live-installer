@@ -803,6 +803,18 @@ def verify(
     return report, installed_packages(entries)
 
 
+def previous_iso_size(manifest: Path | None) -> int | None:
+    """The ISO size recorded by an earlier build, or None. The size is only a hint for a
+    warning, so a missing, unreadable or foreign manifest never fails a build."""
+    if manifest is None or not manifest.is_file():
+        return None
+    try:
+        size = json.loads(manifest.read_text(encoding="utf-8")).get("iso", {}).get("size")
+    except (OSError, ValueError, AttributeError):
+        return None
+    return size if isinstance(size, int) and not isinstance(size, bool) and size > 0 else None
+
+
 def format_report(report: Report) -> str:
     lines = []
     for check in report.checks:
@@ -837,9 +849,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     for variable in ("HOST_UID", "HOST_GID"):
         if os.environ.get(variable, "").isdigit():
             builder_ids.add(int(os.environ[variable]))
-    previous_size = None
-    if args.previous_manifest and args.previous_manifest.is_file():
-        previous_size = json.loads(args.previous_manifest.read_text(encoding="utf-8")).get("iso", {}).get("size")
+    previous_size = previous_iso_size(args.previous_manifest)
 
     own_workdir = args.workdir is None
     workdir = Path(tempfile.mkdtemp(prefix="verify-iso-", dir=os.environ.get("TMPDIR"))) if own_workdir else args.workdir

@@ -157,7 +157,21 @@ def test_publish_runs_the_verifier_and_writes_every_sidecar(sandbox, publish_wor
     assert arguments[0].endswith(name) and arguments[arguments.index("--flavor") + 1] == "release"
     assert arguments[arguments.index("--spec") + 1] == str(sandbox.dirs["build"] / "livecd-stage2.spec")
     assert arguments[arguments.index("--workspace") + 1] == str(publish_workspace)
+    assert "--previous-manifest" not in arguments, "a first build has nothing to compare with"
     assert not [p for p in dist.iterdir() if p.name.startswith(".")], "no partial files are left"
+
+
+def test_an_earlier_manifest_of_the_same_name_feeds_the_size_warning(sandbox, publish_workspace: Path) -> None:
+    name = "gentoo-installer-amd64-20261018T124555Z.iso"
+    sandbox.dirs["dist"].mkdir(parents=True, exist_ok=True)
+    earlier = sandbox.dirs["dist"] / f"{name}.manifest.json"
+    earlier.write_text('{"iso": {"size": 1}}')
+    result, _ = publish(sandbox, publish_workspace)
+    assert result.returncode == 0, result.stderr + result.stdout
+    arguments = json.loads((sandbox.tmp / "verify-args.json").read_text())
+    assert arguments[arguments.index("--previous-manifest") + 1] == str(earlier)
+    # the stub verifier saw the old file; the new build has replaced it afterwards
+    assert json.loads(earlier.read_text())["iso"]["size"] > 1
 
 
 def test_a_failed_verification_publishes_nothing(sandbox, publish_workspace: Path) -> None:

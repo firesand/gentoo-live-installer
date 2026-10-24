@@ -517,3 +517,36 @@ def test_command_line_report_and_package_list(tmp_path: Path, live_make_conf: st
                            capture_output=True, text=True, check=False)
     assert wrong.returncode == 1 and "FAIL" in wrong.stdout
     assert subprocess.run([sys.executable, str(ROOT / "scripts/verify-iso.py"), str(tmp_path / "missing.iso")], capture_output=True, check=False).returncode == 2
+
+
+def test_previous_manifest_is_only_a_hint(tmp_path: Path) -> None:
+    """A missing, unreadable or foreign manifest must never fail a build over a size warning."""
+    manifest = tmp_path / "m.json"
+    assert verify.previous_iso_size(None) is None
+    assert verify.previous_iso_size(tmp_path / "absent.json") is None
+    for text, expected in (
+        ('{"iso": {"size": 3000000000}}', 3_000_000_000),
+        ("{not json", None), ("[]", None), ('"text"', None), ("{}", None),
+        ('{"iso": "x"}', None), ('{"iso": {"size": "3"}}', None), ('{"iso": {"size": true}}', None), ('{"iso": {"size": 0}}', None),
+    ):
+        manifest.write_text(text)
+        assert verify.previous_iso_size(manifest) == expected, text
+
+
+@pytest.mark.skipif(tools_missing(), reason="xorriso, isoinfo, gensquashfs and rdsquashfs are needed")
+def test_growth_over_the_previous_build_is_a_warning(tmp_path: Path, live_make_conf: str, pins: dict[str, str]) -> None:
+    iso = build_iso(tmp_path, "release", live_make_conf, pins)
+    previous = tmp_path / "previous.manifest.json"
+
+    def run(previous_size: int) -> subprocess.CompletedProcess:
+        previous.write_text(json.dumps({"iso": {"size": previous_size}}))
+        return subprocess.run(
+            [sys.executable, str(ROOT / "scripts/verify-iso.py"), str(iso), "--previous-manifest", str(previous), "--workdir", str(tmp_path / "w")],
+            capture_output=True, text=True, check=False,
+        )
+
+    grown = run(1000)
+    assert grown.returncode == 0, grown.stdout + grown.stderr
+    assert "[WARN] iso.size" in grown.stdout and "1 warnings" in grown.stdout
+    same = run(iso.stat().st_size)
+    assert same.returncode == 0 and "[ok  ] iso.size" in same.stdout and "0 warnings" in same.stdout

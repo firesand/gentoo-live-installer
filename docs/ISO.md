@@ -141,7 +141,7 @@ Measured on the accepted r19 image (ISO 2,981,701,632 bytes; `image.squashfs` 2,
 | `/usr/lib/llvm` | 573 MiB | kept: Mesa's drivers link libLLVM |
 | `/usr/include`, other `.a` | 132 + 22 MiB | kept: users compile on the live system |
 
-The removals are about 1.5 GiB uncompressed. The binhost packages do not compress further (about 0.47 GB of the ISO); rust-bin, static libraries and docs compress to roughly 0.35 GB, so the ISO should get **about 0.8 GB smaller**. The new packages add roughly 30-40 MiB uncompressed (the Rust `pdata_tools` binary, `links` and its libraries and the `lshw` ID files are the largest) and roughly 10-15 MB to the ISO. These are estimates until the next build; `manifest.json` records the final size and `verify-iso.py` warns when an ISO grows more than 20 percent over the previous manifest (`--previous-manifest`).
+The removals are about 1.5 GiB uncompressed. The binhost packages do not compress further (about 0.47 GB of the ISO); rust-bin, static libraries and docs compress to roughly 0.35 GB, so the ISO should get **about 0.8 GB smaller**. The new packages add roughly 30-40 MiB uncompressed (the Rust `pdata_tools` binary, `links` and its libraries and the `lshw` ID files are the largest) and roughly 10-15 MB to the ISO. These are estimates until the next build; `manifest.json` records the final size and `verify-iso.py` warns when an ISO grows more than 20 percent over the previous manifest (`--previous-manifest`; the builder passes the manifest of an earlier build of the same ISO name, if `dist/` holds one).
 
 ## 8. Packaging
 
