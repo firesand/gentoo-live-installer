@@ -11,7 +11,13 @@ media-libs/libwebp -tiff
 sys-apps/memtest86+ boot bios64 uefi64
 # Thin-provisioned LVM volumes are common on Fedora/RHEL and server installs; the
 # repair tool cannot activate them without thin_check (thin-provisioning-tools).
-sys-fs/lvm2 thin
+# thin requires lvm (REQUIRED_USE), so both are named here.
+sys-fs/lvm2 lvm thin
+# mount must never depend on a library that is installed after it: with cryptsetup,
+# util-linux links mount to libcryptsetup, which cannot be merged before lvm2, while every
+# source build (lvm2 included) needs mount for Portage's namespace sandbox. Nothing on the
+# live image uses mount's dm-verity support; the cryptsetup tool itself is unaffected.
+sys-apps/util-linux -cryptsetup
 # The live image keeps AIO cooler support in HWMonux (the ebuild leaves it off by default
 # because liquidctl is ~amd64) and Secure Boot signing tools for the installer's checks.
 app-misc/hwmonux liquidctl
