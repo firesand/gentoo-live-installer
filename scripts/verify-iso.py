@@ -191,20 +191,26 @@ class Tools:
         out = self._run(["isoinfo", "-R", "-f", "-i", str(self.iso)]).decode(errors="replace")
         return [line for line in out.splitlines() if line.strip()]
 
+    def extract(self, path: str, destination: Path) -> Path:
+        """Copy one file out of the ISO. (isoinfo -x silently writes nothing for files over 2 GiB.)"""
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.unlink(missing_ok=True)
+        self._run(["xorriso", "-osirrox", "on", "-indev", str(self.iso), "-extract", path, str(destination)])
+        if not destination.is_file() or destination.stat().st_size == 0:
+            raise VerifyError(f"cannot extract {path} from the ISO")
+        return destination
+
     def iso_read(self, path: str) -> bytes:
-        return self._run(["isoinfo", "-R", "-i", str(self.iso), "-x", path])
+        target = self.workdir / ("extract-" + path.strip("/").replace("/", "_"))
+        try:
+            return self.extract(path, target).read_bytes()
+        finally:
+            target.unlink(missing_ok=True)
 
     def squashfs(self) -> Path:
         target = self.workdir / "image.squashfs"
         if not target.exists():
-            self.workdir.mkdir(parents=True, exist_ok=True)
-            with target.open("wb") as stream:
-                proc = subprocess.run(
-                    ["isoinfo", "-R", "-i", str(self.iso), "-x", "/image.squashfs"],
-                    stdout=stream, stderr=subprocess.PIPE, check=False,
-                )
-            if proc.returncode != 0 or target.stat().st_size == 0:
-                raise VerifyError("cannot extract /image.squashfs from the ISO")
+            self.extract("/image.squashfs", target)
         return target
 
     def squashfs_listing(self) -> str:
