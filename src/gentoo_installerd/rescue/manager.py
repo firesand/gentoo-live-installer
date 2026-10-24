@@ -372,7 +372,10 @@ class RescueManager:
             graph = self.load_graph()
         except RescueError:
             graph = None
-        session = session_from_state(self.env, raw, graph)
+        try:
+            session = session_from_state(self.env, raw, graph)
+        except (KeyError, TypeError, ValueError, AttributeError):
+            return None  # valid JSON that is not a session of this program
         with self.lock:
             self.sessions[sid] = session
         return session
@@ -533,6 +536,8 @@ class RescueManager:
                 raw = json.loads(path.read_text())
             except (OSError, ValueError):
                 continue
+            if not isinstance(raw, dict) or not isinstance(raw.get("root"), dict):
+                continue  # not a session state file; mounts below the session directory still show up as "unknown"
             sid = raw.get("sid", path.stem)
             if sid in known:
                 continue
@@ -570,8 +575,12 @@ class RescueManager:
                 return self._release_pool(op, bool(params.get("force")))
             session = self.sessions.get(sid) or self.adopt(sid)
             if session is None:
+                still_mounted = self.pool_runner().execute(("findmnt", "-R", "-n", "-l", "-o", "TARGET", str(self.env.base_dir / sid)), timeout=15)
+                if still_mounted.returncode == 0 and still_mounted.stdout.strip():
+                    raise RescueError("not_found", f"There is no saved state for {sid}, so rescue cannot tell whether it made the mounts below {self.env.base_dir / sid}. "
+                                      f"If they are yours, unmount them by hand: umount -R {self.env.base_dir / sid}", session_id=sid)
                 raise RescueError("not_found", f"There is no saved session {sid}", session_id=sid)
-            result = session.release(force=True)
+            result = session.release(force=bool(params.get("force")))
             payload = result.to_dict()
             if result.complete:
                 with self.lock:
