@@ -1,0 +1,165 @@
+{
+  "schema_version": 1,
+  "description": "What scripts/verify-iso.py requires of every finished ISO. Keep it in step with iso/specs, iso/root_overlay and iso/fsscript-stage2.sh; tests/iso checks the obvious drift. An item with \"when_source\" only applies while that file exists in the source tree.",
+  "iso": {
+    "required_files": [
+      "boot/gentoo",
+      "boot/gentoo.igz",
+      "boot/grub/grub.cfg",
+      "image.squashfs",
+      "livecd",
+      "README.txt",
+      "SECURE-BOOT-OFF.txt",
+      "efi.img",
+      "efi/boot/bootx64.efi",
+      "efi/boot/bootia32.efi",
+      "boot/grub/i386-pc/eltorito.img",
+      "memtest64.bios",
+      "memtest.efi64"
+    ],
+    "required_dirs": [
+      "boot/grub/i386-pc",
+      "boot/grub/x86_64-efi",
+      "boot/grub/i386-efi",
+      "boot/grub/themes/gentoo_frosted"
+    ],
+    "forbidden_files": []
+  },
+  "grub": {
+    "kernel": "/boot/gentoo",
+    "initrd": "/boot/gentoo.igz",
+    "min_entries": 8,
+    "required_arguments": ["nox", "dokeymap", "nomodeset", "rd.live.ram=1", "dospeakup", "console=ttyS0,115200n8", "acpi=off", "rd.debug"],
+    "required_argument_groups": [
+      "nox dokeymap",
+      "nomodeset pcie_aspm=off nvme_core.default_ps_max_latency_us=0 usbcore.autosuspend=-1"
+    ],
+    "forbidden_titles": ["safe graphics"]
+  },
+  "initramfs": {
+    "required": [
+      "usr/bin/dmsquash-live-root",
+      "var/lib/dracut/hooks/cmdline/30-parse-dmsquash-live.sh",
+      "var/lib/dracut/hooks/pre-udev/30-dmsquash-live-genrules.sh"
+    ],
+    "required_modules": ["isofs", "squashfs", "overlay", "loop", "usb-storage", "uas", "vmd", "sdhci-pci", "mmc-block", "dm-crypt", "raid1"],
+    "min_keymaps": 20
+  },
+  "squashfs": {
+    "required": [
+      {"path": "etc/init.d/gentoo-installerd", "type": "file", "executable": true},
+      {"path": "etc/init.d/xdm", "type": "file", "executable": true},
+      {"path": "etc/init.d/chronyd", "type": "file|slink"},
+      {"path": "etc/lightdm/lightdm.conf", "type": "file"},
+      {"path": "etc/NetworkManager/NetworkManager.conf", "type": "file"},
+      {"path": "etc/polkit-1/rules.d/50-gentoo-live.rules", "type": "file"},
+      {"path": "etc/xdg/autostart/gentoo-installer.desktop", "type": "file"},
+      {"path": "etc/xdg/autostart/xfce4-screensaver.desktop", "type": "file"},
+      {"path": "etc/xdg/autostart/gentoo-live-noblank.desktop", "type": "file"},
+      {"path": "etc/xdg/xfce4/panel/default.xml", "type": "file"},
+      {"path": "etc/xdg/xfce4/xfconf/xfce-perchannel-xml/thunar-volman.xml", "type": "file"},
+      {"path": "etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-power-manager.xml", "type": "file"},
+      {"path": "etc/xfce4/helpers.rc", "type": "file"},
+      {"path": "etc/lvm/lvmlocal.conf", "type": "file"},
+      {"path": "etc/mdadm.conf", "type": "file"},
+      {"path": "etc/chrony/chrony.conf", "type": "file"},
+      {"path": "etc/conf.d/autoconfig", "type": "file"},
+      {"path": "etc/elogind/logind.conf.d/50-gentoo-live.conf", "type": "file"},
+      {"path": "etc/acpi/actions/powerbtn.sh", "type": "file", "executable": true},
+      {"path": "etc/motd", "type": "file"},
+      {"path": "etc/issue", "type": "file"},
+      {"path": "etc/profile.d/10-gentoo-rescue-hint.sh", "type": "file"},
+      {"path": "etc/modules-load.d/hwmonux.conf", "type": "file"},
+      {"path": "usr/bin/gentoo-installer", "type": "file|slink"},
+      {"path": "usr/bin/gentoo-installerd", "type": "file|slink"},
+      {"path": "usr/bin/hwmonux", "type": "file|slink"},
+      {"path": "usr/bin/portagehub", "type": "file|slink"},
+      {"path": "usr/libexec/portagehub-helper", "type": "file"},
+      {"path": "usr/share/applications/gentoo-installer.desktop", "type": "file"},
+      {"path": "usr/bin/gentoo-rescue", "type": "file|slink", "when_source": "src/gentoo_installerd/rescue/__init__.py"},
+      {"path": "usr/bin/gentoo-rescue-gui", "type": "file|slink", "when_source": "src/gentoo_installerd/rescue/__init__.py"},
+      {"path": "usr/share/applications/gentoo-rescue.desktop", "type": "file", "when_source": "src/gentoo_installerd/rescue/__init__.py"},
+      {"path": "boot/memtest86plus/memtest64.bios", "type": "file"},
+      {"path": "boot/memtest86plus/memtest.efi64", "type": "file"},
+      {"path": "mnt/gentoo", "type": "dir"},
+      {"path": "mnt/rescue", "type": "dir"},
+      {"path": "home/gentoo", "type": "dir"},
+      {"path": "usr/lib/modules", "type": "dir"},
+      {"path": "usr/lib/firmware", "type": "dir"}
+    ],
+    "commands": [
+      "lsblk", "findmnt", "blkid", "sgdisk", "parted", "partprobe", "udevadm", "wipefs", "mkswap", "swapon",
+      "mkfs.ext4", "e2fsck", "mkfs.vfat", "fsck.vfat", "mkfs.xfs", "xfs_repair", "mkfs.btrfs", "btrfs",
+      "fsck.f2fs", "fsck.exfat", "ntfsfix", "cryptsetup", "lvm", "mdadm", "thin_check", "dmsetup",
+      "efibootmgr", "grub-install", "os-prober", "mokutil", "sbverify", "sbsign",
+      "smartctl", "nvme", "hdparm", "lshw", "lspci", "lsusb", "dmidecode", "ddrescue", "testdisk", "fuser",
+      "cpuid2cpuflags", "setxkbmap", "xrandr", "xset", "chronyd", "jq", "pv", "links", "gpg", "gpgv",
+      "tar", "rsync", "gparted", "loadkeys", "nmtui", "nmcli"
+    ],
+    "implicit_services": [["autoconfig", "default"], ["xdm", "default"], ["fixinittab", "default"], ["syslog-ng", "default"]],
+    "forbidden_services": ["acpid"],
+    "forbidden": [
+      "var/cache/binhost*",
+      "opt/rust-bin*",
+      "usr/lib64/libQt6*.a",
+      "usr/share/doc",
+      "usr/share/doc/*",
+      "usr/share/gtk-doc*",
+      "etc/portage/make.conf.extra",
+      "etc/portage/make.conf.old",
+      "var/db/repos/*",
+      "usr/src/*"
+    ],
+    "owner_exceptions": ["home/gentoo", "home/gentoo/*", "var/spool/mail/gentoo"],
+    "required_packages": [
+      "app-admin/gentoo-live-installer", "app-misc/hwmonux", "app-portage/portagehub",
+      "app-crypt/sbsigntools", "app-misc/jq", "app-portage/cpuid2cpuflags",
+      "net-misc/chrony", "sys-apps/hdparm", "sys-apps/lshw", "sys-apps/memtest86+", "sys-apps/pv",
+      "sys-block/gparted", "sys-block/thin-provisioning-tools", "sys-boot/efibootmgr", "sys-boot/mokutil",
+      "sys-boot/os-prober", "sys-fs/cryptsetup", "sys-fs/lvm2", "sys-fs/mdadm", "sys-process/psmisc",
+      "www-client/links", "x11-apps/setxkbmap", "x11-apps/xrandr", "xfce-extra/xfce4-xkb-plugin"
+    ],
+    "forbidden_packages": ["dev-lang/rust-bin", "sys-boot/shim", "net-misc/netifrc"],
+    "content": [
+      {"path": "etc/lvm/lvmlocal.conf", "must_match": ["^\\s*event_activation\\s*=\\s*0\\b", "^\\s*auto_activation_volume_list\\s*=\\s*\\[\\s*\\]"],
+       "why": "the live system must not activate the PC's volume groups by itself"},
+      {"path": "etc/mdadm.conf", "must_match": ["^AUTO -all$"],
+       "why": "the live system must not assemble the PC's RAID arrays by itself"},
+      {"path": "etc/conf.d/autoconfig", "must_match": ["^ACPI=\"no\"$"],
+       "why": "acpid would power the PC off on a button press during an installation"},
+      {"path": "etc/elogind/logind.conf.d/50-gentoo-live.conf",
+       "must_match": ["^HandleLidSwitch=ignore$", "^HandleLidSwitchExternalPower=ignore$", "^HandleLidSwitchDocked=ignore$", "^IdleAction=ignore$"],
+       "why": "closing the lid must not suspend an installation"},
+      {"path": "etc/xdg/autostart/xfce4-screensaver.desktop", "must_match": ["^Hidden=true$"],
+       "why": "a locked or blanked screen must not hide an installation"},
+      {"path": "etc/xdg/xfce4/xfconf/xfce-perchannel-xml/thunar-volman.xml", "must_match": ["automount-drives"],
+       "why": "the desktop must not mount the PC's disks by itself"},
+      {"path": "etc/chrony/chrony.conf", "must_match": ["^makestep\\b"], "must_not_match": ["^\\s*rtcsync", "^\\s*rtcfile"],
+       "why": "the live system corrects its clock but never writes the PC's hardware clock"},
+      {"path": "etc/xfce4/helpers.rc", "must_match": ["^WebBrowser=\\S"], "why": "the panel's web browser launcher needs a browser"},
+      {"path": "etc/portage/make.conf",
+       "must_match": ["^VIDEO_CARDS="],
+       "must_not_match": ["^MAKEOPTS=", "^NINJAOPTS=", "^EMERGE_DEFAULT_OPTS=", "^DISTDIR=", "^PKGDIR=", "^FEATURES=.*\\bbuildpkg\\b", "^ACCEPT_LICENSE=\"\\*\""],
+       "why": "the builder's job counts, caches and licence wildcard must not leak onto somebody's PC"},
+      {"path": "etc/motd", "must_match": ["gentoo-rescue", "gentoo-installer"], "why": "first-time users need to know where repair is"},
+      {"path": "etc/issue", "must_match": ["gentoo-rescue"], "why": "first-time users need to know where repair is"},
+      {"path": "etc/issue", "flavor": "testkey", "must_match": ["TEST BUILD"], "why": "a test image must say what it is"},
+      {"path": "etc/motd", "flavor": "testkey", "must_match": ["TEST BUILD"], "why": "a test image must say what it is"},
+      {"path": "etc/issue", "flavor": "release", "must_not_match": ["TEST BUILD"], "why": "a release is not a test build"}
+    ]
+  },
+  "flavor": {
+    "test_artifacts": [
+      "root/.ssh/authorized_keys",
+      "etc/gentoo-installer-vm-test",
+      "etc/ssh/sshd_config.d/90-installer-vm-test.conf",
+      "etc/runlevels/*/sshd"
+    ],
+    "testkey_required": [
+      "root/.ssh/authorized_keys",
+      "etc/gentoo-installer-vm-test",
+      "etc/ssh/sshd_config.d/90-installer-vm-test.conf",
+      "etc/runlevels/default/sshd"
+    ]
+  }
+}
