@@ -467,7 +467,7 @@ def test_manual_kernel_genkernel_and_none_are_not_offered_nor_silently_replaced(
     window = make_window(manifest=manifest)
     window._show_page(3)
     kernel = window.system.kernel
-    assert kernel.currentData() == "manual" and "not available" in kernel.currentText()
+    assert kernel.value() == "manual" and "not available" in kernel.cards["manual"].title_label.text()
     assert window.manifest.system.kernel == "manual"  # never replaced behind the user's back
     valid, message = window.system.validate_page()
     assert not valid and "kernel" in message
@@ -475,19 +475,20 @@ def test_manual_kernel_genkernel_and_none_are_not_offered_nor_silently_replaced(
 
 def test_dual_boot_needs_grub(make_window):
     window = make_window()
-    window.system.bootloader.setCurrentIndex(window.system.bootloader.findData("systemd-boot"))
+    window.system.bootloader.set_value("systemd-boot")
     assert not window.system.dual_boot.isEnabled()
-    window.system.bootloader.setCurrentIndex(window.system.bootloader.findData("grub"))
+    window.system.bootloader.set_value("grub")
     assert window.system.dual_boot.isEnabled()
 
 
 def test_uefi_only_bootloaders_are_greyed_out_for_a_bios_install(make_window):
     window = make_window(info=sample_info(uefi=False))
     window._show_page(3)
-    model = window.system.bootloader.model()
-    assert model.item(window.system.bootloader.findData("grub")).isEnabled()
-    assert not model.item(window.system.bootloader.findData("systemd-boot")).isEnabled()
-    assert not model.item(window.system.bootloader.findData("efi-stub")).isEnabled()
+    cards = window.system.bootloader.cards
+    assert cards["grub"].isEnabled()
+    assert not cards["systemd-boot"].isEnabled() and not cards["efi-stub"].isEnabled()
+    assert "BIOS" in cards["efi-stub"].toolTip() and "UEFI" in cards["efi-stub"].toolTip()  # a greyed choice says why
+    assert "BIOS" in window.system.boot_section.bootloader_note.text()
 
 
 def test_the_storage_mode_choice_is_always_reachable(make_window):

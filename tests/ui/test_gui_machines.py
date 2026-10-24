@@ -95,8 +95,7 @@ def test_the_old_bios_computer_is_installed_for_legacy_boot(make_window):
     window = make_window(info=info)
     assert window.manifest.storage.firmware == "bios"
     window._show_page(3)
-    model = window.system.bootloader.model()
-    assert not model.item(window.system.bootloader.findData("systemd-boot")).isEnabled() and not window.system.secure_boot.isEnabled()
+    assert not window.system.bootloader.cards["systemd-boot"].isEnabled() and not window.system.secure_boot.isEnabled()
     window._show_page(4)
     tab = window.customize.hardware
     assert not tab.gpu_driver.cards["nvidia"].isVisibleTo(tab) and "AMD Radeon" in tab.summary.text()

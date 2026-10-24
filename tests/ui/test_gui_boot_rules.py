@@ -14,9 +14,7 @@ from tests.ui.conftest import sample_info
 
 def choose_bootloader(page, name):
     """Pick a bootloader the way a user does."""
-    index = page.bootloader.findData(name)
-    page.bootloader.setCurrentIndex(index)
-    page.bootloader.activated.emit(index)
+    page.bootloader.set_value(name)
 
 
 def system_page(make_window, manifest=None, **kwargs):
@@ -35,6 +33,8 @@ def test_ticking_secure_boot_forces_the_unified_kernel_image(make_window):
     page.secure_boot.click()
     assert page.secure_boot.isChecked() and page.uki.isChecked() and not page.uki.isEnabled()
     assert "signed Unified Kernel Image" in page.uki.toolTip()
+    assert page.secure_mode.currentData() == "create" and not page.signing_key.isEnabled()  # the installer makes the key: no files to give
+    page.secure_mode.setCurrentIndex(page.secure_mode.findData("own-key"))
     assert page.signing_key.isEnabled() and page.signing_cert.isEnabled()
     page.secure_boot.click()  # unticking gives the image back to the user, still ticked
     assert not page.secure_boot.isChecked() and page.uki.isEnabled() and page.uki.isChecked()
@@ -79,6 +79,7 @@ def test_secure_boot_and_the_image_need_uefi(make_window):
 def test_a_loaded_secure_boot_with_grub_is_shown_as_loaded_and_can_be_unticked(make_window):
     manifest = InstallManifest()
     manifest.system.secure_boot = True
+    manifest.system.stage_variant = "amd64-desktop-openrc"  # what the page derives for KDE, so that looking changes nothing
     manifest.system.secure_boot_key, manifest.system.secure_boot_certificate = "/k.key", "/c.crt"
     window, page = system_page(make_window, manifest)
     before = copy.deepcopy(window.manifest.system)
