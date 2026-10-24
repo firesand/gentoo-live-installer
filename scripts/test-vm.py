@@ -61,7 +61,7 @@ TEST_USERNAME = "vmtest"
 TEST_PASSWORD = "vmtest-only-password"
 TEST_ROOT_PASSWORD = "vmtest-only-root-password"
 # The passphrase prompt of both unlock paths, matched case-insensitively:
-#   systemd-cryptsetup: "Please enter passphrase for disk root (gentoo-root):"
+#   systemd-cryptsetup: "Please enter passphrase for disk root (gentoo-root):" (gentoo-crypt when LVM sits inside the container)
 #   dracut 70crypt:     "Password (/dev/disk/by-uuid/...) [1/3]:"
 LUKS_PROMPT_RE = r"(?:passphrase|password)\b[^\r\n]{0,200}:"
 # The installed kernel has no serial console unless the manifest asks for one.
@@ -69,6 +69,9 @@ LUKS_PROMPT_RE = r"(?:passphrase|password)\b[^\r\n]{0,200}:"
 SERIAL_CONSOLE_ARGUMENTS = "console=tty0 console=ttyS0,115200n8"
 SOCKET_NAMES = ("serial.sock", "qmp.sock")
 HARDWARE_PLAN_PATH = "/var/lib/gentoo-installer/hardware-plan.json"
+# The device-mapper names of a guided root (layout.luks_mapper_name): LUKS alone is gentoo-root, LVM is /dev/gentoo/root,
+# and with LVM inside the LUKS container the mapping is gentoo-crypt (the logical volume is the one that is gentoo-root).
+LEFTOVER_STACK = ("/dev/mapper/gentoo-root", "/dev/mapper/gentoo-crypt", "/dev/gentoo/root")
 # gentoo-installer-text (docs/contracts.md, interface I5): exit status -> what it means.
 TEXT_INSTALLER = "gentoo-installer-text"
 TEXT_INSTALLER_EXIT = {1: "reported that the installation failed", 2: "rejected the command line or the manifest", 3: "refused (the device confirmation was missing or wrong)",
@@ -826,6 +829,11 @@ def parse_lsblk_snapshot(output: str, disk: str = TARGET_DEVICE) -> dict[str, di
     return dict(sorted(flattened.items()))
 
 
+# What parted does to a disk when a command line names one of these: a new table or partition, and the flags in the table
+# (``set 2 boot on``, ``disk_set pmbr_boot on``), which the installer writes for BIOS firmware that insists on a boot flag.
+PARTED_WRITES = frozenset({"mklabel", "mktable", "mkpart", "rm", "resizepart", "move", "name", "set", "disk_set", "toggle", "rescue"})
+
+
 def destructive_runner_commands(output: str) -> list[str]:
     destructive: list[str] = []
     for line in ANSI_RE.sub("", output).splitlines():
@@ -848,12 +856,29 @@ def destructive_runner_commands(output: str) -> list[str]:
             continue
         executable = Path(argv[0]).name
         is_destructive = (executable.startswith("mkfs.") or executable in {"mkswap", "sgdisk", "wipefs", "pvcreate", "vgcreate", "lvcreate"}
-                          or (executable == "parted" and "mklabel" in argv[1:])
+                          or (executable == "parted" and any(word in PARTED_WRITES for word in argv[1:]))
                           or (executable == "mdadm" and "--create" in argv[1:])
                           or (executable == "cryptsetup" and any(arg.lower() == "luksformat" for arg in argv[1:])))
         if is_destructive:
             destructive.append(command_text)
     return destructive
+
+
+def cancel_cleanup_command(target_device: str) -> str:
+    """The command that shows, in the live system, what a cancelled install left behind: mounts of the target, the root stack's volumes, swap on the target.
+
+    It prints one JSON line and exits non-zero when anything is left.
+    """
+    return "python3 -c " + shlex.quote(
+        "from pathlib import Path; import json, sys; "
+        "mounts=[fields[4].replace('\\\\040',' ') for line in Path('/proc/self/mountinfo').read_text().splitlines() "
+        "if len(fields := line.split()) > 4 and (fields[4] == '/mnt/gentoo' or fields[4].startswith('/mnt/gentoo/'))]; "
+        f"left=[p for p in {tuple(LEFTOVER_STACK)!r} if Path(p).exists()]; "
+        "swaps=[line.split()[0] for line in Path('/proc/swaps').read_text().splitlines()[1:] "
+        f"if line.split() and line.split()[0].startswith(({target_device!r},'/dev/mapper/gentoo','/dev/gentoo/'))]; "
+        "print(json.dumps({'target_mounts':mounts,'leftover_root_stack':left,'target_swaps':swaps})); "
+        "sys.exit(bool(mounts or left or swaps))"
+    )
 
 
 def parse_resume_regression(returncode: int, output: str, before: dict[str, dict[str, str]],
@@ -2189,19 +2214,7 @@ class ScenarioRunner:
     def verify_cancel_cleanup(self) -> dict:
         if self.args.ssh_user != "root":
             raise HarnessError("--cancel-then-resume requires root SSH for guest cleanup checks and resume")
-        check = (
-            "python3 -c " + shlex.quote(
-                "from pathlib import Path; import json, sys; "
-                "mounts=[fields[4].replace('\\\\040',' ') for line in Path('/proc/self/mountinfo').read_text().splitlines() "
-                "if len(fields := line.split()) > 4 and (fields[4] == '/mnt/gentoo' or fields[4].startswith('/mnt/gentoo/'))]; "
-                "left=[p for p in ('/dev/mapper/gentoo-root','/dev/gentoo/root') if Path(p).exists()]; "
-                "swaps=[line.split()[0] for line in Path('/proc/swaps').read_text().splitlines()[1:] "
-                f"if line.split() and line.split()[0].startswith(({self.target_device!r},'/dev/mapper/gentoo','/dev/gentoo/'))]; "
-                "print(json.dumps({'target_mounts':mounts,'leftover_root_stack':left,'target_swaps':swaps})); "
-                "sys.exit(bool(mounts or left or swaps))"
-            )
-        )
-        code, log = self.ssh(self.args.ssh_user, check, "cancel-cleanup.log", self.args.command_timeout)
+        code, log = self.ssh(self.args.ssh_user, cancel_cleanup_command(self.target_device), "cancel-cleanup.log", self.args.command_timeout)
         output = log.read_text(errors="replace")
         report = parse_cancel_cleanup(code, output)
         report["output"] = output

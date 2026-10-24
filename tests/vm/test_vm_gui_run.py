@@ -99,3 +99,5 @@ def test_the_cancel_variant_passes_the_flag_and_reads_the_cancel_output_director
     assert "events_file" not in result["resume"] or (run / "resume-events.jsonl").is_file()
     assert (run / "cancel-events.jsonl").is_file() and (run / "cancel-gui-review.png").is_file()
     assert any("--cancel-at-stage3" in call["remote"] for call in lab.ssh_calls())
+    checks = [call["remote"] for call in lab.ssh_calls() if "/proc/self/mountinfo" in call["remote"]]
+    assert len(checks) == 1 and "/dev/mapper/gentoo-crypt" in checks[0]  # the cleanup check also looks for LUKS under LVM

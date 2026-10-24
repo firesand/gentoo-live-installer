@@ -1,4 +1,7 @@
 import json
+import shlex
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -255,6 +258,57 @@ def test_cancel_cleanup_rejects_remaining_mounts_root_stack_or_swap():
         payload = {"target_mounts": [], "leftover_root_stack": [], "target_swaps": []}
         payload[field] = value
         assert vm.parse_cancel_cleanup(0, json.dumps(payload))["success"] is False
+
+
+def test_the_leftover_stack_check_knows_every_name_the_storage_stage_gives_its_volumes():
+    """LUKS alone is gentoo-root, LVM is /dev/gentoo/root, and LUKS under LVM is gentoo-crypt (the LV keeps gentoo-root)."""
+    assert {"/dev/mapper/gentoo-root", "/dev/mapper/gentoo-crypt", "/dev/gentoo/root"} <= set(vm.LEFTOVER_STACK)
+    command = vm.cancel_cleanup_command("/dev/nvme0n1")
+    assert "gentoo-crypt" in command and "'/dev/nvme0n1'" in command
+
+
+def test_the_cleanup_check_in_the_guest_reports_what_is_left_and_exits_with_an_error(tmp_path, monkeypatch):
+    names = [tmp_path / "gentoo-root", tmp_path / "gentoo-crypt", tmp_path / "root"]
+    monkeypatch.setattr(vm, "LEFTOVER_STACK", tuple(str(name) for name in names))
+    argv = shlex.split(vm.cancel_cleanup_command("/dev/harness-no-such-disk"))
+    assert argv[:2] == ["python3", "-c"]
+
+    def run() -> tuple[int, dict]:
+        done = subprocess.run([sys.executable, *argv[1:]], capture_output=True, text=True, check=False)
+        return done.returncode, json.loads(done.stdout.splitlines()[-1])
+
+    code, report = run()
+    assert code == 0 and report["leftover_root_stack"] == []
+    names[1].write_text("")  # the mapping of LUKS under LVM
+    code, report = run()
+    assert code == 1 and report["leftover_root_stack"] == [str(names[1])]
+    assert vm.parse_cancel_cleanup(code, json.dumps(report))["success"] is False
+
+
+@pytest.mark.parametrize("command", [
+    "mkfs.ext4 -F /dev/vda2", "sgdisk --zap-all /dev/vda", "wipefs --all /dev/vda", "parted --script /dev/vda mklabel msdos",
+    "parted --script /dev/vda disk_set pmbr_boot on", "parted --script /dev/vda set 2 boot on",
+    "parted --script /dev/vda mkpart primary ext4 1MiB 100%", "parted --script /dev/vda rm 2",
+])
+def test_every_write_to_a_disk_or_its_partition_table_is_a_destructive_command(command):
+    logged = json.dumps({"type": "log", "message": f"$ {command}"})
+    assert vm.destructive_runner_commands(logged) == [command]
+
+
+@pytest.mark.parametrize("command", [
+    "parted --script --machine /dev/vda print", "parted --script /dev/vda unit s print", "partprobe /dev/vda", "udevadm settle",
+    "lsblk --json /dev/vda", "blkid -s UUID -o value /dev/vda2", "blkid -p /dev/vda",
+])
+def test_reading_a_disk_is_not(command):
+    assert vm.destructive_runner_commands(json.dumps({"type": "log", "message": f"$ {command}"})) == []
+
+
+def test_a_boot_flag_written_during_a_resume_fails_the_resume_check():
+    snapshot = vm.parse_lsblk_snapshot(json.dumps(_storage_snapshot()))
+    success = json.dumps({"type": "stage", "stage": "storage", "data": {"status": "skipped"}}) + "\n" + completed(True)
+    flag = json.dumps({"type": "log", "message": "$ parted --script /dev/vda disk_set pmbr_boot on"})
+    report = vm.parse_resume_regression(0, success + "\n" + flag, snapshot, snapshot)
+    assert report["success"] is False and report["destructive_commands"] == ["parted --script /dev/vda disk_set pmbr_boot on"]
 
 
 # --- why a start-up failure has no events (T1 step 6) -----------------------------------------------
