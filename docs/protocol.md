@@ -171,6 +171,28 @@ may need the right clock first). Each reply is one `result` event
   `date -u -s`, and `hwclock --systohc` only when the hardware clock is known to keep UTC.
   A bad time is `proto.bad_request`.
 
+### Network (feature `network.v1`) and live remote access (feature `remote.v1`)
+
+`gentoo_installerd.netactions` and `gentoo_installerd.remote` register like `hwactions`. Each reply is one `result` event
+`data = {ok, message, ...}`, then `completed`. NetworkManager (`nmcli`) does the work; no secret is ever in an argument
+list: a Wi-Fi profile is a keyfile (mode 0600, `psk-flags=0`) loaded with `nmcli connection load`, and a failed attempt deletes
+the profile it made. The actions that change the network (`wifi_connect`, `wifi_radio`, `network_static`) are `install.busy`
+while an installation runs.
+
+* `network_status {proxy?, mirror?, check_mirror?}`: `online`, `mirror`, `default_route`, `dns`, `wifi_present`, `wifi_enabled`,
+  `rfkill_hard`, `devices[{name, kind, state, driver, connection, ipv4[], ipv6[]}]`, `steps[{key, label, ok, detail}]` (the
+  Handbook's tests in order: link, address, route, ping, DNS, mirror) and `problem` (`""`, `cable`, `no_device`, `wifi_off`,
+  `wifi_hard_off`, `no_connection`, `no_route`, `no_dns`, `no_mirror`, `proxy`) with the plain sentence in `message`.
+* `wifi_scan {rescan?}`: `networks[{ssid, signal, security, in_use, known, band}]`, one row per SSID.
+* `wifi_connect {ssid, password?, hidden?}`: `{uuid, ssid}`, or `ok: false` with `reason` (`wrong_password`, `not_found`,
+  `timeout`, `no_device`, `wifi_off`, `wifi_hard_off`, `enterprise`, `failed`) and `message`.
+* `wifi_radio {on}`, `wifi_live_connections` (`connections[{uuid, ssid, active, secret_stored}]`).
+* `network_static {address, gateway, dns[], connection?}` gives the live connection a fixed address (NET-04);
+  `{dhcp: true}` puts it back.
+* `remote_status` (`sshd_running`, `enabled`, `user`, `port`, `addresses[]`, `fingerprints[{type, sha256}]`),
+  `remote_enable {password?}` (sets the live user's password through `chpasswd` on its standard input, generates one when empty,
+  starts sshd, returns the status plus `password` once) and `remote_disable` (`passwd -d`, the boot state). Live medium only.
+
 ### Rescue (feature `rescue.v1`)
 
 `gentoo_installerd.rescue.api.register(registry)` adds the fourteen `rescue.*` actions
