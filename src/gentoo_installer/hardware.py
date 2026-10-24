@@ -108,6 +108,13 @@ class HypervisorInfo:
 
 
 @dataclass
+class BootEntry:
+    id: str = ""  # "0001" of Boot0001
+    label: str = ""
+    active: bool = False
+
+
+@dataclass
 class FirmwareInfo:
     mode: str = "bios"  # uefi | bios
     efi_bits: int = 0  # 64 | 32 | 0 (BIOS)
@@ -118,6 +125,7 @@ class FirmwareInfo:
     efivars_writable: bool | None = None
     windows_boot_entry: bool | None = None
     tpm: str = ""  # "" (none) | "2.0" | "1.2" | "present" (version unknown)
+    boot_entries: list[BootEntry] = field(default_factory=list)  # UEFI boot menu from efibootmgr (labels only)
 
 
 @dataclass
@@ -769,6 +777,16 @@ def dpi_from(width_px: int, width_mm: int, height_px: int = 0, height_mm: int = 
     return round(dpi) if 40 <= dpi <= 600 else 0
 
 
+def parse_efibootmgr(text: str | None) -> list[BootEntry]:
+    """Boot entries from `efibootmgr` output: 'Boot0001* Gentoo<tab>HD(...)' -> BootEntry('0001', 'Gentoo', True)."""
+    entries: list[BootEntry] = []
+    for line in (text or "").splitlines():
+        match = re.match(r"Boot([0-9A-Fa-f]{4})(\*?)\s+(.*?)(?:\t.*)?$", line)
+        if match:
+            entries.append(BootEntry(match.group(1).upper(), match.group(3).strip(), bool(match.group(2))))
+    return entries
+
+
 def parse_chrony_tracking(text: str | None) -> tuple[bool | None, float | None]:
     """(synced, |offset| seconds) from ``chronyc -c tracking``; (None, None) when unusable."""
     if not text or not text.strip():
@@ -1099,6 +1117,7 @@ class _Prober:
             f.efivars_writable = "rw" in efivarfs[0][3].split(",")
         boot = self.command(("efibootmgr", "-v"))
         f.windows_boot_entry = None if boot is None else "Windows Boot Manager" in boot
+        f.boot_entries = parse_efibootmgr(boot)
 
     # -- graphics --------------------------------------------------------------------
 

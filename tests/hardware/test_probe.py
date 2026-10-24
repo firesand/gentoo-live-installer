@@ -363,3 +363,10 @@ def test_chrony_state_in_the_profile():
     assert probe_fixture("asus-desktop-rtx4090").clock.chrony_running is True
     assert probe_fixture("qemu-q35-virtio").clock.chrony_running is None        # no chronyc output: unknown
     assert probe_fixture("amd-laptop-sof").clock.chrony_running is True and probe_fixture("amd-laptop-sof").clock.ntp_synced is False
+
+
+def test_uefi_boot_entries_are_listed():
+    labels = {name: [e.label for e in probe_fixture(name).firmware.boot_entries] for name in FIXTURE_NAMES}
+    assert labels["asus-desktop-rtx4090"] == ["Gentoo", "UEFI OS", "UEFI: PXE IPv4 Intel(R) Ethernet Controller I226-V", "UEFI: PXE IPv6 Intel(R) Ethernet Controller I226-V"]
+    assert labels["thinkpad-intel-nvidia-hybrid"] == ["Windows Boot Manager", "ubuntu"]
+    assert labels["old-bios-sata-radeon"] == []          # BIOS: no NVRAM boot menu

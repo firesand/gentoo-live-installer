@@ -230,3 +230,14 @@ def test_hybrid_rule_does_not_misclassify_the_authors_desktop():
     virtual = hw.GpuInfo(vendor="virtio", virtual=True)
     assert not hw.is_hybrid(hw.HardwareProfile(gpus=[igpu, virtual], machine=hw.MachineInfo(form_factor="laptop")))
     assert not hw.is_hybrid(hw.HardwareProfile(gpus=[dgpu], machine=hw.MachineInfo(form_factor="laptop")))
+
+
+def test_efibootmgr_entries():
+    text = ("BootCurrent: 0001\nTimeout: 1 seconds\nBootOrder: 0001,0000\n"
+            "Boot0000* Windows Boot Manager\tHD(1,GPT,aaaa-bbbb,0x800,0x32000)/File(\\EFI\\Microsoft\\Boot\\bootmgfw.efi)WINDOWS\n"
+            "Boot0001* Gentoo\tHD(1,GPT,cccc)/File(\\EFI\\Gentoo\\grubx64.efi)\n"
+            "Boot0002  Disabled Entry\tHD(2,GPT,dddd)\n"
+            "Boot00ZZ* not an entry\n")
+    entries = hw.parse_efibootmgr(text)
+    assert [(e.id, e.label, e.active) for e in entries] == [("0000", "Windows Boot Manager", True), ("0001", "Gentoo", True), ("0002", "Disabled Entry", False)]
+    assert hw.parse_efibootmgr("") == [] and hw.parse_efibootmgr(None) == []
