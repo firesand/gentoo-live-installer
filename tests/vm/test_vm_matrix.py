@@ -15,8 +15,8 @@ from tests.vm.helpers import load_vm_module
 
 vm = load_vm_module()
 
-EXPECTED = ["defaults", "rescue-gentoo", "uefi-nvme-luks-openrc", "systemd", "openrc", "uefi-luks", "uefi-manual-two-disks", "bios", "bios-sata-minimal",
-            "text-install", "rescue-fedora", "rescue-ubuntu", "rescue-debian", "rescue-arch"]
+EXPECTED = ["defaults", "rescue-gentoo", "uefi-nvme-luks-openrc", "systemd", "openrc", "uefi-luks", "uefi-luks-lvm", "uefi-manual-two-disks", "bios",
+            "bios-sata-minimal", "text-install", "rescue-fedora", "rescue-ubuntu", "rescue-debian", "rescue-arch"]
 
 
 # --- the data -----------------------------------------------------------------------------------------------------
@@ -24,7 +24,7 @@ EXPECTED = ["defaults", "rescue-gentoo", "uefi-nvme-luks-openrc", "systemd", "op
 def test_wave3_has_every_scenario_the_plan_names_and_each_exactly_once():
     wave3 = vm_matrix.MATRICES["wave3"]
     assert [entry.name for entry in wave3.entries] == EXPECTED and len({entry.name for entry in wave3.entries}) == len(wave3.entries)
-    wanted = {"defaults", "bios-sata-minimal", "uefi-nvme-luks-openrc", "uefi-manual-two-disks", "openrc", "systemd", "uefi-luks", "bios",
+    wanted = {"defaults", "bios-sata-minimal", "uefi-nvme-luks-openrc", "uefi-manual-two-disks", "openrc", "systemd", "uefi-luks", "uefi-luks-lvm", "bios",
               "rescue-debian", "rescue-ubuntu", "rescue-fedora", "rescue-arch", "rescue-gentoo"}
     assert wanted <= {entry.scenario for entry in wave3.entries}
     assert all(entry.scenario in vm.SCENARIO_MAP for entry in wave3.entries)
@@ -38,6 +38,42 @@ def test_every_entry_documents_its_memory_and_cpus_and_the_biggest_job_is_the_de
     assert defaults.options[defaults.options.index("--swap-mib") + 1] == "4096"  # the rule for desktop installs in docs/TESTING.md
     assert max(entry.memory_mib for entry in vm_matrix.WAVE3.entries) == defaults.memory_mib
     assert defaults.sizing() == "12 GiB RAM, 4 CPUs" and vm_matrix.MatrixEntry("x", "bios", 6144, 2).sizing() == "6 GiB RAM, 2 CPUs"
+
+
+def parsed(entry):
+    shared = ["--iso", "/tmp/x.iso", "--ssh-host", "127.0.0.1", "--ssh-private-key", "/tmp/key"]
+    return vm.build_parser().parse_args(vm_matrix.job_argv(entry, port=40222, shared=shared))
+
+
+def test_only_the_job_with_the_memory_for_pyside_installs_hwmonux():
+    """HWMonux pulls PySide, which has no binary package: it is compiled on every install, for an hour, and a 4 GiB VM with two jobs gets the compiler killed (the first real runs)."""
+    installing = [entry for entry in vm_matrix.WAVE3.entries if not vm.SCENARIO_MAP[entry.scenario].image]
+    with_hwmonux = [entry for entry in installing if parsed(entry).companions == "both"]
+    assert [entry.name for entry in with_hwmonux] == ["defaults"]
+    defaults = with_hwmonux[0]
+    args = parsed(defaults)
+    assert defaults.memory_mib >= 12288 and args.build_jobs == 1 and args.swap_mib >= 4096  # what the desktop install gets, and a person's guided default
+    for entry in installing:
+        if entry is not defaults:
+            assert parsed(entry).companions == "portagehub", entry.name  # PortageHub is a Rust build that a 4 GiB VM does
+
+
+def test_the_callers_companions_reach_only_the_job_that_does_not_name_its_own():
+    """--companions is passed to every child (its default is 'both'), and the entry's option comes later: the install jobs keep PortageHub only."""
+    base = ["--matrix", "wave3", "--iso", "a.iso", "--ssh-host", "127.0.0.1", "--ssh-private-key", "k"]
+    for caller, defaults_gets in ((None, "both"), ("none", "none"), ("portagehub", "portagehub")):
+        args = vm.build_parser().parse_args(base + (["--companions", caller] if caller else []))
+        shared = vm_matrix.passthrough_arguments(args)
+        assert ["--companions", caller or "both"] in [shared[i:i + 2] for i in range(len(shared))]
+        chosen = {entry.name: vm.build_parser().parse_args(vm_matrix.job_argv(entry, port=40222, shared=[*shared, "--ssh-host", "127.0.0.1"])).companions
+                  for entry in vm_matrix.WAVE3.entries if not vm.SCENARIO_MAP[entry.scenario].image}
+        assert chosen["defaults"] == defaults_gets
+        assert {name: value for name, value in chosen.items() if name != "defaults"} == {name: "portagehub" for name in chosen if name != "defaults"}
+
+
+def test_the_matrix_stays_within_its_memory_budget_with_two_jobs_at_a_time():
+    biggest_pair = sorted((entry.memory_mib for entry in vm_matrix.WAVE3.entries), reverse=True)[:vm_matrix.PARALLEL_MAX]
+    assert sum(biggest_pair) <= vm_matrix.DEFAULT_BUDGET_MIB
 
 
 def test_the_defaults_job_has_the_disk_without_a_serial_number_and_the_gui_installer():
@@ -177,11 +213,12 @@ def test_never_more_than_two_vms_run_at_the_same_time_and_every_job_runs_once(tm
 def test_a_third_job_waits_for_a_free_place_and_gets_that_places_port(tmp_path):
     clock = Clock()
     lab = Lab(tmp_path, clock)
-    entries = [vm_matrix.WAVE3.entries[i] for i in (3, 4, 5)]  # systemd (40 min), openrc (40), uefi-luks (50)
+    entries = [vm_matrix.WAVE3.entries[i] for i in (3, 4, 5)]  # systemd, openrc, uefi-luks
+    assert [entry.name for entry in entries] == ["systemd", "openrc", "uefi-luks"]
     scheduler(tmp_path, clock, lab, entries=entries, budget_mib=100000, base_port=41000).run([])
     starts = [(t, name, int(a[a.index("--ssh-port") + 1])) for t, name, a in lab.started]
     assert starts[0][2] != starts[1][2] and {starts[0][2], starts[1][2]} == {41000, 41001}
-    assert starts[2][0] >= 40 * 60 and starts[2][2] in {41000, 41001}
+    assert starts[2][0] >= min(entries[0].minutes, entries[1].minutes) * 60 and starts[2][2] in {41000, 41001}  # when the first of the two is done
 
 
 def test_the_memory_budget_keeps_the_desktop_away_from_a_second_big_job(tmp_path):
@@ -274,7 +311,8 @@ def test_the_summary_is_written_next_to_the_logs(tmp_path):
     path = vm_matrix.write_summary(tmp_path, vm_matrix.WAVE3, results)
     data = json.loads(path.read_text())
     assert path.name == "matrix-result.json" and data["success"] is True and data["jobs"][0]["name"] == "systemd"
-    assert data["jobs"][0]["argv"][-2:] == ["--strict-probes", "--fresh-nvram-check"] and data["jobs"][0]["exit_code"] == 0
+    assert data["jobs"][0]["argv"][-len(entries[0].options):] == list(entries[0].options) and data["jobs"][0]["exit_code"] == 0
+    assert "--strict-probes" in data["jobs"][0]["argv"] and "--fresh-nvram-check" in data["jobs"][0]["argv"]
     assert "systemd" in vm_matrix.format_results(results) and "PASS" in vm_matrix.format_results(results)
 
 

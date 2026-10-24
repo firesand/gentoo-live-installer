@@ -14,6 +14,8 @@ import sys
 import types
 from pathlib import Path
 
+import vm_probes
+from gentoo_installer.layout import luks_mapper_name
 from tests.vm.helpers import PUBLIC_KEY
 
 FAKES = Path(__file__).resolve().parent / "fakes"
@@ -98,6 +100,21 @@ def hardware_plan_for(vm, scenario_name: str, firmware: str | None = None) -> di
     return hwplan.plan(scenario_manifest(vm, scenario_name, firmware), fixture_dict("qemu-q35-virtio")).to_dict()
 
 
+def plan_record(plan: dict) -> dict:
+    """The file the daemon keeps in its state directory (Installer._save_plan): the plan inside a record bound to the manifest."""
+    return {"version": 1, "fingerprint": "63308222627f71c26c7e4297df94f4a403047b31bdafd17ca9bcd8034fc04757",
+            "created": "2026-10-24T11:09:05.376Z", "plan": plan}
+
+
+def boot_flag_report(vm, scenario_name: str, firmware: str | None = None, *, flagged: bool = True) -> dict:
+    """What the boot-flag probe's program prints in a guest whose disk is (or is not) flagged: the first sector is one parted and sgdisk really wrote."""
+    gpt = scenario_manifest(vm, scenario_name, firmware).storage.table == "gpt"
+    image = ("gpt-pmbr-boot" if flagged else "gpt-no-flag") if gpt else ("dos-root-active" if flagged else "dos-no-flag")
+    partition = 3 if gpt else 2  # BIOS boot, swap, root on GPT; swap, root on DOS
+    sector = (Path(__file__).resolve().parent / "data" / f"mbr-{image}.bin").read_bytes()
+    return {"holder": "/", "source": f"/dev/vda{partition}", "partition": partition, "disk": "/dev/vda", **vm_probes.decode_mbr(sector)}
+
+
 def package_database(plan: dict) -> str:
     """What the package check prints on a machine where every package of the plan was installed (and nothing else)."""
     wanted = {atom for field in ("early_atoms", "driver_atoms", "required_atoms", "optional_atoms") for atom in plan.get(field, [])}
@@ -114,9 +131,14 @@ def layout_output(vm, scenario_name: str) -> str:
 
 
 def guest_rules(vm, scenario_name: str, *, guard: str = "vm_disk_guard", install: list | None = None,
-                companions: bool = True, extra: list | None = None, guard_options: dict | bool = True,
-                swap_mib: int = 512, firmware: str | None = None) -> list[dict]:
-    """Rules for a guest that installs and boots successfully, in the order the harness needs them."""
+                companions: bool | str = True, extra: list | None = None, guard_options: dict | bool = True,
+                swap_mib: int = 512, firmware: str | None = None, sudo: bool = False, boot_flag: bool = True) -> list[dict]:
+    """Rules for a guest that installs and boots successfully, in the order the harness needs them.
+
+    ``companions`` is True (both are installed and answer), "portagehub" (HWMonux is absent) or False (neither answers).
+    ``sudo`` gives the test user a working sudo: the probes that need it answer instead of ending up as findings,
+    so a ``--strict-probes`` run of a good guest can pass. ``boot_flag`` says whether the BIOS disk carries its boot flag.
+    """
     scenario = vm.SCENARIO_MAP[scenario_name]
     plan = hardware_plan_for(vm, scenario_name, firmware)
     preset = vm.vm_hw.SMBIOS_PRESETS[scenario.hardware.smbios]
@@ -132,7 +154,7 @@ def guest_rules(vm, scenario_name: str, *, guard: str = "vm_disk_guard", install
         {"user": "^root$", "match": guard, "guard": guard_options},
         {"user": "^root$", "match": r"(?:decoy-prepare|decoy-check|partition-manual|disk-hash) '\{", "guest_tool": True},
         {"user": "^root$", "match": r"^cat /var/log/gentoo-installerd\.log$", "stdout": "daemon stderr\n"},
-        {"user": "^root$", "match": r"^cat /var/lib/gentoo-installer/hardware-plan\.json$", "stdout": json.dumps(plan) + "\n"},
+        {"user": "^root$", "match": r"^cat /var/lib/gentoo-installer/hardware-plan\.json$", "stdout": json.dumps(plan_record(plan), indent=2) + "\n"},
         {"user": "^root$", "match": r"^cat > /run/gentoo-installer-vm-manifest\.json$", "stdin_to": "manifest.json"},
         {"user": "^root$", "match": r"^gentoo-installerd --manifest \S+ --yes$", "events": install or EVENT_STREAM},
         {"user": "^root$", "match": r"^gentoo-installerd --manifest \S+ --yes --resume$", "events": RESUME_STREAM},
@@ -147,13 +169,15 @@ def guest_rules(vm, scenario_name: str, *, guard: str = "vm_disk_guard", install
     ]
     uuid = "0a1b2c3d-1111-2222-3333-444455556666"
     cmdline = f"BOOT_IMAGE=/vmlinuz-6.12 root=UUID={uuid} ro quiet"
-    if scenario.luks:
-        cmdline += f" rd.luks.uuid={uuid} rd.luks.name={uuid}=gentoo-root console=tty0 console=ttyS0,115200n8"
+    if scenario.luks:  # the names configure_initramfs gives a guided root: gentoo-root, or gentoo-crypt when LVM sits inside the container
+        cmdline += f" rd.luks.uuid={uuid} rd.luks.name={uuid}={luks_mapper_name(scenario_manifest(vm, scenario_name, firmware).storage)} console=tty0 console=ttyS0,115200n8"
+    if scenario.lvm:
+        cmdline += " rd.lvm.lv=gentoo/root"
     rules += [
         {"user": "^vmtest$", "match": r"^test -d /sys/firmware/efi", "stdout": scenario.firmware + "\n"},
         {"user": "^vmtest$", "match": r"^cat /proc/cmdline$", "stdout": cmdline + "\n"},
         {"user": "^vmtest$", "match": r"^findmnt -no SOURCE /$",
-         "stdout": ("/dev/mapper/gentoo-root" if scenario.luks else "/dev/vda2") + "\n"},
+         "stdout": ("/dev/mapper/gentoo-root" if scenario.luks or scenario.lvm else "/dev/vda2") + "\n"},
         {"user": "^vmtest$", "match": r"^swapon --noheadings --bytes", "stdout": (f"/swapfile file {swap_mib * 2**20}\n" if scenario.luks
                                                                           else f"/dev/vda3 partition {swap_mib * 2**20 - 4096}\n")},
         {"user": "^vmtest$", "match": r"^cat /etc/gentoo-live-installer/install\.json$", "stdout": receipt_for(vm, scenario_name, firmware)},
@@ -163,12 +187,22 @@ def guest_rules(vm, scenario_name: str, *, guard: str = "vm_disk_guard", install
         {"user": "^vmtest$", "match": r"^findmnt -rno TARGET,SOURCE", "stdout": layout_output(vm, scenario_name) if scenario.manual else ""},
         {"user": "^vmtest$", "match": r"^sh -c .* sh sys-firmware/intel-microcode", "stdout": package_database(plan)},
     ]
+    if companions == "portagehub":  # HWMonux is switched off: its absence is what the probe looks for
+        rules.append({"user": "^vmtest$", "match": r"app-misc.*glob.*hwmonux-", "stdout": "absent\n"})
     rules.append({"user": "^vmtest$", "match": r"/var/db/pkg/", "stdout": "plasma-meta\n"})
-    if companions:
+    guided = scenario_manifest(vm, scenario_name, firmware).storage
+    if guided.firmware == "bios" and guided.mode == "erase":
+        rules.append({"user": "^vmtest$", "match": vm_probes.BOOT_FLAG_MARK, "stdout": json.dumps(boot_flag_report(vm, scenario_name, firmware, flagged=boot_flag)) + "\n"})
+    if sudo:
+        locked = scenario_manifest(vm, scenario_name, firmware).accounts.disable_root_login
         rules += [
-            {"user": "^vmtest$", "match": r"^hwmonux --dump$", "stdout": "vm-host\nSensor Value Min Max\n"},
-            {"user": "^vmtest$", "match": r"^portagehub --self-test$", "stdout": "repos: 1\ncatalog: 2\nvdb: 3\n"},
+            {"user": "^vmtest$", "match": r"^sudo -S -p '' true$", "stdout": ""},
+            {"user": "^vmtest$", "match": r"^sudo -S -p '' passwd -S root$", "stdout": f"root {'L' if locked else 'P'} 2026-10-24 0 99999 7 -1\n"},
         ]
+    if companions:
+        if companions != "portagehub":
+            rules.append({"user": "^vmtest$", "match": r"^hwmonux --dump$", "stdout": "vm-host\nSensor Value Min Max\n"})
+        rules.append({"user": "^vmtest$", "match": r"^portagehub --self-test$", "stdout": "repos: 1\ncatalog: 2\nvdb: 3\n"})
     rules.append({"user": "^vmtest$", "match": "nmcli", "stdout": STATIC_NETWORK + "\n"})
     return rules
 

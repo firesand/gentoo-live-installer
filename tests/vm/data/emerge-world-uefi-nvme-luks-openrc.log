@@ -1,0 +1,25 @@
+[gentoo] Local copy of remote index is within TTL and will be used.
+
+These are the packages that would be merged, in order:
+
+Calculating dependencies ... done!
+Dependency resolution took 5.73 s (backtrack: 0/20).
+
+[binary    gU  ] app-misc/ca-certificates-20260816.3.131.1-1::gentoo [20260601.3.112.5::gentoo] USE="-cacert" 150 KiB
+[binary    gU  ] sys-libs/timezone-data-2026e-1::gentoo [2026b::gentoo] USE="nls -leaps-timezone -verify-sig% -zic-slim" 320 KiB
+[binary   Rg   ] app-arch/zstd-1.5.7-r1-10:0/1::gentoo  USE="lzma zlib -lz4 -static-libs -test -verify-sig" ABI_X86="(32*) (64) (-x32)" 770 KiB
+[binary  N g   ] net-libs/nghttp2-1.70.0-3:0/1.14::gentoo  USE="-debug -hpack-tools -systemd -test -utils -verify-sig -xml" ABI_X86="(64) -32 (-x32)" 190 KiB
+[binary  N g   ] net-libs/nghttp3-1.18.0-1::gentoo  USE="-verify-sig" ABI_X86="(64) -32 (-x32)" 110 KiB
+[binary  N g   ] net-libs/ngtcp2-1.25.0-1::gentoo  USE="openssl ssl -gnutls -verify-sig" ABI_X86="(64) -32 (-x32)" 230 KiB
+[binary   Rg   ] net-misc/iputils-20250605-r4-1::gentoo  USE="arping caps filecaps* nls suid -clockdiff -doc -idn -test -tracepath -verify-sig" 140 KiB
+[binary   Rg   ] sys-devel/gettext-0.23.2-7::gentoo  USE="acl cxx ncurses nls openmp* xattr -doc -emacs -git -java -static-libs -verify-sig" ABI_X86="(64) -32 (-x32)" 2,690 KiB
+[binary    gU  ] net-misc/curl-8.23.0-1::gentoo [8.22.0::gentoo] USE="adns alt-svc ftp hsts http2* http3* httpsrr imap openssl pop3 psl quic* smtp ssl tftp websockets -brotli -debug (-ech) -gnutls -gopher -idn -kerberos -ldap -mbedtls (-rustls) -sasl-scram -ssh -static-libs -telnet -test -verify-sig -zstd" ABI_X86="(64) -32 (-x32)" CURL_SSL="openssl -gnutls -mbedtls (-rustls)" 1,380 KiB
+[binary   Rg   ] app-crypt/libb2-0.98.1-r3-14::gentoo  USE="openmp* -native-cflags -static-libs" ABI_X86="(64) -32 (-x32)" 50 KiB
+[binary   Rg   ] app-portage/portage-utils-0.97.1-1::gentoo  USE="openmp* qmanifest -static" 200 KiB
+[binary    gU  ] dev-python/ensurepip-pip-26.2.1-r1-1::gentoo [26.2.1::gentoo] USE="(test-rust) -test" PYTHON_TARGETS="python3_14 -python3_12 -python3_13 (-python3_14t) (-python3_15) (-python3_15t)" 1,010 KiB
+
+Total: 12 packages (4 upgrades, 3 new, 5 reinstalls, 12 binaries), Size of downloads: 7,240 KiB
+
+ * IMPORTANT: 26 news items need reading for repository 'gentoo'.
+ * Use eselect news read to view new items.
+

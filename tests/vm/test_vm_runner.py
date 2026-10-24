@@ -44,7 +44,7 @@ def test_cli_run_of_the_bios_scenario_passes_and_cleans_up(lab, capsys):
     run = lab.run_dir()
     result = lab.result()
     assert result["success"] is True
-    assert PROBES | {"network-static"} == {probe["name"] for probe in result["probes"]}
+    assert PROBES | {"network-static", "boot-flag"} == {probe["name"] for probe in result["probes"]}  # a BIOS install also has its boot flag read
     assert all(probe["success"] for probe in result["probes"] if not probe["advisory"])
     # The fake guest has no sudo: advisory findings are recorded, not fatal.
     assert {probe["name"] for probe in result["advisory_findings"]} == ADVISORY

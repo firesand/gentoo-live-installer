@@ -3,15 +3,17 @@ empty NVRAM, the console installer with a boot menu entry, an install across two
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
-from tests.vm.fake_env import EVENT_STREAM, FAILED_STREAM, Lab, guest_rules, hardware_plan_for
+from tests.vm.fake_env import EVENT_STREAM, FAILED_STREAM, Lab, guest_rules, hardware_plan_for, plan_record
 from tests.vm.fake_rescue import rescue_rules
 from tests.vm.helpers import PUBLIC_KEY, load_vm_module
 from tests.vm.iso_fixture import write_iso
 
 vm = load_vm_module()
+DATA = Path(__file__).resolve().parent / "data"  # files of the first real VM runs
 
 pytestmark = pytest.mark.slow  # real processes and sockets: about a second per scenario
 
@@ -35,7 +37,7 @@ def test_the_daemons_stderr_log_and_the_hardware_plan_are_copied_out_of_the_live
     lab.rules = guest_rules(vm, "bios")
     assert lab.run("--scenario", "bios", "--keep") == 0
     run = lab.run_dir()
-    assert (run / "daemon-stderr.log").read_text() == "daemon stderr\n" and json.loads((run / "hardware-plan.json").read_text())["schema"] == 1
+    assert (run / "daemon-stderr.log").read_text() == "daemon stderr\n" and json.loads((run / "hardware-plan.json").read_text())["plan"]["schema"] == 1
     artifacts = json.loads((run / "install-artifacts.json").read_text())
     assert artifacts["daemon-stderr.log"]["from"] == "/var/log/gentoo-installerd.log" and artifacts["hardware-plan.json"]["from"] == vm.HARDWARE_PLAN_PATH
     assert lab.result()["install"]["artifacts"] == artifacts and lab.result()["install"]["mode"] == "cli"
@@ -58,6 +60,31 @@ def test_a_missing_log_or_plan_is_recorded_not_an_error_of_its_own(lab):
     assert "hardware-plan-file" in findings(lab) and "hardware-plan.json" in findings(lab)["hardware-plan-file"]["error"]
 
 
+def test_the_plan_file_the_daemon_really_writes_passes_the_plan_checks_in_a_strict_run(lab):
+    """H1: the state file is {version, fingerprint, created, plan}; the first real runs called it 'not a plan'."""
+    real = (DATA / "hardware-plan-uefi-nvme-luks-openrc.json").read_text()
+    lab.rules = guest_rules(vm, "bios", sudo=True, extra=[{"user": "^root$", "match": r"^cat /var/lib/gentoo-installer/hardware-plan\.json$", "stdout": real}])
+    assert lab.run("--scenario", "bios", "--strict-probes") == 0
+    probes = {probe["name"]: probe for probe in lab.result()["probes"]}
+    assert probes["hardware-plan-file"]["success"] and probes["hardware-plan-file"]["output"].startswith('["CPU: QEMU Virtual CPU')
+    assert lab.result()["advisory_findings"] == []
+
+
+def test_a_plan_file_without_the_record_around_it_is_still_accepted(lab):
+    bare = hardware_plan_for(vm, "bios")
+    lab.rules = guest_rules(vm, "bios", sudo=True, extra=[{"user": "^root$", "match": r"^cat /var/lib/gentoo-installer/hardware-plan\.json$", "stdout": json.dumps(bare)}])
+    assert lab.run("--scenario", "bios", "--strict-probes") == 0
+    assert {probe["name"]: probe for probe in lab.result()["probes"]}["hardware-plan-file"]["success"]
+
+
+def test_a_plan_with_intel_microcode_inside_the_daemons_record_fails_the_run(lab):
+    plan = hardware_plan_for(vm, "bios")
+    plan["early_atoms"] = ["sys-firmware/intel-microcode"]
+    lab.rules = guest_rules(vm, "bios", extra=[{"user": "^root$", "match": r"^cat /var/lib/gentoo-installer/hardware-plan\.json$", "stdout": json.dumps(plan_record(plan))}])
+    assert lab.run("--scenario", "bios") == 1
+    assert "hardware-plan-file: the plan installs Intel microcode in a virtual machine" in lab.result()["error"]
+
+
 def test_a_missing_hardware_plan_fails_a_strict_run(lab):
     lab.rules = [{"user": "^root$", "match": r"^cat /var/lib/gentoo-installer/hardware-plan\.json$", "rc": 1}] + guest_rules(vm, "bios")
     assert lab.run("--scenario", "bios", "--strict-probes") == 1
@@ -71,6 +98,50 @@ def test_a_success_that_is_not_bootable_is_not_a_success(lab):
     lab.rules = guest_rules(vm, "bios", install=stream)
     assert lab.run("--scenario", "bios") == 1
     assert "success but not a bootable system" in lab.result()["error"]
+
+
+def last_result(lab) -> dict:
+    return json.loads((lab.run_dirs()[-1] / "result.json").read_text())
+
+
+def test_the_installers_reason_for_a_degraded_part_is_shown_as_it_sent_it_and_a_strict_run_fails(lab):
+    """H3: the completed event of the first real run (a part that could not be installed) is the one the harness judges."""
+    completed = json.loads((DATA / "completed-uefi-nvme-luks-openrc.json").read_text())
+    reason = completed["data"]["degraded"][0]
+    stream = EVENT_STREAM[:-1] + [completed]
+    lab.rules = guest_rules(vm, "bios", sudo=True, install=stream)
+    assert lab.run("--scenario", "bios") == 0  # a finding: the system installed and boots
+    finding = findings(lab)["install-degraded"]
+    assert reason in finding["error"] and json.loads(finding["output"])["degraded"] == [reason]
+    assert lab.result()["install"]["completed"]["degraded"] == [reason]
+    lab.rules = guest_rules(vm, "bios", sudo=True, install=stream)
+    assert lab.run("--scenario", "bios", "--strict-probes") == 1  # an optional part that is missing is a real problem
+    # nothing else fails: the one problem is what the installer said
+    assert last_result(lab)["error"] == f"Target verification failed: install-degraded: the installer finished with problems it did not treat as fatal: {reason}"
+
+
+def test_the_probe_of_a_part_that_did_not_install_carries_the_reason_the_installer_gave(lab):
+    """H3 with the real data: the completed event of the first run says hwmonux could not be installed, the probe found 'command not found'."""
+    completed = json.loads((DATA / "completed-uefi-nvme-luks-openrc.json").read_text())
+    reason = completed["data"]["degraded"][0]
+    gone = {"user": "^vmtest$", "match": r"^hwmonux --dump$", "rc": 127, "stdout": "bash: line 1: hwmonux: command not found\n"}
+    lab.rules = guest_rules(vm, "bios", sudo=True, install=EVENT_STREAM[:-1] + [completed], extra=[gone])
+    assert lab.run("--scenario", "bios") == 1
+    result = lab.result()
+    probe = {p["name"]: p for p in result["probes"]}["hwmonux"]
+    assert not probe["success"] and probe["error"] == f"Probe exited with status 127 (the installer reported: {reason})"
+    assert f"hwmonux: Probe exited with status 127 (the installer reported: {reason})" in result["error"]
+    assert result["companion_probes"][0]["error"] == probe["error"]
+
+
+def test_a_long_reason_of_the_installer_is_not_cut_short(lab):
+    reason = ("app-misc/hwmonux could not be installed: dev-python/pyside-6.11.2 was stopped because the machine ran out of memory while it compiled "
+              "QtOpenGL (the compiler was killed). " + "The build log inside the new system has the details. " * 12 + "End of the reason.")
+    stream = EVENT_STREAM[:-1] + [{"type": "completed", "message": "done", "data": {"success": True, "bootable": True, "degraded": [reason], "warnings": []}}]
+    lab.rules = guest_rules(vm, "bios", install=stream)
+    assert lab.run("--scenario", "bios") == 0
+    finding = findings(lab)["install-degraded"]
+    assert len(reason) > 500 and json.loads(finding["output"])["degraded"] == [reason] and finding["error"].endswith("End of the reason.")
 
 
 def test_optional_parts_that_failed_and_cleanup_warnings_are_findings(lab):
@@ -104,13 +175,38 @@ def test_the_world_probe_can_be_skipped_and_has_its_own_timeout(lab):
     assert "world-resolve" not in {probe["name"] for probe in lab.result()["probes"]}
 
 
-def test_a_world_that_does_not_resolve_fails_and_one_that_wants_rebuilds_is_a_finding(lab):
+def test_a_world_that_does_not_resolve_fails_the_run(lab):
     lab.rules = guest_rules(vm, "bios", extra=[{"user": "^vmtest$", "match": r"emerge --color=n", "rc": 1,
                                                  "stdout": "The following USE changes are necessary to proceed:\n>=media-libs/libpng-1.6 -apng\n"}])
     assert lab.run("--scenario", "bios") == 1
     assert "world-resolve: the configuration cannot satisfy the world" in lab.result()["error"]
-    lab.rules = guest_rules(vm, "bios", extra=[{"user": "^vmtest$", "match": r"emerge --color=n", "stdout": "[ebuild   R    ] dev-libs/drift-2.0 USE=\"b\" 10 KiB\n"}])
+
+
+def test_drift_is_information_that_never_fails_a_job_not_even_a_strict_one(lab):
+    """H2: the first real run (4 upgrades, 3 new, 5 reinstalls) came from a tree newer than the stage3, not from the installer."""
+    real = (DATA / "emerge-world-uefi-nvme-luks-openrc.log").read_text()
+    lab.rules = guest_rules(vm, "bios", sudo=True, extra=[{"user": "^vmtest$", "match": r"emerge --color=n", "stdout": real}])
+    assert lab.run("--scenario", "bios", "--strict-probes") == 0
+    result = lab.result()
+    assert result["advisory_findings"] == []
+    drift = result["world_drift"]
+    assert drift["counts"] == {"upgrades": 4, "new": 3, "reinstalls": 5}
+    assert "net-misc/curl-8.23.0-1" in drift["upgrades"] and "app-arch/zstd-1.5.7-r1-10" in drift["reinstalls"] and "net-libs/nghttp2-1.70.0-3" in drift["new"]
+    probes = {probe["name"]: probe for probe in result["probes"]}
+    assert probes["world-resolve"]["success"] and probes["world-drift"]["success"] and probes["world-drift"]["data"] == drift
+    assert "information only" in probes["world-drift"]["output"] and "data" not in probes["world-resolve"]  # only a probe that collected something has data
+
+
+def test_a_world_without_drift_says_so_in_the_result(lab):
+    lab.rules = guest_rules(vm, "bios")
     assert lab.run("--scenario", "bios") == 0
+    assert lab.result()["world_drift"]["counts"] == {"upgrades": 0, "new": 0, "reinstalls": 0}
+
+
+def test_no_world_probe_means_no_drift_record(lab):
+    lab.rules = guest_rules(vm, "bios")
+    assert lab.run("--scenario", "bios", "--no-world-probe") == 0
+    assert lab.result()["world_drift"] is None
 
 
 def test_a_receipt_that_contradicts_the_manifest_fails_the_run(lab):
@@ -165,6 +261,21 @@ def test_an_encrypted_install_with_a_swap_partition_fails_the_run(lab):
     assert "swap: an encrypted install has a raw swap partition (/dev/vda3)" in lab.result()["error"]
 
 
+def test_luks_with_lvm_inside_is_unlocked_installed_and_checked_with_the_names_the_storage_stage_gives(lab):
+    lab.rules = guest_rules(vm, "uefi-luks-lvm")
+    lab.qemu_config.update(serial_text_target="Enter passphrase for /dev/vda3: \r\n", unlock_line=vm.TEST_LUKS_PASSPHRASE)  # the prompt of the first real OpenRC guest
+    assert lab.run("--scenario", "uefi-luks-lvm", "--keep") == 0
+    run, result = lab.run_dir(), lab.result()
+    storage = json.loads((run / "fake-guest" / "manifest.json").read_text())["storage"]
+    assert (storage["luks"], storage["lvm"], storage["mode"]) == (True, True, "erase")
+    probes = {probe["name"]: probe for probe in result["probes"]}
+    assert "=gentoo-crypt" in probes["cmdline"]["output"] and "rd.lvm.lv=gentoo/root" in probes["cmdline"]["output"]
+    assert probes["root-source"]["output"] == "/dev/mapper/gentoo-root"  # the logical volume, not the container under it
+    assert all(probes[name]["success"] for name in ("cmdline", "root-source", "swap", "receipt")), [p for p in probes.values() if not p["success"]]
+    assert result["luks_unlock"]["method"] == "serial" and (run / "luks-unlock-receipt.json").is_file()
+    assert json.loads(probes["receipt"]["output"])["root"]["lvm"] is True
+
+
 def test_a_missing_fallback_boot_file_fails_the_run(lab):
     lab.rules = guest_rules(vm, "openrc", extra=[{"user": "^vmtest$", "match": r"BOOTX64\.EFI$", "rc": 1, "stdout": json.dumps({"path": "/efi/EFI/BOOT/BOOTX64.EFI", "error": "No such file"})}])
     assert lab.run("--scenario", "openrc") == 1
@@ -175,6 +286,47 @@ def test_a_broken_sudo_makes_the_fallback_check_a_finding_that_only_a_strict_run
     lab.rules = guest_rules(vm, "openrc", extra=[{"user": "^vmtest$", "match": r"BOOTX64\.EFI$", "rc": 1, "stdout": "sudo: a password is required\n"}])
     assert lab.run("--scenario", "openrc") == 0
     assert "efi-fallback" in findings(lab) and "cannot use sudo" in findings(lab)["efi-fallback"]["error"]
+
+
+def test_a_bios_install_has_the_boot_flag_of_its_disk_read_in_the_installed_system(lab):
+    lab.rules = guest_rules(vm, "bios")
+    assert lab.run("--scenario", "bios") == 0
+    probe = {p["name"]: p for p in lab.result()["probes"]}["boot-flag"]
+    assert probe["success"] and not probe["advisory"] and json.loads(probe["output"])["partition"] == 2
+    calls = [call for call in lab.ssh_calls() if vm.vm_probes.BOOT_FLAG_MARK in call["remote"]]
+    assert len(calls) == 1 and calls[0]["user"] == vm.TEST_USERNAME and calls[0]["remote"].startswith("sudo -S -p '' python3 -c ")
+
+
+@pytest.mark.parametrize(("name", "words"), [("bios", "no partition of the DOS disk"), ("bios-gpt", "protective MBR of the GPT disk")])
+def test_a_bios_install_whose_disk_has_no_boot_flag_fails_the_run(lab, name, words):
+    lab.rules = guest_rules(vm, name, boot_flag=False)
+    assert lab.run("--scenario", name) == 1
+    error = lab.result()["error"]
+    assert "boot-flag: " in error and words in error and "no bootable device" in error
+
+
+def test_the_boot_flag_of_a_uefi_install_is_not_looked_at(lab):
+    lab.rules = guest_rules(vm, "openrc")
+    assert lab.run("--scenario", "openrc") == 0
+    assert "boot-flag" not in {probe["name"] for probe in lab.result()["probes"]}
+    assert not any(vm.vm_probes.BOOT_FLAG_MARK in call["remote"] for call in lab.ssh_calls())
+
+
+def test_a_boot_flag_that_cannot_be_read_because_sudo_is_broken_is_a_finding(lab):
+    lab.rules = [{"user": "^vmtest$", "match": vm.vm_probes.BOOT_FLAG_MARK, "rc": 1, "stdout": "sudo: a password is required\n"}] + guest_rules(vm, "bios")
+    assert lab.run("--scenario", "bios") == 0
+    assert "cannot use sudo" in findings(lab)["boot-flag"]["error"]
+
+
+def test_an_install_with_portagehub_only_probes_portagehub_and_checks_that_hwmonux_is_absent(lab):
+    lab.rules = guest_rules(vm, "bios", companions="portagehub", sudo=True)
+    assert lab.run("--scenario", "bios", "--companions", "portagehub", "--strict-probes") == 0
+    result = lab.result()
+    names = {probe["name"] for probe in result["probes"]}
+    assert {"portagehub", "disabled-hwmonux-absent"} <= names and "hwmonux" not in names
+    assert result["companions"] == {"hwmonux": False, "portagehub": True}
+    manifest = json.loads((lab.run_dir() / "fake-guest" / "manifest.json").read_text())["options"]
+    assert (manifest["install_hwmonux"], manifest["install_portagehub"]) == (False, True)
 
 
 def test_a_bios_install_has_no_fallback_probe(lab):

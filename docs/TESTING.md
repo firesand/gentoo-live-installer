@@ -38,7 +38,10 @@ small ISO 9660 reader of the harness (`scripts/vm_iso.py`); `xorriso` is not nee
    `tests/vm/test_vm_rescue_driver.py` runs the harness's rescue driver against the real
    `gentoo-rescue` command line on the rescue tests' laboratory (a fake kernel and fake tools), and
    `tests/vm/test_vm_probes.py` checks the probes against the receipt and the hardware plan that the
-   product itself produces.
+   product itself produces. `tests/vm/data/` holds what the first real VM runs printed (the hardware
+   plan record, the output of `emerge -pvuDN @world`, the installer's final event) and first sectors
+   that `parted` and `sgdisk` wrote with the commands of the storage stage, so that the parsers are
+   tested against what the tools really say.
 3. **Real VMs** (`scripts/test-vm.py`): the real ISO, real QEMU, real installs. Hours for a
    desktop, minutes for a minimal system. Only this layer proves that something boots.
 
@@ -110,7 +113,13 @@ python3 scripts/test-vm.py --scenario openrc --iso build/test-dist/<iso> \
 Memory rule: run one VM at a time (or let `--matrix` run two), leave 3 GiB of host memory free
 beyond `--memory`, and give desktop installs `--memory 12288 --build-jobs 1 --swap-mib 4096`.
 `--companions both|portagehub|none` chooses which companion apps the manifest installs (and which
-probes run). `--install-mode gui` drives the real graphical installer as the live user,
+probes run). **`both`, the default, installs HWMonux, which pulls PySide: there is no binary package
+for it, so it is compiled from source on every install, for an hour or more, and one compile job
+needs several GiB.** The first real runs (4 GiB of memory, 512 MiB of swap, two jobs) had the compiler
+killed by the kernel (and, once, a guest that thrashed until SSH gave up). Treat `--companions both`
+like a desktop install, or use `--companions portagehub` (a Rust build that a 4 GiB VM does; the probe
+`disabled-hwmonux-absent` then checks that HWMonux really is not there).
+`--install-mode gui` drives the real graphical installer as the live user,
 `--install-mode text` the console installer (below); `--check-resume` reruns the daemon with
 `--resume`; `--cancel-then-resume` (GUI mode) cancels at stage3 and resumes. `--keep` keeps the disk
 and the firmware variables after success (failed runs always keep them).
@@ -130,7 +139,7 @@ them and even when the harness is killed with SIGKILL (the kernel sends QEMU SIG
 | `uefi-luks` | an encrypted root, unlocked over the serial console without an operator |
 | `bios` | SeaBIOS, MBR partition table, static network configuration |
 | `defaults` | the untouched wizard defaults (KDE, OpenRC, firmware, microcode, both companions); hours |
-| `bios-gpt` | SeaBIOS with a GPT disk: BIOS-boot partition and `grub-install i386-pc` |
+| `bios-gpt` | SeaBIOS with a GPT disk: BIOS-boot partition and `grub-install i386-pc`; the boot flag of the protective MBR is read |
 | `openrc-luks` | OpenRC with dracut's non-systemd passphrase prompt |
 | `uefi-fresh-nvram` | the installed disk boots with empty NVRAM, so it needs the removable fallback path |
 | `decoy-disk` | a second disk with data survives the installation byte for byte |
@@ -147,6 +156,7 @@ them and even when the harness is killed with SIGKILL (the kernel sends QEMU SIG
 | `btrfs-root`, `xfs-root`, `lvm-root`, `systemd-boot` | filesystem, LVM and bootloader variants |
 | `bios-sata-minimal` | an old PC: SeaBIOS, SATA (`sda`), Intel NIC, standard VGA, MBR partition table |
 | `uefi-nvme-luks-openrc` | an encrypted OpenRC laptop: NVMe, QXL display, passphrase on the serial console; swap must be a file inside the encrypted root |
+| `uefi-luks-lvm` | guided LUKS with LVM inside on OpenRC: the container is `gentoo-crypt` (`rd.luks.name=<uuid>=gentoo-crypt`), the root logical volume `gentoo-root` (`rd.lvm.lv=gentoo/root`); dracut unlocks and activates both. Never booted before the Wave 3 matrix |
 | `uefi-manual-two-disks` | a manual layout across two disks (ESP and root on the first, swap and `/home` on the second) next to a third disk that must stay byte for byte as it was |
 | `text-install` | the console installer: the ISO's text entry, then `gentoo-installer-text` with a device confirmation |
 | `rescue-debian` | Debian 13 cloud image: menu file deleted, repaired from the live ISO, booted with UEFI and BIOS |
@@ -202,21 +212,23 @@ images with a root login and are named like the release: move them out of `dist/
 After the first boot of the installed disk the harness runs these probes as the test user.
 Advisory probes record a finding in `result.json` (`advisory_findings`) and print it; only
 `--strict-probes` turns a finding into a failure. Every job of the matrix runs with `--strict-probes`.
+Information (`world-drift`) is kept in `result.json` and is neither.
 
 | Probe | What must be true | If it is not |
 |---|---|---|
 | `init`, `hostname`, `user`, `network`, `dns`, `portage` | the basics boot and work; `network-static` for the static-address scenarios | failure |
-| `hwmonux`, `portagehub` or `disabled-*-absent`, `desktop` | the companions and desktop the manifest asked for are installed and run; those it declined are absent | failure |
-| `firmware`, `cmdline`, `root-source` | booted in the firmware mode it was installed for; a stable `root=` (UUID, PARTUUID, label or mapper name) and the encryption argument, nothing of the live system, the requested extra arguments; root on `/dev/mapper` for LUKS and LVM | failure |
+| `hwmonux`, `portagehub` or `disabled-*-absent`, `desktop` | the companions and desktop the manifest asked for are installed and run; those it declined are absent. A companion that is missing carries the reason the installer gave for it in its final event | failure |
+| `firmware`, `cmdline`, `root-source` | booted in the firmware mode it was installed for; a stable `root=` (UUID, PARTUUID, label or mapper name) and the encryption argument, nothing of the live system, the requested extra arguments; in a guided install the container name of `rd.luks.name` (`gentoo-root`, or `gentoo-crypt` when LVM sits inside) and `rd.lvm.lv=gentoo/root` for LVM; root on `/dev/mapper` for LUKS and LVM | failure |
 | `swap` | a swap of the requested size is active (zram does not count). An encrypted install keeps swap in a **file** inside the encrypted root: a raw swap partition is a failure | failure |
 | `receipt` | `/etc/gentoo-live-installer/install.json` exists and agrees with the manifest: firmware, bootloader, init, kernel, initramfs, UKI, Secure Boot, profile, ESP mount point, root file system and UUID, LUKS UUID, LVM, RAID, separate `/boot` | missing: finding; wrong: failure |
 | `efi-fallback` | UEFI installs that must have it leave a non-empty EFI program at `EFI/BOOT/BOOTX64.EFI` on the ESP (read with `sudo`, the ESP is mounted with umask 0077) | failure; no sudo: finding |
-| `hardware-plan-file` | the daemon left `/var/lib/gentoo-installer/hardware-plan.json` in the live system (copied out to `hardware-plan.json`) and the plan fits a virtual machine: no Intel microcode, no guest tools when they are switched off, the hypervisor's tool when it is on automatic and the DMI strings name the hypervisor | missing: finding; wrong: failure |
+| `boot-flag` | BIOS installs (guided): the first sector of the installed disk, read in the installed system with `sudo`, carries the flag strict BIOS firmware looks for: the protective MBR of a GPT disk has the boot flag (byte 446 is `0x80`), a DOS disk has exactly one active partition, the one that holds `/boot` (else `/`). SeaBIOS never asks for it, so a VM cannot show it by booting. UEFI installs and manual layouts (which keep a flag that is already there) are not looked at | failure; no sudo: finding |
+| `hardware-plan-file` | the daemon left `/var/lib/gentoo-installer/hardware-plan.json` in the live system (copied out to `hardware-plan.json`; the file is a record `{version, fingerprint, created, plan}`, a bare plan is read too) and the plan in it fits a virtual machine: no Intel microcode, no guest tools when they are switched off, the hypervisor's tool when it is on automatic and the DMI strings name the hypervisor | missing: finding; wrong: failure |
 | `hardware-plan` | the installed system agrees with the plan: no `sys-firmware/intel-microcode`, every guest tool of the plan installed unless the installer itself reported it as degraded, none when they are switched off | failure |
 | `layout` | in a manual layout every row is mounted from the device the manifest named (the second disk's `/home`, its swap) | failure |
 | `world-resolve` | `emerge -pvuDN @world` resolves: no blocker, no conflict, no change the configuration would need | failure; no sudo: finding |
-| `world-drift` | the same command does not want to rebuild installed packages (USE flags that differ from the configuration) | finding |
-| `install-degraded` | the installer's final event reports no `degraded` parts (a desktop package or the NVIDIA driver that failed) and no `warnings` (a cleanup that failed after a good install) | finding |
+| `world-drift` | nothing: the same command's upgrades, new packages and reinstalls are only counted and listed (`world_drift` in `result.json`). Right after an install they come from a tree that is newer than the stage3 (new versions, changed USE defaults), not from the installer | information: never a finding, never a failure, also under `--strict-probes` |
+| `install-degraded` | the installer's final event reports no `degraded` parts (a desktop package or the NVIDIA driver that failed) and no `warnings` (a cleanup that failed after a good install). The finding carries the installer's own reasons, whole (also `install.completed` in `result.json`) | finding; a failure under `--strict-probes`: a part that did not install is a real problem |
 | `dmi` | the VM shows the DMI identity the scenario asked for | failure |
 | `sudo`, `root-lock` | the new user can use sudo with the password; root's password is locked as asked | finding |
 
@@ -324,6 +336,14 @@ driver starts from the wizard's own defaults plus only what a person would type,
 like a user, and requires the final manifest to equal the expected one: firmware, partition table
 (when the scenario fixes it) and disk identity must be what the GUI detected. A BIOS machine
 whose wizard offers UEFI fails with `storage.firmware: the GUI chose 'uefi', expected 'bios'`.
+In detect mode the wizard also seeds some fields from the hardware report: the swap size from the
+memory, no Bluetooth without a radio, no microcode in a virtual machine, and the companions (a
+machine without the memory for PySide may not get HWMonux). The plan records these fields and does
+not assert them. The harness then takes the wizard's values over into the saved `manifest.json`, so
+that the probes judge what was really asked for; what the harness itself expected stays in
+`manifest-expected.json`, and `install.wizard_choices` in `result.json` lists every difference (a
+machine with enough memory, like the 12 GiB of the `defaults` job, is expected to keep both companions,
+and the list shows when it did not).
 The driver stops itself with status 2 when a page does not advance (`--navigation-timeout`) or the
 backend is silent (`--idle-timeout`), and retries a slow network (`--readiness-timeout`) but never
 an identity problem.
@@ -331,8 +351,9 @@ an identity problem.
 ### What a run leaves behind
 
 `build/vm/<scenario>-<time>-<id>/` holds `result.json` (verdict, probes, `advisory_findings`,
-`luks_unlock`, `decoys`, `rescue`, `hardware`, `disk`, `install`, `boot_entry`, `fresh_nvram`,
-`boots`), `manifest.json`, the logs (`install.log`, `qemu-*.log`, `serial-*.log` with one pair per
+`world_drift` with the counts and the packages, `luks_unlock`, `decoys`, `rescue`, `hardware`,
+`disk`, `install`, `boot_entry`, `fresh_nvram`, `boots`), `manifest.json` (`manifest-expected.json`
+beside it when a detect-mode wizard chose other values), the logs (`install.log`, `qemu-*.log`, `serial-*.log` with one pair per
 boot: `serial-baseline.log`, `serial-final-uefi.log`, ...), `ssh-*-wait.log`, `verify-*.log`,
 `rescue-*.log` and the rescue audit logs, screenshots on failure (`failure-*.ppm`,
 `broken-boot.ppm`, `final-uefi.ppm`), `*-disk-guard.json`, `daemon-stderr.log`,
@@ -466,30 +487,44 @@ entries of the ISO; a missing input is a usage error (exit status 2), not a fail
 Every job gets `--strict-probes`; UEFI installs also get `--fresh-nvram-check`. Options of the
 caller (ISO, SSH key, timeouts, image directory) are passed to every job.
 
-| Entry | Scenario and options | RAM | CPUs | Minutes |
-|---|---|---|---|---|
-| `defaults` | `defaults`: KDE, UEFI, a virtio disk **without** a serial number (path identity), binhost; GUI install; `--disk-size 64 --build-jobs 1 --swap-mib 4096` | 12 GiB | 4 | 150 |
-| `rescue-gentoo` | `rescue-gentoo` | 4 GiB | 2 | 100 |
-| `uefi-nvme-luks-openrc` | `uefi-nvme-luks-openrc` | 4 GiB | 2 | 55 |
-| `systemd` | `systemd`: re-acceptance, the guided erase sequence changed in Wave 1 | 4 GiB | 2 | 40 |
-| `openrc` | `openrc`: re-acceptance | 4 GiB | 2 | 40 |
-| `uefi-luks` | `uefi-luks`: re-acceptance | 4 GiB | 2 | 50 |
-| `uefi-manual-two-disks` | `uefi-manual-two-disks` | 4 GiB | 2 | 45 |
-| `bios` | `bios`: re-acceptance | 4 GiB | 2 | 40 |
-| `bios-sata-minimal` | `bios-sata-minimal` | 4 GiB | 2 | 40 |
-| `text-install` | `text-install` | 4 GiB | 2 | 45 |
-| `rescue-fedora` | `rescue-fedora` | 4 GiB | 2 | 30 |
-| `rescue-ubuntu` | `rescue-ubuntu` | 4 GiB | 2 | 30 |
-| `rescue-debian` | `rescue-debian` | 4 GiB | 2 | 25 |
-| `rescue-arch` | `rescue-arch` | 4 GiB | 2 | 15 |
+| Entry | Scenario and options | Companions | RAM | CPUs | Minutes |
+|---|---|---|---|---|---|
+| `defaults` | `defaults`: KDE, UEFI, a virtio disk **without** a serial number (path identity), binhost; GUI install; `--disk-size 64 --build-jobs 1 --swap-mib 4096` | HWMonux and PortageHub | 12 GiB | 4 | 150 |
+| `rescue-gentoo` | `rescue-gentoo` | PortageHub | 4 GiB | 2 | 70 |
+| `uefi-nvme-luks-openrc` | `uefi-nvme-luks-openrc` | PortageHub | 4 GiB | 2 | 40 |
+| `systemd` | `systemd`: re-acceptance, the guided erase sequence changed in Wave 1 | PortageHub | 4 GiB | 2 | 30 |
+| `openrc` | `openrc`: re-acceptance | PortageHub | 4 GiB | 2 | 30 |
+| `uefi-luks` | `uefi-luks`: re-acceptance | PortageHub | 4 GiB | 2 | 35 |
+| `uefi-luks-lvm` | `uefi-luks-lvm`: LUKS with LVM inside, a combination that no VM has booted yet | PortageHub | 4 GiB | 2 | 40 |
+| `uefi-manual-two-disks` | `uefi-manual-two-disks` | PortageHub | 4 GiB | 2 | 35 |
+| `bios` | `bios`: re-acceptance; the boot flag of the disk is read | PortageHub | 4 GiB | 2 | 30 |
+| `bios-sata-minimal` | `bios-sata-minimal`; the boot flag of the disk is read | PortageHub | 4 GiB | 2 | 30 |
+| `text-install` | `text-install` | PortageHub | 4 GiB | 2 | 30 |
+| `rescue-fedora` | `rescue-fedora` | - | 4 GiB | 2 | 30 |
+| `rescue-ubuntu` | `rescue-ubuntu` | - | 4 GiB | 2 | 30 |
+| `rescue-debian` | `rescue-debian` | - | 4 GiB | 2 | 25 |
+| `rescue-arch` | `rescue-arch` | - | 4 GiB | 2 | 15 |
+
+**Companions.** Only the `defaults` entry installs HWMonux. It is the entry that has the memory for
+PySide (12 GiB, one build job, 4096 MiB of swap, which is also what the installer's guided defaults
+give a person), and its point is "the untouched wizard installs everything it offers". Every other
+install entry runs with `--companions portagehub`: HWMonux does not depend on the disk, the firmware
+or the network card that the entry is there to vary, and PySide would put an hour of compiling, and
+a memory limit that a 4 GiB VM does not meet, into every one of them. They still install PortageHub,
+and `disabled-hwmonux-absent` proves that the switched-off companion is not installed. The
+alternative, 6 GiB for every entry, would fit the budget (12 + 6 GiB of 24) but is still a guess for
+PySide's large compile jobs and keeps the hour in each job. A `--companions` given to `--matrix`
+reaches only the `defaults` job (the other entries name their own). The minutes are estimates of an install
+without PySide, from the stage times of the first real runs: about 10 minutes for the base system, a
+few more for PortageHub, and the boots and probes.
 
 The matrix needs an ISO built from the merged tree: `text-install` asks the boot menu for the
 text console entry, and the check before the first job stops the whole matrix with exit status 2
 when the menu has none (`--matrix-only` leaves such an entry out).
 
-The minutes are estimates for a machine with KVM. The `defaults` entry needs the wizard to offer a
-disk without a serial number (known gap G3 below); without that it fails at the disk page, which
-is what the entry is there to find out. 12 GiB + 4 GiB + the margin is the most that ever runs.
+The minutes are estimates for a machine with KVM. The first real `defaults` run stopped at the disk
+page because the driver did not tick the approval that the wizard asks for a disk without a serial
+number; the driver now ticks it, like a person. 12 GiB + 4 GiB + the margin is the most that ever runs.
 
 ```sh
 test-vm.py --list-matrix                                    # the table above, from the data
@@ -508,8 +543,13 @@ clean up its own QEMU. `--matrix-parallel` cannot exceed 2.
 
 Read these before trusting, or blaming, a result.
 
-* **Nothing outside the original four scenarios has run on real QEMU.** The new scenarios, the
-  hardware options, `--live-only`, the rescue flow and everything in the Wave 3 matrix are tested
+* **Little outside the original four scenarios has run on real QEMU.** The first Wave 3 matrix runs
+  (OpenRC with LUKS on NVMe, OpenRC, the install part of `rescue-gentoo`) installed a system that
+  booted and passed the basic probes. They failed on the HWMonux build (PySide ran out of memory, see
+  "Companions" above), on a check that read the daemon's plan file wrongly and on a drift of the
+  Portage world that the installer did not cause (the harness reads the plan record now, and the drift
+  is information). The new scenarios, the
+  hardware options, `--live-only`, the rescue flow and the rest of the Wave 3 matrix are tested
   as argument lists and against the fake lab. The first real runs are also where QEMU and the
   guests confirm what the harness assumes and the fake lab cannot know: that `-smbios file=`
   replaces QEMU's own enclosure record (the `dmi` probe of `laptop-smbios` checks `chassis_type`),
@@ -522,13 +562,12 @@ Read these before trusting, or blaming, a result.
 * **LUKS unlock over serial needs the installed system to honour `system.kernel_cmdline_extra`**
   (`configure.py` must put it on `/etc/kernel/cmdline` and `GRUB_CMDLINE_LINUX`). Until it does,
   `uefi-luks` and `openrc-luks` time out waiting for the prompt, with a message saying so.
-* **`serial-less` fails until the daemon accepts `device_id_kind=path`**, and the `defaults` entry
-  of the matrix until the GUI offers a path identity for such a disk (G3).
+* **`serial-less` fails until the daemon accepts `device_id_kind=path`.**
 * **`--gui-detect` on a BIOS machine fails until the wizard seeds the firmware from detection**
   (the unit test in `tests/vm/test_vm_gui_driver.py` is an expected failure that starts passing then).
 * **The hardware plan is read from `/var/lib/gentoo-installer/hardware-plan.json`** (the daemon's
-  state directory). Until the daemon writes it, `hardware-plan-file` is a finding; with
-  `--strict-probes` (the matrix) it fails the run.
+  state directory), from the `plan` key of the record the daemon writes there. A missing file, or one
+  without a plan, is a finding; with `--strict-probes` (the matrix) it fails the run.
 * **The cloud images are not Gentoo systems:** the harness cannot log in, so it cannot look at their
   `/proc/cmdline`; the kernel's own command line shows up on the console only when its log level
   allows it. The live arguments are therefore also searched in the boot files from the live side.
@@ -557,6 +596,10 @@ Read these before trusting, or blaming, a result.
 * **`uefi-luks` and friends hang at the passphrase prompt**: read `serial-target.log` and
   `luks-unlock-receipt.json`; if the kernel never printed to ttyS0 the installed system ignored
   `system.kernel_cmdline_extra`.
+* **"The SSH connection to the live system was lost (exit 255) during the desktop stage"**: the guest
+  stopped answering (SSH waits 30 minutes of silence before it gives up). A guest that runs out of
+  memory thrashes instead of failing; the usual cause is a compile (PySide, for HWMonux). Read
+  `serial-live.log` and `qemu-live.log`, and see the memory rule under "Running a scenario".
 * **A matrix job was skipped for memory**: the note names the numbers; free memory or lower
   `--matrix-memory-budget` only if you know what else runs.
 

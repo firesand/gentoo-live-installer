@@ -1,4 +1,7 @@
 import json
+import shlex
+import subprocess
+import sys
 from pathlib import Path
 
 import pytest
@@ -22,6 +25,21 @@ def test_install_result_requires_zero_exit_and_success_event():
     assert vm.parse_install_result(1, output).success is False
     assert vm.parse_install_result(0, completed(False)).success is False
     assert vm.parse_install_result(0, "ordinary output").success is False
+
+
+def test_a_lost_connection_is_named_with_the_stage_the_installer_was_in():
+    """The first real systemd run: PySide made the 4 GiB guest thrash, SSH gave up (exit 255) and the only text left was the daemon's banner."""
+    output = "\n".join((
+        json.dumps({"type": "stage", "stage": "base", "data": {"status": "completed"}}),
+        json.dumps({"type": "stage", "stage": "desktop", "data": {"status": "running"}}),
+        json.dumps({"type": "log", "stage": "desktop", "message": "[44/107] /usr/bin/x86_64-pc-linux-gnu-g++ -DQT_CORE_LIB"}),
+        "2026-10-24 11:55:21,318 INFO gentoo_installerd.server: gentoo-installerd 0.1.0 manifest=/run/gentoo-installer-vm-manifest.json",
+    ))
+    result = vm.parse_install_result(255, output)
+    assert result.success is False and len(result.events) == 3
+    assert "SSH connection to the live system was lost (exit 255) during the desktop stage" in result.error
+    assert "out of memory" in result.error and "serial-live.log" in result.error and "INFO" not in result.error
+    assert vm.parse_install_result(255, "").error.startswith("The SSH connection to the live system was lost (exit 255)")
 
 
 def test_install_result_reports_backend_errors_and_ignores_non_json():
@@ -255,6 +273,57 @@ def test_cancel_cleanup_rejects_remaining_mounts_root_stack_or_swap():
         payload = {"target_mounts": [], "leftover_root_stack": [], "target_swaps": []}
         payload[field] = value
         assert vm.parse_cancel_cleanup(0, json.dumps(payload))["success"] is False
+
+
+def test_the_leftover_stack_check_knows_every_name_the_storage_stage_gives_its_volumes():
+    """LUKS alone is gentoo-root, LVM is /dev/gentoo/root, and LUKS under LVM is gentoo-crypt (the LV keeps gentoo-root)."""
+    assert {"/dev/mapper/gentoo-root", "/dev/mapper/gentoo-crypt", "/dev/gentoo/root"} <= set(vm.LEFTOVER_STACK)
+    command = vm.cancel_cleanup_command("/dev/nvme0n1")
+    assert "gentoo-crypt" in command and "'/dev/nvme0n1'" in command
+
+
+def test_the_cleanup_check_in_the_guest_reports_what_is_left_and_exits_with_an_error(tmp_path, monkeypatch):
+    names = [tmp_path / "gentoo-root", tmp_path / "gentoo-crypt", tmp_path / "root"]
+    monkeypatch.setattr(vm, "LEFTOVER_STACK", tuple(str(name) for name in names))
+    argv = shlex.split(vm.cancel_cleanup_command("/dev/harness-no-such-disk"))
+    assert argv[:2] == ["python3", "-c"]
+
+    def run() -> tuple[int, dict]:
+        done = subprocess.run([sys.executable, *argv[1:]], capture_output=True, text=True, check=False)
+        return done.returncode, json.loads(done.stdout.splitlines()[-1])
+
+    code, report = run()
+    assert code == 0 and report["leftover_root_stack"] == []
+    names[1].write_text("")  # the mapping of LUKS under LVM
+    code, report = run()
+    assert code == 1 and report["leftover_root_stack"] == [str(names[1])]
+    assert vm.parse_cancel_cleanup(code, json.dumps(report))["success"] is False
+
+
+@pytest.mark.parametrize("command", [
+    "mkfs.ext4 -F /dev/vda2", "sgdisk --zap-all /dev/vda", "wipefs --all /dev/vda", "parted --script /dev/vda mklabel msdos",
+    "parted --script /dev/vda disk_set pmbr_boot on", "parted --script /dev/vda set 2 boot on",
+    "parted --script /dev/vda mkpart primary ext4 1MiB 100%", "parted --script /dev/vda rm 2",
+])
+def test_every_write_to_a_disk_or_its_partition_table_is_a_destructive_command(command):
+    logged = json.dumps({"type": "log", "message": f"$ {command}"})
+    assert vm.destructive_runner_commands(logged) == [command]
+
+
+@pytest.mark.parametrize("command", [
+    "parted --script --machine /dev/vda print", "parted --script /dev/vda unit s print", "partprobe /dev/vda", "udevadm settle",
+    "lsblk --json /dev/vda", "blkid -s UUID -o value /dev/vda2", "blkid -p /dev/vda",
+])
+def test_reading_a_disk_is_not(command):
+    assert vm.destructive_runner_commands(json.dumps({"type": "log", "message": f"$ {command}"})) == []
+
+
+def test_a_boot_flag_written_during_a_resume_fails_the_resume_check():
+    snapshot = vm.parse_lsblk_snapshot(json.dumps(_storage_snapshot()))
+    success = json.dumps({"type": "stage", "stage": "storage", "data": {"status": "skipped"}}) + "\n" + completed(True)
+    flag = json.dumps({"type": "log", "message": "$ parted --script /dev/vda disk_set pmbr_boot on"})
+    report = vm.parse_resume_regression(0, success + "\n" + flag, snapshot, snapshot)
+    assert report["success"] is False and report["destructive_commands"] == ["parted --script /dev/vda disk_set pmbr_boot on"]
 
 
 # --- why a start-up failure has no events (T1 step 6) -----------------------------------------------

@@ -39,6 +39,7 @@ sys.dont_write_bytecode = True
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from gentoo_installer.layout import luks_mapper_name  # noqa: E402
 from gentoo_installer.manifest import InstallManifest, Partition  # noqa: E402
 import vm_guard  # noqa: E402
 import vm_guest  # noqa: E402
@@ -61,7 +62,7 @@ TEST_USERNAME = "vmtest"
 TEST_PASSWORD = "vmtest-only-password"
 TEST_ROOT_PASSWORD = "vmtest-only-root-password"
 # The passphrase prompt of both unlock paths, matched case-insensitively:
-#   systemd-cryptsetup: "Please enter passphrase for disk root (gentoo-root):"
+#   systemd-cryptsetup: "Please enter passphrase for disk root (gentoo-root):" (gentoo-crypt when LVM sits inside the container)
 #   dracut 70crypt:     "Password (/dev/disk/by-uuid/...) [1/3]:"
 LUKS_PROMPT_RE = r"(?:passphrase|password)\b[^\r\n]{0,200}:"
 # The installed kernel has no serial console unless the manifest asks for one.
@@ -69,6 +70,9 @@ LUKS_PROMPT_RE = r"(?:passphrase|password)\b[^\r\n]{0,200}:"
 SERIAL_CONSOLE_ARGUMENTS = "console=tty0 console=ttyS0,115200n8"
 SOCKET_NAMES = ("serial.sock", "qmp.sock")
 HARDWARE_PLAN_PATH = "/var/lib/gentoo-installer/hardware-plan.json"
+# The device-mapper names of a guided root (layout.luks_mapper_name): LUKS alone is gentoo-root, LVM is /dev/gentoo/root,
+# and with LVM inside the LUKS container the mapping is gentoo-crypt (the logical volume is the one that is gentoo-root).
+LEFTOVER_STACK = ("/dev/mapper/gentoo-root", "/dev/mapper/gentoo-crypt", "/dev/gentoo/root")
 # gentoo-installer-text (docs/contracts.md, interface I5): exit status -> what it means.
 TEXT_INSTALLER = "gentoo-installer-text"
 TEXT_INSTALLER_EXIT = {1: "reported that the installation failed", 2: "rejected the command line or the manifest", 3: "refused (the device confirmation was missing or wrong)",
@@ -270,6 +274,8 @@ SCENARIO_MAP = {
     "uefi-nvme-luks-openrc": Scenario("uefi-nvme-luks-openrc", "openrc", "uefi", luks=True, in_all=False,
                                       hardware=_hw(disk_bus="nvme", vga="qxl"),
                                       note="an encrypted OpenRC laptop: NVMe, QXL display, passphrase prompt on the serial console"),
+    "uefi-luks-lvm": Scenario("uefi-luks-lvm", "openrc", "uefi", luks=True, lvm=True, in_all=False,
+                              note="guided LUKS with LVM inside: the container is gentoo-crypt, the root volume gentoo-root; dracut unlocks and activates both"),
     "uefi-manual-two-disks": Scenario("uefi-manual-two-disks", "openrc", "uefi", manual=True, decoy=True, extra_roles=("data", "decoy"), in_all=False,
                                       hardware=_hw(extra_disks=(4096, 256)),
                                       note="manual layout across two disks (ESP and root on one, swap and /home on the other) next to a third disk that must survive"),
@@ -293,6 +299,10 @@ ALL_SCENARIOS = tuple(name for name, scenario in SCENARIO_MAP.items() if scenari
 # Manifest fields the GUI determines from the machine it runs on. In --gui-detect mode the harness
 # leaves them at the wizard's defaults and asserts what the GUI chose.
 DETECTED_FIELDS = ("storage.device", "storage.device_id", "storage.device_id_kind", "storage.firmware", "storage.table")
+# Fields the wizard seeds from the hardware report (recommend.defaults_for) when the manifest still holds the default: the swap size from
+# the memory, no Bluetooth without a radio, no microcode in a virtual machine, and the companions, which a machine too small for PySide
+# may not get. In detect mode the plan records them without asserting them, and the probes judge what the wizard chose.
+WIZARD_SEEDED = ("storage.swap_mib", "options.bluetooth", "options.microcode", "options.install_hwmonux", "options.install_portagehub")
 
 
 @dataclass(frozen=True)
@@ -306,6 +316,19 @@ class InstallResult:
     success: bool
     error: str
     events: list[dict]
+
+
+# HWMonux pulls PySide, which has no binary package. The first real runs (4096 MiB of memory, two build jobs, 512 MiB of swap) had
+# its compiler killed by the kernel; a desktop install gets 12288 MiB, one job and 4096 MiB of swap (docs/TESTING.md).
+PYSIDE_MEMORY_MIB = 8192
+
+
+def companion_memory_note(scenario: Scenario, args: argparse.Namespace) -> str:
+    """A warning for a run that installs HWMonux in a machine too small to compile PySide ('' when there is nothing to say)."""
+    if scenario.image or getattr(args, "companions", "both") != "both" or args.memory >= PYSIDE_MEMORY_MIB:
+        return ""
+    return (f"NOTE {scenario.name}: --companions both installs HWMonux, which compiles PySide from source; the first real runs with {args.memory} MiB "
+            "of memory had the compiler killed. Use --companions portagehub, or --memory 12288 --build-jobs 1 --swap-mib 4096.")
 
 
 def companion_selection(manifest: InstallManifest) -> dict[str, bool]:
@@ -651,6 +674,7 @@ def ssh_command(args: argparse.Namespace, known_hosts: Path, user: str, remote: 
     return [*ssh_base_arguments(args, known_hosts, user), "--", remote]
 
 
+SSH_LOST = 255  # ssh's own exit status: it never reached the command, or the connection died (a guest that thrashes under memory pressure)
 UNKNOWN_FIELDS_RE = re.compile(r"Unknown (\w+) fields?: ([\w, ]+)")
 
 
@@ -659,6 +683,7 @@ def parse_install_result(returncode: int, output: str) -> InstallResult:
     errors: list[str] = []
     stray: list[str] = []
     completed: dict | None = None
+    stage = ""
     for line in ANSI_RE.sub("", output).splitlines():
         try:
             event = json.loads(line)
@@ -673,8 +698,14 @@ def parse_install_result(returncode: int, output: str) -> InstallResult:
             errors.append(str(event.get("error") or event.get("message") or "Unknown backend error"))
         if event.get("type") == "completed":
             completed = event
+        if event.get("type") == "stage" and (event.get("data") or {}).get("status") == "running":
+            stage = str(event.get("stage") or "")
     if completed is None:
         reason = "Backend output has no completed event" + (f" (exit {returncode})" if returncode else "")
+        if returncode == SSH_LOST:  # ssh itself ended: the guest stopped answering, and the daemon's banner says nothing about why
+            return InstallResult(False, f"The SSH connection to the live system was lost (exit {SSH_LOST})" + (f" during the {stage} stage" if stage else "")
+                                 + f" after {len(events)} events. A guest that runs out of memory stops answering: read serial-live.log and qemu-live.log, "
+                                 "and give the machine more memory, more swap or fewer build jobs", events)
         if stray:  # the daemon refused to start: its message is the cause
             reason += f": {stray[-1][:300]}"
             unknown = UNKNOWN_FIELDS_RE.search(stray[-1])
@@ -826,6 +857,11 @@ def parse_lsblk_snapshot(output: str, disk: str = TARGET_DEVICE) -> dict[str, di
     return dict(sorted(flattened.items()))
 
 
+# What parted does to a disk when a command line names one of these: a new table or partition, and the flags in the table
+# (``set 2 boot on``, ``disk_set pmbr_boot on``), which the installer writes for BIOS firmware that insists on a boot flag.
+PARTED_WRITES = frozenset({"mklabel", "mktable", "mkpart", "rm", "resizepart", "move", "name", "set", "disk_set", "toggle", "rescue"})
+
+
 def destructive_runner_commands(output: str) -> list[str]:
     destructive: list[str] = []
     for line in ANSI_RE.sub("", output).splitlines():
@@ -848,12 +884,29 @@ def destructive_runner_commands(output: str) -> list[str]:
             continue
         executable = Path(argv[0]).name
         is_destructive = (executable.startswith("mkfs.") or executable in {"mkswap", "sgdisk", "wipefs", "pvcreate", "vgcreate", "lvcreate"}
-                          or (executable == "parted" and "mklabel" in argv[1:])
+                          or (executable == "parted" and any(word in PARTED_WRITES for word in argv[1:]))
                           or (executable == "mdadm" and "--create" in argv[1:])
                           or (executable == "cryptsetup" and any(arg.lower() == "luksformat" for arg in argv[1:])))
         if is_destructive:
             destructive.append(command_text)
     return destructive
+
+
+def cancel_cleanup_command(target_device: str) -> str:
+    """The command that shows, in the live system, what a cancelled install left behind: mounts of the target, the root stack's volumes, swap on the target.
+
+    It prints one JSON line and exits non-zero when anything is left.
+    """
+    return "python3 -c " + shlex.quote(
+        "from pathlib import Path; import json, sys; "
+        "mounts=[fields[4].replace('\\\\040',' ') for line in Path('/proc/self/mountinfo').read_text().splitlines() "
+        "if len(fields := line.split()) > 4 and (fields[4] == '/mnt/gentoo' or fields[4].startswith('/mnt/gentoo/'))]; "
+        f"left=[p for p in {tuple(LEFTOVER_STACK)!r} if Path(p).exists()]; "
+        "swaps=[line.split()[0] for line in Path('/proc/swaps').read_text().splitlines()[1:] "
+        f"if line.split() and line.split()[0].startswith(({target_device!r},'/dev/mapper/gentoo','/dev/gentoo/'))]; "
+        "print(json.dumps({'target_mounts':mounts,'leftover_root_stack':left,'target_swaps':swaps})); "
+        "sys.exit(bool(mounts or left or swaps))"
+    )
 
 
 def parse_resume_regression(returncode: int, output: str, before: dict[str, dict[str, str]],
@@ -1206,8 +1259,18 @@ def parse_cmdline_probe(returncode: int, output: str, manifest: InstallManifest)
         problems.append("no stable root= argument (UUID=, PARTUUID=, LABEL= or a /dev/mapper name)")
     if any(UNSTABLE_ROOT_RE.fullmatch(token) for token in roots):
         problems.append("root= names a kernel device (it breaks when the disks are enumerated in another order)")
-    if manifest.storage.luks and not any(token.startswith("rd.luks.uuid=") for token in tokens):
-        problems.append("the encrypted root has no rd.luks.uuid= argument")
+    storage = manifest.storage
+    guided = storage.mode == "erase"  # a manual layout names its volumes itself
+    if storage.luks:
+        containers = [token.partition("=")[2] for token in tokens if token.startswith("rd.luks.uuid=")]
+        mapper = luks_mapper_name(storage)
+        if not containers:
+            problems.append("the encrypted root has no rd.luks.uuid= argument")
+        elif guided and not any(f"rd.luks.name={uuid}={mapper}" in tokens for uuid in containers):
+            problems.append(f"the encrypted container is not named by rd.luks.name=<uuid>={mapper}"
+                            + (" (with LVM inside, the volume is gentoo-root, so the container needs another name)" if storage.lvm else ""))
+    if storage.lvm and guided and "rd.lvm.lv=gentoo/root" not in tokens:
+        problems.append("the LVM root has no rd.lvm.lv=gentoo/root argument, so the initramfs would not activate it")
     for wanted in manifest.system.kernel_cmdline_extra.split():
         if wanted not in tokens:
             problems.append(f"the requested argument {wanted} is missing")
@@ -1286,6 +1349,9 @@ def installed_system_probes(manifest: InstallManifest, scenario: Scenario, *, wo
     ]
     if vm_probes.expects_efi_fallback(manifest):
         probes.append(("efi-fallback", vm_probes.efi_fallback_command(manifest), vm_probes.parse_efi_fallback_probe, password))
+    if manifest.storage.firmware == "bios" and manifest.storage.mode == "erase":
+        # SeaBIOS never asks for the boot flag, so only the disk can show that strict BIOS firmware would start it.
+        probes.append(("boot-flag", vm_probes.boot_flag_command(), vm_probes.parse_boot_flag_probe, password))
     if manifest.storage.mode == "manual" and manifest.storage.partitions:
         rows = list(manifest.storage.partitions)
         probes.append(("layout", vm_probes.LAYOUT_COMMAND, lambda c, o: vm_probes.parse_layout_probe(c, o, rows)))
@@ -2001,9 +2067,9 @@ class ScenarioRunner:
             plan["detected"] = {"storage.device": storage.device, "storage.device_id": storage.device_id,
                                 "storage.device_id_kind": storage.device_id_kind, "storage.firmware": storage.firmware,
                                 "storage.table": table,
-                                # Seeded by the wizard from the hardware report (recommend.defaults_for): recorded,
-                                # not asserted; the target probes check what they lead to (no microcode in a VM).
-                                "storage.swap_mib": None, "options.bluetooth": None, "options.microcode": None}
+                                # Seeded by the wizard from the hardware report: recorded, not asserted (WIZARD_SEEDED);
+                                # the probes then judge what it chose (adopt_wizard_choices).
+                                **dict.fromkeys(WIZARD_SEEDED)}
         return plan
 
     def install(self, *, cancel_at_stage3: bool = False, reinstall: bool = False) -> dict | None:
@@ -2095,10 +2161,36 @@ class ScenarioRunner:
             )
             if code != 0 or not daemon_log.stat().st_size:
                 raise HarnessError(f"Could not retrieve the daemon log; see {daemon_log}")
+            if self.gui_detect_enabled() and not cancel_at_stage3:
+                self.adopt_wizard_choices()
         if not cancel_at_stage3:
             validate_install_outcome(result, log, gui=gui)
             self.installed = True
         return None
+
+    def adopt_wizard_choices(self) -> dict:
+        """Detect mode: make the saved manifest say what the wizard chose for the fields it seeds from the hardware report.
+
+        The plan only records those fields (WIZARD_SEEDED), so the harness's own values may differ from what was installed; the
+        probes read the saved manifest, and a system must be judged against what was really asked for. What the harness expected
+        stays in manifest-expected.json, and the differences go to result.json (install.wizard_choices).
+        """
+        detected = json.loads((self.run_dir / "gui-detected.json").read_text())
+        manifest_path = self.run_dir / "manifest.json"
+        manifest = InstallManifest.load(manifest_path)
+        changes: dict[str, dict[str, Any]] = {}
+        for dotted in WIZARD_SEEDED:
+            section, _, name = dotted.partition(".")
+            chosen = detected.get(dotted)
+            target = getattr(manifest, section)
+            if chosen is not None and chosen != getattr(target, name):
+                changes[dotted] = {"harness": getattr(target, name), "wizard": chosen}
+                setattr(target, name, chosen)
+        if changes:
+            manifest_path.replace(self.run_dir / "manifest-expected.json")
+            manifest.save(manifest_path, redact=False)
+        self.__dict__["wizard_choices"] = changes
+        return changes
 
     def collect_install_artifacts(self) -> dict:
         """Copy out of the live system what explains an install: the daemon's own stderr log and the hardware plan it made.
@@ -2189,19 +2281,7 @@ class ScenarioRunner:
     def verify_cancel_cleanup(self) -> dict:
         if self.args.ssh_user != "root":
             raise HarnessError("--cancel-then-resume requires root SSH for guest cleanup checks and resume")
-        check = (
-            "python3 -c " + shlex.quote(
-                "from pathlib import Path; import json, sys; "
-                "mounts=[fields[4].replace('\\\\040',' ') for line in Path('/proc/self/mountinfo').read_text().splitlines() "
-                "if len(fields := line.split()) > 4 and (fields[4] == '/mnt/gentoo' or fields[4].startswith('/mnt/gentoo/'))]; "
-                "left=[p for p in ('/dev/mapper/gentoo-root','/dev/gentoo/root') if Path(p).exists()]; "
-                "swaps=[line.split()[0] for line in Path('/proc/swaps').read_text().splitlines()[1:] "
-                f"if line.split() and line.split()[0].startswith(({self.target_device!r},'/dev/mapper/gentoo','/dev/gentoo/'))]; "
-                "print(json.dumps({'target_mounts':mounts,'leftover_root_stack':left,'target_swaps':swaps})); "
-                "sys.exit(bool(mounts or left or swaps))"
-            )
-        )
-        code, log = self.ssh(self.args.ssh_user, check, "cancel-cleanup.log", self.args.command_timeout)
+        code, log = self.ssh(self.args.ssh_user, cancel_cleanup_command(self.target_device), "cancel-cleanup.log", self.args.command_timeout)
         output = log.read_text(errors="replace")
         report = parse_cancel_cleanup(code, output)
         report["output"] = output
@@ -2243,7 +2323,7 @@ class ScenarioRunner:
             code, log = self.ssh(TEST_USERNAME, command, f"verify-{name}{label}.log", rest[1] if len(rest) > 1 else self.args.command_timeout,
                                  stdin=rest[0] if rest else None)
             parsed = parser(code, log.read_text(errors="replace"))
-            results.extend(parsed if isinstance(parsed, list) else [parsed])
+            results.extend(vm_probes.explain_missing_part(item, degraded) for item in (parsed if isinstance(parsed, list) else [parsed]))
         return results
 
     # --- what the installer itself reported ----------------------------------------------------------------------
@@ -2272,10 +2352,13 @@ class ScenarioRunner:
         return [str(item) for item in self.install_completed().get("degraded") or []]
 
     def install_completion_probe(self, manifest: InstallManifest, plan: Mapping[str, Any] | None) -> ProbeResult:
-        """Optional parts that failed (a desktop package, the NVIDIA driver) and warnings (a cleanup that failed after a good install) are findings."""
+        """Optional parts that failed (a desktop package, the NVIDIA driver) and warnings (a cleanup that failed after a good install) are findings.
+
+        The reasons are the installer's own words from the completed event, whole: they are what explains a missing package.
+        """
         completed = self.install_completed()
         notes = [str(item) for item in (completed.get("degraded") or [])] + [f"warning: {item}" for item in (completed.get("warnings") or [])]
-        return ProbeResult("install-degraded", not notes, json.dumps(completed, sort_keys=True)[:400],
+        return ProbeResult("install-degraded", not notes, json.dumps(completed, sort_keys=True)[:20000],
                            "the installer finished with problems it did not treat as fatal: " + "; ".join(notes) if notes else "", advisory=True)
 
     def hardware_plan_findings(self, manifest: InstallManifest, plan: Mapping[str, Any] | None) -> list[ProbeResult]:
@@ -2308,10 +2391,12 @@ class ScenarioRunner:
         self.wait_for_ssh(TEST_USERNAME, "target", target)
         probes = self.verify(label)
         strict = getattr(self.args, "strict_probes", False)
-        result[key] = [asdict(probe) for probe in probes]
-        result["companion_probes"] = [asdict(probe) for probe in probes if probe.name in {"hwmonux", "portagehub"}]
-        result["disabled_companion_probes"] = [asdict(probe) for probe in probes if probe.name.startswith("disabled-")]
-        result["advisory_findings"] = [asdict(probe) for probe in probes if not probe.success and probe.advisory]
+        result[key] = [probe.record() for probe in probes]
+        result["companion_probes"] = [probe.record() for probe in probes if probe.name in {"hwmonux", "portagehub"}]
+        result["disabled_companion_probes"] = [probe.record() for probe in probes if probe.name.startswith("disabled-")]
+        result["advisory_findings"] = [probe.record() for probe in probes if not probe.success and probe.advisory]
+        # What Portage would still change right after the install: information, kept from the first round of probes.
+        result["world_drift"] = result.get("world_drift") or next((probe.data for probe in probes if probe.name == "world-drift"), None)
         for probe in probes:
             if not probe.success and probe.advisory:
                 print(f"WARNING {self.scenario.name}: advisory probe {probe.name} failed: {probe.error}", file=sys.stderr)
@@ -2734,7 +2819,7 @@ class ScenarioRunner:
         checks = []
         for name, command, expected in (("firmware", "test -d /sys/firmware/efi && echo uefi || echo bios", "uefi"), ("hostname", "hostname", self.scenario.hostname)):
             code, log = self.ssh(TEST_USERNAME, command, f"verify-fresh-{name}.log", self.args.command_timeout)
-            checks.append(asdict(parse_probe_result(name, code, log.read_text(errors="replace"), expected)))
+            checks.append(parse_probe_result(name, code, log.read_text(errors="replace"), expected).record())
         serial_text = vm.serial_log.read_text(errors="replace") if vm.serial_log.exists() else ""
         choices = vm_probes.firmware_boot_choices(serial_text)
         evidence["probes"], evidence["firmware_boot_choices"] = checks, choices
@@ -2747,14 +2832,14 @@ class ScenarioRunner:
 
     def install_summary(self) -> dict:
         return {"mode": self.install_mode(), "completed": self.install_completed(), "artifacts": self.__dict__.get("install_artifacts"),
-                "text_installer": self.__dict__.get("text_installer_checks")}
+                "text_installer": self.__dict__.get("text_installer_checks"), "wizard_choices": self.__dict__.get("wizard_choices")}
 
     def run(self) -> dict:
         result = {"scenario": self.scenario.name, "success": False, "run_dir": str(self.run_dir),
                   "companions": None, "companion_probes": [], "disabled_companion_probes": [],
                   "probes": [], "resume": None, "cancel": None, "luks_unlock": None,
                   "decoys": None, "refusal": None, "rescue": None, "live": None, "hardware": asdict(self.scenario.hardware),
-                  "firmware": self.scenario.firmware, "install": None, "boot_entry": None, "fresh_nvram": None}
+                  "firmware": self.scenario.firmware, "install": None, "boot_entry": None, "fresh_nvram": None, "world_drift": None}
         mode = getattr(self.args, "rescue_break", "none")
         command = getattr(self.args, "rescue_command", None) or ""
         try:
@@ -3220,7 +3305,7 @@ def list_scenarios() -> str:
         hw = scenario.hardware
         shape = f"{hw.disk_bus}{'/4Kn' if hw.sector_size == 4096 else ''}{'' if hw.disk_serial else '/no-serial'}, {hw.nic}, {hw.vga}"
         extras = [text for text in (f"smbios={hw.smbios}" if hw.smbios != "qemu" else "", f"cpu={hw.cpu}" if hw.cpu else "",
-                                    f"machine={hw.machine}" if hw.machine != "q35" else "", "luks" if scenario.luks else "",
+                                    f"machine={hw.machine}" if hw.machine != "q35" else "", "luks" if scenario.luks else "", "lvm" if scenario.lvm else "",
                                     f"+{len(hw.extra_disks)} extra disk(s)" if hw.extra_disks else "",
                                     "fresh NVRAM on the target boot" if hw.ovmf_vars == "fresh-on-target" else "",
                                     f"{scenario.install_mode} installer" if scenario.install_mode else "",
@@ -3296,7 +3381,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-world-probe", action="store_true", help="Skip 'emerge -pvuDN @world' in the installed system (minutes on a desktop)")
     parser.add_argument("--world-timeout", type=positive_int, default=1800, help="Seconds the world probe may take (default: 1800)")
     parser.add_argument("--companions", choices=("both", "portagehub", "none"), default="both",
-                        help="Install HWMonux and PortageHub (both), only PortageHub, or neither")
+                        help="Install HWMonux and PortageHub (both), only PortageHub, or neither. HWMonux compiles PySide from source: "
+                             "with both, give the VM --memory 12288 --build-jobs 1 --swap-mib 4096 (the wave3 matrix does so for the defaults job only)")
     parser.add_argument("--gui-detect", action=argparse.BooleanOptionalAction, default=None,
                         help="GUI mode: leave firmware, partition table and disk to the GUI's own detection and assert what "
                              "it chose (default: on for the defaults scenario only)")
@@ -3527,6 +3613,10 @@ def _main(argv: Sequence[str] | None = None) -> int:
                 (*hardware_problems(scenario, args.install_mode), *rescue_problems(scenario, args))]
     if problems:
         parser.error("; ".join(problems))
+    for scenario in scenarios:
+        note = companion_memory_note(scenario, args)
+        if note:
+            print(note, file=sys.stderr, flush=True)
     try:
         firmware = preflight(args, scenarios)
         public_key = public_key_from_private(args.ssh_keygen, args.ssh_private_key)

@@ -14,7 +14,9 @@ vm = load_vm_module()
 
 PROMPTS = {
     "systemd-cryptsetup": "Please enter passphrase for disk root (gentoo-root): (press TAB for no echo)",
+    "systemd-cryptsetup-lvm-inside": "Please enter passphrase for disk root (gentoo-crypt): (press TAB for no echo)",
     "systemd-short": "Enter passphrase for /dev/vda2:",
+    "openrc-dracut-cryptsetup": "Enter passphrase for /dev/nvme0n1p3: \r",  # what the first real encrypted OpenRC guest printed on its serial console
     "dracut-70crypt": "Password (/dev/disk/by-uuid/0a1b2c3d-1111-2222-3333-444455556666) [1/3]:",
     "dracut-70crypt-luks-name": "Password (luks-0a1b2c3d) [1/3]:",
 }

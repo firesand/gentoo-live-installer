@@ -5,14 +5,15 @@ the output and returns a ``ProbeResult``. Nothing here starts a process or touch
 rule is tested on sample output without a VM. ``scripts/test-vm.py`` owns the list of probes and
 runs them; this module owns what "correct" means for the checks added for the hardware-aware
 installer: the install receipt, the hardware plan, the swap of an encrypted install, the removable
-EFI fallback, the layout of a manual install and the state of the Portage world.
+EFI fallback, the boot flag of a BIOS install, the layout of a manual install and the state of the Portage world.
 """
 from __future__ import annotations
 
+import inspect
 import json
 import re
 import shlex
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Iterable, Mapping, Sequence
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -29,6 +30,15 @@ class ProbeResult:
     error: str = ""
     # An advisory probe records a finding without failing the scenario (unless --strict-probes).
     advisory: bool = False
+    # What the probe collected for the record (world-drift: the packages), apart from its verdict.
+    data: dict[str, Any] = field(default_factory=dict)
+
+    def record(self) -> dict[str, Any]:
+        """The probe as result.json keeps it: ``data`` only when the probe collected some."""
+        record = asdict(self)
+        if not record["data"]:
+            del record["data"]
+        return record
 
 
 def parse_probe_result(name: str, returncode: int, output: str, expected: str | None = None) -> ProbeResult:
@@ -242,6 +252,117 @@ def booted_through_fallback(serial_text: str) -> bool:
     return bool(choices) and choices[-1]["path"].upper().endswith("\\EFI\\BOOT\\BOOTX64.EFI")
 
 
+# --- the boot flag of a BIOS install ----------------------------------------------------------------------------------------------
+
+def decode_mbr(sector: bytes) -> dict:
+    # This function also runs in the guest (BOOT_FLAG_SNIPPET is built from its source): keep it standalone and its annotations builtin.
+    """The boot signature and the four partition entries of a first sector: status byte (0x80 = active), type, first sector and length."""
+    entries = []
+    for number in range(1, 5):
+        base = 446 + 16 * (number - 1)
+        entries.append({"number": number, "status": sector[base], "type": sector[base + 4],
+                        "start": int.from_bytes(sector[base + 8:base + 12], "little"), "sectors": int.from_bytes(sector[base + 12:base + 16], "little")})
+    return {"signature": sector[510:512].hex(), "entries": entries}
+
+
+BOOT_FLAG_MARK = "gentoo-vm boot-flag probe"
+BOOT_FLAG_SNIPPET = f"# {BOOT_FLAG_MARK}\n" + inspect.getsource(decode_mbr) + r"""
+import json, os, re, subprocess, sys
+
+sysfs = sys.argv[1] if len(sys.argv) > 1 else '/sys/class/block'
+devices = sys.argv[2] if len(sys.argv) > 2 else '/dev'
+
+
+def source(mountpoint):
+    done = subprocess.run(['findmnt', '-no', 'SOURCE', mountpoint], capture_output=True, text=True)
+    return re.sub(r'\[.*\]$', '', done.stdout.strip()) if done.returncode == 0 else ''
+
+
+def partition_of(name, depth=0):
+    base = os.path.join(sysfs, name)
+    if os.path.exists(os.path.join(base, 'partition')):
+        return name
+    slaves = os.path.join(base, 'slaves')
+    if depth < 4 and os.path.isdir(slaves):
+        for slave in sorted(os.listdir(slaves)):
+            found = partition_of(slave, depth + 1)
+            if found:
+                return found
+    return ''
+
+
+report = {}
+try:
+    for mountpoint in ('/boot', '/'):
+        device = source(mountpoint)
+        if device:
+            report.update(holder=mountpoint, source=device)
+            break
+    if not report:
+        raise RuntimeError('neither /boot nor / is a mount point')
+    name = partition_of(os.path.basename(os.path.realpath(report['source'])))
+    if not name:
+        raise RuntimeError(report['source'] + ' is not on a partition')
+    base = os.path.realpath(os.path.join(sysfs, name))
+    disk = os.path.basename(os.path.dirname(base))
+    with open(os.path.join(base, 'partition')) as stream:
+        report['partition'] = int(stream.read())
+    with open(os.path.join(devices, disk), 'rb') as stream:
+        sector = stream.read(512)
+    report.update(disk='/dev/' + disk, **decode_mbr(sector))
+except (OSError, RuntimeError, ValueError) as exc:
+    report['error'] = str(exc)
+print(json.dumps(report))
+sys.exit(1 if 'error' in report else 0)
+"""
+
+
+def boot_flag_command() -> str:
+    """Reads the first sector of the disk that holds /boot (else /); the disk can only be read by root."""
+    return "sudo -S -p '' " + shlex.join(("python3", "-c", BOOT_FLAG_SNIPPET))
+
+
+def boot_flag_problems(report: Mapping[str, Any]) -> list[str]:
+    """Why strict BIOS firmware would not start this disk: a GPT disk needs the boot flag in its protective MBR, a DOS disk one active partition, the one that holds /boot (else /)."""
+    disk = report.get("disk", "the disk")
+    if report.get("signature") != "55aa":
+        return [f"the first sector of {disk} has no boot signature (55aa), so no firmware starts it"]
+    entries = report["entries"]
+    problems = [f"partition entry {entry['number']} has the status byte 0x{entry['status']:02x}, which a BIOS refuses (only 0x00 and 0x80 are valid)"
+                for entry in entries if entry["status"] not in (0, 0x80)]
+    if entries[0]["type"] == 0xEE:  # GPT: the protective MBR is what a BIOS looks at
+        if entries[0]["status"] != 0x80:
+            problems.append(f"the protective MBR of the GPT disk {disk} has no boot flag (byte 446 is 0x{entries[0]['status']:02x}): "
+                            "strict BIOS firmware says 'no bootable device'")
+        return problems
+    active = [entry["number"] for entry in entries if entry["status"] == 0x80]
+    wanted, holder = report.get("partition"), report.get("holder", "/")
+    if isinstance(wanted, int) and wanted > 4:
+        problems.append(f"{holder} is on logical partition {wanted}, which cannot be active")
+    elif not active:
+        problems.append(f"no partition of the DOS disk {disk} is active (0x80): strict BIOS firmware says 'no bootable device'")
+    elif len(active) > 1:
+        problems.append(f"{len(active)} partitions are active ({', '.join(map(str, active))}): a BIOS expects one")
+    elif isinstance(wanted, int) and active != [wanted]:
+        problems.append(f"partition {active[0]} is active, but {holder} is on partition {wanted}")
+    return problems
+
+
+def parse_boot_flag_probe(returncode: int, output: str) -> ProbeResult:
+    problem = _sudo_problem("boot-flag", returncode, output)
+    if problem:
+        return problem
+    clean = ANSI_RE.sub("", output).strip()
+    try:
+        report = json.loads(clean.splitlines()[-1])
+    except (IndexError, json.JSONDecodeError):
+        return ProbeResult("boot-flag", False, clean[-400:], "the check returned no JSON evidence")
+    if "error" in report:
+        return ProbeResult("boot-flag", False, clean, f"the boot flag of the installed disk could not be read: {report['error']}")
+    problems = boot_flag_problems(report)
+    return ProbeResult("boot-flag", not problems, clean, "; ".join(problems))
+
+
 # --- manual layouts -----------------------------------------------------------------------------------------------------------
 
 LAYOUT_COMMAND = "findmnt -rno TARGET,SOURCE; echo ---; swapon --noheadings --raw --show=NAME"
@@ -298,8 +419,42 @@ def summarize_world(output: str) -> dict[str, list[str]]:
     return groups
 
 
+DRIFT_NOTE = ("information only: right after an install this usually comes from a tree that is newer than the stage3 (new versions, "
+              "changed USE defaults), not from the installer")
+DRIFT_LISTED = 40  # packages named per group in the text of the probe (the data has all of them)
+
+
+def plain_atom(atom: str) -> str:
+    """cat/pkg-version as emerge prints it, without the slot and the repository (``app-arch/zstd-1.5.7-r1-10:0/1::gentoo``)."""
+    return atom.split("::", 1)[0].split(":", 1)[0]
+
+
+def world_drift(output: str) -> dict[str, Any]:
+    """What ``emerge -pvuDN @world`` would still do after an install: how many and which upgrades, new packages and reinstalls."""
+    groups = summarize_world(ANSI_RE.sub("", output))
+    listed = {"upgrades": [plain_atom(atom) for atom in groups["upgrade"]], "new": [plain_atom(atom) for atom in groups["new"]],
+              "reinstalls": [plain_atom(atom) for atom in groups["rebuild"]]}
+    return {"counts": {name: len(atoms) for name, atoms in listed.items()}, **listed}
+
+
+def drift_text(drift: Mapping[str, Any], returncode: int) -> str:
+    counts = drift["counts"]
+    lines = [f"{counts['upgrades']} upgrades, {counts['new']} new, {counts['reinstalls']} reinstalls ({DRIFT_NOTE})"]
+    for name in ("upgrades", "new", "reinstalls"):
+        atoms = drift[name]
+        if atoms:
+            lines.append(f"{name}: " + ", ".join(atoms[:DRIFT_LISTED]) + (f" ... and {len(atoms) - DRIFT_LISTED} more" if len(atoms) > DRIFT_LISTED else ""))
+    if returncode != 0 and not any(drift[name] for name in ("upgrades", "new", "reinstalls")):
+        lines.append(f"nothing could be listed: emerge exited with status {returncode}")
+    return "\n".join(lines)
+
+
 def parse_world_probe(returncode: int, output: str) -> list[ProbeResult]:
-    """Two verdicts from one command: the world must resolve (a failure), and should not want rebuilds (a finding)."""
+    """Two results from one command: the world must resolve (a failure), and what it would still change is information.
+
+    The drift (upgrades, new packages, reinstalls) never fails a job: right after an install it comes from the tree being
+    newer than the stage3, which is not the installer's doing. It is kept in ``data`` for result.json.
+    """
     problem = _sudo_problem("world-resolve", returncode, output)
     if problem:
         return [problem]
@@ -307,16 +462,29 @@ def parse_world_probe(returncode: int, output: str) -> list[ProbeResult]:
     failures = [text for pattern, text in WORLD_FAILURES if pattern.search(clean)]
     if returncode != 0 and not failures:
         failures.append(f"emerge exited with status {returncode}")
-    groups = summarize_world(clean)
+    drift = world_drift(clean)
+    counts = drift["counts"]
     tail = "\n".join(clean.strip().splitlines()[-12:])
-    summary = f"{len(groups['new'])} new, {len(groups['upgrade'])} upgrades, {len(groups['rebuild'])} rebuilds"
+    summary = f"{counts['upgrades']} upgrades, {counts['new']} new, {counts['reinstalls']} reinstalls"
     resolve = ProbeResult("world-resolve", not failures, f"{summary}\n{tail}", "; ".join(failures))
-    drift = groups["rebuild"]
-    drift_text = ""
-    if drift:
-        drift_text = ("installed packages would be rebuilt because their USE flags differ from the configuration: "
-                      + ", ".join(drift[:12]) + (" ..." if len(drift) > 12 else ""))
-    return [resolve, ProbeResult("world-drift", not drift, summary, drift_text, advisory=True)]
+    return [resolve, ProbeResult("world-drift", True, drift_text(drift, returncode), data=drift)]
+
+
+# --- a part the installer could not install -----------------------------------------------------------------------------------
+
+COMPANION_PACKAGES = {"hwmonux": "app-misc/hwmonux", "portagehub": "app-portage/portagehub"}
+
+
+def explain_missing_part(result: ProbeResult, degraded: Sequence[str]) -> ProbeResult:
+    """A companion probe that failed gets the installer's own words about that package, when its final event named it as not installed.
+
+    'hwmonux: Probe exited with status 127' says that the program is not there; the reason is in the installer's report.
+    """
+    package = COMPANION_PACKAGES.get(result.name)
+    if result.success or package is None:
+        return result
+    reasons = [text for text in degraded if package in text or result.name in text.lower()]
+    return replace(result, error=f"{result.error} (the installer reported: {'; '.join(reasons)})") if reasons else result
 
 
 # --- the hardware plan -------------------------------------------------------------------------------------------------
@@ -385,9 +553,15 @@ def parse_hardware_probe(returncode: int, output: str, plan: Mapping[str, Any], 
 
 
 def parse_hardware_plan_file(text: str) -> dict[str, Any] | None:
-    """The hardware-plan.json the daemon leaves in its state directory; None when it is absent or not a plan."""
+    """The plan in the hardware-plan.json the daemon leaves in its state directory; None when it is absent or holds no plan.
+
+    The daemon writes a record, ``{version, fingerprint, created, plan}`` (the fingerprint binds it to the manifest, so that a
+    resume does not decide again). A bare plan, which has a ``schema`` of its own, is accepted too.
+    """
     try:
-        plan = json.loads(text)
+        record = json.loads(text)
     except json.JSONDecodeError:
         return None
-    return plan if isinstance(plan, dict) and "schema" in plan else None
+    if isinstance(record, dict) and isinstance(record.get("plan"), dict):
+        record = record["plan"]
+    return record if isinstance(record, dict) and "schema" in record else None

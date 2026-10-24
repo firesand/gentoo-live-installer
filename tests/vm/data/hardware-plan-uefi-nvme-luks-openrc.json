@@ -1,0 +1,84 @@
+{
+  "version": 1,
+  "fingerprint": "63308222627f71c26c7e4297df94f4a403047b31bdafd17ca9bcd8034fc04757",
+  "created": "2026-10-24T11:09:05.376Z",
+  "plan": {
+    "schema": 1,
+    "early_atoms": [
+      "sys-kernel/linux-firmware"
+    ],
+    "driver_atoms": [],
+    "required_atoms": [],
+    "optional_atoms": [
+      "sys-block/zram-init"
+    ],
+    "package_use": {
+      "sys-kernel/linux-firmware": [
+        "redistributable"
+      ]
+    },
+    "package_license": {
+      "sys-kernel/linux-firmware": [
+        "linux-fw-redistributable"
+      ]
+    },
+    "package_mask": [],
+    "make_conf": {},
+    "files": [
+      [
+        "/etc/conf.d/zram-init",
+        "# Compressed RAM swap, written by the Gentoo installer.\nload_on_start=\"yes\"\nunload_on_stop=\"yes\"\nnum_devices=\"1\"\ntype0=\"swap\"\nsize0=\"1946\"\nmaxs0=\"1\"\nalgo0=\"zstd\"\nlabl0=\"zram_swap\"\n",
+        420
+      ]
+    ],
+    "services": [],
+    "optional_services": [
+      [
+        "zram-init",
+        "default"
+      ]
+    ],
+    "kernel_cmdline": [],
+    "post_steps": [],
+    "summary": [
+      "CPU: QEMU Virtual CPU version 2.5+, 2 threads; no microcode",
+      "Graphics: QXL paravirtual graphic card (virtual, software rendering unless the host provides 3D)",
+      "Firmware: Linux firmware",
+      "Memory: compressed RAM swap (zram), 1946 MiB",
+      "Virtual machine: qemu; no guest tools",
+      "Boot: fallback boot path is always written"
+    ],
+    "notes": [],
+    "warnings": [],
+    "scalars": {
+      "btrfs_discard_async": false,
+      "cpu_flags_mode": "profile",
+      "cpu_vendor": "intel",
+      "firmware_forced": false,
+      "firmware_reasons": [],
+      "form_factor": "vm",
+      "gpu_driver": "open",
+      "gpu_vendors": [
+        "qxl"
+      ],
+      "grub_target": "x86_64-efi",
+      "hidpi": "off",
+      "hybrid": false,
+      "hypervisor": "qemu",
+      "init": "openrc",
+      "luks_allow_discards": false,
+      "microcode": "none",
+      "nvidia_branch": "",
+      "nvk": "no",
+      "power": "none",
+      "prime": "off",
+      "removable_fallback": "always",
+      "sof_firmware": "no",
+      "target": "this",
+      "thermald": "no",
+      "trim": "off",
+      "zram": "yes",
+      "zram_mib": 1946
+    }
+  }
+}

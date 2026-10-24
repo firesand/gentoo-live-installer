@@ -5,6 +5,7 @@ import copy
 import json
 import shlex
 import types
+from pathlib import Path
 
 import pytest
 
@@ -17,6 +18,7 @@ from tests.vm.helpers import PUBLIC_KEY, load_vm_module
 
 vm = load_vm_module()
 UUID = "0a1b2c3d-1111-2222-3333-444455556666"
+DATA = Path(__file__).resolve().parent / "data"  # output of the first real VM runs (the record of what the product really prints)
 
 
 def manifest_of(name: str, **changes) -> InstallManifest:
@@ -103,6 +105,50 @@ def test_a_manual_install_is_compared_with_its_root_row_and_its_esp_mount():
     assert receipt["esp"] == "/boot/efi"
     assert vm_probes.parse_receipt_probe(0, json.dumps(receipt), manifest).success
     assert "root.fstype" in vm_probes.parse_receipt_probe(0, json.dumps(receipt | {"root": receipt["root"] | {"fstype": "ext4"}}), manifest).error
+
+
+# --- the command line of the installed kernel ---------------------------------------------------------------------------
+
+# /proc/cmdline of the first real encrypted install (uefi-nvme-luks-openrc)
+REAL_LUKS_CMDLINE = ("BOOT_IMAGE=/vmlinuz-6.18.57-gentoo-dist-bin root=UUID=c29723df-cc13-4a09-9106-7fac70da20a9 ro "
+                     "rd.luks.uuid=e1d07902-57c2-4bc7-9223-289102723d3f rd.luks.name=e1d07902-57c2-4bc7-9223-289102723d3f=gentoo-root "
+                     "console=tty0 console=ttyS0,115200n8")
+
+
+def test_the_command_line_of_a_real_encrypted_install_passes():
+    result = vm.parse_cmdline_probe(0, REAL_LUKS_CMDLINE + "\n", manifest_of("uefi-nvme-luks-openrc"))
+    assert result.success, result.error
+
+
+def test_the_container_must_carry_the_name_the_storage_stage_gave_it():
+    manifest = manifest_of("uefi-nvme-luks-openrc")
+    renamed = vm.parse_cmdline_probe(0, REAL_LUKS_CMDLINE.replace("=gentoo-root ", "=gentoo-crypt "), manifest)
+    assert not renamed.success and "rd.luks.name=<uuid>=gentoo-root" in renamed.error
+    unnamed = vm.parse_cmdline_probe(0, REAL_LUKS_CMDLINE.replace("rd.luks.name=e1d07902-57c2-4bc7-9223-289102723d3f=gentoo-root ", ""), manifest)
+    assert not unnamed.success and "rd.luks.name=<uuid>=gentoo-root" in unnamed.error
+
+
+def test_with_lvm_inside_the_container_dracut_names_the_mapping_gentoo_crypt_and_activates_the_volume():
+    manifest = manifest_of("uefi-luks-lvm")
+    good = REAL_LUKS_CMDLINE.replace("=gentoo-root ", "=gentoo-crypt ") + " rd.lvm.lv=gentoo/root"
+    assert vm.parse_cmdline_probe(0, good, manifest).success
+    old_name = vm.parse_cmdline_probe(0, REAL_LUKS_CMDLINE + " rd.lvm.lv=gentoo/root", manifest)
+    assert not old_name.success and "rd.luks.name=<uuid>=gentoo-crypt" in old_name.error and "gentoo-root" in old_name.error
+    no_volume = vm.parse_cmdline_probe(0, good.replace(" rd.lvm.lv=gentoo/root", ""), manifest)
+    assert not no_volume.success and "rd.lvm.lv=gentoo/root" in no_volume.error
+
+
+def test_lvm_without_encryption_needs_its_volume_activated_too():
+    manifest = manifest_of("lvm-root")
+    plain = "BOOT_IMAGE=/vmlinuz-6.18.57-gentoo-dist-bin root=UUID=c29723df-cc13-4a09-9106-7fac70da20a9 ro"
+    assert "rd.lvm.lv=gentoo/root" in vm.parse_cmdline_probe(0, plain, manifest).error
+    assert vm.parse_cmdline_probe(0, plain + " rd.lvm.lv=gentoo/root", manifest).success
+    assert vm.parse_cmdline_probe(0, plain, manifest_of("openrc")).success  # a plain install has nothing to activate
+
+
+def test_a_manual_layout_is_not_held_to_the_names_of_the_guided_one():
+    manifest = manifest_of("uefi-nvme-luks-openrc", storage__mode="manual")
+    assert vm.parse_cmdline_probe(0, REAL_LUKS_CMDLINE.replace("=gentoo-root ", "=my-own-name "), manifest).success
 
 
 # --- swap ----------------------------------------------------------------------------------------------------------
@@ -232,14 +278,43 @@ UPDATES = (
 def test_a_world_with_nothing_to_do_is_clean():
     resolve, drift = vm_probes.parse_world_probe(0, NOTHING_TO_DO)
     assert resolve.name == "world-resolve" and resolve.success and not resolve.advisory
-    assert drift.name == "world-drift" and drift.success and "0 new, 0 upgrades, 0 rebuilds" in drift.output
+    assert drift.name == "world-drift" and drift.success and not drift.advisory and "0 upgrades, 0 new, 0 reinstalls" in drift.output
+    assert drift.data["counts"] == {"upgrades": 0, "new": 0, "reinstalls": 0}
 
 
-def test_updates_resolve_and_rebuilds_are_a_finding():
+def test_updates_and_reinstalls_resolve_and_are_information_only():
+    """A tree synced at install time is newer than the stage3: Portage wants upgrades and reinstalls the installer did not cause."""
     resolve, drift = vm_probes.parse_world_probe(0, UPDATES)
     assert resolve.success
     assert vm_probes.summarize_world(UPDATES) == {"new": ["x11-libs/new-1.0"], "upgrade": ["sys-libs/zlib-1.3.1-r1"], "rebuild": ["dev-libs/foo-1.0", "dev-libs/drift-2.0"]}
-    assert not drift.success and drift.advisory and "dev-libs/drift-2.0" in drift.error and "USE flags differ" in drift.error
+    assert drift.name == "world-drift" and drift.success and not drift.advisory and drift.error == ""  # never a finding, never a failure
+    assert drift.data == {"counts": {"upgrades": 1, "new": 1, "reinstalls": 2}, "upgrades": ["sys-libs/zlib-1.3.1-r1"], "new": ["x11-libs/new-1.0"],
+                          "reinstalls": ["dev-libs/foo-1.0", "dev-libs/drift-2.0"]}
+    assert "1 upgrades, 1 new, 2 reinstalls" in drift.output and "dev-libs/drift-2.0" in drift.output and "information only" in drift.output
+
+
+def test_the_world_of_the_first_real_run_resolves_and_its_drift_is_listed():
+    """tests/vm/data/emerge-world-*.log is the output of 'emerge -pvuDN @world' in the first real VM install: 4 upgrades, 3 new packages, 5 reinstalls."""
+    text = (DATA / "emerge-world-uefi-nvme-luks-openrc.log").read_text()
+    groups = vm_probes.summarize_world(text)
+    assert (len(groups["upgrade"]), len(groups["new"]), len(groups["rebuild"])) == (4, 3, 5)
+    resolve, drift = vm_probes.parse_world_probe(0, text)
+    assert resolve.name == "world-resolve" and resolve.success and not resolve.advisory
+    assert drift.success and not drift.advisory and drift.error == ""
+    assert drift.data["counts"] == {"upgrades": 4, "new": 3, "reinstalls": 5}
+    assert drift.data["upgrades"] == ["app-misc/ca-certificates-20260816.3.131.1-1", "sys-libs/timezone-data-2026e-1", "net-misc/curl-8.23.0-1",
+                                      "dev-python/ensurepip-pip-26.2.1-r1-1"]
+    assert drift.data["reinstalls"] == ["app-arch/zstd-1.5.7-r1-10", "net-misc/iputils-20250605-r4-1", "sys-devel/gettext-0.23.2-7",
+                                        "app-crypt/libb2-0.98.1-r3-14", "app-portage/portage-utils-0.97.1-1"]  # no ::repo and no slot
+    assert drift.data["new"] == ["net-libs/nghttp2-1.70.0-3", "net-libs/nghttp3-1.18.0-1", "net-libs/ngtcp2-1.25.0-1"]
+
+
+def test_drift_is_information_even_when_the_world_does_not_resolve():
+    resolve, drift = vm_probes.parse_world_probe(1, "!!! Problem resolving dependencies for @world\n[ebuild   R    ] dev-libs/drift-2.0 USE=\"b\" 10 KiB\n")
+    assert not resolve.success and not resolve.advisory
+    assert drift.success and not drift.advisory and drift.data["reinstalls"] == ["dev-libs/drift-2.0"]
+    _resolve, nothing = vm_probes.parse_world_probe(137, "Calculating dependencies ...")
+    assert nothing.success and nothing.data["counts"] == {"upgrades": 0, "new": 0, "reinstalls": 0} and "status 137" in nothing.output
 
 
 @pytest.mark.parametrize("text", [
@@ -265,6 +340,24 @@ def test_a_broken_sudo_is_not_a_verdict_about_the_world():
     [only] = vm_probes.parse_world_probe(1, "sudo: a password is required\n")
     assert only.name == "world-resolve" and only.advisory and "cannot use sudo" in only.error
     assert vm_probes.WORLD_COMMAND.startswith("sudo -S -p ''") and "emerge --color=n -pvuDN @world" in vm_probes.WORLD_COMMAND
+
+
+# --- a part the installer could not install ------------------------------------------------------------------------------------
+
+def test_a_missing_companion_is_explained_by_what_the_installer_said_about_it():
+    """The first real run: 'hwmonux: Probe exited with status 127' and, three probes away, the installer's own words about the package."""
+    missing = vm_probes.ProbeResult("hwmonux", False, "bash: line 1: hwmonux: command not found", "Probe exited with status 127")
+    reason = "app-misc/hwmonux could not be installed: dev-python/pyside-6.11.2 was killed because the machine ran out of memory"
+    explained = vm_probes.explain_missing_part(missing, ["app-emulation/qemu-guest-agent failed", reason])
+    assert explained.error == f"Probe exited with status 127 (the installer reported: {reason})" and explained.output == missing.output
+    assert vm_probes.explain_missing_part(missing, ["app-emulation/qemu-guest-agent failed"]).error == "Probe exited with status 127"
+    assert vm_probes.explain_missing_part(missing, []).error == "Probe exited with status 127"
+    fine = vm_probes.ProbeResult("hwmonux", True, "ok")
+    assert vm_probes.explain_missing_part(fine, [reason]).error == ""
+    other = vm_probes.ProbeResult("network", False, "", "no route")
+    assert vm_probes.explain_missing_part(other, [reason]).error == "no route"
+    hub = vm_probes.ProbeResult("portagehub", False, "", "Probe exited with status 127")
+    assert "app-portage/portagehub failed" in vm_probes.explain_missing_part(hub, ["app-portage/portagehub failed to build"]).error
 
 
 # --- the hardware plan -----------------------------------------------------------------------------------------------------
@@ -345,3 +438,29 @@ def test_the_plan_file_is_recognised_by_its_schema():
     assert vm_probes.parse_hardware_plan_file(json.dumps({"schema": 1, "early_atoms": []}))["schema"] == 1
     assert vm_probes.parse_hardware_plan_file("") is None and vm_probes.parse_hardware_plan_file("[1]") is None
     assert vm_probes.parse_hardware_plan_file(json.dumps({"early_atoms": []})) is None
+
+
+def test_the_state_file_the_daemon_really_wrote_is_read_and_checked_against_the_machine():
+    """tests/vm/data/hardware-plan-*.json is the file of a real run (a QEMU guest, uefi-nvme-luks-openrc): {version, fingerprint, created, plan}."""
+    text = (DATA / "hardware-plan-uefi-nvme-luks-openrc.json").read_text()
+    assert set(json.loads(text)) == {"version", "fingerprint", "created", "plan"}  # the fixture is the daemon's record, not a bare plan
+    plan = vm_probes.parse_hardware_plan_file(text)
+    assert plan is not None and plan["schema"] == 1 and plan["early_atoms"] == ["sys-kernel/linux-firmware"]
+    assert plan["summary"][0].endswith("no microcode")
+    assert vm_probes.hardware_plan_problems(plan, manifest_of("uefi-nvme-luks-openrc"), "qemu") == []
+
+
+def test_a_plan_inside_the_daemons_record_is_judged_like_a_bare_one():
+    record = {"version": 1, "fingerprint": "0" * 64, "created": "2026-10-24T11:09:05.376Z",
+              "plan": {"schema": 1, "early_atoms": [vm_probes.INTEL_MICROCODE], "optional_atoms": []}}
+    plan = vm_probes.parse_hardware_plan_file(json.dumps(record))
+    assert plan == record["plan"]
+    assert "Intel microcode in a virtual machine" in " ".join(vm_probes.hardware_plan_problems(plan, manifest_of("openrc"), "qemu"))
+
+
+@pytest.mark.parametrize("text", [
+    json.dumps({"version": 1, "fingerprint": "f", "created": "x", "plan": {"early_atoms": []}}),   # a record whose plan has no schema
+    json.dumps({"version": 1, "plan": "not a plan"}), json.dumps({"version": 1, "plan": [1]}), json.dumps({"version": 1}),
+])
+def test_a_record_without_a_real_plan_is_not_a_plan(text):
+    assert vm_probes.parse_hardware_plan_file(text) is None
