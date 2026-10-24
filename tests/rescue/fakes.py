@@ -663,3 +663,24 @@ DEFAULT_EFFECTS = {
     "dracut": fx_dracut, "update-initramfs": fx_update_initramfs, "chpasswd": fx_chpasswd, "kernel-install": fx_kernel_install,
 }
 FakeSystem.__init_effects__ = DEFAULT_EFFECTS  # type: ignore[attr-defined]
+
+
+class CancelAware:
+    """What SubprocessRunner does with its cancel Event: refuse to start, or abort, once the flag is set."""
+
+    def __init__(self, system: FakeSystem, cancel: Any) -> None:
+        self.system = system
+        self.cancel = cancel
+
+    def run(self, argv: Sequence[str], **kwargs: Any) -> CommandResult:
+        from gentoo_installerd.runner import InstallCancelled
+
+        if self.cancel is not None and self.cancel.is_set():
+            raise InstallCancelled("Installation cancelled")
+        result = self.system.run(argv, **kwargs)
+        if self.cancel is not None and self.cancel.is_set():  # set while the command ran: SubprocessRunner kills the process group
+            raise InstallCancelled("Installation cancelled")
+        return result
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.system, name)

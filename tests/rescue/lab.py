@@ -70,7 +70,9 @@ class Lab:
     def session_env(self):
         from gentoo_installerd.rescue.session import SessionEnv
 
-        return SessionEnv(self.base, self.state_dir, self.tmp / "audit-dir", self.probe_root, self.host, lambda _cancel: self.system, sleep=lambda _s: None,
+        from .fakes import CancelAware
+
+        return SessionEnv(self.base, self.state_dir, self.tmp / "audit-dir", self.probe_root, self.host, lambda cancel: CancelAware(self.system, cancel), sleep=lambda _s: None,
                           clock=lambda: 1_792_400_000.0, pid=4242)
 
     def session(self, root_device: str, *, sid: str = "r1a2b3c", allow_write: bool = True, include_tier4=(), overrides=(), candidate=None, **kwargs):

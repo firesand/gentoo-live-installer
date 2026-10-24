@@ -39,6 +39,7 @@ class PlanExecutor:
         self.op = op
         self.secrets = secrets or {}
         self.chroot_state = ""  # "" until the smoke test ran, then "ok" or "broken"
+        self.killed = False  # a forced cancel stopped a command
         self.results: list[dict[str, Any]] = []
         self._window = 0.0
         self._count = 0
@@ -86,6 +87,7 @@ class PlanExecutor:
         except RescueError as exc:
             rc, error = 1, exc.message
             output = exc.message
+            self.killed = self.killed or exc.short == "cancelled"
         except OSError as exc:
             rc, error = 1, f"{exc.strerror or exc}"
             output = error
@@ -132,7 +134,10 @@ class PlanExecutor:
             if not ok:
                 outcome, failed_group = "failed", step.group
                 break
-        if outcome == "failed" and failed_group in {"enter-write", "leave-write"}:
+        if self.killed:
+            outcome = "cancelled"
+        self.session.cancel.clear()  # the cleanup must be able to run after a forced cancel
+        if outcome in {"failed", "cancelled"} and failed_group in {"enter-write", "leave-write"}:
             self._rollback()
         for step in self.plan.cleanup:
             self._run_step(step, index, total, cleanup=True)

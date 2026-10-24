@@ -317,3 +317,47 @@ def test_nothing_destructive_was_ever_issued(lab_factory) -> None:
     assert_nothing_destructive(lab.system)
     refused = [r for r in manager.session(sid).audit.records if r["kind"] == "refused"] if sid in manager.sessions else []
     assert refused == []
+
+
+def test_a_forced_cancel_kills_the_step_runs_the_cleanup_and_never_blocks_the_unmount(lab_factory) -> None:
+    lab, _ = uefi_gentoo_lab(lab_factory)
+    manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    session = manager.session(sid)
+    plan = manager.plan({"session_id": sid, "action_id": "fs.check", "params": {"mode": "repair"}})
+    op = manager.new_op("run", sid)
+    original = lab.system.run
+
+    def killing(argv, **kwargs):
+        if argv[:3] == ("e2fsck", "-f", "-p") or (argv[0] == "timeout" and "e2fsck" in argv):
+            manager.cancel({"job_id": op.id, "force": True})  # the user chose "Stop now" while the repair ran
+        return original(argv, **kwargs)
+
+    lab.system.run = killing  # type: ignore[method-assign]
+    result = manager.run_plan(op, {"session_id": sid, "plan_id": plan["plan_id"], "digest": plan["digest"], "confirm": True, "typed": plan["confirm"]["typed"]})
+    assert result["outcome"] == "cancelled" and not session.cancel.is_set()
+    assert session.root in lab.system.mounts and lab.system.ro["/dev/nvme0n1p5"] is True  # the cleanup restored the read-only mount
+    assert any(r["kind"] == "cancel" for r in session.audit.records)
+    lab.system.run = original  # type: ignore[method-assign]
+    assert unmount(manager, sid)["leftovers"] == []
+    assert lab.system.mounted_targets() == []
+
+
+def test_a_forced_cancel_during_the_write_transition_returns_to_the_read_only_mount(lab_factory) -> None:
+    lab, _ = uefi_gentoo_lab(lab_factory)
+    manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    session = manager.session(sid)
+    plan = manager.plan({"session_id": sid, "action_id": "boot.config"})
+    op = manager.new_op("run", sid)
+    original = lab.system.run
+
+    def killing(argv, **kwargs):
+        if "-o" in argv and "rw,nodev,nosuid" in argv:
+            manager.cancel({"job_id": op.id, "force": True})
+        return original(argv, **kwargs)
+
+    lab.system.run = killing  # type: ignore[method-assign]
+    result = manager.run_plan(op, {"session_id": sid, "plan_id": plan["plan_id"], "digest": plan["digest"], "confirm": True})
+    assert result["outcome"] == "cancelled"
+    lab.system.run = original  # type: ignore[method-assign]
+    assert session.mode == "ro" and session.root in lab.system.mounts
+    assert unmount(manager, sid)["leftovers"] == []

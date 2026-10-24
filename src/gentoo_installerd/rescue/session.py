@@ -620,6 +620,7 @@ class RescueSession:
     def release(self, *, force: bool = False) -> ReleaseResult:
         """Undo every acquisition of this session in reverse order; stops at the first mount that stays busy."""
         result = ReleaseResult()
+        self.cancel.clear()  # a forced cancel must never stop the release that follows it
         self.state = "closing"
         for shell in list(self.shells):
             self.shells.remove(shell)
@@ -697,6 +698,9 @@ def session_from_state(env: SessionEnv, raw: dict[str, Any], graph: DeviceGraph 
     candidate = {"id": root.get("candidate", ""), "os": root.get("os", {}), "label": root.get("label", "")}
     session = RescueSession(env, raw["sid"], plan, candidate, graph, allow_write=raw.get("allow_write", True), depends=raw.get("depends", []))
     session.created = raw.get("created", session.created)
+    if raw.get("audit"):  # keep appending to the log the previous process wrote
+        session.audit = AuditLog(Path(raw["audit"]), raw["sid"], clock=env.clock)
+        session.runner.audit = session.audit
     session.generation = int(raw.get("generation", 0))
     session.state = raw.get("state", "mounted_ro")
     session.ledger = Ledger.from_state(raw.get("ledger", []), session.persist)
