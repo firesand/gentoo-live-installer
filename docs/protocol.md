@@ -245,3 +245,99 @@ Handler = Callable[[dict, Channel], None]
   module whose own import fails is logged as an error.
 * SIGTERM and SIGINT only set a flag and start a shutdown thread. That thread cancels the
   install (cleanup still runs), calls every shutdown hook, and then stops the server.
+
+## Manifest settings added in Wave 5
+
+All of these are optional in a settings file (a missing one has its default) and live in the `manifest` of `start` and `inspect`.
+Where a setting says "effect later", the field is stored and validated but no install output changes yet; the defaults reproduce the behaviour before Wave 5.
+The one deliberate change is `options.ssh`, now `true`.
+
+### storage
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `separate_boot` | bool | `false` | A /boot partition of its own (Advanced). Effect later. |
+| `swap_kind` | `auto`, `partition`, `file`, `zram`, `none` | `auto` | Kind of swap; `auto` is today's choice. Effect later. |
+| `swap_choice` | `recommended`, `none`, `custom`, `hibernate` | `custom` | `custom` uses `swap_mib`. Effect later. |
+| `filesystem` | `ext4`, `xfs`, `btrfs`, `f2fs` | `ext4` | `f2fs` (flash media) is refused with GRUB unless `separate_boot`; manual rows may use `f2fs` too. Effect later. |
+| `fstab_ident` | `uuid`, `label`, `partuuid` | `uuid` | How fstab names filesystems. Effect later. |
+| `atime` | `noatime`, `lazytime`, `relatime` | `noatime` | Access-time mount option (fstab writes `noatime` today). Effect later. |
+| `boot_noauto` | bool | `false` | Mount /boot only on demand. Effect later. |
+
+### network
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `keep_proxy` | bool | `true` | Keep the proxy in the new system's make.conf (written today). Effect later. |
+| `live_static` | object `{address, gateway, dns[]}` | all empty | Fixed address for the live session; if any part is set, all must be valid. Effect later. |
+| `wireless_tools` | bool | `false` | Install wireless tools. Effect later. |
+| `ppp` | bool | `false` | Install PPP support. Effect later. |
+| `copy_live_wifi` | string (uuid) | `""` | uuid of a live NetworkManager Wi-Fi connection copied with its secret (I11); needs NetworkManager. Effect later. |
+
+### portage
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `optimize` | `generic`, `native` | `generic` | `native` = `-march=native`. Effect later. |
+| `binhost_variant` | `auto`, `generic`, `v3` | `auto` | Binary package variant. Effect later. |
+| `mirrors` | list of HTTPS URLs | `[]` | Mirrors in order; `mirror` and `mirror_fallbacks` stay valid. Effect later. |
+| `rsync_mode` | `snapshot`, `sync` | `snapshot` | `snapshot` = emerge-webrsync (today). Effect later. |
+| `license_groups` | list of strings | `[]` | ACCEPT_LICENSE groups; `accept_license` stays the source of truth. Effect later. |
+| `depclean` | bool | `false` | Run emerge --depclean at the end. Effect later. |
+| `profile_override` | string | `""` | A published 23.0 profile path replacing the derived one. Effect later. |
+
+### system
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `world_update` | `auto`, `now`, `later` | `later` | Was a bool: `true` loads as `now`, `false` as `later`. Only `now` updates @world today. |
+| `stage_auto` | bool | `true` | Pick the matching stage3 automatically. Effect later. |
+| `kernel` | adds `custom` | `gentoo-kernel-bin` | `custom` is built by the user's own choice. Effect later. |
+| `kernel_config_snippet` | string | `""` | `CONFIG_X=value` / `# CONFIG_X is not set` lines (at most 16 KiB). Effect later. |
+| `initramfs` | `dracut`, `ugrd`, `none` | `dracut` | `genkernel` is refused with a plain message. Distribution kernels still require `dracut`. |
+| `hostonly` | bool | `false` | dracut host-only mode (the image is generic today). Effect later. |
+| `generic_uki` | bool | `false` | Also build a generic Unified Kernel Image. Effect later. |
+| `bootloader` | adds `none` | `grub` | `none` needs no UEFI. Effect later. |
+| `secure_boot_mode` | `off`, `own-key`, `create`, `shim` | `off` | An old file with `secure_boot: true` loads as `own-key`. Effect later. |
+| `serial_console` | string | `""` | e.g. `ttyS0,115200`. Effect later. |
+| `desktop` | adds `cinnamon`, `mate`, `lxqt`, `gnome-light`, `sway`, `i3` | `kde` | Checked against `FAMILY_DESKTOP_SUPPORT`; the registry comes later. |
+| `domain` | string | `""` | Domain name. Effect later. |
+| `hosts_extra` | list of `"address name [alias...]"` | `[]` | Extra /etc/hosts lines. Effect later. |
+| `extra_locales` | list of locales | `[]` | Locales besides `locale`. Effect later. |
+
+### accounts
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `root_mode` | `same`, `separate`, `locked` | `separate` | Kept in step with `disable_root_login` (`locked` = true). `same`/`separate` still need a root password today. |
+| `privilege` | `sudo`, `doas`, `run0`, `su` | `sudo` | `run0` needs systemd. Only `sudo`/`doas` have an effect today. |
+| `ssh_password_login` | bool | `true` | Password login over SSH (I10). With `ssh` on, `false` and no authorized key is refused. Effect later. |
+| `ssh_root_login` | bool | `false` | Effect later. |
+
+### options
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `ssh` | bool | **`true`** (was `false`) | sshd enabled on the installed system. |
+| `logger` | `sysklogd`, `syslog-ng`, `metalog`, `none` | `syslog-ng` | Was a bool: `true` loads as `syslog-ng`, `false` as `none`. Only syslog-ng/none have an effect today. |
+| `cron` | `cronie`, `dcron`, `fcron`, `bcron`, `none` | `cronie` | Was a bool: `true` loads as `cronie`, `false` as `none`. |
+| `timesync` | `chrony`, `timesyncd`, `none` | `chrony` | The old bool `chrony` still loads (`true` = `chrony`, `false` = `none`); `timesyncd` needs systemd. |
+| `gentoolkit`, `eclean_kernel`, `mlocate`, `journal_persistent` | bool | `false` | Effect later. |
+| `browser` | `firefox`, `none` | `firefox` | Effect later. |
+| `flathub` | bool | `false` | Effect later. |
+| `input_method` | `auto`, `none`, `ibus`, `fcitx5` | `auto` | `auto` installs nothing yet. |
+| `accessibility` | bool | `false` | Effect later. |
+| `gaming` | `off`, `flatpak`, `native` | `off` | `native` is refused without multilib; both are refused on the minimal desktop. Effect later. |
+| `gaming_tweaks` | bool | `true` | Read only when `gaming` is not `off`. |
+| `gaming_windows_tools` | bool | `false` | Effect later. |
+| `gaming_accept_external` | bool | `false` | Native mode: accept the Steam overlay, ~amd64 packages and the download from Valve. |
+
+### hardware
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `gpu_driver` | `auto`, `nvidia`, `nouveau`, `basic` | `auto` | A saved `open` loads as `nouveau`. `auto` still plans like today. |
+| `nvidia_modules` | `auto`, `open`, `closed` | `auto` | `closed` is invalid on Blackwell (hwplan checks later). |
+| `nvk` | `auto`, `on`, `off` | `auto` | Saved `yes`/`no` load as `on`/`off`. The plan's `scalars["nvk"]` keeps `yes`/`no`. |
+| `safe_graphics_entry` | bool | `true` | Safe graphics boot entry. Effect later. |
+| `nvidia_rtd3` | `auto`, `on`, `off` | `auto` | Effect later. |
+| `nvidia_extras` | list of `vaapi`, `cuda`, `nvtop`, `persistenced` | `[]` | `cuda` needs `nvidia_cuda_license_accepted`. |
+| `nvidia_cuda_license_accepted` | bool | `false` | |
+| `signed_modules` | `off`, `auto`, `kernel_key` | `off` | Effect after the Secure Boot VM test. |
+| `devices` | object of bool | `{}` | Keys: `openrazer`, `openrgb`, `game_rules`, `solaar`, `razer_frontend`, `iio_sensors`, `bolt`, `wacom`, `fingerprint`, `asus_tools`, `thinkfan`; any other key is an error. |
+| `battery_charge_limit` | `0`, `60`, `80` | `0` | Effect later. |
+| `lid_action` | `suspend`, `lock`, `ignore` | `suspend` | Effect later. |
+| `vendor_workarounds` | bool | `false` | Effect later. |
