@@ -159,6 +159,21 @@ def test_detect_mode_lets_the_gui_choose_and_writes_down_what_it_chose(lab, caps
     assert navigation["detect"] is True
 
 
+def test_detect_mode_approves_a_disk_without_a_serial_number_like_a_user(lab, capsys):
+    lab.machine(disks=[DiskInfo("/dev/vda", "QEMU", 64 * 2**30, by_path="pci-0000:00:04.0")])
+    lab.manifest_path = lab.manifest("defaults")
+    expected = vm.build_manifest(vm.SCENARIO_MAP["defaults"], PUBLIC_KEY).to_dict(redact=False)
+    overrides = vm.manifest_overrides(expected, __import__("gentoo_installer.manifest", fromlist=["InstallManifest"]).InstallManifest().to_dict(redact=False))
+    plan = lab.plan(guard={"disks": []}, detect=True, overrides=overrides, target={"path": "/dev/vda", "by_path": ["pci-0000:00:04.0"]},
+                    detected={"storage.device": "/dev/vda", "storage.device_id": None, "storage.device_id_kind": "path",
+                              "storage.firmware": "uefi", "storage.table": "gpt"})
+    daemon = FakeDaemon()
+    lab.serve(daemon)
+    assert lab.run("--plan", str(plan)) == 0, [event for event in events_of(capsys) if event["type"] == "error"]
+    assert daemon.manifest.storage.device_id_kind == "path"
+    assert daemon.manifest.storage.device_id.startswith("pci-0000:00:04.0|")
+
+
 def test_a_gui_that_detects_the_wrong_firmware_fails_the_run_with_the_difference(lab, capsys):
     lab.machine(uefi=False)  # a BIOS live system ...
     lab.manifest_path = lab.manifest("openrc")  # ... installed with a UEFI scenario's manifest

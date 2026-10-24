@@ -384,6 +384,9 @@ def main(argv: list[str] | None = None) -> int:
         """Choose the disk like a user does; remember what the GUI had selected by itself."""
         chosen["preselected"] = window.storage.disk_group.value()
         window.storage.disk_group.set_value(device)
+        approval = window.storage.approve_path
+        if approval.isVisibleTo(window.storage):  # no serial number: a user has to approve the disk explicitly
+            approval.setChecked(True)
 
     def navigate_next() -> None:
         if window.current == 6:
