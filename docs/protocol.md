@@ -290,14 +290,14 @@ The one deliberate change is `options.ssh`, now `true`.
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `world_update` | `auto`, `now`, `later` | `later` | Was a bool: `true` loads as `now`, `false` as `later`. Only `now` updates @world today. |
-| `stage_auto` | bool | `true` | Pick the matching stage3 automatically. Effect later. |
-| `kernel` | adds `custom` | `gentoo-kernel-bin` | `custom` is built by the user's own choice. Effect later. |
-| `kernel_config_snippet` | string | `""` | `CONFIG_X=value` / `# CONFIG_X is not set` lines (at most 16 KiB). Effect later. |
-| `initramfs` | `dracut`, `ugrd`, `none` | `dracut` | `genkernel` is refused with a plain message. Distribution kernels still require `dracut`. |
-| `hostonly` | bool | `false` | dracut host-only mode (the image is generic today). Effect later. |
-| `generic_uki` | bool | `false` | Also build a generic Unified Kernel Image. Effect later. |
-| `bootloader` | adds `none` | `grub` | `none` needs no UEFI. Effect later. |
-| `secure_boot_mode` | `off`, `own-key`, `create`, `shim` | `off` | An old file with `secure_boot: true` loads as `own-key`. Effect later. |
+| `stage_auto` | bool | `true` | The System page picks the stage3 from the desktop and the 32-bit choice (Desktop stage3 for any desktop, Standard for Minimal, No-multilib without 32-bit support). A stage3 chosen by hand ends it. The daemon always reads `stage_variant`. |
+| `kernel` | adds `custom` | `gentoo-kernel-bin` | `custom` is refused with "not available yet" (the Your-turn pause of BOOT-10 is not built). `manual` stays a command-line flow. |
+| `kernel_config_snippet` | string | `""` | `CONFIG_X=value` / `# CONFIG_X is not set` lines (at most 16 KiB). Written to `/etc/kernel/config.d/00-installer.config` for `gentoo-kernel` only. |
+| `initramfs` | `dracut`, `ugrd`, `none` | `dracut` | `genkernel` is refused with a plain message. Distribution kernels still require `dracut`; `ugrd` is refused with "not available yet". |
+| `hostonly` | bool | `false` | dracut host-only mode. `true` is refused with "not available yet" (the image is generic). |
+| `generic_uki` | bool | `false` | Also build a generic Unified Kernel Image. `true` is refused with "not available yet". |
+| `bootloader` | adds `none` | `grub` | `none` installs no boot loader and needs no UEFI; the kernel options stay in `/etc/kernel/cmdline`. Not with Secure Boot. |
+| `secure_boot_mode` | `off`, `own-key`, `create`, `shim` | `off` | An old file with `secure_boot: true` loads as `own-key`; `secure_boot` and the mode always agree. `create` makes the key on the target (no key files needed), `own-key` copies the user's. Either way the key is kept in `/etc/secureboot` (root only, 0600) and the ESP hook signs every new image. `shim` is refused with "not available yet". |
 | `serial_console` | string | `""` | e.g. `ttyS0,115200`. Effect later. |
 | `desktop` | adds `cinnamon`, `mate`, `lxqt`, `gnome-light`, `sway`, `i3` | `kde` | Checked against `FAMILY_DESKTOP_SUPPORT`; the registry comes later. |
 | `domain` | string | `""` | Domain name. Effect later. |
@@ -319,7 +319,8 @@ The one deliberate change is `options.ssh`, now `true`.
 | `logger` | `sysklogd`, `syslog-ng`, `metalog`, `none` | `syslog-ng` | Was a bool: `true` loads as `syslog-ng`, `false` as `none`. Only syslog-ng/none have an effect today. |
 | `cron` | `cronie`, `dcron`, `fcron`, `bcron`, `none` | `cronie` | Was a bool: `true` loads as `cronie`, `false` as `none`. |
 | `timesync` | `chrony`, `timesyncd`, `none` | `chrony` | The old bool `chrony` still loads (`true` = `chrony`, `false` = `none`); `timesyncd` needs systemd. |
-| `gentoolkit`, `eclean_kernel`, `mlocate`, `journal_persistent` | bool | `false` | Effect later. |
+| `gentoolkit`, `mlocate`, `journal_persistent` | bool | `false` | Effect later. |
+| `eclean_kernel` | bool | `false` | Installs `app-admin/eclean-kernel` with a distribution kernel. |
 | `browser` | `firefox`, `none` | `firefox` | Effect later. |
 | `flathub` | bool | `false` | Effect later. |
 | `input_method` | `auto`, `none`, `ibus`, `fcitx5` | `auto` | `auto` installs nothing yet. |
@@ -335,7 +336,7 @@ The one deliberate change is `options.ssh`, now `true`.
 | `gpu_driver` | `auto`, `nvidia`, `nouveau`, `basic` | `auto` | A saved `open` loads as `nouveau`. `auto` still plans like today. |
 | `nvidia_modules` | `auto`, `open`, `closed` | `auto` | `closed` is invalid on Blackwell (hwplan checks later). |
 | `nvk` | `auto`, `on`, `off` | `auto` | Saved `yes`/`no` load as `on`/`off`. The plan's `scalars["nvk"]` keeps `yes`/`no`. |
-| `safe_graphics_entry` | bool | `true` | Safe graphics boot entry. Effect later. |
+| `safe_graphics_entry` | bool | `true` | With the NVIDIA proprietary driver (`scalars.gpu_driver == "nvidia"`) every boot loader gets a second entry that starts with `nomodeset module_blacklist=nvidia,nvidia_drm,nvidia_modeset,nvidia_uvm,nouveau`: a GRUB submenu (`/etc/grub.d/42_gentoo_safe_graphics`), `loader/entries/gentoo-safe.conf`, a second `efibootmgr` entry, and `EFI/Linux/gentoo-safe.efi` for UKI installs. |
 | `nvidia_rtd3` | `auto`, `on`, `off` | `auto` | Effect later. |
 | `nvidia_extras` | list of `vaapi`, `cuda`, `nvtop`, `persistenced` | `[]` | `cuda` needs `nvidia_cuda_license_accepted`. |
 | `nvidia_cuda_license_accepted` | bool | `false` | |
