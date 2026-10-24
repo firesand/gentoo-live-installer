@@ -240,6 +240,8 @@ class StorageManager:
             raise StorageError("Naming filesystems by partition UUID needs a GPT partition table; choose the filesystem UUID or the label", "storage.layout")
         if storage.boot_noauto and not guided_layout.has_boot_partition(storage) and not any(p.mountpoint == "/boot" for p in storage.partitions):
             raise StorageError("Mounting /boot only when needed (noauto) needs a /boot partition of its own", "storage.layout")
+        if storage.mode == "manual" and manifest.system.initramfs != "dracut" and any(p.mountpoint == "/usr" for p in storage.partitions):
+            raise StorageError("A separate /usr partition needs an initramfs (dracut) to be mounted before the system starts", "storage.layout")
         if storage.mode == "manual" and manifest.system.bootloader == "grub" and any(p.mountpoint == "/" and p.filesystem == "f2fs" for p in storage.partitions) \
                 and not any(p.mountpoint == "/boot" for p in storage.partitions):
             raise StorageError("GRUB cannot reliably read an F2FS root: keep /boot on a separate ext4 partition, or choose another root filesystem", "storage.layout")

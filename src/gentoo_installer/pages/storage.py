@@ -468,6 +468,7 @@ class StoragePage(Page):
         self._update_holders()
         self._refresh()
         self._update_visibility()
+        self._suggest_when_empty()
 
     def _manual_changed(self) -> None:
         self._update_extra_approvals()
@@ -580,6 +581,12 @@ class StoragePage(Page):
         self.guided.setVisible(not manual)
         self._update_visibility()
         self._update_holders()
+        self._suggest_when_empty()
+
+    def _suggest_when_empty(self) -> None:
+        """Entering the manual mode with an empty table fills it with a layout made from what is on the disk (nothing is written by this)."""
+        if self.mode.currentData() == "manual" and self.selected_disk() is not None and not self.manual_editor.row_count():
+            self.manual_editor.suggest_layout(confirm=False)
 
     def set_advanced(self, advanced: bool) -> None:
         self.advanced = advanced
@@ -983,7 +990,7 @@ class StoragePage(Page):
         if raid:
             return False, raid
         if storage.mode == "manual":
-            problems = self.manual_editor.problems(storage.firmware)
+            problems = self.manual_editor.problems(storage.firmware, bootloader=self.manifest.system.bootloader, initramfs=self.manifest.system.initramfs)
             if problems:
                 return False, problems[0]
             for path, check in self.extra_checks.items():

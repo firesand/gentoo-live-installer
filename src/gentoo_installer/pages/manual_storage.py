@@ -22,18 +22,35 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .. import layout
 from ..keyboard import start_detached
 from ..manifest import Partition
 from ..system_info import DiskInfo, PartitionInfo, SystemInfo
 from ..widgets import FlowLayout, wrapped_label
+from .storage_widgets import DiskBar, ROLE_COLORS
 
-MOUNT_CHOICES = ("/", "/boot", "/efi", "/home", "swap")
+MOUNT_CHOICES = ("/", "/boot", "/efi", "/home", "/var", "/opt", "/usr", "/tmp", "/var/tmp", "swap")
+# One line for every place a partition can be mounted (shown under the table for the row that is selected, and as the tooltip of the choice).
+MOUNT_HELP = {
+    "/": "The system itself: Gentoo, your programs and settings. Every layout needs exactly one.",
+    "/boot": "The kernel and start-up files. Needed outside the encryption with LUKS, and for F2FS with GRUB.",
+    "/efi": "The EFI system partition (FAT32): the small area your computer reads first. UEFI computers need it.",
+    "/home": "A separate /home keeps your files safe if you reinstall the system.",
+    "/var": "Logs, caches and the Portage package data. A separate /var keeps runaway logs from filling the system partition.",
+    "/opt": "Programs installed by hand outside the package manager. Only worth splitting off if you keep a lot of them.",
+    "/usr": "Most of the installed programs. A separate /usr needs an initramfs (dracut) to start; newcomers should leave it on the system partition.",
+    "/tmp": "Temporary files. A separate /tmp is created world-writable with the sticky bit (mode 1777).",
+    "/var/tmp": "Larger temporary files, such as package builds. Created world-writable with the sticky bit (mode 1777).",
+    "swap": "Swap space: disk space the computer uses when memory runs short.",
+}
 FILESYSTEMS = (
-    ("ext4", "ext4"), ("xfs", "XFS"), ("btrfs", "Btrfs"), ("vfat", "FAT32 (EFI)"), ("swap", "swap"),
+    ("ext4", "ext4"), ("xfs", "XFS"), ("btrfs", "Btrfs"), ("f2fs", "F2FS (flash media)"), ("vfat", "FAT32 (EFI)"), ("swap", "swap"),
 )
 # lsblk filesystem names that a declared filesystem may keep without formatting.
-COMPATIBLE = {"ext4": {"ext2", "ext3", "ext4"}, "xfs": {"xfs"}, "btrfs": {"btrfs"}, "vfat": {"vfat", "fat32", "fat16"}, "swap": {"swap"}}
-DETECTED = {"ext2": "ext4", "ext3": "ext4", "ext4": "ext4", "xfs": "xfs", "btrfs": "btrfs", "vfat": "vfat", "swap": "swap"}
+COMPATIBLE = {"ext4": {"ext2", "ext3", "ext4"}, "xfs": {"xfs"}, "btrfs": {"btrfs"}, "f2fs": {"f2fs"}, "vfat": {"vfat", "fat32", "fat16"}, "swap": {"swap"}}
+DETECTED = {"ext2": "ext4", "ext3": "ext4", "ext4": "ext4", "xfs": "xfs", "btrfs": "btrfs", "f2fs": "f2fs", "vfat": "vfat", "swap": "swap"}
+PRESETS = (("/home", "Separate /home"), ("/var", "Separate /var"))
+ROLE_OF_MOUNT = {"/": "root", "/boot": "boot", "/efi": "efi", "/boot/efi": "efi", "/home": "home", "swap": "swap", "": "swap"}
 EFI_MOUNTS = {"/efi", "/boot/efi"}
 COLUMNS = ("Partition", "Use as", "Filesystem", "Format", "Label", "Currently contains")
 STACKED = {"crypt", "lvm", "raid0", "raid1", "raid5", "raid6", "raid10", "md"}
@@ -74,7 +91,15 @@ class ManualLayoutEditor(QWidget):
             self.table.setColumnWidth(column, width)
         self.table.setMinimumHeight(220)
         self.table.setAccessibleName("Manual partitions")
+        self.bar = DiskBar()
+        self.bar.setAccessibleName("The disk and what each partition is used for")
+        box.addWidget(self.bar)
+        self.legend = wrapped_label("", muted=True)
+        box.addWidget(self.legend)
         box.addWidget(self.table)
+        self.mount_help = wrapped_label("", muted=True)
+        box.addWidget(self.mount_help)
+        self.table.currentCellChanged.connect(lambda *_: self._update_mount_help())
         buttons = FlowLayout()
         self.add_button = QPushButton("Add partition")
         self.add_button.clicked.connect(lambda: self.add_row())
@@ -83,12 +108,18 @@ class ManualLayoutEditor(QWidget):
         self.suggest_button = QPushButton("Suggest a layout")
         self.suggest_button.setToolTip("Fill the table from the partitions found on the disk: the EFI partition is kept, the largest Linux partition becomes /.")
         self.suggest_button.clicked.connect(lambda: self.suggest_layout())
+        self.preset_buttons: dict[str, QPushButton] = {}
+        for mountpoint, text in PRESETS:
+            button = QPushButton(text)
+            button.setToolTip(MOUNT_HELP[mountpoint] + " Adds a row; you choose the partition for it.")
+            button.clicked.connect(lambda _=False, m=mountpoint: self.add_preset(m))
+            self.preset_buttons[mountpoint] = button
         self.rescan_button = QPushButton("Rescan disks")
         self.rescan_button.clicked.connect(self.rescanRequested)
         self.gparted_button = QPushButton("Open GParted")
         self.gparted_button.setToolTip("Create or resize partitions with GParted, then press Rescan disks.")
         self.gparted_button.clicked.connect(self.open_gparted)
-        for button in (self.add_button, self.remove_button, self.suggest_button, self.rescan_button, self.gparted_button):
+        for button in (self.add_button, self.remove_button, self.suggest_button, *self.preset_buttons.values(), self.rescan_button, self.gparted_button):
             buttons.addWidget(button)
         box.addLayout(buttons)
         self.note = wrapped_label("", muted=True, selectable=True)
@@ -176,6 +207,8 @@ class ManualLayoutEditor(QWidget):
         mount = QComboBox()
         mount.setEditable(True)
         mount.addItems(MOUNT_CHOICES)
+        for index, choice in enumerate(MOUNT_CHOICES):
+            mount.setItemData(index, MOUNT_HELP[choice], Qt.ItemDataRole.ToolTipRole)
         mount.setAccessibleName("Use as")
         self.table.setCellWidget(row, 1, mount)
         fs = QComboBox()
@@ -202,6 +235,22 @@ class ManualLayoutEditor(QWidget):
         self._update_note()
         self.changed.emit()
         return row
+
+    def add_preset(self, mountpoint: str) -> int:
+        """Add a row for a separate /home or /var. A partition is only chosen for you when it is empty (no filesystem), so no data is at risk."""
+        disk = self.disk()
+        used = {row.device for row in self.rows()}
+        taken = {row.mountpoint for row in self.rows()}
+        index = self.add_row()
+        mount = self.table.cellWidget(index, 1)
+        assert isinstance(mount, QComboBox)
+        mount.setCurrentText("" if mountpoint in taken else mountpoint)
+        empty = [part for part in (disk.partitions if disk else []) if part.type == "part" and not part.fstype and not part.mounted
+                 and not part.is_esp and not part.is_bios_boot and not part.is_swap and not part.is_windows and part.path not in used]
+        combo = self.table.cellWidget(index, 0)
+        if empty and isinstance(combo, QComboBox):
+            combo.setCurrentIndex(max(0, combo.findData(max(empty, key=lambda part: part.size).path)))
+        return index
 
     def _set_from_partition(self, row: int, partition: Partition) -> None:
         mount = self.table.cellWidget(row, 1)
@@ -293,6 +342,12 @@ class ManualLayoutEditor(QWidget):
         self._show_contents(row)
         self.changed.emit()
 
+    def _update_mount_help(self) -> None:
+        row = self.table.currentRow()
+        text = MOUNT_HELP.get(self._mount_text(row), "") if row >= 0 else ""
+        self.mount_help.setText(text)
+        self.mount_help.setVisible(bool(text))
+
     def _mount_text(self, row: int) -> str:
         mount = self.table.cellWidget(row, 1)
         return mount.currentText().strip() if isinstance(mount, QComboBox) else ""
@@ -302,6 +357,7 @@ class ManualLayoutEditor(QWidget):
         fs = self.table.cellWidget(row, 2) if row >= 0 else None
         if isinstance(fs, QComboBox) and mount.currentText().strip().lower() == "swap":
             fs.setCurrentIndex(fs.findData("swap"))
+        self._update_mount_help()
         self.changed.emit()
 
     def _show_contents(self, row: int) -> None:
@@ -311,7 +367,25 @@ class ManualLayoutEditor(QWidget):
         part = self.info.find_partition(self._device(row)) if self.info and self._device(row) else None
         item.setText("" if part is None else part.describe() + (f" · mounted at {', '.join(part.mountpoints)}" if part.mounted else ""))
 
+    def _update_bar(self) -> None:
+        """The disk as a bar: what each partition is used for, and what stays as it is."""
+        disk = self.disk()
+        parts = [part for part in disk.partitions if part.type == "part"] if disk else []
+        rows = {row.device: row for row in self.rows() if row.device}
+        pieces: list[layout.TableRow] = []
+        for part in parts:
+            row = rows.get(part.path)
+            role = ROLE_OF_MOUNT.get(row.mountpoint, "data") if row else "data"
+            use = (row.mountpoint or "swap") if row else "not changed"
+            pieces.append(layout.TableRow(part.path, use, part.fstype, max(1, part.size // layout.MIB), "", role, "format" if row and row.format else "keep"))
+        self.bar.set_rows(pieces)
+        self.legend.setText("  ".join(f'<span style="color:{ROLE_COLORS.get(p.role, ROLE_COLORS["data"])}">■</span> {p.partition} ({p.mountpoint}, {p.size_text})' for p in pieces))
+        self.legend.setTextFormat(Qt.TextFormat.RichText)
+        self.bar.setVisible(bool(pieces))
+        self.legend.setVisible(bool(pieces))
+
     def _update_note(self) -> None:
+        self._update_bar()
         disk = self.disk()
         if disk is None:
             self.note.hide()
@@ -363,7 +437,7 @@ class ManualLayoutEditor(QWidget):
 
     # --- validation ----------------------------------------------------------------------------------------
 
-    def problems(self, firmware: str) -> list[str]:
+    def problems(self, firmware: str, *, bootloader: str = "grub", initramfs: str = "dracut") -> list[str]:
         """Everything wrong with the table, in the order a user would fix it."""
         if self.info is None:
             return ["The disks have not been scanned yet."]
@@ -416,6 +490,10 @@ class ManualLayoutEditor(QWidget):
         roots = [row for row in rows if row.mountpoint == "/"]
         if len(roots) != 1:
             problems.append("Exactly one row must be used as / (root).")
+        if any(row.mountpoint == "/usr" for row in rows) and initramfs != "dracut":
+            problems.append("A separate /usr partition needs an initramfs (dracut) to be mounted before the system starts. Choose dracut as the initramfs, or leave /usr on the system partition.")
+        if bootloader == "grub" and any(row.mountpoint == "/" and row.filesystem == "f2fs" for row in rows) and not any(row.mountpoint == "/boot" for row in rows):
+            problems.append("GRUB cannot reliably read an F2FS root: add a separate /boot partition (ext4), or choose another root filesystem.")
         if firmware == "uefi" and not any(row.mountpoint in EFI_MOUNTS for row in rows):
             problems.append("A UEFI installation needs the EFI System Partition: add a row used as /efi.")
         if firmware == "bios" and disk.pttype == "gpt" and not any(part.is_bios_boot for part in disk.partitions):

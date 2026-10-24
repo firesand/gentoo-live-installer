@@ -366,3 +366,23 @@ class TestFstabStage:
         installer._storage()
         installer._write_fstab()
         assert "tz=UTC" not in (tmp_path / "target/etc/fstab").read_text()
+
+
+class TestManualMounts:
+    def rows(self):
+        return (ESP_ROW, ROOT_ON_B, Partition("/dev/sdb2", "/usr", "ext4", format=True))
+
+    def test_a_separate_usr_with_dracut(self, tmp_path):
+        disks = machine()
+        disks[1].parts[1].update(size=30 * GiB, fstype="ext4")
+        runner = StatefulRunner(disks)
+        make_manager(runner, tmp_path).prepare(manual(*self.rows(), additional_device_ids=["SER-B"]))
+        assert ("mount", "/dev/sdb2", str(tmp_path / "target" / "usr")) in runner.commands
+
+    def test_a_separate_usr_without_an_initramfs_is_refused(self, tmp_path):
+        m = manual(*self.rows(), additional_device_ids=["SER-B"])
+        m.system.initramfs = "none"
+        runner = StatefulRunner(machine())
+        with pytest.raises(StorageError, match="needs an initramfs"):
+            make_manager(runner, tmp_path).prepare(m)
+        assert not any(c[0] in {"sgdisk", "wipefs"} or c[0].startswith("mkfs") for c in runner.commands)

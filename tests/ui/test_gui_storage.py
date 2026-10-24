@@ -321,6 +321,7 @@ def manual(make_window):
     window = make_window(info=info_with(laptop_disk()))
     window.storage.disk_group.set_value("/dev/nvme0n1")
     window.storage.mode.setCurrentIndex(1)
+    window.storage.manual_editor.clear()  # entering the manual mode fills the table with a suggestion; these tests start from an empty one
     return window, window.storage.manual_editor
 
 
