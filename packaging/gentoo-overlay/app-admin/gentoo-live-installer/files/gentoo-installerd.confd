@@ -1,0 +1,8 @@
+# /etc/conf.d/gentoo-installerd
+
+# Extra arguments for gentoo-installerd, for example a different socket:
+#command_args="--socket /run/gentoo-installer/server.sock"
+
+# When the service stops, remove every process it left behind (an installation in
+# progress is cancelled and cleaned up first, so this only catches stragglers).
+rc_cgroup_cleanup="YES"

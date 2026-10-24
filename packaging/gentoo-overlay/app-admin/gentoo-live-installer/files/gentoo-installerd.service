@@ -1,14 +1,19 @@
 [Unit]
 Description=Gentoo installer privileged daemon
-Requires=dbus.service
-After=dbus.service NetworkManager.service
+After=NetworkManager.service
 
 [Service]
 Type=simple
-Group=gentoo-installer
 ExecStart=/usr/bin/gentoo-installerd
+# /run/gentoo-installer holds the socket; the daemon sets its group to gentoo-installer.
+RuntimeDirectory=gentoo-installer
+RuntimeDirectoryMode=0750
+# SIGTERM cancels a running installation and runs its cleanup (unmount, close LUKS).
+KillMode=mixed
+TimeoutStopSec=60
 Restart=on-failure
 RestartSec=2s
+SyslogIdentifier=gentoo-installerd
 
 [Install]
 WantedBy=multi-user.target
