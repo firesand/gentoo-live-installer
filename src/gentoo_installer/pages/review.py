@@ -140,6 +140,18 @@ def storage_plan(manifest: InstallManifest, info: SystemInfo | None) -> layout.S
         return None
 
 
+def graphics_driver_text(manifest: InstallManifest, info: SystemInfo | None) -> str:
+    """The graphics driver the installation will use, as the planner decided it (what was asked for when nothing was detected)."""
+    plan = hardware_plan(manifest, info.hardware) if info is not None and info.hardware else None
+    if plan is None:
+        return "NVIDIA proprietary driver" if manifest.hardware.gpu_driver == "nvidia" else "Open-source driver"
+    if plan.scalars.get("gpu_driver") == "nvidia":
+        return f"NVIDIA proprietary driver {plan.scalars.get('nvidia_branch', '')}".strip()
+    if manifest.hardware.gpu_driver == "nvidia":
+        return "Open-source driver (the NVIDIA driver does not fit this computer or these settings)"
+    return "Open-source driver"
+
+
 def storage_plan_text(manifest: InstallManifest, info: SystemInfo | None) -> str:
     plan = storage_plan(manifest, info)
     return "\n".join(plan.lines()) if plan is not None else ""
@@ -286,9 +298,13 @@ class ReviewPage(Page):
         for name, value in values:
             if name == "Disk" and disk is not None:
                 value = f"{disk.describe()} · {storage.mode} · {storage.filesystem}"
+            elif name == "Encryption":
+                value = storage.encryption_summary()  # says what is and is not encrypted, not just "enabled"
             rich.append((name, value))
         if storage.mode == "erase":
             rich.append(("Swap", f"{storage.swap_mib} MiB" if storage.swap_mib else "None"))
+        rich.append(("Installed for", "A portable disk (other computers)" if self.manifest.hardware.target == "portable" else "This computer"))
+        rich.append(("Graphics driver", graphics_driver_text(self.manifest, self.info)))
         rich.append(("Region", f"{self.manifest.system.locale} · {self.manifest.system.timezone} · keyboard {self.manifest.system.keyboard_layout} (console {self.manifest.system.keymap})"))
         self.summary.setRowCount(len(rich))
         for row, (name, value) in enumerate(rich):

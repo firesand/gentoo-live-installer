@@ -652,3 +652,44 @@ def test_choosing_the_nvidia_driver_never_ticks_the_licence_for_the_user(make_wi
     tab.gpu_driver.set_value("nvidia")
     assert not tab.nvidia_license.isChecked()
     assert any("licence" in problem for problem in tab.problems())
+
+
+# --- the summary table of the review ----------------------------------------------------------------------------------------------------------
+
+
+def summary_rows(window) -> dict[str, str]:
+    table = window.review.summary
+    return {table.item(row, 0).text(): table.item(row, 1).text() for row in range(table.rowCount())}
+
+
+def test_the_review_says_what_encryption_covers(make_window):
+    manifest = InstallManifest()
+    manifest.storage.luks = True
+    manifest.storage.luks_passphrase = "long-enough-passphrase"
+    window = make_window(manifest=manifest)
+    window._show_page(6)
+    assert summary_rows(window)["Encryption"] == manifest.storage.encryption_summary() != "LUKS enabled"
+    assert "swap is never stored unencrypted" in summary_rows(window)["Encryption"]
+
+
+def test_the_review_names_the_target_and_the_graphics_driver(make_window):
+    manifest = InstallManifest()
+    manifest.hardware.gpu_driver, manifest.hardware.nvidia_license_accepted = "nvidia", True
+    window = make_window(manifest=manifest, info=machine("asus-desktop-rtx4090"))
+    window._show_page(6)
+    rows = summary_rows(window)
+    assert rows["Installed for"] == "This computer" and rows["Graphics driver"] == "NVIDIA proprietary driver 595"
+    window.manifest.hardware.target = "portable"
+    window.manifest.hardware.gpu_driver = "auto"
+    window._show_page(5)
+    window._show_page(6)
+    rows = summary_rows(window)
+    assert rows["Installed for"].startswith("A portable disk") and rows["Graphics driver"] == "Open-source driver"
+    unfit = make_window(manifest=manifest, info=machine("old-bios-sata-radeon"))
+    unfit.manifest.hardware.target = "this"
+    unfit.manifest.hardware.gpu_driver = "nvidia"
+    unfit._show_page(6)
+    assert "does not fit" in summary_rows(unfit)["Graphics driver"]
+    plain = make_window()
+    plain._show_page(6)
+    assert summary_rows(plain)["Graphics driver"] == "Open-source driver"
