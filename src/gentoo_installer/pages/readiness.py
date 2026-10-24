@@ -261,6 +261,8 @@ class ReadinessPage(Page):
             small = [disk for disk in info.disks if disk.selectable]
             hint = f" ({', '.join(f'{d.path} {d.size_text}' for d in small)}: too small, {format_size(smallest)} needed)" if small else ""
             message = f"No suitable disk found: a writable disk of at least {format_size(smallest)} that is not the installer medium is required" + hint + "."
+            # A storage controller in Intel RST mode hides the internal disks: the finding of the probe says what to change.
+            message = next((str(w["message"]) for w in info.warnings if clean_code(str(w.get("code", ""))) == "st_rst_no_disks" and w.get("message")), message)
             row.set_status("error", message)
             self.blocking.append(message)
             return

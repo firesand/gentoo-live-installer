@@ -83,8 +83,8 @@ def test_the_machine_whose_disks_are_hidden_by_the_firmware_is_stopped_with_an_e
     info = machine("intel-rst-hidden-nvme")
     window = make_window(info=info)
     valid, message = window.readiness.validate_page()
-    assert not valid
-    assert window.readiness.rows["disk"].status == "error"
+    assert not valid and "SATA Operation to AHCI" in message  # the dialog says what to change, not just that no disk was found
+    assert window.readiness.rows["disk"].status == "error" and "AHCI" in window.readiness.rows["disk"].detail.text()
     texts = " ".join(window.readiness.notes_box.itemAt(i).widget().detail.text() for i in range(window.readiness.notes_box.count()))
     assert "SATA Operation to AHCI" in texts  # the finding of the probe says what to change in the firmware settings
     assert "Windows" in texts
@@ -112,3 +112,20 @@ def test_the_virtual_machines_offer_guest_tools_and_skip_microcode(make_window):
         tab = window.customize.hardware
         assert tab.row_shown("guest_tools") and hypervisor in tab.summary.text()
         assert "guest tools" in tab.plan_text.text().lower()
+
+
+def test_what_the_detection_knows_about_the_disk_stops_the_storage_page(make_window):
+    info = machine("old-bios-sata-radeon")
+    info.hardware["disks"][0]["log_sec"] = 4096  # a disk with 4096-byte sectors: legacy BIOS cannot boot it
+    window = make_window(info=info)
+    disk = next(item for item in info.disks if item.selectable)
+    window.storage.disk_group.set_value(disk.path)
+    window.storage.approve_path.setChecked(not disk.has_identity)
+    valid, message = window.storage.validate_page()
+    assert not valid and "4096-byte sectors" in message
+    # the same disk is fine for a UEFI install on a machine that has UEFI
+    other = machine("asus-desktop-rtx4090")
+    other.hardware["disks"][0]["log_sec"] = 4096
+    window = make_window(info=other)
+    window.storage.disk_group.set_value(next(item for item in other.disks if item.selectable).path)
+    assert window.storage.validate_page() == (True, "")

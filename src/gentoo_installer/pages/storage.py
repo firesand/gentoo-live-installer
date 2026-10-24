@@ -22,6 +22,7 @@ from ..keyboard import start_detached
 from ..manifest import InstallManifest
 from ..system_info import MEMBER_SIGNATURES, DiskInfo, SystemInfo, format_size, smallest_disk_bytes
 from ..widgets import Card, ChoiceGroup, FlowLayout, FormGrid, Page, wrapped_label
+from .hardware import CAPACITY_CODES, blocking_findings
 from .manual_storage import ManualLayoutEditor
 
 UEFI_ON_BIOS = (
@@ -614,6 +615,11 @@ class StoragePage(Page):
             for path, check in self.extra_checks.items():
                 if not check.isChecked():
                     return False, f"{path} has no serial number or WWN. Tick the confirmation box under the partition list to approve it explicitly, or use another disk."
+        # What the detection knows about this disk and firmware (4K sectors with legacy BIOS, a DOS table that is too small, ...).
+        # The room for the chosen desktop is judged later, when the desktop is known.
+        known = blocking_findings(self.manifest, self.info.hardware, "storage", skip=CAPACITY_CODES)
+        if known:
+            return False, known[0]
         reasons = self.holders()
         if reasons and not storage.release_holders:
             return False, ("Something on the disk is still in use (" + "; ".join(reasons) + "). Tick “Switch these volumes off and erase them together with the disk” "
