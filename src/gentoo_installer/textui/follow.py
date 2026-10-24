@@ -263,6 +263,7 @@ class InstallFollower:
         final_attach = False
         while True:
             received = 0
+            silent = False
             try:
                 for event in self.daemon.stream(request):
                     received += 1
@@ -275,9 +276,9 @@ class InstallFollower:
                     return self._partial("detached", "You stopped watching. The installation is still running.")
                 request = self._attach_request()
                 continue
-            except OSError:
-                pass  # connection lost or silent for too long: decided below from the daemon's own status
-            verdict = self._after_drop(request, received, failures, final_attach)
+            except OSError as exc:
+                silent = isinstance(exc, TimeoutError)  # connected, but nothing was reported for a long time
+            verdict = self._after_drop(request, received, failures, final_attach, silent)
             if isinstance(verdict, Outcome):
                 return verdict
             failures, final_attach = verdict
@@ -286,13 +287,16 @@ class InstallFollower:
     def _attach_request(self) -> dict[str, Any]:
         return {"action": "attach", "after_seq": self.run_state.last_seq}
 
-    def _after_drop(self, request: dict[str, Any], received: int, failures: int, final_attach: bool) -> Outcome | tuple[int, bool]:
+    def _after_drop(self, request: dict[str, Any], received: int, failures: int, final_attach: bool, silent: bool = False) -> Outcome | tuple[int, bool]:
         """The stream ended without a ``completed`` event: find out what the daemon is doing."""
         state = self.daemon.probe()
         if state.reachable:
             job = state.job_status
             if job == "running" and not state.supports("attach.v1"):
                 return self._wait_for_old_service()
+            if job == "running" and silent:
+                self.sink.note(f"Nothing has been reported for {self.daemon.read_timeout:.0f} seconds; the installation is still running (long builds are quiet). Waiting on...")
+                return 0, final_attach
             if job == "running":
                 self.sink.note("The connection to the installer service was lost, but the installation is still running. Reconnecting...")
                 self.host.sleep(1.0)

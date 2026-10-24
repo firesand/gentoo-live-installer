@@ -173,6 +173,8 @@ def test_a_service_that_stays_quiet_is_asked_and_the_follower_re_attaches(instal
     follower, script = follower_for(fake, host, daemon=daemon)
     outcome = follower.run(start_request())
     assert outcome.ok and [request["after_seq"] for request in fake.requests if request["action"] == "attach"] == [5]
+    assert "Nothing has been reported for 0 seconds; the installation is still running" in script.flat and "connection to the installer service was lost" not in script.flat
+    assert host.slept == []  # no reason to pause: the connection was fine
 
 
 def test_when_the_job_is_over_one_more_attach_fetches_the_missed_end(installer, host: FakeHost) -> None:
