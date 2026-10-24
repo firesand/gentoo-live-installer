@@ -1,4 +1,4 @@
-"""XKB layout to console keymap, and locale to L10N code (pure data).
+"""XKB layout to console keymap, and locale to L10N code and script (pure data).
 
 The text console and the initramfs passphrase prompt use kbd keymaps, the
 desktops use XKB layouts. This table maps the second to the first, with
@@ -89,3 +89,26 @@ def l10n_code(locale: str) -> str:
     if region and f"{language}-{region.upper()}" in L10N_CODES:
         return f"{language}-{region.upper()}"
     return language if language in L10N_CODES else ""
+
+
+# Languages whose text needs glyphs that the desktops' default fonts (DejaVu, Liberation, Adwaita) do not have.
+# The first group is Chinese, Japanese and Korean (including the glibc locales of the other Chinese languages);
+# the second one every other script that is not Latin, Greek or Cyrillic.
+CJK_LANGUAGES = frozenset({"ja", "ko", "zh", "yue", "cmn", "hak", "nan", "lzh"})
+COMPLEX_SCRIPT_LANGUAGES = frozenset("""
+ar fa ur ps sd ug ckb ks he iw yi th lo km my shn hi bn as or ta te ml kn gu pa mr ne sa mai kok bho doi brx mni sat mag hne tcy si bo dz am ti byn gez tig
+ka hy dv chr iu
+""".split())
+
+
+def locale_language(locale: str) -> str:
+    """'ja_JP.UTF-8' -> 'ja', 'sat_IN' -> 'sat', 'de_DE@euro' -> 'de'; 'c' for 'C'."""
+    return locale.split(".")[0].split("@")[0].partition("_")[0].lower()
+
+
+def locale_script(locale: str) -> str:
+    """'cjk' or 'complex' for a language that needs fonts the desktops do not bring, '' for Latin, Greek and Cyrillic."""
+    language = locale_language(locale)
+    if language in CJK_LANGUAGES:
+        return "cjk"
+    return "complex" if language in COMPLEX_SCRIPT_LANGUAGES else ""

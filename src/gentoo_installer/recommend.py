@@ -250,6 +250,10 @@ def defaults_for(profile: HardwareProfile | Mapping[str, Any] | None, manifest: 
         changes["options.bluetooth"] = False
     if hw.machine.hypervisor and manifest.options.microcode:
         changes["options.microcode"] = False  # the hypervisor owns the CPU microcode
+    # A disk that moves to other screens keeps the default font; so does a font the user chose.
+    font = "" if manifest.system.console_font or manifest.hardware.target == "portable" else console_font_hint(hw.displays)
+    if font:
+        changes["system.console_font"] = font
     if resolve_auto:
         scalars = _plan(manifest, hw).scalars
         for name, key in (("power", "power"), ("thermald", "thermald"), ("zram", "zram"), ("trim", "trim"), ("sof_firmware", "sof_firmware"),

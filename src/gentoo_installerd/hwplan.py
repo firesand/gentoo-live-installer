@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Sequence
 
 from gentoo_installer import hardware_data as data
-from gentoo_installer import recommend
+from gentoo_installer import keyboard_data, recommend
 from gentoo_installer.hardware import DiskInfo, GpuInfo, HardwareProfile, gpu_label, is_hybrid, parent_disk_name
 from gentoo_installer.manifest import InstallManifest
 
@@ -63,6 +63,8 @@ A_PIPEWIRE = "media-video/pipewire"
 A_MESA = "media-libs/mesa"
 A_AVAHI = "net-dns/avahi"
 A_HWMONUX = "app-misc/hwmonux"
+A_NOTO = "media-fonts/noto"
+A_NOTO_CJK = "media-fonts/noto-cjk"
 
 LIC_FIRMWARE = "linux-fw-redistributable"
 LIC_INTEL_UCODE = "intel-ucode"
@@ -288,6 +290,7 @@ class _Planner:
         self.nvidia_gpus = [gpu for gpu in self.gpus if gpu.vendor == "nvidia"]
         self.proprietary = ""  # nvidia branch when the proprietary path is active
         self.firmware_reasons: list[str] = []
+        self.fonts: tuple[str, str] | None = None  # (atom, what it covers) when the locale needs a font package
 
     # -- accumulation helpers ---------------------------------------------------------------------------------------
 
@@ -337,6 +340,7 @@ class _Planner:
         self.audio()
         self.boot()
         self.display()
+        self.locale()
         self.companions()
         self.finish()
         return p
@@ -695,6 +699,24 @@ class _Planner:
         if dpi > 96 and self.desktop == "xfce":
             self.file("/etc/skel/.config/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml", xfce_xsettings(dpi))
 
+    def locale(self) -> None:
+        """Fonts for the script of the chosen language; without them a translated desktop shows empty boxes.
+
+        DejaVu, Liberation and Adwaita cover Latin, Greek and Cyrillic only. The KDE package set already brings
+        media-fonts/noto (kde-plasma/plasma-integration needs it); nothing in it has Chinese, Japanese or Korean
+        glyphs. Both packages are large downloads, so they are optional atoms: a failure only degrades.
+        """
+        if self.desktop == "minimal":
+            return
+        script = keyboard_data.locale_script(self.m.system.locale)
+        if script == "cjk":
+            self.fonts = (A_NOTO_CJK, "Chinese, Japanese and Korean text")
+        elif script == "complex" and self.desktop != "kde":
+            self.fonts = (A_NOTO, "Arabic, Hebrew, Indic, Thai and other scripts")
+        if self.fonts:
+            self.p.optional_atoms.append(self.fonts[0])
+            self.note(f"{self.fonts[0]} was added for the language {self.m.system.locale}: the default fonts have no glyphs for {self.fonts[1]}.")
+
     def companions(self) -> None:
         """COMP-NEW-3: HWMonux reads NVIDIA sensors through NVML only when the proprietary driver is installed.
 
@@ -768,6 +790,8 @@ class _Planner:
             lines.append("Boot: " + {"always": "fallback boot path is always written", "if-missing": "fallback boot path is written only if missing"}[s["removable_fallback"]])
         if s["hidpi"] != "off" and self.desktop == "xfce":
             lines.append(f"Display: {s['hidpi'][4:]} dpi interface scale for Xfce")
+        if self.fonts:
+            lines.append(f"Fonts: {self.fonts[0].rsplit('/', 1)[1]} for {self.fonts[1]}")
         if self.p.warnings:
             lines.extend(issue.message for issue in self.p.warnings if issue.severity != "info")
         return lines
@@ -883,11 +907,26 @@ def _memory_issues(m: InstallManifest, hw: HardwareProfile) -> list[Issue]:
             out.append(Issue("hw.hibernate_luks", "error", "Hibernation is not available on an encrypted install: its swap is a file inside the encrypted root, "
                              "and the installer does not set up resuming from it. Turn hibernation off or install without disk encryption."))
         needed = recommend.nominal_ram_gib(hw.memory.total_kib) * 1024 if hw.memory.total_kib else 0
-        if needed and m.storage.swap_mib < needed:
-            out.append(Issue("hw.hibernate_swap_small", "error", f"Hibernation needs a swap partition of at least {needed} MiB (the size of memory); it is {m.storage.swap_mib} MiB."))
+        swap = _swap_mib(m, hw)
+        if swap == 0:
+            out.append(Issue("hw.hibernate_swap_small", "error", "Hibernation needs a swap partition as large as the memory, but this installation has no swap partition. "
+                             "Add one, or turn hibernation off."))
+        elif swap is not None and needed and swap < needed:
+            out.append(Issue("hw.hibernate_swap_small", "error", f"Hibernation needs a swap partition of at least {needed} MiB (the size of memory); it is {swap} MiB."))
         if hw.firmware.lockdown in ("integrity", "confidentiality"):
             out.append(Issue("hw.hibernate_lockdown", "warning", "The kernel is in lockdown mode, which blocks hibernation."))
     return out
+
+
+def _swap_mib(m: InstallManifest, hw: HardwareProfile) -> int | None:
+    """MiB of swap the installation will have; None when a manual layout's swap is not a partition the probe lists (so it is not measured)."""
+    if m.storage.mode != "manual":
+        return m.storage.swap_mib
+    rows = [row for row in m.storage.partitions if row.filesystem == "swap"]
+    if not rows:
+        return 0
+    sizes = [next((part.size for disk in hw.disks for part in disk.partitions if f"/dev/{part.name}" == row.device), None) for row in rows]
+    return None if None in sizes else sum(size or 0 for size in sizes) // 1024**2
 
 
 def _power_issues(m: InstallManifest, hw: HardwareProfile) -> list[Issue]:
@@ -914,8 +953,30 @@ def _firmware_issues(m: InstallManifest, hw: HardwareProfile) -> list[Issue]:
                          + ("GRUB will be installed with the fallback boot path only; restart the installer in UEFI mode for a normal install."
                             if severity == "warning" else "Choose GRUB, or restart the installer in UEFI mode.")))
     if requested == "uefi" and live == "uefi" and hw.firmware.efi_bits == 32:
-        out.append(Issue("hw.fw_uefi32", "warning", "This PC has 32-bit UEFI firmware: the 32-bit boot files are needed. If it does not start, use legacy BIOS/CSM mode."))
+        problem = _uefi32_problem(m)
+        if problem:
+            out.append(Issue("hw.fw_uefi32", "error", problem))
+        else:
+            out.append(Issue("hw.fw_uefi32", "warning", "This PC has 32-bit UEFI firmware: the 32-bit boot files are needed. If it does not start, use legacy BIOS/CSM mode."))
     return out
+
+
+def _uefi32_problem(m: InstallManifest) -> str:
+    """Why this boot setup cannot start on 32-bit UEFI firmware ("" when it can).
+
+    Only a 32-bit program starts there: GRUB is installed for i386-efi, and systemd-boot has an ia32 image on a
+    multilib system. A Unified Kernel Image and the bare kernel of the EFI stub are 64-bit programs.
+    """
+    system = m.system
+    alternatives = "GRUB" + (" or systemd-boot" if system.multilib else "")
+    if system.uki:
+        what = "a Unified Kernel Image, which is a 64-bit program"
+        return f"This PC has 32-bit UEFI firmware, which cannot start {what}. Turn the Unified Kernel Image off and choose {alternatives}, or use legacy BIOS mode if the firmware offers it."
+    if system.bootloader == "efi-stub":
+        return f"This PC has 32-bit UEFI firmware, which cannot start the 64-bit kernel that the EFI stub boots directly. Choose {alternatives}, or use legacy BIOS mode if the firmware offers it."
+    if system.bootloader == "systemd-boot" and not system.multilib:
+        return "This PC has 32-bit UEFI firmware, and systemd-boot has no 32-bit image on a pure 64-bit (no-multilib) system. Choose GRUB, or use legacy BIOS mode if the firmware offers it."
+    return ""
 
 
 def _target_disk_issues(m: InstallManifest, hw: HardwareProfile) -> list[Issue]:
