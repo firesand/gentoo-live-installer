@@ -207,3 +207,15 @@ def test_the_scan_audit_log_never_contains_a_write(lab_factory) -> None:
     kinds = {record["kind"] for record in lab.audit.records}
     assert kinds == {"exec"}
     assert all(record["class"] in {"inspect", "mount", "device"} for record in lab.audit.records)
+
+
+def test_the_live_medium_is_found_in_findmnt_output_without_the_tree_drawing(lab_factory) -> None:
+    """findmnt prints a tree by default (├─/run/initramfs/live); the scan asks for the plain list."""
+    from gentoo_installerd.rescue.scan import live_sources
+
+    lab = lab_factory(lf.usb_live_hybrid())
+    lab.system.live_mounts.append(("/dev/sdb1", "/run/initramfs/live"))
+    lab.system.live_mounts.append(("/dev/mapper/ventoy[/iso]", "/run/live/medium"))
+    assert live_sources(lab.runner) == ["/dev/sdb1", "/dev/mapper/ventoy"]
+    assert ("findmnt", "-n", "-l", "-o", "SOURCE,TARGET") in lab.system.commands
+    assert lab.system._do_findmnt(("findmnt", "-n", "-o", "SOURCE,TARGET"), None)[1].splitlines()[1].split("\t")[1].startswith("├─")  # the fake really prints a tree without -l

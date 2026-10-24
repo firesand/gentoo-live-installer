@@ -74,7 +74,7 @@ def strip_source(source: str) -> str:
 
 
 def live_sources(runner: RescueRunner) -> list[str]:
-    result = runner.execute(("findmnt", "-n", "-o", "SOURCE,TARGET"), timeout=15)
+    result = runner.execute(("findmnt", "-n", "-l", "-o", "SOURCE,TARGET"), timeout=15)  # -l: the default tree view draws branches in front of the target
     sources: list[str] = []
     for line in result.stdout.splitlines():
         parts = line.split(None, 1)

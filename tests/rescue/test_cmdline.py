@@ -82,6 +82,12 @@ def test_a_system_without_any_configuration_still_gets_a_root_argument(tmp_path:
     ("dracut systemd systemd-boot", {"etc/cmdline": "x\n"}, True),   # BLS layout needs /etc/kernel/cmdline too
     ("dracut systemd systemd-boot", {"etc/cmdline": "x\n", "etc/kernel/cmdline": "root=UUID=x\n"}, False),
     ("dracut", {"etc/kernel/preinst.d/05-check-chroot.install": ""}, False),   # already overridden
+    # the vendor settings of installkernel count, as they do for kernel-install itself; /etc overrides them
+    ("dracut", {"usr/lib/kernel/install.conf": "layout=bls\n", "etc/cmdline": "x\n"}, True),
+    ("dracut", {"usr/lib/kernel/install.conf": "layout=bls\n", "etc/cmdline": "x\n", "etc/kernel/install.conf": "layout=grub\n"}, False),
+    ("dracut", {"usr/lib/kernel/install.conf": "# managed\nlayout=uki\n", "etc/cmdline": "x\n", "usr/lib/kernel/cmdline": "root=UUID=x\n"}, False),
+    # the real configuration of a Gentoo system with the dist kernel: hostonly_cmdline=no comes from dracut's own vendor file
+    ("dracut grub", {"usr/lib/dracut/dracut.conf.d/01-gentoo.conf": 'hostonly="yes"\nhostonly_cmdline="no"\n', "usr/lib/kernel/install.conf": "layout=grub\ninitrd_generator=dracut\n"}, False),
 ])
 def test_installkernel_guard(tmp_path: Path, use: str, files: dict[str, str], blocks: bool) -> None:
     root = tmp_path / "root"

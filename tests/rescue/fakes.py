@@ -180,7 +180,8 @@ class FakeSystem:
         if "-o" in argv:
             columns = argv[argv.index("-o") + 1].split(",")
         paths = [a for a in argv[1:] if a.startswith("/") and (not "-o" in argv or a != argv[argv.index("-o") + 1])]
-        rows: list[dict[str, str]] = [{"SOURCE": source, "TARGET": target, "FSTYPE": "iso9660", "OPTIONS": "ro"} for source, target in self.live_mounts]
+        rows: list[dict[str, str]] = [{"SOURCE": "overlay", "TARGET": "/", "FSTYPE": "overlay", "OPTIONS": "rw"}]  # the live system's own root comes first, as in the real tree
+        rows += [{"SOURCE": source, "TARGET": target, "FSTYPE": "iso9660", "OPTIONS": "ro"} for source, target in self.live_mounts]
         for target in sorted(self.mounts):
             rec = self.mounts[target]
             rows.append({"SOURCE": rec.device, "TARGET": target, "FSTYPE": rec.fstype, "OPTIONS": rec.options})
@@ -191,6 +192,8 @@ class FakeSystem:
             rows = [row for row in rows if row["TARGET"] == base or row["TARGET"].startswith(base + "/")]
             if not rows and "-R" not in argv:
                 return 1, ""
+        if not any(flag in argv for flag in ("-l", "--list", "-r", "--raw", "-P", "--pairs", "-J", "--json")):  # the default is a tree: the TARGET column carries the branch drawing
+            rows = [{**row, "TARGET": ("\u251c\u2500" if index else "") + row["TARGET"]} for index, row in enumerate(rows)]
         return 0, "".join("\t".join(row[column] for column in columns) + "\n" for row in rows)
 
     efivars = True

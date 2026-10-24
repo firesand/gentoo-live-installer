@@ -118,6 +118,17 @@ def _kernel_cmdline_configured(fs: RootFS) -> bool:
     return any(fs.is_file(path) for path in ("/etc/kernel/cmdline", "/run/kernel/cmdline", "/usr/local/lib/kernel/cmdline", "/usr/lib/kernel/cmdline"))
 
 
+def install_conf(fs: RootFS) -> dict[str, str]:
+    """installkernel's settings: the vendor file in /usr/lib/kernel overridden by /etc/kernel (both are read, as kernel-install does)."""
+    settings: dict[str, str] = {}
+    for path in ("/usr/lib/kernel/install.conf", "/etc/kernel/install.conf"):
+        for line in fs.read_text_or(path, "", 4096).splitlines():
+            key, eq, value = line.partition("=")
+            if eq and not key.lstrip().startswith("#"):
+                settings[key.strip()] = value.strip().strip("\"'")
+    return settings
+
+
 @dataclass
 class GuardInfo:
     blocks: bool
@@ -134,7 +145,7 @@ def installkernel_guard(fs: RootFS, installkernel_use: str) -> GuardInfo:
         return GuardInfo(False, "the chroot check is already overridden", override)
     if "dracut" in use and not _dracut_cmdline_configured(fs):
         return GuardInfo(True, "dracut would fall back to /proc/cmdline and no command line is configured for it", override)
-    layout_bls = bool({"systemd-boot", "uki", "ukify"} & use) or "layout=bls" in fs.read_text_or("/etc/kernel/install.conf", "") or "layout=uki" in fs.read_text_or("/etc/kernel/install.conf", "")
+    layout_bls = bool({"systemd-boot", "uki", "ukify"} & use) or install_conf(fs).get("layout") in {"bls", "uki"}
     if layout_bls and not _kernel_cmdline_configured(fs):
         return GuardInfo(True, "the boot entry would take its command line from /proc/cmdline and /etc/kernel/cmdline does not exist", override)
     return GuardInfo(False, "", override)

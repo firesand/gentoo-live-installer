@@ -393,3 +393,15 @@ def test_parse_fuser() -> None:
     text = "                     USER        PID ACCESS COMMAND\n/mnt/rescue/r1:      root     kernel mount /mnt/rescue/r1\n                     gentoo     4321 ..c.. bash\n"
     assert parse_fuser(text) == [{"user": "gentoo", "pid": 4321, "access": "..c..", "command": "bash"}]
     assert parse_fuser("") == []
+
+
+def test_parse_fuser_reads_a_real_capture() -> None:
+    """fuser -vm prints the path only on the first row, a 'kernel mount' row without a process, access letters in any case and shortened command names."""
+    text = ("                     USER        PID ACCESS COMMAND\n"
+            "/tmp:                root     kernel mount /\n"
+            "                     user        3137 .rce. python3\n"
+            "                     user        4149 .rce. dbus-run-sessio\n"
+            "                     user        4219 Frce. dbus-daemon\n"
+            "                     root       10231 ..c.m my script\n")
+    assert [(item["user"], item["pid"], item["access"], item["command"]) for item in parse_fuser(text)] == [
+        ("user", 3137, ".rce.", "python3"), ("user", 4149, ".rce.", "dbus-run-sessio"), ("user", 4219, "Frce.", "dbus-daemon"), ("root", 10231, "..c.m", "my script")]

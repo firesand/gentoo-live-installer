@@ -537,7 +537,7 @@ class RescueManager:
             if sid in known:
                 continue
             root = raw.get("root", {}).get("path", str(self.env.base_dir / sid))
-            listing = runner.execute(("findmnt", "-R", "-n", "-o", "TARGET", root), timeout=15)
+            listing = runner.execute(("findmnt", "-R", "-n", "-l", "-o", "TARGET", root), timeout=15)
             mounts = [line.strip() for line in listing.stdout.splitlines() if line.strip()] if listing.returncode == 0 else []
             ledger = raw.get("ledger", [])
             found.append({"sid": sid, "state": "alive" if mounts else "stale", "mounts": mounts, "mappings": [e["name"] for e in ledger if e.get("kind") == "luks"],
@@ -545,7 +545,7 @@ class RescueManager:
         if len(self.pool_ledger):
             found.append({"sid": "", "state": "pool", "mounts": [], "mappings": [e.data["name"] for e in self.pool_ledger.of_kind("luks")],
                           "vgs": [e.data["name"] for e in self.pool_ledger.of_kind("vg")], "arrays": [e.data["device"] for e in self.pool_ledger.of_kind("md")]})
-        listing = runner.execute(("findmnt", "-R", "-n", "-o", "TARGET", str(self.env.base_dir)), timeout=15)
+        listing = runner.execute(("findmnt", "-R", "-n", "-l", "-o", "TARGET", str(self.env.base_dir)), timeout=15)
         if listing.returncode == 0:
             known_roots = {item["sid"] for item in found} | known
             unknown = sorted({line.strip().split("/")[len(self.env.base_dir.parts)] for line in listing.stdout.splitlines()
