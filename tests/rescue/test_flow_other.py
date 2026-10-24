@@ -12,7 +12,7 @@ from gentoo_installerd.rescue.errors import RescueError
 from . import fakeroot as fr
 from . import lsblk_fixtures as lf
 from .fakes import assert_nothing_destructive
-from .flow import chroot_commands, mount_through_the_manager, plan_and_run, uefi_gentoo_lab, unmount
+from .flow import boot_efi_lab, chroot_commands, mount_through_the_manager, plan_and_run, uefi_gentoo_lab, unmount
 
 DEBIAN_ENV = {"DEBIAN_FRONTEND": "noninteractive", "DEBCONF_NONINTERACTIVE_SEEN": "true"}
 
@@ -30,6 +30,19 @@ def test_debian_family_is_identified_and_offers_repairs(lab_factory) -> None:
     actions = {a["id"]: a for a in info["actions"]}
     assert all(actions[name]["available"] for name in ("boot.bootloader", "boot.config", "boot.initramfs", "boot.kernel", "fstab.fix") if name != "fstab.fix")
     assert [f for f in info["findings"] if f["severity"] == "error"] == []
+
+
+def test_a_wiped_esp_behind_a_separate_boot_is_seen_before_repairs_are_enabled(lab_factory) -> None:
+    """Debian, Ubuntu and Fedora with a /boot partition keep the ESP at /boot/efi, a directory on that partition: the ESP used to stay unmounted until repairs were enabled."""
+    lab, _tree, _boot = boot_efi_lab(lab_factory, loaders=False)
+    manager, sid, info = mount_through_the_manager(lab, candidate_device="/dev/mapper/ubuntu--vg-ubuntu--lv", allow_write=True)
+    ids = {finding["id"] for finding in info["findings"]}
+    assert "M01" not in ids and "D08" in ids and "boot.bootloader" in info["recommended"]
+    assert info["esp"] == {"mountpoint": "/boot/efi", "device": "/dev/sda1"}
+    plan = manager.plan({"session_id": sid, "action_id": "repair.recommended"})
+    assert plan["title"] == "Fix everything recommended" and any("grub-install" in step["display"] or "apt-get" in step["display"] for step in plan["steps"])
+    assert not any(failed in plan["summary"] for failed in ("nothing that needs repairing",))
+    unmount(manager, sid)
 
 
 def test_debian_initramfs_uses_initramfs_tools_in_a_clean_noninteractive_environment(lab_factory) -> None:

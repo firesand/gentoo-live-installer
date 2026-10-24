@@ -169,6 +169,16 @@ def test_missing_mountpoint_directories_are_postponed(tmp_path: Path) -> None:
     assert plan.items[0].needs_mkdir is True
 
 
+def test_a_mount_point_below_another_mount_is_not_judged_by_the_root_file_system(tmp_path: Path) -> None:
+    """With a separate /boot the directory efi lives on the /boot partition; the empty /boot of the root file system says nothing about it."""
+    fstab = f"UUID={fr.ROOT_UUID} / ext4 defaults 0 1\nUUID={fr.BOOT_UUID} /boot ext4 defaults 0 2\nUUID={fr.ESP_UUID} /boot/efi vfat umask=0077 0 2\n"
+    plan, _ = make_plan(tmp_path, "gentoo", lf.ubuntu_lvm(), "/dev/mapper/ubuntu--vg-ubuntu--lv", fstab=fstab, mounts=["/boot"])
+    assert [(item.mountpoint, item.needs_mkdir) for item in plan.selected] == [("/boot", False), ("/boot/efi", False)]
+    # below nothing that is mounted, the root file system is the only place the directory can be
+    alone, _ = make_plan(tmp_path / "alone", "gentoo", lf.ubuntu_lvm(), "/dev/mapper/ubuntu--vg-ubuntu--lv", fstab=fstab.replace(f"UUID={fr.BOOT_UUID} /boot ext4 defaults 0 2\n", ""))
+    assert [(item.mountpoint, item.needs_mkdir) for item in alone.selected] == [("/boot/efi", True)]
+
+
 def test_devices_mounted_elsewhere_are_refused_unless_confirmed(tmp_path: Path) -> None:
     with pytest.raises(RescueError) as info:
         make_plan(tmp_path, "gentoo", lf.desktop_automount(), "/dev/sda1", fstab="")

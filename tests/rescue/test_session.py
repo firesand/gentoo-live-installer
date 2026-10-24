@@ -14,6 +14,7 @@ from gentoo_installerd.rescue.session import parse_fuser, session_from_state
 from . import fakeroot as fr
 from . import lsblk_fixtures as lf
 from .fakes import assert_nothing_destructive, tree_digest
+from .flow import boot_efi_lab
 
 
 def gentoo_lab(lab_factory, **kwargs):
@@ -137,6 +138,35 @@ def test_a_failing_boot_mount_is_a_warning_not_a_failure(lab_factory) -> None:
     assert session.mounted and [m["mountpoint"] for m in session.failed_mounts] == ["/efi"]
     assert any("/efi could not be mounted" in w for w in session.warnings)
     assert session.release().complete
+
+
+def test_the_esp_below_a_separate_boot_partition_is_mounted_read_only(lab_factory) -> None:
+    lab, _tree, _boot = boot_efi_lab(lab_factory)
+    session = lab.session("/dev/mapper/ubuntu--vg-ubuntu--lv", esp="/boot/efi")
+    session.mount_ro(lab.graph_obj)
+    assert session.failed_mounts == []
+    assert [entry.data["mountpoint"] for entry in session.ledger.of_kind("mount")] == ["/", "/boot", "/boot/efi"]
+    assert (Path(session.root) / "boot/efi/EFI/ubuntu/shimx64.efi").exists()
+    assert session.release().complete
+
+
+def test_a_mount_point_missing_on_the_boot_partition_is_created_when_repairs_are_enabled(lab_factory) -> None:
+    """Whether efi exists can only be seen once /boot is mounted: it is noted then, created by the write transition, and the note goes away."""
+    lab, _tree, boot = boot_efi_lab(lab_factory, efi_dir=False)
+    session = lab.session("/dev/mapper/ubuntu--vg-ubuntu--lv", esp="/boot/efi")
+    assert [item.needs_mkdir for item in session.plan.selected] == [False, False]  # the plan cannot know
+    session.mount_ro(lab.graph_obj)
+    assert [(item["kind"], item["mountpoint"]) for item in session.failed_mounts] == [("missing_directory", "/boot/efi")]
+    assert [item.needs_mkdir for item in session.plan.selected] == [False, True]
+    assert not [entry for entry in session.ledger.of_kind("mount") if entry.data["mountpoint"] == "/boot/efi"]
+    steps = session.enter_write_steps(with_virtual=False)
+    assert [step.display for step in steps if step.display.startswith("mkdir")] == ["mkdir /boot/efi"]
+    run_all(session, steps)
+    assert session.failed_mounts == []
+    assert session.ledger.find("mount", mountpoint="/boot/efi").data["rw"] is True
+    assert (Path(session.root) / "boot/efi/EFI/ubuntu").is_dir()
+    assert session.release().complete
+    assert (boot / "efi").is_dir()  # the directory was made on the /boot partition, not on the root file system
 
 
 def test_inspect_only_mounts_are_noexec_and_refuse_the_write_transition(lab_factory) -> None:

@@ -24,6 +24,23 @@ def uefi_gentoo_lab(lab_factory, family: str = "gentoo", root_device: str = "/de
     return lab, tree
 
 
+def boot_efi_lab(lab_factory, *, efi_dir: bool = True, loaders: bool = True):
+    """Every LUKS/LVM Ubuntu or Debian and Fedora's default layout: the ESP is mounted at /boot/efi, a directory that lives on the separate /boot partition."""
+    lab = lab_factory(lf.ubuntu_lvm())
+    fstab = f"/dev/mapper/ubuntu--vg-ubuntu--lv / ext4 defaults 0 1\nUUID={fr.BOOT_UUID} /boot ext4 defaults 0 2\nUUID={fr.ESP_UUID} /boot/efi vfat umask=0077 0 1\n"
+    tree = lab.add_tree("/dev/mapper/ubuntu--vg-ubuntu--lv", "ubuntu", firmware="uefi", separate_boot=True, fstab=fstab)
+    (tree / "boot").mkdir(exist_ok=True)  # empty: the real /boot is the partition
+    fr.put(tree, f"usr/lib/modules/{fr.UBUNTU_KVER}/modules.dep", "kernel/fs/ext4/ext4.ko:\n")
+    boot = lab.tmp / "trees" / "boot"
+    fr.kernel_files(boot, fr.UBUNTU_KVER, prefix="vmlinuz-", initrd_prefix="initrd.img-", initrd_suffix="", modules=False)
+    fr.put(boot, "grub/grub.cfg", fr.grub_cfg(fr.UBUNTU_KVER, kernel="vmlinuz", initrd="initrd.img").replace("/boot/", "/"))
+    if efi_dir:
+        (boot / "efi").mkdir(parents=True, exist_ok=True)
+    lab.system.attach("/dev/sda2", boot)
+    lab.system.attach("/dev/sda1", fr.esp_tree(lab.tmp / "trees" / "esp", "ubuntu", loaders=loaders, fallback=loaders, shim=True))
+    return lab, tree, boot
+
+
 def mount_through_the_manager(lab, *, allow_write: bool = True, candidate_device: str | None = None, **extra: Any):
     """scan -> dry run -> mount, exactly as a client would; returns (manager, session id, mount result)."""
     manager = lab.manager()

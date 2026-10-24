@@ -281,10 +281,16 @@ class RescueSession:
         if rung:
             self.warnings.append("The root file system needed recovery options to mount; some data may be unreadable. Run a file system check.")
 
+    def _note_failed_mount(self, item: MountItem, kind: str, reason: str) -> None:
+        self.failed_mounts[:] = [entry for entry in self.failed_mounts if entry.get("mountpoint") != item.mountpoint]
+        self.failed_mounts.append({"mountpoint": item.mountpoint, "device": item.device, "kind": kind, "reason": reason})
+
+    def _missing_directory(self, item: MountItem) -> None:
+        self._note_failed_mount(item, "missing_directory", "the directory does not exist in the read-only system; it is created when repairs are enabled")
+
     def _mount_item(self, item: MountItem, graph: DeviceGraph, emit: Callable[..., None]) -> None:
         if item.needs_mkdir:
-            self.failed_mounts.append({"mountpoint": item.mountpoint, "device": item.device, "kind": "missing_directory",
-                                      "reason": "the directory does not exist in the read-only system; it is created when repairs are enabled"})
+            self._missing_directory(item)
             return
         try:
             with self.fs() as fs:
@@ -292,9 +298,13 @@ class RescueSession:
             check_mount_destination(destination, self.root)
             rung = mount_readonly(self.runner, item.device, item.fstype, destination, extra=item.options, noexec=not self.allow_write, allow_degraded=self.allow_degraded,
                                   available=self.env.host.filesystems() or None)
+        except FileNotFoundError:  # below a mount that was only made just now (/boot/efi on a separate /boot): the plan could not know; the write transition makes it
+            item.needs_mkdir = True
+            self._missing_directory(item)
+            return
         except (RescueError, OSError) as exc:
             reason = exc.message if isinstance(exc, RescueError) else str(exc)
-            self.failed_mounts.append({"mountpoint": item.mountpoint, "device": item.device, "kind": "failed", "reason": reason})
+            self._note_failed_mount(item, "failed", reason)
             self.warnings.append(f"{item.mountpoint} could not be mounted from {item.device}: {reason}")
             return
         self.ledger.add("mount", path=destination, mountpoint=item.mountpoint, device=item.device, fs=item.fstype, tier=item.tier, rw=False, rung=rung, recursive=False)
@@ -479,6 +489,7 @@ class RescueSession:
             if existing:
                 self.ledger.remove(existing)
             self.ledger.add("bind" if effect.get("fs") in {"bind", "rbind"} else "mount", **data)
+            self.failed_mounts[:] = [entry for entry in self.failed_mounts if entry.get("mountpoint") != effect.get("mountpoint")]  # it is mounted now
         elif kind == "mount_remove":
             for entry in list(self.ledger.entries):
                 if entry.kind in {"mount", "bind", "cmdline"} and entry.data.get("path") == effect["path"]:
