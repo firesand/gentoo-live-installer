@@ -90,6 +90,12 @@ Rules live in `iso/image-contract.json`; items with `when_source` apply only whi
 
 Run on the accepted r19 image the squashfs rules fail exactly where this change set changes the image (43 overlay entries owned by 1000:1000, `acpid` enabled, no `chronyd`, rust-bin present, a builder `make.conf`, the new packages missing), and pass where nothing changed; that is the red test for I10. `tests/iso/test_verify_iso.py` also builds a small ISO with xorriso and gensquashfs from the repository's own overlay and runs the real contract against it, in both flavours, and again with parts taken away.
 
+### When a check stops the build
+
+* **The image check fails** (`the ISO failed the image checks; nothing was published`): the finished ISO stays in `<cache>/catalyst/builds/23.0-default/`. Run `scripts/verify-iso.py <that file>` for the full list of failed rules, fix the cause (or the rule in `iso/image-contract.json` if the rule was wrong) and run `scripts/build-iso.sh --stage2-only`: stage1 is reused, so this takes minutes, not hours.
+* **The Gentoo commit is refused** (`verify-snapshot:` in the log, either while the builder image is made or at the start of a build): the commit of `GENTOO_TREEISH` is not signed, is signed by another key than `GENTOO_TREEISH_SIGNER_FPR`, or its signer is missing from the keyring of `sec-keys/openpgp-keys-gentoo-developers` in the bootstrap tree (a very new key). Check the commit by hand (`git verify-commit`), then pin the commit that you verified together with its signer in `iso/pins.env`. The check cannot be switched off from the command line on purpose.
+* **`stage2-only` is refused** (`no receipt`, `sha512`, `specs, Portage configuration or pins changed`): stage1 is out of date; build once without `--stage2-only`.
+
 ## 5. Boot menu
 
 `iso/cd_overlay/boot/grub/grub.cfg.in` is rendered to the overlay and **replaces** Catalyst's three-entry menu.
