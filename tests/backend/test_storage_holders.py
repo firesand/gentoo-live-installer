@@ -57,7 +57,9 @@ class TestActiveVolumes:
         order = [text.index(item) for item in ("vgchange -an vg0", "cryptsetup close luks-old", "wipefs --all /dev/vda1", "wipefs --all /dev/vda2", "sgdisk --zap-all /dev/vda")]
         assert order == sorted(order), text
         assert text.index("udevadm settle") < text.index("wipefs --all /dev/vda1")
-        assert "lvs --noheadings -o vg_name /dev/mapper/vg0-root" in " ".join(" ".join(c) for c in runner.commands)
+        # the group comes from the device-mapper name: lvs fails for the layered devices of thin pools (STOR-7)
+        assert ("dmsetup", "splitname", "--noheadings", "-o", "vg_name", "vg0-root", "LVM") in runner.commands
+        assert not any(c[0] == "lvs" for c in runner.commands)
 
     def test_one_vgchange_per_volume_group(self, tmp_path):
         two = Holder("luks-old", "crypt", children=(Holder("vg0-root", "lvm", vg="vg0"), Holder("vg0-home", "lvm", vg="vg0")))

@@ -38,7 +38,7 @@ from gentoo_installer import blockdev
 from gentoo_installer import layout as guided_layout
 from gentoo_installer.manifest import InstallManifest, Partition
 
-from .inspect import BY_PATH_DIR, MD_MEMBER_TYPES, PROC_CMDLINE, Disk, Discovery, find_disk, find_volume_sets, holders, parent_disks, resolve_by_path
+from .inspect import BY_PATH_DIR, MD_MEMBER_TYPES, PROC_CMDLINE, Disk, Discovery, VolumeSet, find_disk, find_volume_sets, holders, parent_disks, resolve_by_path
 from .runner import Runner, RunnerError
 
 BIOS_BOOT_GUID = "21686148-6449-6e6f-744e-656564454649"
@@ -453,12 +453,13 @@ class StorageManager:
 
         Covers active LVM / dm-crypt / md volumes and active swap (lsblk shows them) and LVM / md sets
         that span other disks (found with pvs and mdadm --examine, because the live system does not
-        assemble or activate them by itself any more).
+        assemble or activate them by itself any more) and Btrfs / ZFS / bcachefs pools with a member on
+        another disk (lsblk shows the same filesystem UUID on every member).
         """
         consent = self.manifest.storage.release_holders
         found = [(node, holder) for node in rewritten for holder in holders(node)]
         swaps = [sub.path for node in rewritten for sub in node.walk() if "[SWAP]" in sub.mountpoints]
-        sets = find_volume_sets(self.runner, disks, rewritten)
+        sets: list[VolumeSet | blockdev.FilesystemPool] = [*find_volume_sets(self.runner, disks, rewritten), *blockdev.filesystem_pools(disks, rewritten)]
         spanning = [item for item in sets if item.spans_other_disks]
         for item in sets:
             if not item.spans_other_disks:
@@ -488,12 +489,10 @@ class StorageManager:
         containers: list[Disk] = []
         for _, holder in found:
             if holder.type == "lvm":
-                group = self.runner.run(("lvs", "--noheadings", "-o", "vg_name", holder.path)).stdout.strip()
-                if not group:
-                    raise StorageError(f"Cannot determine the volume group of {holder.path}", "storage.holders")
+                group = self._volume_group_of(holder)
                 if group not in volume_groups:
                     volume_groups.add(group)
-                    self._run(("vgchange", "-an", group))
+                    self._deactivate_group(group)
             elif holder.type == "crypt":
                 self._run(("cryptsetup", "close", holder.name))
             elif holder.type == "md":
@@ -512,6 +511,32 @@ class StorageManager:
                 raise StorageError(f"Volumes on {node.path} are still active after deactivation; stop them manually and retry", "storage.holders")
         return fresh
 
+    def _volume_group_of(self, holder: Disk) -> str:
+        """The volume group of an active logical volume, read from its device-mapper name.
+
+        Not with lvs: it cannot resolve the hidden and layered devices of thin pools, snapshots and RAID
+        volumes (/dev/mapper/vg0-pool-tpool). dmsetup splitname only parses the name and knows the layers.
+        """
+        try:
+            group = self.runner.run(("dmsetup", "splitname", "--noheadings", "-o", "vg_name", holder.name, "LVM")).stdout.strip()
+        except (RunnerError, OSError):
+            group = ""
+        if not group:
+            raise StorageError(
+                f"Cannot determine the volume group of {holder.path}; deactivate it yourself (vgchange -an <volume group>) and try again",
+                "storage.holders",
+            )
+        return group
+
+    def _deactivate_group(self, group: str) -> None:
+        try:
+            self.runner.run(("vgchange", "-an", group))
+        except RunnerError as exc:
+            raise StorageError(
+                f"Cannot deactivate the LVM volume group {group}: something still uses it. Stop that, run \"vgchange -an {group}\" yourself and try again",
+                "storage.holders",
+            ) from exc
+
     # ------------------------------------------------------------------ layout
 
     def _partition_device(self, disk: str, number: int) -> str:
@@ -522,8 +547,10 @@ class StorageManager:
         canonical = os.path.realpath(disk)
         for node in self._target_nodes:
             if os.path.realpath(node.path) == canonical:
+                # The disk's own partitions only (lsblk lists MBR logical partitions flat next to the others). The
+                # partitions of an md array or a multipath map sit deeper and are gone once that volume is released.
                 # An MBR extended-partition container shows up as a 1 KiB "part"; it holds no signature to wipe.
-                return [child.path for child in node.walk()[1:] if child.type == "part" and child.size >= guided_layout.MIB]
+                return [child.path for child in node.children if child.type == "part" and child.size >= guided_layout.MIB]
         return []
 
     def use_btrfs_subvolumes(self) -> bool:
