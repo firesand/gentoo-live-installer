@@ -272,7 +272,8 @@ def _erase_plan(manifest: InstallManifest, selected: blockdev.BlockDevice | None
     root_note = ""
     if storage.filesystem == "btrfs" and btrfs_subvolumes:
         root_note = "Btrfs subvolumes @ (/)" + ("" if storage.separate_home else " and @home (/home)")
-    volumes.append(PlannedVolume("root", "/", storage.filesystem, 0, "create", encrypted=storage.luks, note=root_note))
+    root_mib = guided_plan(storage, selected.size).root_mib if selected is not None else 0
+    volumes.append(PlannedVolume("root", "/", storage.filesystem, max(root_mib, 0), "create", encrypted=storage.luks, note=root_note))
     if swap_in_root(storage) and swap_file:
         volumes.append(PlannedVolume("swapfile", "", "swap", storage.swap_mib, "create", encrypted=True, note="a file inside the encrypted root, so swapped-out memory is encrypted too"))
     elif swap_in_root(storage):

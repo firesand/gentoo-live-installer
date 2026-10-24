@@ -257,10 +257,14 @@ class TestEncryptedSwap:
         assert any(e.source == "/swapfile" for e in again.layout)
         assert first_write(runner.commands) is None, runner.commands
 
-    def test_summary_text_matches_what_is_built(self, tmp_path, monkeypatch):
-        runner, manager = self.prepare(tmp_path, monkeypatch)
-        text = manager.manifest.storage.encryption_summary()
-        assert "swap file (inside the encrypted root)" in text
+    @pytest.mark.parametrize("fstab_can_describe_a_swap_file", [True, False])
+    def test_the_summary_is_true_whether_or_not_the_swap_file_could_be_created(self, tmp_path, monkeypatch, fstab_can_describe_a_swap_file):
+        supports(monkeypatch, options=True, source=fstab_can_describe_a_swap_file)
+        runner = StatefulRunner([FakeDisk("/dev/vda", 80 * GiB, serial="SER", wwn="WWN-1")])
+        manager = make_manager(runner, tmp_path)
+        manager.prepare(encrypted())
+        assert "swap is never stored unencrypted" in manager.manifest.storage.encryption_summary()
+        assert not any(c[0] == "mkswap" and "--file" not in c for c in runner.commands)  # no plain swap either way
 
 
 class TestBtrfsSubvolumes:

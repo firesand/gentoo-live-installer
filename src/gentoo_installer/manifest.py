@@ -113,8 +113,9 @@ class Storage:
             })
             text = "LUKS2 on the root volume only"
             return text + (f"; NOT encrypted: {', '.join(plain)}" if plain else "") + " (/boot stays readable for the bootloader)"
-        swap = "root volume and swap file (inside the encrypted root)" if self.swap_mib else "root volume"
-        return f"LUKS2: {swap}; /boot stays readable for the bootloader"
+        # Swap of an encrypted install is a file inside the encrypted root (or absent): never a plain partition.
+        swap = "; swap is never stored unencrypted" if self.swap_mib else ""
+        return f"LUKS2 on the root volume{swap} (/boot stays readable for the bootloader)"
 
 
 @dataclass

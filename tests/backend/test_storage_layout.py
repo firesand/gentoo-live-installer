@@ -133,13 +133,14 @@ class TestPlanDescription:
         assert "CREATE  EFI system partition → /efi (vfat, 1.0 GiB)" in text
         assert "CREATE  swap (swap, 4.0 GiB)" in text
         assert "CREATE  /dev/sda3" not in text  # new partitions are not named before they exist
-        assert "CREATE  root → / (ext4, the rest)" in text
+        assert "CREATE  root → / (ext4, 495.0 GiB)" in text  # 500 GiB - 2 MiB - 1 GiB EFI - 4 GiB swap
         assert "Other disks will not be modified." in text
 
     def test_plan_without_an_inventory_still_lists_the_partitions(self):
         plan = layout.plan_storage(guided(storage__firmware="bios"))
         assert plan.disks[0].description == "/dev/sda"
         assert [v.role for v in plan.disks[0].volumes] == ["bios_boot", "swap", "root"]
+        assert plan.disks[0].volumes[-1].size_mib == 0 and "CREATE  root → / (ext4, the rest)" in "\n".join(plan.lines())
         assert any("checked before anything is written" in n for n in plan.notes)
 
     def test_encrypted_plan_shows_the_swap_file_inside_the_root(self):

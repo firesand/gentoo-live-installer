@@ -169,9 +169,10 @@ class TestRaidAndEncryptionWording:
     def test_no_luks_says_not_enabled(self):
         assert Storage().encryption_summary() == "Not enabled"
 
-    def test_guided_luks_says_the_swap_file_is_inside_the_encrypted_root(self):
+    def test_guided_luks_says_swap_is_never_stored_unencrypted(self):
         text = Storage(luks=True, swap_mib=4096).encryption_summary()
-        assert "swap file" in text and "NOT" not in text and "/boot stays readable" in text
+        assert text == "LUKS2 on the root volume; swap is never stored unencrypted (/boot stays readable for the bootloader)"
+        assert "NOT" not in text
         assert "swap" not in Storage(luks=True, swap_mib=0).encryption_summary()
 
     def test_manual_luks_lists_what_is_not_encrypted(self):
