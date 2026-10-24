@@ -8,6 +8,7 @@ from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QL
 
 from .. import keymaps
 from ..manifest import InstallManifest
+from ..system_info import SystemInfo
 from ..widgets import Card, Page, wrapped_label
 
 
@@ -41,6 +42,7 @@ class AccountsPage(Page):
     def __init__(self, manifest: InstallManifest):
         super().__init__("Personalize your system", "Create your daily account and choose regional settings. Passwords are sent only to the privileged installer and are never written to logs.")
         self.manifest = manifest
+        self.info: SystemInfo | None = None
         account = Card("User accounts")
         form = QFormLayout()
         self.hostname = QLineEdit()
@@ -113,10 +115,33 @@ class AccountsPage(Page):
         self.keymap_note = wrapped_label("", muted=True)
         self.keymap_note.hide()
         regional.content.addWidget(self.keymap_note)
+        self.rtc_local = QCheckBox("The clock keeps local time (for Windows dual boot)")
+        self.rtc_local.setToolTip("Windows keeps local time in the hardware clock, Linux normally keeps UTC. With one choice for both, the time stays right after switching systems.")
+        self.rtc_local.toggled.connect(lambda _=False: self._update_clock_hint())
+        regional.content.addWidget(self.rtc_local)
+        self.clock_hint = wrapped_label("", muted=True)
+        self.clock_hint.hide()
+        regional.content.addWidget(self.clock_hint)
         self.content.addWidget(regional)
         self.advance_on_enter(self.hostname, self.full_name, self.username, self.password, self.password_confirm, self.root_password, self.root_confirm)
         self.load_manifest()
         self.finish_layout()
+
+    def set_info(self, info: SystemInfo) -> None:
+        """What was found on this computer decides whether the clock advice shows."""
+        self.info = info
+        self._update_clock_hint()
+
+    def _update_clock_hint(self) -> None:
+        """Windows next to Linux is the usual reason for a hardware clock in local time: suggest it, never set it."""
+        info = self.info
+        suggest = False
+        if info is not None and info.hardware:
+            profile = info.profile
+            suggest = bool(profile.firmware.windows_boot_entry) or profile.clock.rtc_mode == "local"
+        shown = suggest and not self.rtc_local.isChecked()
+        self.clock_hint.setText("Windows was found on this computer, or its clock already keeps local time. Tick the box above so both systems show the right time." if shown else "")
+        self.clock_hint.setVisible(shown)
 
     def _show_keymap(self, keymap: str) -> None:
         """Show the manifest's console keymap; one that is not in the table is added as a flagged entry, never replaced."""
@@ -165,6 +190,7 @@ class AccountsPage(Page):
         self.locale_box.setCurrentText(system.locale)
         self.timezone.setCurrentText(system.timezone)
         self._show_keymap(system.keymap)
+        self.rtc_local.setChecked(system.rtc_local)
         layout = system.keyboard_layout + (f" ({system.keyboard_variant})" if system.keyboard_variant else "")
         self.keyboard_summary.setText(f"Keyboard layout of the installed system: {layout}. Pick it on the welcome page.")
 
@@ -181,6 +207,7 @@ class AccountsPage(Page):
         self.manifest.system.locale = self.locale_box.currentText().strip()
         self.manifest.system.timezone = self.timezone.currentText().strip()
         self.manifest.system.keymap = str(self.keymap.currentData() or self.manifest.system.keymap)
+        self.manifest.system.rtc_local = self.rtc_local.isChecked()
 
     def validate_page(self) -> tuple[bool, str]:
         self.save_manifest()

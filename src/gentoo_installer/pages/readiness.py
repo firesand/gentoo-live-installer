@@ -237,8 +237,13 @@ class ReadinessPage(Page):
     def _hardware(self, info: SystemInfo) -> None:
         row = self.rows["hardware"]
         summary = info.profile.summary() if info.hardware else ""
-        if summary:
+        unread = sorted({error.split(":", 1)[0] for error in (info.profile.errors if info.hardware else [])})
+        if summary and unread:
+            row.set_status("warning", f"{summary} · The detection could not read: {', '.join(unread)}. Those choices stay on Automatic.")
+        elif summary:
             row.set_status("ok", summary)
+        elif info.hardware_error:
+            row.set_status("warning", f"The hardware detection failed ({info.hardware_error}). The installer will decide when it runs, and the Hardware tab keeps every choice on Automatic.")
         elif info.daemon is not None and info.daemon.kind == "dev":
             row.set_status("info", "Not detected in development mode")
         else:

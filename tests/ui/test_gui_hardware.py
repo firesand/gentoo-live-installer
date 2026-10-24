@@ -592,3 +592,52 @@ def test_findings_of_the_service_checks_are_named_for_what_they_are_about():
 
     assert warning_area("preflight.disks") == "Storage" and warning_area("preflight.network") == "Network" and warning_area("preflight.something") == "Installer check"
     assert warning_area("hw.st_no_disk") == "Storage" and warning_area("hw.gpu_hybrid") == "Graphics" and warning_area("hw.odd_thing") == "Hardware"
+
+
+def test_a_detection_that_could_not_read_everything_says_which_parts(make_window):
+    info = machine("asus-desktop-rtx4090")
+    info.hardware["errors"] = ["disks: lsblk failed", "usb: no permission", "disks: again"]
+    window = make_window(info=info)
+    row = window.readiness.rows["hardware"]
+    assert row.status == "warning" and "could not read: disks, usb" in row.detail.text() and "RTX 4090" in row.detail.text()
+
+
+def test_a_failed_detection_is_reported_with_its_reason_and_the_wizard_goes_on(make_window):
+    from gentoo_installer import system_info
+
+    info = sample_info()
+    system_info.merge_inspection(info, {"architecture": "x86_64", "hardware_error": "OSError: sysfs is not readable"})
+    window = make_window(info=info)
+    window.apply_info(info)
+    row = window.readiness.rows["hardware"]
+    assert row.status == "warning" and "sysfs is not readable" in row.detail.text() and "Automatic" in row.detail.text()
+    assert window.readiness.validate_page() == (True, "")
+
+
+# --- keyboard only ------------------------------------------------------------------------------------------------------------------------
+
+
+def test_every_control_of_the_hardware_tab_can_be_reached_with_the_keyboard(make_window):
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QAbstractButton, QAbstractSpinBox
+
+    window = make_window(info=machine("thinkpad-intel-nvidia-hybrid"))
+    window.mode.setCurrentIndex(1)
+    tab = tab_of(window)
+    tab.gpu_driver.set_value("nvidia")  # shows the licence and the version too
+    window.show()
+    controls = [w for kind in (QComboBox, QAbstractButton, QAbstractSpinBox) for w in tab.findChildren(kind) if w.isVisibleTo(tab) and w.isEnabled()]
+    assert len(controls) > 15
+    unreachable = [w.accessibleName() or w.objectName() or type(w).__name__ for w in controls if w.focusPolicy() == Qt.FocusPolicy.NoFocus]
+    # the cards of a choice group are one tab stop (the arrow keys move inside it): only the selected card has focus
+    unreachable = [name for name in unreachable if name not in {card.accessibleName() for card in [*tab.target.cards.values(), *tab.gpu_driver.cards.values()]}]
+    assert unreachable == []
+
+
+def test_the_first_control_of_the_customization_page_is_a_choice_card(make_window):
+    window = make_window(info=machine("thinkpad-intel-nvidia-hybrid"))
+    window._show_page(4)
+    window.show()
+    window.customize.focus_first()
+    focused = window.focusWidget()
+    assert focused is not None and focused is window.customize.hardware.target.cards["this"]

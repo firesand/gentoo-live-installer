@@ -544,6 +544,7 @@ class InstallerWindow(QMainWindow):
         self.readiness.update_info(info)
         self.storage.set_info(info)
         self.customize.set_info(info)
+        self.accounts.set_info(info)
         self.review.set_info(info)
         self._update_navigation()
         self._check_job_state(info)

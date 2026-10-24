@@ -326,6 +326,7 @@ class SystemInfo:
     network_error: str = ""
     daemon: DaemonState | None = None
     missing_for_selection: list[str] = field(default_factory=list)
+    hardware_error: str = ""  # why the service could not describe the hardware (its probe failed)
     roots: list[blockdev.BlockDevice] = field(default_factory=list)  # the lsblk tree behind `disks`
     excluded: list[ExcludedDevice] = field(default_factory=list)  # real devices that cannot be a target, with the reason
 
@@ -798,6 +799,8 @@ def merge_inspection(info: SystemInfo, data: dict[str, Any], state: DaemonState 
         info.warnings = [item for item in data["warnings"] if isinstance(item, dict)]
     if isinstance(data.get("hardware"), dict):
         info.hardware = data["hardware"]
+    if isinstance(data.get("hardware_error"), str):
+        info.hardware_error = data["hardware_error"]
     if isinstance(data.get("missing_for_selection"), list):
         info.missing_for_selection = [str(item) for item in data["missing_for_selection"]]
     clock = data.get("clock")
