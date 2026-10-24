@@ -6,8 +6,6 @@ longer offers it, and a hand-written or old row says what to do instead of endin
 
 from __future__ import annotations
 
-import pytest
-
 from gentoo_installer.manifest import Partition
 from gentoo_installer.pages.manual_storage import FILESYSTEMS, ManualLayoutEditor
 
