@@ -146,7 +146,8 @@ class Console:
             if not paragraph.strip():
                 lines.append("")
                 continue
-            lines.extend(textwrap.wrap(paragraph, self.width, initial_indent=first, subsequent_indent=later) or [""])
+            # Never break at a hyphen: people copy commands and device names from the screen.
+            lines.extend(textwrap.wrap(paragraph, self.width, initial_indent=first, subsequent_indent=later, break_on_hyphens=False) or [""])
         return lines
 
     def para(self, text: str, *, indent: int = 0, hanging: int | None = None) -> None:
@@ -173,7 +174,7 @@ class Console:
     def kv_lines(self, label: str, value: str, *, label_width: int = 14) -> list[str]:
         """'  Disk          /dev/sda (...)' with the value wrapped under itself."""
         head = f"  {label:<{label_width}} "
-        lines = textwrap.wrap(value, max(20, self.width - len(head))) or [""]
+        lines = textwrap.wrap(value, max(20, self.width - len(head)), break_on_hyphens=False) or [""]
         return [head + lines[0], *(" " * len(head) + line for line in lines[1:])]
 
     def kv(self, label: str, value: str, *, label_width: int = 14) -> None:

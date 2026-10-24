@@ -79,6 +79,11 @@ class Script:
     def text(self) -> str:
         return self.out.getvalue()
 
+    @property
+    def flat(self) -> str:
+        """The transcript with every run of white space (including line breaks) made one space, to find sentences."""
+        return " ".join(self.text.split())
+
     def assert_finished(self) -> None:
         assert not self.steps, f"The program stopped asking before the script ended; unused: {self.steps}\n{self.text}"
 
@@ -153,12 +158,13 @@ class FakeHost(Host):
 
 def lsblk_disk(disk: dict[str, Any], *, serial: str | None = None, mounted: bool = False) -> dict[str, Any]:
     """A hardware-profile disk as the service reports it in ``data.disks`` (BlockDevice.to_dict() keys)."""
+    partitions = disk["partitions"] or ([{"name": disk["name"] + "1", "size": disk["size"] // 2, "fstype": "ext4", "label": "", "parttype": ""}] if mounted else [])
     children = tuple(
         blockdev.BlockDevice(
             name=part["name"], path="/dev/" + part["name"], type="part", size=part["size"], fstype=part["fstype"], label=part["label"],
             parttype=part["parttype"], mountpoints=("/mnt/data",) if mounted else (),
         )
-        for part in disk["partitions"]
+        for part in partitions
     )
     node = blockdev.BlockDevice(
         name=disk["name"], path=disk["path"], type="disk", size=disk["size"], model=disk["model"],
