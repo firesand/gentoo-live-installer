@@ -143,6 +143,14 @@ class TestSwap:
             make_manager(runner, tmp_path).prepare(erase(luks=True, luks_passphrase="correct horse battery", swap_kind="partition"))
         assert not any(c[0] == "sgdisk" for c in runner.commands)
 
+    def test_a_recommended_swap_partition_on_an_encrypted_disk_is_refused_even_when_swap_mib_is_zero(self, tmp_path):
+        with_memory(tmp_path, 16)
+        runner = StatefulRunner([vda()])
+        m = erase(luks=True, luks_passphrase="correct horse battery", swap_kind="partition", swap_choice="recommended", swap_mib=0)
+        with pytest.raises(StorageError, match="without encryption"):
+            make_manager(runner, tmp_path).prepare(m)
+        assert not any(c[0] in {"sgdisk", "parted", "wipefs", "cryptsetup"} for c in runner.commands)
+
     def test_hibernation_with_zram_is_refused(self, tmp_path):
         with pytest.raises(StorageError, match="Hibernation needs swap on the disk"):
             make_manager(StatefulRunner([vda()]), tmp_path).prepare(erase(swap_kind="zram", swap_choice="hibernate"))

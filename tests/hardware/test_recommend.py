@@ -161,7 +161,7 @@ def test_swap_advice():
     assert found(manifest(), profile(ram_gib=16))["rec.swap_size"].suggestion == "8192"
     assert "rec.swap_size" not in found(manifest(storage={"swap_mib": 8192}), profile(ram_gib=16))       # a deliberate value is left alone
     result = found(manifest(hardware={"hibernate": True}), profile(ram_gib=16))
-    assert result["rec.hibernate_swap"].suggestion == "24576" and result["rec.hibernate_swap"].severity == "warning"
+    assert result["rec.hibernate_swap"].suggestion == "hibernate" and result["rec.hibernate_swap"].field == "storage.swap_choice" and result["rec.hibernate_swap"].severity == "warning"
     assert "rec.swap_size" not in found(manifest(), profile(ram_gib=4))                  # 4 GiB is already the default
     zram = found(manifest(), profile(ram_gib=4))["rec.swap_zram"]
     assert (zram.field, zram.suggestion) == ("storage.swap_kind", "zram")

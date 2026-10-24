@@ -245,6 +245,9 @@ class StorageManager:
         if storage.mode == "manual" and manifest.system.bootloader == "grub" and any(p.mountpoint == "/" and p.filesystem == "f2fs" for p in storage.partitions) \
                 and not any(p.mountpoint == "/boot" for p in storage.partitions):
             raise StorageError("GRUB cannot reliably read an F2FS root: keep /boot on a separate ext4 partition, or choose another root filesystem", "storage.layout")
+        problem = guided_layout.swap_kind_problem(storage)  # again, now that "recommended" has a size: an unencrypted swap partition must never be created
+        if problem:
+            raise StorageError(problem, "storage.layout")
         problems = guided_layout.table_problems(storage)
         if problems:
             raise StorageError(problems[0], "storage.layout")

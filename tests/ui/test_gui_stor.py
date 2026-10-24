@@ -79,8 +79,9 @@ def test_sd_cards_and_removable_disks_get_the_yellow_note_but_stay_allowed(make_
     window = make_window(info=info_of(disk))
     page = select(window, disk.path)
     assert page.removable_note.isVisibleTo(page) and "wear out quickly" in page.removable_note.text()
-    assert page.validate_page()[0] or "smallest" in page.validate_page()[1] or True
     assert page.disk_group.cards[disk.path].isEnabled()
+    valid, message = page.validate_page()
+    assert "wear" not in message and "removable" not in message.lower() and "SD card" not in message
 
 
 def test_an_internal_disk_has_no_notes(make_window):

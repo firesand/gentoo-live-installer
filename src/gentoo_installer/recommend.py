@@ -231,7 +231,7 @@ def recommend(profile: HardwareProfile | Mapping[str, Any] | None, manifest: Ins
             if manifest.storage.swap_mib < wanted:
                 out.append(Recommendation("rec.hibernate_swap", "warning",
                                           f"Hibernation writes all memory to swap: the Handbook advises at least {wanted / 1024:.0f} GiB of swap for {gib:.0f} GiB of memory.",
-                                          "storage.swap_mib", str(wanted)))
+                                          "storage.swap_choice", "hibernate"))
         elif manifest.storage.swap_mib == DEFAULT_SWAP_MIB and manifest.storage.swap_choice == "custom":
             wanted = recommend_swap_mib(total_kib)
             if wanted != DEFAULT_SWAP_MIB:
