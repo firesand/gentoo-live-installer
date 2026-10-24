@@ -76,6 +76,7 @@ class DebianAdapter(Adapter):
         b.title, b.risk = "Regenerate the boot menu", "medium"
         b.summary = "Rebuilds grub.cfg from the kernels found in /boot."
         path = view.boot().grub_cfg or "/boot/grub/grub.cfg"
+        base.clean_cmdline_sources(b)
         if view.which("update-grub"):
             b.chroot(["update-grub"], env=ENV, writes=(path,), timeout=600)
         elif view.which("grub-mkconfig"):

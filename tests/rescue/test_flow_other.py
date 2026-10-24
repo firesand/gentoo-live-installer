@@ -190,6 +190,42 @@ def test_fedora_dracut_and_bls_entries(lab_factory) -> None:
     assert (tree / "boot/loader/entries").glob("*.conf").__next__().exists() and (tree / ".autorelabel").exists()
 
 
+def test_boot_entries_made_in_the_chroot_never_carry_the_live_command_line(lab_factory) -> None:
+    """kernel-install falls back to /proc/cmdline; there the live system's root=live:... would end up in the repaired system's boot entry (review R3)."""
+    import shutil
+
+    lab, tree = fedora_lab(lab_factory)
+    shutil.rmtree(tree / "boot/loader")
+    assert not (tree / "etc/kernel/cmdline").exists()
+    manager, sid, _info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    plan, _result, _ = plan_and_run(manager, sid, "boot.config")
+    assert any("Boot entries" in check["text"] and "root=UUID=" in check["text"] for check in plan["preconditions"])  # the reviewer sees which command line the new entries get
+    seen = [snapshot["cmdline"] for snapshot in lab.system.chroot_snapshots]
+    assert seen and all("root=live" not in text and "rd.live" not in text and "CDLABEL" not in text for text in seen)
+    unmount(manager, sid)
+    entries = sorted((tree / "boot/loader/entries").glob("*.conf"))
+    assert entries, "kernel-install added no boot entry"
+    for entry in entries:
+        text = entry.read_text()
+        assert f"options root=UUID={fr.ROOT_UUID} ro" in text, text
+        assert "root=live" not in text and "rd.live" not in text and "CDLABEL" not in text and "cdroot" not in text
+
+
+def test_live_arguments_in_a_boot_entry_are_removed_and_nothing_else_is_touched(lab_factory) -> None:
+    lab, tree = fedora_lab(lab_factory)
+    entry = next((tree / "boot/loader/entries").glob("*.conf"))
+    original = entry.read_text()
+    entry.write_text(original.replace("ro rootflags=subvol=root", "ro root=live:CDLABEL=GENTOO_INSTALLER_AMD64 rd.live.image quiet"))
+    manager, sid, info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    assert "D21" in {f["id"] for f in info["findings"]}
+    plan, result, _ = plan_and_run(manager, sid, "boot.config")
+    assert result["outcome"] == "success" and f"-options root=UUID={fr.ROOT_UUID} ro root=live:CDLABEL=GENTOO_INSTALLER_AMD64 rd.live.image quiet" in plan["diff"]
+    unmount(manager, sid)
+    lines = entry.read_text().splitlines()
+    assert f"options root=UUID={fr.ROOT_UUID} ro quiet" in lines and "title Fedora Linux (" + fr.FEDORA_KVER + ")" in lines and "grub_class fedora" in lines
+    assert len(list((tree / "boot/loader/entries").glob("*.gentoo-rescue-*"))) == 1  # the entry as it was found is kept
+
+
 def test_fedora_bootloader_comes_from_packages_never_from_grub2_install(lab_factory) -> None:
     lab, _ = fedora_lab(lab_factory)
     manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")

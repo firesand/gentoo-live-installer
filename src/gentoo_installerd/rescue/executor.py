@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING, Any
 from . import efi as efimod
 from .audit import tail
 from .builder import SMOKE_ID
-from .cmdline import contains_live_arguments
+from .cmdline import contains_live_arguments, effective_text
 from .errors import RescueError
 from .fstab import resolve_all
 from .ops import Operation
@@ -210,7 +210,7 @@ class PlanExecutor:
             ok = re.search(check["pattern"], text, re.M) is not None
             return ok, f"{check['path']} contains the expected text" if ok else f"{check['path']} does not contain /{check['pattern']}/"
         if kind == "no_live_args":
-            ok = not contains_live_arguments(view.read(check["path"], 1 << 20))
+            ok = not contains_live_arguments(effective_text(view.read(check["path"], 1 << 20)))
             return ok, f"{check['path']} has no live-medium arguments" if ok else f"{check['path']} still contains live-medium arguments"
         if kind == "esp_file":
             listing = view.listdir(check["dir"])

@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import efi
-from .cmdline import contains_live_arguments
+from .cmdline import contains_live_arguments, effective_text
 from .devices import GPT_BIOS_BOOT
 from .view import SessionView
 
@@ -214,7 +214,7 @@ def _misc_findings(view: SessionView, boot: Any) -> list[Finding]:
     if pending:
         findings.append(Finding("D18", "warn", "A package operation was interrupted", "The package manager was stopped in the middle of an operation.", pending, []))
     for source in boot.cmdline_sources:
-        text = view.read(source, 16384)
+        text = effective_text(view.read(source, 16384))
         if contains_live_arguments(text):
             findings.append(Finding("D21", "error", "A live-medium argument is stored in the kernel command line", f"{source} contains arguments from a live session.", [source], ["boot.config"]))
     root = view.root_node

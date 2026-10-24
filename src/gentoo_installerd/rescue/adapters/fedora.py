@@ -69,9 +69,12 @@ class FedoraAdapter(Adapter):
         b.summary = "Creates missing boot entries for the installed kernels and rebuilds grub.cfg."
         if not view.which("grub2-mkconfig"):
             raise Unsupported("grub2 is not installed in this system. Reinstall it with 'dnf reinstall grub2-tools' from the terminal.")
+        base.clean_cmdline_sources(b)
         entries = " ".join(view.boot().bls_entries)
         for kernel in view.kernels():
             if kernel.image and kernel.modules and kernel.version not in entries and view.which("kernel-install"):
+                if not any(step.argv[:2] == ("kernel-install", "add") for step in b.steps):
+                    b.cmdline_notice()
                 b.chroot(["kernel-install", "add", kernel.version, f"/usr/lib/modules/{kernel.version}/vmlinuz"], writes=("/boot/loader/entries/*",), timeout=600)
         path = self.grub_cfg_path(view)
         b.chroot(["grub2-mkconfig", "-o", path], writes=(path,), timeout=600)
@@ -121,6 +124,7 @@ class FedoraAdapter(Adapter):
         if not manager:
             raise Unsupported("Neither dnf nor yum was found in this system.")
         base.need_network(b, "download the kernel packages")
+        b.cmdline_notice()  # the packages' scripts run kernel-install, which writes the boot entry
         b.chroot([manager, "reinstall", "-y", "--setopt=strict=0", "kernel-core", "kernel-modules-core", "kernel-modules"], writes=("/boot/*", "/usr/lib/modules/*"), timeout=3600)
         if view.which("dracut"):
             b.chroot(["dracut", "--force", "--regenerate-all"], writes=("/boot/initramfs-<version>.img",), timeout=1800)

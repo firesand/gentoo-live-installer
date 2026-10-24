@@ -12,7 +12,9 @@ from typing import Any, ClassVar
 
 from .. import efi
 from ..builder import PlanBuilder
+from ..cmdline import contains_live_arguments, effective_text, sanitize
 from ..errors import RescueError, Unsupported
+from ..fstab import unified_diff
 from ..view import SessionView
 
 SUPPORTED_FAMILIES = ("gentoo", "debian", "fedora")
@@ -176,6 +178,58 @@ def grub_bios_steps(b: PlanBuilder, install: str, disks: list[str]) -> None:
         has_bios_boot = any(node.parttype == "21686148-6449-6e6f-744e-656564726976" for node in b.view.graph.descendants(disk))
         if disk.pttype == "gpt" and not has_bios_boot:
             b.precondition(False, f"{disk_path} uses a GPT partition table but has no BIOS boot partition; GRUB cannot be embedded. Rescue never repartitions disks.")
+
+
+GRUB_CMDLINE_RE = re.compile(r"^(\s*GRUB_CMDLINE_LINUX(?:_DEFAULT)?=)([\"']?)(.*?)\2\s*$")
+
+
+def _without_live_arguments(b: PlanBuilder, path: str, text: str) -> str:
+    """The same file with the arguments that belong to the live medium removed (anything else is kept as it is)."""
+    out: list[str] = []
+    for line in text.splitlines():
+        stripped = line.strip()
+        if path == "/etc/default/grub":
+            match = GRUB_CMDLINE_RE.match(line)
+            if match and contains_live_arguments(match.group(3)):
+                line = f"{match.group(1)}{match.group(2)}{sanitize(match.group(3))}{match.group(2)}"
+        elif path.startswith("/boot/loader/entries/"):
+            if stripped.startswith("options") and contains_live_arguments(stripped):
+                options = sanitize(stripped.split(None, 1)[1] if len(stripped.split(None, 1)) == 2 else "")
+                if not any(token.startswith("root=") for token in options.split()) and b.view.root_uuid:
+                    options = f"root=UUID={b.view.root_uuid} {options}".strip()
+                line = f"options {options}"
+        elif stripped and not stripped.startswith("#"):
+            line = sanitize(line)
+            if path == "/etc/kernel/cmdline" and "root=" not in line and b.view.root_uuid:
+                line = f"root=UUID={b.view.root_uuid} {line}".strip()
+        out.append(line)
+    return "\n".join(out) + ("\n" if text.endswith("\n") or not text else "")
+
+
+def clean_cmdline_sources(b: PlanBuilder) -> list[str]:
+    """Remove the live system's arguments from the files boot entries are made from (finding D21).
+
+    Regenerating the menu alone would write them out again: the source files are shown as a diff, backed up and checked
+    against the digest they were read with before they are replaced.
+    """
+    view = b.view
+    boot = view.boot()
+    sources = [path for path in boot.cmdline_sources if path.startswith("/etc/")] + [f"/boot/loader/entries/{name}" for name in boot.bls_entries]
+    changed: list[str] = []
+    for path in sources:
+        old = view.read(path, 65536)
+        if not contains_live_arguments(effective_text(old)):
+            continue
+        new = _without_live_arguments(b, path, old)
+        if new == old or contains_live_arguments(effective_text(new)):
+            b.warn(f"{path} contains arguments of the live system that could not be removed automatically; edit it in the terminal.")
+            continue
+        b.write_file(path, new, display=f"write {path} without the live system's arguments (a backup copy is kept beside it)")
+        b.diff += unified_diff(old, new, path.lstrip("/"))
+        changed.append(path)
+    if changed:
+        b.warn("Arguments of the live system (root=live:..., rd.live...) were found in " + ", ".join(changed) + "; they are removed so the system can boot from its disk.")
+    return changed
 
 
 def grub_config_checks(b: PlanBuilder, path: str) -> None:

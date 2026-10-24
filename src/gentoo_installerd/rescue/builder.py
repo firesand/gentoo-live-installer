@@ -91,6 +91,14 @@ class PlanBuilder:
         if text not in self.warnings:
             self.warnings.append(text)
 
+    def cmdline_notice(self) -> None:
+        """Show which kernel command line boot entries made by this plan get; programs in the chroot see it as /proc/cmdline (review R3a)."""
+        try:
+            derived = self.session.derive_cmdline(self.view.graph)
+        except (RescueError, OSError):
+            return
+        self.precondition(True, f"Boot entries made by these steps use the kernel command line: {derived.text} (from {derived.source})")
+
     def check(self, kind: str, **fields: Any) -> None:
         self.post_checks.append({"kind": kind, **fields})
 

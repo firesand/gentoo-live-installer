@@ -598,7 +598,12 @@ def _modules(root: Path) -> list[str]:
 def fx_grub_mkconfig(system: FakeSystem, root: Path, command: tuple[str, ...], extra: dict[str, str]) -> tuple[int, str]:
     target = command[command.index("-o") + 1]
     kernels = sorted(p.name for p in (root / "boot").glob("vmlinuz-*"))
-    text = "set default=0\n" + "".join(f"menuentry 'Linux {k}' {{\n\tlinux /boot/{k} root=UUID=998f7697-b591-4cb9-a8e7-d1c52c798ac7 ro\n}}\n" for k in kernels)
+    defaults = root / "etc/default/grub"
+    extra_args = ""
+    if defaults.is_file():  # like 10_linux: GRUB_CMDLINE_LINUX and GRUB_CMDLINE_LINUX_DEFAULT end up on every linux line
+        found = re.findall(r'^GRUB_CMDLINE_LINUX(?:_DEFAULT)?=["\']?(.*?)["\']?\s*$', defaults.read_text(), re.M)
+        extra_args = " ".join(part for part in found if part)
+    text = "set default=0\n" + "".join(f"menuentry 'Linux {k}' {{\n\tlinux /boot/{k} root=UUID=998f7697-b591-4cb9-a8e7-d1c52c798ac7 ro {extra_args}\n}}\n" for k in kernels)
     path = root / target.lstrip("/")
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text + "# generated\n" * 100)
@@ -651,10 +656,19 @@ def fx_chpasswd(system: FakeSystem, root: Path, command: tuple[str, ...], extra:
 
 
 def fx_kernel_install(system: FakeSystem, root: Path, command: tuple[str, ...], extra: dict[str, str]) -> tuple[int, str]:
+    """kernel-install add: the boot entry's options come from /etc/kernel/cmdline, then /usr/lib/kernel/cmdline, then (a chroot is not a container) /proc/cmdline."""
     version = command[2]
+    options = None
+    for candidate in ("etc/kernel/cmdline", "usr/lib/kernel/cmdline"):
+        if (root / candidate).is_file():
+            options = (root / candidate).read_text().strip()
+            break
+    if options is None:
+        proc = root / "proc/cmdline"
+        options = " ".join(token for token in (proc.read_text().split() if proc.exists() else []) if not token.startswith("initrd="))
     entries = root / "boot/loader/entries"
     entries.mkdir(parents=True, exist_ok=True)
-    (entries / f"0123456789abcdef0123456789abcdef-{version}.conf").write_text(f"title Fedora ({version})\nlinux /vmlinuz-{version}\ninitrd /initramfs-{version}.img\noptions root=UUID=998f7697-b591-4cb9-a8e7-d1c52c798ac7 ro\n")
+    (entries / f"0123456789abcdef0123456789abcdef-{version}.conf").write_text(f"title Fedora ({version})\nlinux /vmlinuz-{version}\ninitrd /initramfs-{version}.img\noptions {options}\n")
     return 0, ""
 
 

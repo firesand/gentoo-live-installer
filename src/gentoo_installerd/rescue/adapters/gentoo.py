@@ -96,6 +96,7 @@ class GentooAdapter(Adapter):
             raise Unsupported("The boot loader here is not GRUB. Kernel entries of systemd-boot are written when a kernel is (re)installed; use 'Reinstall the kernel'." if loader == "systemd-boot"
                               else "No GRUB installation was found, so there is no menu file to regenerate. Reinstall the boot loader instead.")
         path = view.boot().grub_cfg or "/boot/grub/grub.cfg"
+        base.clean_cmdline_sources(b)
         b.chroot(["grub-mkconfig", "-o", path], writes=(path,), timeout=600)
         base.grub_config_checks(b, path)
 
@@ -112,6 +113,8 @@ class GentooAdapter(Adapter):
         if chosen not in packages:
             raise RescueError("bad_request", f"{chosen!r} is not an installed kernel package", param="package")
         atom = f"={chosen}"
+        if self.active_loader(view) in {"systemd-boot", "efistub"} or "systemd-boot" in self.installkernel_use(view).split():
+            b.cmdline_notice()  # installkernel writes the boot entry for these loaders
         guard = view.installkernel_guard(self.installkernel_use(view))
         if guard.blocks:
             b.warn(f"Gentoo's installkernel refuses to run in a chroot here ({guard.reason}). A temporary override file is created and removed again; programs inside the chroot see a synthesized kernel command line.")

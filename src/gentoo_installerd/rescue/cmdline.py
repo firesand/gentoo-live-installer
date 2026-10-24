@@ -31,6 +31,11 @@ def sanitize(cmdline: str) -> str:
     return " ".join(token for token in cmdline.split() if not LIVE_TOKEN_RE.match(token))
 
 
+def effective_text(text: str) -> str:
+    """The text without comment lines: a commented-out setting does not reach any boot entry."""
+    return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
+
+
 def contains_live_arguments(cmdline: str) -> bool:
     return any(LIVE_TOKEN_RE.match(token) and not token.startswith(("BOOT_IMAGE=", "initrd=")) for token in cmdline.split())
 

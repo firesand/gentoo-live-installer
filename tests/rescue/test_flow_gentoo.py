@@ -268,3 +268,54 @@ def test_systemd_boot_reinstall_and_the_refusal_of_efistub(lab_factory) -> None:
     with pytest.raises(RescueError) as info:
         manager.plan({"session_id": sid, "action_id": "boot.bootloader", "params": {"loader": "lilo"}})
     assert info.value.short == "bad_request"
+
+
+LIVE_ARGS = "root=live:CDLABEL=GENTOO_INSTALLER_AMD64 rd.live.image cdroot"
+
+
+def test_live_arguments_in_the_sources_are_removed_before_the_menu_is_regenerated(lab_factory) -> None:
+    """Regenerating grub.cfg alone would write the live arguments out again from /etc/default/grub (finding D21)."""
+    lab, tree = uefi_gentoo_lab(lab_factory)
+    defaults = fr.put(tree, "etc/default/grub", f'GRUB_DEFAULT=0\nGRUB_CMDLINE_LINUX="quiet {LIVE_ARGS}"\nGRUB_CMDLINE_LINUX_DEFAULT="splash"\n# GRUB_CMDLINE_LINUX="{LIVE_ARGS}"\n')
+    cfg = tree / "boot/grub/grub.cfg"
+    cfg.write_text(cfg.read_text().replace("ro\n", f"ro {LIVE_ARGS}\n"))
+    manager, sid, info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    assert "D21" in {f["id"] for f in info["findings"]}
+    plan = manager.plan({"session_id": sid, "action_id": "boot.config"})
+    assert '-GRUB_CMDLINE_LINUX="quiet root=live:CDLABEL=GENTOO_INSTALLER_AMD64 rd.live.image cdroot"' in plan["diff"] and '+GRUB_CMDLINE_LINUX="quiet"' in plan["diff"]
+    assert "-GRUB_CMDLINE_LINUX_DEFAULT" not in plan["diff"] and "-# GRUB_CMDLINE_LINUX" not in plan["diff"]  # lines without a live argument are not part of the change
+    assert any("Arguments of the live system" in w for w in plan["warnings"])
+    shown = [step["display"] for step in plan["steps"]]
+    assert next(i for i, d in enumerate(shown) if d.startswith("write /etc/default/grub without")) < next(i for i, d in enumerate(shown) if "grub-mkconfig" in d)
+    plan, result, _ = plan_and_run(manager, sid, "boot.config")
+    assert result["outcome"] == "success" and all(check["ok"] for check in result["post_checks"])
+    unmount(manager, sid)
+    text = defaults.read_text()
+    active = "\n".join(line for line in text.splitlines() if not line.startswith("#"))
+    assert 'GRUB_CMDLINE_LINUX="quiet"' in active and 'GRUB_CMDLINE_LINUX_DEFAULT="splash"' in active and "root=live" not in active
+    assert f'# GRUB_CMDLINE_LINUX="{LIVE_ARGS}"' in text  # a commented-out line is the user's own business
+    assert "root=live" not in cfg.read_text() and "rd.live" not in cfg.read_text()  # the regenerated menu does not carry them either
+    backups = list((tree / "etc/default").glob("grub.gentoo-rescue-*"))
+    assert len(backups) == 1 and LIVE_ARGS in backups[0].read_text()
+
+
+def test_a_kernel_command_line_file_with_only_live_arguments_gets_the_root_back(lab_factory) -> None:
+    lab, tree = uefi_gentoo_lab(lab_factory)
+    (tree / "etc/kernel").mkdir(parents=True, exist_ok=True)
+    (tree / "etc/kernel/cmdline").write_text(LIVE_ARGS + "\n")
+    manager, sid, _info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    plan_and_run(manager, sid, "boot.config")
+    unmount(manager, sid)
+    assert (tree / "etc/kernel/cmdline").read_text() == f"root=UUID={fr.ROOT_UUID}\n"
+
+
+def test_files_without_live_arguments_are_never_rewritten(lab_factory) -> None:
+    lab, tree = uefi_gentoo_lab(lab_factory)
+    before = (tree / "etc/default/grub").read_text() if (tree / "etc/default/grub").exists() else ""
+    manager, sid, _info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    plan = manager.plan({"session_id": sid, "action_id": "boot.config"})
+    assert plan["diff"] == "" and not any("without the live system" in step["display"] for step in plan["steps"])
+    plan_and_run(manager, sid, "boot.config")
+    unmount(manager, sid)
+    assert ((tree / "etc/default/grub").read_text() if (tree / "etc/default/grub").exists() else "") == before
+    assert not list((tree / "etc").rglob("*.gentoo-rescue-*"))
