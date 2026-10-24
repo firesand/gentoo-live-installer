@@ -14,12 +14,12 @@ import copy
 from dataclasses import dataclass
 from typing import Callable, Sequence
 
-from .. import blockdev, hardware, keymaps, layout, recommend
+from .. import blockdev, desktops, hardware, keymaps, layout, recommend
 from ..daemon_client import DaemonState
 from ..diagnostics import redact_url_userinfo
 from ..hardware import NicInfo
 from ..layout import human_size
-from ..manifest import KEYMAP_RE, InstallManifest
+from ..manifest import KEYMAP_RE, InstallManifest, desktop_problem
 from .check import field_errors
 from .console import Console, GoBack, Option, Quit
 from .daemon import Daemon, DaemonError
@@ -34,12 +34,14 @@ RESERVED_USERNAMES = frozenset({
     "root", "bin", "daemon", "adm", "lp", "sync", "shutdown", "halt", "operator", "nobody", "portage", "sshd", "messagebus", "polkitd",
 })
 
+# The desktops come from the registry (desktops.py): four choices, then "More desktops" with the rest.
 DESKTOPS = (
     ("kde", "KDE Plasma", "A complete, polished desktop with many applications; it needs the most memory."),
     ("gnome", "GNOME", "A modern, simple desktop."),
     ("xfce", "Xfce", "A light, fast desktop. A good choice for older computers."),
     ("minimal", "Minimal system (no desktop)", "Only the base system and a command line. You add what you need later."),
 )
+MORE_DESKTOPS_LABEL = "More desktops..."
 INITS = (
     ("openrc", "OpenRC", "Gentoo's traditional init system: simple and fast. Recommended."),
     ("systemd", "systemd", "The init system most other Linux distributions use."),
@@ -629,9 +631,9 @@ class Wizard:
         self.substeps(self._ask_desktop, self._ask_init)
 
     def _desktop_problem(self, desktop: str) -> str:
-        if desktop == "kde" and any(word in self.manifest.system.stage_variant for word in ("nomultilib", "hardened")):
-            return ("KDE Plasma needs a Standard or Desktop stage3: the Hardened and No-multilib profiles do not enable the desktop USE flags Plasma requires, "
-                    "so the package step would fail after your disk was erased. Choose another desktop, or the graphical installer for another stage3.")
+        family_problem = desktop_problem(self.manifest.system.stage_variant, desktop)
+        if family_problem:
+            return family_problem + " Choose another desktop, or the graphical installer for another stage3."
         entry = self.current_disk()
         if entry is None:
             return ""
@@ -649,32 +651,44 @@ class Wizard:
             pass
         return self.manifest.system.desktop
 
+    def _desktop_option(self, key: str, label: str, detail: str) -> Option:
+        text = f"{detail} Needs about {layout.MIN_ROOT_MIB[key] // 1024} GiB of disk space."
+        entry = desktops.get(key)
+        if entry is not None and entry.note:
+            text += " " + entry.note
+        if self._desktop_problem(key):
+            text += " Not possible on the disk you chose."
+        return Option(label, text)
+
     def _ask_desktop(self) -> bool:
         c = self.console
         system, options = self.manifest.system, self.manifest.options
-        options_list = []
-        for key, label, detail in DESKTOPS:
-            need = layout.MIN_ROOT_MIB[key] // 1024
-            text = f"{detail} Needs about {need} GiB of disk space."
-            if self._desktop_problem(key):
-                text += " Not possible on the disk you chose."
-            options_list.append(Option(label, text))
-        keys = [item[0] for item in DESKTOPS]
-        names = {key: label for key, label, _ in DESKTOPS}
+        main = list(DESKTOPS)
+        more = [(key, desktops.REGISTRY[key].label, desktops.REGISTRY[key].card_text()) for key in desktops.MORE_DESKTOPS]
+        main_keys = [item[0] for item in main]
+        names = {key: label for key, label, _ in [*main, *more]}
         suggested = self._recommended_desktop()
-        if suggested != system.desktop and suggested in keys:
+        if suggested != system.desktop and suggested in names:
             c.note(f"This computer has little memory, so {names[suggested]} is suggested.")
-        default = keys.index(suggested) if suggested in keys else 0
+        default = main_keys.index(suggested) if suggested in main_keys else (len(main) if suggested in names else 0)
         while True:
+            options_list = [self._desktop_option(key, label, detail) for key, label, detail in main]
+            options_list.append(Option(MORE_DESKTOPS_LABEL, ", ".join(label for _, label, _ in more) + ". Lighter or different desktops, and tiling window managers."))
             choice = c.menu(options_list, title="Which desktop do you want?", default=default,
                             help="The desktop is the graphical environment with windows and menus. Choose Minimal for a server or if you only need a command line.")
-            problem = self._desktop_problem(keys[choice.index])
+            if choice.index < len(main):
+                picked = main_keys[choice.index]
+            else:
+                sub = c.menu([self._desktop_option(key, label, detail) for key, label, detail in more], title="Which of these desktops do you want?",
+                             default=next((i for i, item in enumerate(more) if item[0] == suggested), 0), help="Every one of them includes a web browser and a network tray icon.")
+                picked = more[sub.index][0]
+            problem = self._desktop_problem(picked)
             if problem:
                 c.warn(problem)
                 continue
             break
         was_minimal = system.desktop == "minimal"
-        system.desktop = keys[choice.index]
+        system.desktop = picked
         if system.desktop == "minimal":
             options.install_hwmonux = options.install_portagehub = False  # graphical programs
         elif was_minimal:

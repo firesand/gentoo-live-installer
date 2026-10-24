@@ -30,6 +30,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Sequence
 
+from gentoo_installer import desktops
 from gentoo_installer import hardware_data as data
 from gentoo_installer import keyboard_data, recommend
 from gentoo_installer.hardware import DiskInfo, GpuInfo, HardwareProfile, gpu_label, is_hybrid, parent_disk_name
@@ -516,7 +517,7 @@ class _Planner:
         self.p.driver_atoms.append(A_NVIDIA)
         self.license(A_NVIDIA, str(info["license"]))
         flags = ["dist-kernel"]  # modules follow kernel updates
-        if self.desktop in ("kde", "gnome"):
+        if desktops.wayland_use(self.desktop):
             flags.append("wayland")
         if branch == "580" and self.nvidia_gpus and all(g.generation == "turing+" for g in self.nvidia_gpus):
             flags.append("kernel-open")  # open modules on Turing and newer; Maxwell to Volta need the closed ones
@@ -583,14 +584,14 @@ class _Planner:
     def power(self) -> None:
         choice = self.m.hardware.power
         if choice == "auto":
-            choice = "none" if (not self.mobile or self.vm or self.portable) else ("ppd" if self.desktop in ("kde", "gnome") else "tlp")
+            choice = "none" if (not self.mobile or self.vm or self.portable) else ("ppd" if desktops.ppd_ui(self.desktop) else "tlp")
         self.p.scalars["power"] = choice
         if choice == "ppd":
             self.p.optional_atoms.append(A_PPD)
             self.service(A_PPD.split("/")[1], optional=True)
         elif choice == "tlp":
             self.p.optional_atoms.append(A_TLP)
-            ppd_ui = self.desktop in ("kde", "gnome")
+            ppd_ui = desktops.ppd_ui(self.desktop)
             flags = [] if ppd_ui else ["-ppd"]  # tlp[ppd] replaces power-profiles-daemon for the desktop's profile switcher
             if self.m.network.manager != "networkmanager":
                 flags.append("-rdw")  # rdw needs NetworkManager
@@ -776,7 +777,7 @@ class _Planner:
         script = keyboard_data.locale_script(self.m.system.locale)
         if script == "cjk":
             self.fonts = (A_NOTO_CJK, "Chinese, Japanese and Korean text")
-        elif script == "complex" and self.desktop != "kde":
+        elif script == "complex" and not desktops.brings_noto(self.desktop):
             self.fonts = (A_NOTO, "Arabic, Hebrew, Indic, Thai and other scripts")
         if self.fonts:
             self.p.optional_atoms.append(self.fonts[0])
@@ -967,7 +968,7 @@ def blocking_issues(manifest: InstallManifest, hardware: Mapping[str, Any] | Har
 def _memory_issues(m: InstallManifest, hw: HardwareProfile) -> list[Issue]:
     out: list[Issue] = []
     gib = hw.memory.total_kib / recommend.KIB_PER_GIB
-    if hw.memory.total_kib and 2 <= gib < 4 and m.system.desktop in ("kde", "gnome"):
+    if hw.memory.total_kib and 2 <= gib < 4 and desktops.is_heavy(m.system.desktop):
         out.append(Issue("hw.memory_tight", "info", f"This PC has {gib:.1f} GiB of memory. {m.system.desktop.upper()} will feel slow; Xfce needs less."))
     if m.hardware.hibernate:
         if m.storage.luks:

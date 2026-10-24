@@ -228,6 +228,34 @@ def unverified(desktop: str, family: str) -> bool:
     return family in UNVERIFIED_FAMILIES and family_supports(desktop, family)
 
 
+def is_heavy(desktop: str) -> bool:
+    """True for the desktops that feel slow below 4 GiB of memory."""
+    entry = REGISTRY.get(desktop)
+    return bool(entry and entry.heavy)
+
+
+def ppd_ui(desktop: str) -> bool:
+    """True when the desktop has its own power-profile switcher that wants power-profiles-daemon (or tlp[ppd])."""
+    entry = REGISTRY.get(desktop)
+    return bool(entry and entry.ppd_ui)
+
+
+def wayland_use(desktop: str) -> bool:
+    """True when NVIDIA's driver is built with Wayland support for this desktop."""
+    entry = REGISTRY.get(desktop)
+    return bool(entry and entry.wayland_use)
+
+
+def brings_noto(desktop: str) -> bool:
+    entry = REGISTRY.get(desktop)
+    return bool(entry and entry.brings_noto)
+
+
+def label(desktop: str) -> str:
+    entry = REGISTRY.get(desktop)
+    return entry.label if entry else desktop
+
+
 def profile_suffix(desktop: str) -> str:
     entry = REGISTRY.get(desktop)
     return entry.profile_suffix if entry else ""

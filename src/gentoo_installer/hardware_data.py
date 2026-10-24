@@ -12,6 +12,8 @@ from __future__ import annotations
 import re
 from typing import Iterable, Mapping
 
+from . import desktops
+
 # ---------------------------------------------------------------------------
 # PCI
 # ---------------------------------------------------------------------------
@@ -423,13 +425,9 @@ IGNORED_DISK_RE = re.compile(r"^(?:loop|ram|zram|nbd|sr|fd|dm-|md|rbd|nullb)\d*$
 # ---------------------------------------------------------------------------
 
 # desktop -> (minimum root, recommended root) with the binhost; source builds add BUILD_EXTRA_GIB.
-ROOT_SIZES_GIB: dict[str, tuple[int, int]] = {
-    "minimal": (8, 15),
-    "xfce": (14, 22),
-    "gnome": (18, 28),
-    "kde": (24, 40),
-}
-BUILD_EXTRA_GIB: dict[str, int] = {"minimal": 10, "xfce": 12, "gnome": 14, "kde": 16}
+# The figures live in the desktop registry (desktops.py).
+ROOT_SIZES_GIB: dict[str, tuple[int, int]] = {key: desktops.root_gib(key) for key in desktops.DESKTOPS}
+BUILD_EXTRA_GIB: dict[str, int] = {key: desktops.build_extra_gib(key) for key in desktops.DESKTOPS}
 
 
 def distinct(values: Iterable[str]) -> list[str]:

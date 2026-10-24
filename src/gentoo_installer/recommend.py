@@ -18,6 +18,7 @@ import math
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from . import desktops
 from . import hardware_data as data
 from .hardware import HardwareProfile, gpu_label, is_hybrid
 from .manifest import InstallManifest, Storage
@@ -195,7 +196,7 @@ def recommend(profile: HardwareProfile | Mapping[str, Any] | None, manifest: Ins
             out.append(Recommendation("rec.low_memory_desktop", "warning",
                                       f"This PC has {gib:.1f} GiB of memory. A graphical desktop is not recommended; choose Minimal (no desktop) and keep compressed RAM swap on.",
                                       "system.desktop", "minimal"))
-        elif gib < 4 and desktop in ("kde", "gnome"):
+        elif gib < 4 and desktops.is_heavy(desktop):
             out.append(Recommendation("rec.tight_memory", "info",
                                       f"This PC has {gib:.1f} GiB of memory. {desktop.upper()} will feel slow; Xfce needs less.", "system.desktop", "xfce"))
         if manifest.options.install_hwmonux and nominal_ram_gib(total_kib) < HWMONUX_COMFORTABLE_GIB:
