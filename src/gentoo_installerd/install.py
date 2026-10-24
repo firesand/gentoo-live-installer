@@ -227,10 +227,24 @@ class Installer:
             raise InstallError("Target root must be an absolute, non-root mount directory")
         if any(path.is_symlink() for path in (self.target_root, *self.target_root.parents)):
             raise InstallError("Target root must not contain symlinks")
+        if isinstance(self.inspector, Discovery):
+            # Probe the mirror the install will really download from, through the proxy the user configured.
+            self.inspector.configure(mirror=self.manifest.portage.mirror, proxy=self.manifest.network.proxy)
         self.inspection = self.inspector.inspect()
         if self.manifest.storage.firmware == "uefi" and not self.dry_run and not self.inspection.uefi:
-            raise InstallError("The live system was not booted in UEFI mode")
-        fatal = [error for error in self.inspection.errors if not error.startswith("At least 2 GiB")]
+            raise InstallError(
+                "The installation is set to UEFI, but this PC was started in legacy BIOS (CSM) mode. "
+                "Restart the installer in UEFI mode, or choose Legacy BIOS in the storage settings"
+            )
+        for warning in self.inspection.warnings:
+            self.log(f"Preflight warning: {warning}")
+        # Structured findings decide (severity "error" blocks); no message wording is matched.
+        fatal = self.inspection.blocking_errors()
+        if fatal and self.dry_run:
+            # A preview cannot know the real machine's network, tools or disks: report, never block.
+            for error in fatal:
+                self.log(f"[dry-run] preflight finding (fatal in a real run): {error}")
+            fatal = []
         if fatal:
             raise InstallError("Preflight failed: " + "; ".join(fatal))
         selected_tools: set[str] = set()
@@ -238,6 +252,8 @@ class Installer:
             selected_tools.add("mkfs.vfat")
         if self.manifest.storage.filesystem in {"xfs", "btrfs"}:
             selected_tools.add("mkfs." + self.manifest.storage.filesystem)
+        if self.manifest.storage.filesystem == "btrfs" and self.manifest.storage.mode == "erase":
+            selected_tools.add("btrfs")  # subvolumes and the swap file of an encrypted install
         for partition in self.manifest.storage.partitions:
             if partition.format and partition.filesystem in {"ext4", "xfs", "btrfs", "vfat"}:
                 selected_tools.add("mkfs." + partition.filesystem)
@@ -254,17 +270,30 @@ class Installer:
         if self.manifest.system.bootloader == "efi-stub":
             selected_tools.add("efibootmgr")
         missing = sorted(tool for tool in selected_tools if self.inspection.tools.get(tool) is False)
-        if missing:
+        if missing and self.dry_run:
+            self.log("[dry-run] selected configuration needs tools missing on this machine: " + ", ".join(missing))
+        elif missing:
             raise InstallError("Selected configuration needs missing tools: " + ", ".join(missing))
         if self.manifest.system.kernel == "manual":
             self.log("Manual kernel selected: installation will stop at the kernel stage with interactive instructions")
         self.emit("progress", "preflight", "System readiness checked", 5.0, inspection=self.inspection.to_dict())
 
     def _storage(self) -> None:
+        # What will happen to which disk goes into the log before anything is changed. A plan is
+        # information: failing to build one never stops the installation (prepare() does the checking).
+        plan = None
+        try:
+            plan = self.storage.describe(self.manifest, None if self.dry_run else self.storage.inventory())
+            for line in plan.lines():
+                self.log(f"Storage plan: {line}")
+        except Exception as exc:  # noqa: BLE001
+            self.log(f"Storage plan unavailable: {exc}")
         layout = self.storage.prepare(self.manifest, dry_run=self.dry_run)
+        for note in self.storage.notes:
+            self.log(f"Storage note: {note}")
         if not self.dry_run:
             self.checkpoints.save_layout(layout, self.storage.snapshot())
-        self.emit("progress", "storage", "Storage layout prepared", data={"layout": [entry.__dict__ for entry in layout]})
+        self.emit("progress", "storage", "Storage layout prepared", data={"layout": [entry.__dict__ for entry in layout], "plan": plan.to_dict() if plan else None})
 
     def _stage3(self) -> None:
         if self.dry_run:
@@ -282,7 +311,10 @@ class Installer:
         if not self.dry_run:
             for directory in ("dev", "proc", "sys", "run", "etc"):
                 self.configurer.path(directory).mkdir(parents=True, exist_ok=True)
-            resolv = Path("/etc/resolv.conf").read_text()
+            try:
+                resolv = Path("/etc/resolv.conf").read_text()
+            except OSError as exc:
+                raise InstallError(f"The live system has no readable /etc/resolv.conf to copy into the new system ({exc}); connect to a network first") from exc
             self.configurer.write("etc/resolv.conf", resolv)
         mounts = [
             (("mount", "--rbind", "/dev", str(self.configurer.path("dev"))), self.configurer.path("dev")),

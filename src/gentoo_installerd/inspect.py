@@ -21,7 +21,7 @@ from typing import Any, Callable, Iterable, Sequence
 from gentoo_installer import blockdev
 from gentoo_installer.blockdev import BlockDevice
 
-from .runner import DryRunRunner, Runner, RunnerError, SubprocessRunner
+from .runner import DryRunRunner, Runner, RunnerError, SubprocessRunner, format_command
 
 # The daemon's historical name for a node of the lsblk tree.
 Disk = BlockDevice
@@ -189,12 +189,14 @@ class ReadOnlyRunner:
     ALLOWED = (("lsblk",), ("findmnt",), ("blkid",), ("pvs",), ("mdadm", "--examine"))
 
     def __init__(self, log: Callable[[str], None] | None = None) -> None:
-        self._inner = SubprocessRunner(log)
+        self._log = log or (lambda _line: None)
+        self._inner = SubprocessRunner()  # silent: the lsblk JSON would flood a preview's log
 
     def run(self, argv: Sequence[str], **kwargs: Any) -> Any:
         args = tuple(argv)
         if not any(args[: len(prefix)] == prefix for prefix in self.ALLOWED):
             raise RunnerError(args or ("",), 126, "refused: only read-only inventory commands run in a preview")
+        self._log("$ [read-only] " + format_command(args))
         return self._inner.run(args, **kwargs)
 
 

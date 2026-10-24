@@ -89,8 +89,11 @@ def fstab_supports_layout_fields() -> tuple[bool, bool]:
     try:
         from .configure import render_fstab
 
-        probe = [LayoutEntry("/dev/probe1", "/", "btrfs", options="subvol=@probe"), LayoutEntry("/probe-swap-file", "", "swap", source="/probe-swap-file")]
-        text = render_fstab(probe, {"/dev/probe1": "00000000-0000-0000-0000-000000000000"})
+        probe = [
+            LayoutEntry("/dev/probe-root", "/", "btrfs", options="subvol=@probe"),
+            LayoutEntry("/dev/probe-swap", "", "swap", source="/probe-swap-file"),
+        ]
+        text = render_fstab(probe, {"/dev/probe-root": "00000000-0000-0000-0000-000000000000", "/dev/probe-swap": "11111111-1111-1111-1111-111111111111"})
     except Exception:  # noqa: BLE001 - any failure means "not supported"
         return False, False
     return "subvol=@probe" in text, "/probe-swap-file none swap" in text
@@ -903,7 +906,14 @@ class StorageManager:
     # ------------------------------------------------------------------ receipts for resume
 
     def _uuid(self, device: str) -> str:
-        value = self.runner.run(("blkid", "-s", "UUID", "-o", "value", device)).stdout.strip()
+        try:
+            value = self.runner.run(("blkid", "-s", "UUID", "-o", "value", device)).stdout.strip()
+        except RunnerError as exc:
+            raise StorageError(
+                f"Cannot establish filesystem identity: {device} is missing or has no filesystem signature "
+                "(an assembled RAID array or an LVM volume has to be activated first: mdadm --assemble --scan, vgchange -ay)",
+                "storage.resume",
+            ) from exc
         if not value or len(value.splitlines()) != 1:
             raise StorageError(f"Cannot establish filesystem identity: {device}", "storage.resume")
         return value
@@ -1037,6 +1047,13 @@ class StorageManager:
             raise
 
     # ------------------------------------------------------------------ plan description
+
+    def inventory(self) -> list[Disk] | None:
+        """The current lsblk inventory, or None when it cannot be read (the plan then has no disk details)."""
+        try:
+            return self._discovery().disks()
+        except (RunnerError, ValueError, OSError):
+            return None
 
     def describe(self, manifest: InstallManifest, disks: Sequence[Disk] | None = None) -> guided_layout.StoragePlan:
         """What this manifest will do to storage (see gentoo_installer.layout.plan_storage)."""
