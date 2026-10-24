@@ -27,8 +27,11 @@ STAGES = (
     "portage",
     "kernel",
     "target",
-    "packages",
+    # Essential packages and services, then the bootloader, so the target is
+    # bootable before the long, failure-prone desktop stage runs.
+    "base",
     "bootloader",
+    "desktop",
     "validation",
     "cleanup",
 )
@@ -196,8 +199,9 @@ class Installer:
             ("portage", self._portage, lambda: self._target_file("etc/portage/make.conf")),
             ("kernel", self._kernel, self._verify_kernel),
             ("target", self._target, lambda: self._target_file("etc/fstab")),
-            ("packages", self._packages, None),
+            ("base", self._base, None),
             ("bootloader", self._bootloader, self._verify_bootloader),
+            ("desktop", self._desktop, None),
             ("validation", self._validate, None),
         ]
         for index, (name, operation, verifier) in enumerate(steps):
@@ -370,11 +374,18 @@ class Installer:
         else:
             self.configurer.write("etc/doas.conf", "permit persist :wheel\n", 0o600)
 
-    def _packages(self) -> None:
+    def _base(self) -> None:
+        """Essential packages and services needed to boot and log in."""
         self.configurer.install_packages(self.manifest)
         self.configurer.configure_services(self.manifest)
         if self.manifest.system.world_update:
             self.configurer.chroot(("emerge", "--update", "--deep", "--newuse", "@world"))
+
+    def _desktop(self) -> None:
+        """Desktop and optional packages, installed after the bootloader.
+
+        The package sets are not split yet: _base still installs everything.
+        """
 
     def _bootloader(self) -> None:
         systemd_package = "sys-apps/systemd" if self.manifest.system.init == "systemd" else "sys-apps/systemd-utils"

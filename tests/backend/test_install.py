@@ -47,7 +47,7 @@ class InstallerFlowTests(unittest.TestCase):
             installer = Installer(m, runner=runner, target_root=target, state_dir=state, cache_dir=cache, dry_run=True, inspector=FakeInspector(), emit=events.append)
             self.assertTrue(installer.run())
             stages = {event.stage for event in events if event.type == "stage" and event.data.get("status") == "completed"}
-            self.assertEqual(stages, {"preflight", "storage", "stage3", "mounts", "repository", "portage", "kernel", "target", "packages", "bootloader", "validation", "cleanup"})
+            self.assertEqual(stages, {"preflight", "storage", "stage3", "mounts", "repository", "portage", "kernel", "target", "base", "bootloader", "desktop", "validation", "cleanup"})
             self.assertEqual([event.data.get("success") for event in events if event.type == "completed"], [True])
             self.assertFalse(target.exists())
             self.assertFalse(state.exists())

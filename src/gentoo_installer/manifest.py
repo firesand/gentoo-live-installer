@@ -9,6 +9,9 @@ from typing import Any, get_args, get_origin, get_type_hints
 
 SCHEMA_VERSION = 1
 SECRET_KEYS = {"password", "root_password", "luks_passphrase", "wifi_password", "proxy_password"}
+# Keys of validate_sections(); GUI pages route errors by section, not wording.
+VALIDATION_SECTIONS = ("general", "storage", "system", "locale", "portage", "network", "accounts", "options", "hardware")
+CMDLINE_TOKEN_RE = re.compile(r"[A-Za-z0-9_.:=,/+@%-]+")
 
 
 class ManifestError(ValueError):
@@ -31,6 +34,10 @@ class Storage:
     mode: str = "erase"
     device: str = ""
     device_id: str = ""
+    # "" (legacy: device_id is a serial or WWN) | "serial" | "wwn" | "path".
+    # For "path" the user approved a disk without a stable serial/WWN and
+    # device_id is "<by-path link name>|<size in bytes>|<model>".
+    device_id_kind: str = ""
     firmware: str = "uefi"
     table: str = "gpt"
     filesystem: str = "ext4"
@@ -62,6 +69,16 @@ class System:
     locale: str = "en_US.UTF-8"
     timezone: str = "UTC"
     keymap: str = "us"
+    # X11/Wayland (XKB) keyboard for display managers and desktop sessions;
+    # several layouts are comma-separated.
+    keyboard_layout: str = "us"
+    keyboard_variant: str = ""
+    keyboard_model: str = "pc105"
+    keyboard_options: str = ""
+    rtc_local: bool = False
+    console_font: str = ""
+    # Extra kernel arguments appended after the installer's own (no root=/init=).
+    kernel_cmdline_extra: str = ""
     world_update: bool = False
 
 
@@ -95,6 +112,9 @@ class Network:
     proxy: str = ""
     wifi_ssid: str = ""
     wifi_password: str = ""
+    # Copy the live session's NetworkManager connections (including saved
+    # Wi-Fi secrets) into the target. Off unless the user asks for it.
+    import_live_profiles: bool = False
 
 
 @dataclass
@@ -130,6 +150,51 @@ class Options:
 
 
 @dataclass
+class Hardware:
+    """Hardware-dependent choices; "auto" means "decide from detection"."""
+
+    target: str = "this"  # "this" (this machine) | "portable" (generic, movable install)
+    gpu_driver: str = "auto"  # "auto" | "open" | "nvidia"
+    nvidia_branch: str = "auto"  # "auto" | three-digit driver branch such as "580"
+    nvidia_license_accepted: bool = False
+    nvk: str = "auto"  # "auto" | "yes" | "no"
+    prime: str = "auto"  # "auto" | "off" | "offload"
+    cpu_flags_mode: str = "auto"  # "auto" | "detect" | "profile" | "manual" (portage.cpu_flags)
+    power: str = "auto"  # "auto" | "ppd" | "tlp" | "none"
+    thermald: str = "auto"  # "auto" | "yes" | "no"
+    fingerprint: bool = False
+    fwupd: bool = False
+    guest_tools: str = "auto"  # "auto" | "none"
+    zram: str = "auto"  # "auto" | "yes" | "no"
+    zram_percent: int = 50
+    hibernate: bool = False
+    trim: str = "auto"  # "auto" | "weekly" | "off"
+    luks_discard: bool = False
+    sof_firmware: str = "auto"  # "auto" | "yes" | "no"
+    printer_drivers: list[str] = field(default_factory=list)  # subset of PRINTER_DRIVERS
+    hidpi: str = "auto"  # "auto" | "off" | "dpi:<96..288>"
+    removable_fallback: str = "auto"  # "auto" | "always" | "if-missing" | "never"
+    pipewire_alsa: bool = False
+
+
+PRINTER_DRIVERS = {"gutenprint", "hplip"}
+HARDWARE_CHOICES = {
+    "target": {"this", "portable"},
+    "gpu_driver": {"auto", "open", "nvidia"},
+    "nvk": {"auto", "yes", "no"},
+    "prime": {"auto", "off", "offload"},
+    "cpu_flags_mode": {"auto", "detect", "profile", "manual"},
+    "power": {"auto", "ppd", "tlp", "none"},
+    "thermald": {"auto", "yes", "no"},
+    "guest_tools": {"auto", "none"},
+    "zram": {"auto", "yes", "no"},
+    "trim": {"auto", "weekly", "off"},
+    "sof_firmware": {"auto", "yes", "no"},
+    "removable_fallback": {"auto", "always", "if-missing", "never"},
+}
+
+
+@dataclass
 class InstallManifest:
     storage: Storage = field(default_factory=Storage)
     system: System = field(default_factory=System)
@@ -137,6 +202,7 @@ class InstallManifest:
     network: Network = field(default_factory=Network)
     accounts: Accounts = field(default_factory=Accounts)
     options: Options = field(default_factory=Options)
+    hardware: Hardware = field(default_factory=Hardware)
     version: int = SCHEMA_VERSION
 
     def to_dict(self, redact: bool = False) -> dict[str, Any]:
@@ -218,14 +284,35 @@ class InstallManifest:
         target.chmod(0o600)
 
     def validate(self) -> list[str]:
+        return [error for errors in self.validate_sections().values() for error in errors]
+
+    def validate_sections(self) -> dict[str, list[str]]:
+        """Return validation errors grouped by VALIDATION_SECTIONS key."""
+        return {
+            "general": self._validate_general(),
+            "storage": self._validate_storage(),
+            "system": self._validate_system(),
+            "locale": self._validate_locale(),
+            "portage": self._validate_portage(),
+            "network": self._validate_network(),
+            "accounts": self._validate_accounts(),
+            "options": self._validate_options(),
+            "hardware": self._validate_hardware(),
+        }
+
+    def _validate_general(self) -> list[str]:
         errors: list[str] = []
-        storage, system = self.storage, self.system
         for section in (self.storage, self.system, self.portage, self.network, self.accounts, self.options):
             for key in SECRET_KEYS:
                 if getattr(section, key, None) == "<redacted>":
                     errors.append(f"Replace the redacted secret in {key} before installing")
         if self.version != SCHEMA_VERSION:
             errors.append(f"Unsupported manifest version {self.version}")
+        return errors
+
+    def _validate_storage(self) -> list[str]:
+        errors: list[str] = []
+        storage = self.storage
         if storage.mode not in {"erase", "manual"}:
             errors.append("Storage mode must be erase or manual")
         if not storage.device.startswith("/dev/") or storage.device in {"/dev/null", "/dev/zero", "/dev/random"}:
@@ -268,6 +355,17 @@ class InstallManifest:
             errors.append("The LUKS passphrase must contain at least 8 characters")
         if storage.raid_level and storage.raid_level not in {"0", "1", "5", "6", "10"}:
             errors.append("Unsupported RAID level")
+        if storage.device_id_kind not in {"", "serial", "wwn", "path"}:
+            errors.append("Unknown disk identity kind")
+        if storage.device_id_kind == "path":
+            parts = storage.device_id.split("|")
+            if len(parts) != 3 or not parts[0] or "/" in parts[0] or not parts[1].isdigit() or any(c in storage.device_id for c in "\n\r\0"):
+                errors.append("A disk without a serial number needs a by-path|size|model identity")
+        return errors
+
+    def _validate_system(self) -> list[str]:
+        errors: list[str] = []
+        storage, system = self.storage, self.system
         if system.init not in {"openrc", "systemd"}:
             errors.append("Init system must be OpenRC or systemd")
         if system.stage_variant not in {"amd64-openrc", "amd64-systemd", "amd64-desktop-openrc", "amd64-desktop-systemd", "amd64-nomultilib-openrc", "amd64-nomultilib-systemd", "amd64-hardened-openrc", "amd64-hardened-systemd"}:
@@ -292,6 +390,38 @@ class InstallManifest:
             errors.append("systemd-boot and EFI stub require UEFI firmware")
         if system.secure_boot and (not system.secure_boot_key or not system.secure_boot_certificate):
             errors.append("Secure Boot needs both a signing key and certificate")
+        extra = system.kernel_cmdline_extra
+        if extra:
+            tokens = extra.split(" ")
+            if len(extra) > 512 or not all(CMDLINE_TOKEN_RE.fullmatch(token) for token in tokens):
+                errors.append("Extra kernel arguments may contain only single-space-separated plain tokens (at most 512 characters)")
+            elif any(token.split("=", 1)[0] in {"root", "init", "rd.luks.uuid", "rd.luks.name"} for token in tokens):
+                errors.append("Extra kernel arguments cannot override root=, init= or the encryption arguments")
+        return errors
+
+    def _validate_locale(self) -> list[str]:
+        errors: list[str] = []
+        system = self.system
+        if not system.timezone or system.timezone.startswith("/") or ".." in system.timezone:
+            errors.append("Invalid timezone")
+        if not re.fullmatch(r"[A-Za-z0-9_.@-]{1,64}", system.locale):
+            errors.append("Invalid locale")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", system.keymap):
+            errors.append("Invalid console keymap")
+        if not re.fullmatch(r"[a-z][a-z0-9_-]{0,15}(?:,[a-z][a-z0-9_-]{0,15}){0,3}", system.keyboard_layout):
+            errors.append("Invalid keyboard layout")
+        if not re.fullmatch(r"[A-Za-z0-9_,-]{0,64}", system.keyboard_variant):
+            errors.append("Invalid keyboard variant")
+        if not re.fullmatch(r"[a-z0-9_-]{1,32}", system.keyboard_model):
+            errors.append("Invalid keyboard model")
+        if not re.fullmatch(r"[A-Za-z0-9_:,+-]{0,256}", system.keyboard_options):
+            errors.append("Invalid keyboard options")
+        if not re.fullmatch(r"[A-Za-z0-9_.-]{0,64}", system.console_font):
+            errors.append("Invalid console font")
+        return errors
+
+    def _validate_accounts(self) -> list[str]:
+        errors: list[str] = []
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,62}", self.accounts.hostname):
             errors.append("Hostname must contain only letters, numbers, and hyphens")
         if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}\$?", self.accounts.username):
@@ -302,6 +432,14 @@ class InstallManifest:
             errors.append("The root password must contain at least 8 characters")
         if self.accounts.privilege not in {"sudo", "doas"}:
             errors.append("Privilege tool must be sudo or doas")
+        if any(c in secret for secret in (self.accounts.password, self.accounts.root_password) for c in "\n\r\0"):
+            # chpasswd reads "user:password" lines; a newline would set a second account.
+            errors.append("Passwords cannot contain line breaks or NUL characters")
+        return errors
+
+    def _validate_network(self) -> list[str]:
+        errors: list[str] = []
+        system = self.system
         if self.network.manager not in {"networkmanager", "dhcpcd", "netifrc", "systemd-networkd"}:
             errors.append("Unknown network manager")
         if self.network.manager == "netifrc" and not re.fullmatch(r"[A-Za-z0-9_]+", self.network.interface):
@@ -319,15 +457,40 @@ class InstallManifest:
                     ipaddress.ip_address(server)
             except ValueError:
                 errors.append("Static networking needs a valid address/prefix, gateway, and DNS servers")
+        return errors
+
+    def _validate_portage(self) -> list[str]:
+        errors: list[str] = []
         if not self.portage.mirror.startswith("https://"):
             errors.append("The stage3 mirror must use HTTPS")
         if self.portage.binhost and not self.portage.binhost_url.startswith("https://"):
             errors.append("The binary package host must use HTTPS")
+        return errors
+
+    def _validate_options(self) -> list[str]:
+        errors: list[str] = []
         for atom in self.options.extra_packages:
             if not re.fullmatch(r"[A-Za-z0-9_+.-]+/[A-Za-z0-9_+.-]+(?::[A-Za-z0-9_.-]+)?", atom):
                 errors.append(f"Invalid package atom: {atom}")
-        if not self.system.timezone or self.system.timezone.startswith("/") or ".." in self.system.timezone:
-            errors.append("Invalid timezone")
+        return errors
+
+    def _validate_hardware(self) -> list[str]:
+        errors: list[str] = []
+        hardware = self.hardware
+        for name, choices in HARDWARE_CHOICES.items():
+            if getattr(hardware, name) not in choices:
+                errors.append(f"Unknown hardware choice for {name.replace('_', ' ')}")
+        if hardware.nvidia_branch != "auto" and not re.fullmatch(r"[0-9]{3}", hardware.nvidia_branch):
+            errors.append("The NVIDIA driver branch must be auto or a three-digit branch number")
+        if hardware.gpu_driver == "nvidia" and not hardware.nvidia_license_accepted:
+            errors.append("The proprietary NVIDIA driver needs its licence to be accepted")
+        if not 10 <= hardware.zram_percent <= 100:
+            errors.append("Compressed RAM swap (zram) must use 10–100% of memory")
+        if not set(hardware.printer_drivers) <= PRINTER_DRIVERS:
+            errors.append("Unknown printer driver selection")
+        dpi = re.fullmatch(r"dpi:([0-9]{2,3})", hardware.hidpi)
+        if hardware.hidpi not in {"auto", "off"} and not (dpi and 96 <= int(dpi.group(1)) <= 288):
+            errors.append("Display scaling must be auto, off, or dpi:96 to dpi:288")
         return errors
 
     def require_valid(self) -> None:
