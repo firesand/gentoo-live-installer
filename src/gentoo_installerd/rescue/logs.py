@@ -61,7 +61,7 @@ def list_sources(view: SessionView) -> dict[str, Any]:
                     except (OSError, RescueError):
                         continue
                     files.append({"path": path, "size": info.st_size, "mtime": int(info.st_mtime), "compressed": path.endswith((".gz", ".xz", ".bz2", ".zst"))})
-        journal = []
+        journal: list[dict[str, Any]] = []
         for directory in JOURNAL_DIRS:
             for machine in fs.listdir_or(directory):
                 entries = [n for n in fs.listdir_or(f"{directory}/{machine}") if n.endswith((".journal", ".journal~"))]

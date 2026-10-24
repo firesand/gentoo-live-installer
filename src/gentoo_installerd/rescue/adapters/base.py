@@ -181,11 +181,11 @@ def grub_bios_steps(b: PlanBuilder, install: str, disks: list[str]) -> None:
                writes=(f"the boot sector and embedding area of {disk}",), timeout=600, when="chroot_broken", atomic=False)
     for disk_path in disks:
         try:
-            disk = b.view.graph.find(disk_path)
+            disk_node = b.view.graph.find(disk_path)
         except LookupError:
             continue
-        has_bios_boot = any(node.parttype == "21686148-6449-6e6f-744e-656564726976" for node in b.view.graph.descendants(disk))
-        if disk.pttype == "gpt" and not has_bios_boot:
+        has_bios_boot = any(node.parttype == "21686148-6449-6e6f-744e-656564726976" for node in b.view.graph.descendants(disk_node))
+        if disk_node.pttype == "gpt" and not has_bios_boot:
             b.precondition(False, f"{disk_path} uses a GPT partition table but has no BIOS boot partition; GRUB cannot be embedded. Rescue never repartitions disks.")
 
 

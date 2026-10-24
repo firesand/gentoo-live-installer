@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Iterable, Mapping, Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from gentoo_installerd.runner import CommandResult, InstallCancelled, Runner, RunnerError, format_command
 
@@ -79,7 +79,7 @@ class RescueRunner:
             raise RescueError("cancelled", "The command was stopped. Programs such as dracut or grub-install may have left files half-written.") from exc
         if secret:
             output = ""  # whatever the base runner returned: a command that was given a secret shows no output anywhere
-        record = {"scope": label, "class": kind, "argv": self._shown(args, secret), "rc": code, "duration": round(time.monotonic() - started, 2),
+        record: dict[str, Any] = {"scope": label, "class": kind, "argv": self._shown(args, secret), "rc": code, "duration": round(time.monotonic() - started, 2),
                   "plan": self.scope.plan, "step": self.scope.step, "output_tail": "" if secret else tail(output)}
         if stdin is not None:
             record["stdin"] = "<secret>" if secret else "<text>"

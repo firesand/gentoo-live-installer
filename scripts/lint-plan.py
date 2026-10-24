@@ -532,8 +532,8 @@ def format_report(report: Report, verbose: bool = False) -> str:
         lines.append(f"  REQUIRED_USE  {item['cpv']} (via {item['by']}): {item.get('error') or item['required_use'][:200]}")
     for item in report.unresolved:
         lines.append(f"  UNRESOLVED  {item['atom']} (via {item['by']}): {item['reason']}")
-    for item in report.errors:
-        lines.append(f"  ERROR  {item}")
+    for error in report.errors:
+        lines.append(f"  ERROR  {error}")
     if verbose:
         lines.append("  atoms: " + " ".join(report.atoms))
     return "\n".join(lines)

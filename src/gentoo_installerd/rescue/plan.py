@@ -65,7 +65,7 @@ class Step:
         return result
 
     def digest_view(self) -> dict[str, Any]:
-        view: dict[str, Any] = {"id": self.id, "scope": self.scope, "argv": list(self.argv), "env": self.env, "stdin": self.stdin if not (self.stdin or "").startswith("text:") else "text:" + hashlib.sha256(self.stdin.encode()).hexdigest(),
+        view: dict[str, Any] = {"id": self.id, "scope": self.scope, "argv": list(self.argv), "env": self.env, "stdin": self.stdin if not (self.stdin or "").startswith("text:") else "text:" + hashlib.sha256((self.stdin or "").encode()).hexdigest(),
                                 "ok_rc": list(self.ok_rc), "on_fail": self.on_fail, "mountpoint": self.mountpoint, "handler": self.handler, "when": self.when,
                                 "stdin_template": self.stdin_template, "args": self.args}
         if self.file_op:

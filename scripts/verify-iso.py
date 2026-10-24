@@ -678,7 +678,7 @@ def check_squashfs(
         + ", ".join(owned[:8]) + (" ..." if len(owned) > 8 else ""),
     )
     owner = re.search(r"UID:\s*(\d+).*?GID:\s*(\d+)", root_stat, re.S)
-    report.expect(bool(owner) and owner.groups() == ("0", "0"), "squashfs.root_owner", "", "the root directory of the image is not owned by root")
+    report.expect(owner is not None and owner.groups() == ("0", "0"), "squashfs.root_owner", "", "the root directory of the image is not owned by root")
 
     # Content rules for small files.
     for rule in rules.get("content", []):

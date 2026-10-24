@@ -285,13 +285,13 @@ def _mark_live(graph: DeviceGraph, roots: list[BlockDevice], sources: Iterable[s
             marked.add(node.key)
             marked.update(parent.key for parent in graph.ancestors(node))
     for key in list(marked):
-        node = graph.get(key)
-        if node is not None and node.type == "disk":
-            marked.update(child.key for child in graph.descendants(node))  # a hybrid USB stick: every partition inherits
+        found = graph.get(key)
+        if found is not None and found.type == "disk":
+            marked.update(child.key for child in graph.descendants(found))  # a hybrid USB stick: every partition inherits
     for key in marked:
-        node = graph.get(key)
-        if node is not None:
-            node.live_medium = True
+        found = graph.get(key)
+        if found is not None:
+            found.live_medium = True
 
 
 def reclassify(graph: DeviceGraph) -> None:

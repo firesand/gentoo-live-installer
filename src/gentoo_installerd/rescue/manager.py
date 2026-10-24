@@ -108,7 +108,9 @@ class RescueManager:
         return load_graph(runner or self.pool_runner(), self.pool_ctx, self.env.host)
 
     def settle(self, runner: RescueRunner) -> Callable[[], None]:
-        return lambda: runner.execute(("udevadm", "settle", "--timeout=10"), timeout=20) and None
+        def settle() -> None:
+            runner.execute(("udevadm", "settle", "--timeout=10"), timeout=20)
+        return settle
 
     def stack(self, runner: RescueRunner) -> StackManager:
         return StackManager(runner, self.pool_ctx, self.pool_ledger, lambda: self.load_graph(runner), self.env.host, self.settle(runner))

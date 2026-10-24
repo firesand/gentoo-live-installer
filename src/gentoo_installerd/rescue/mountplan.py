@@ -288,8 +288,8 @@ def plan_mounts(
         claimed.add(node.key)
     _apply_overrides(plan, overrides, graph, used_mountpoints, chosen_tier4)
     _check_busy(plan, graph, root_node, movable, own_root)
-    for item in plan.items:
-        item.needs_mkdir = not _directory_exists(fs, item.mountpoint)
+    for mount in plan.items:
+        mount.needs_mkdir = not _directory_exists(fs, mount.mountpoint)
     plan.items.sort(key=lambda it: (depth_of(it.mountpoint), it.order))
     if not fstab.entries or (plan.unresolved and not plan.selected):
         plan.suggestions.extend(suggest_boot_mounts(graph, root_node, esp_default_mountpoint, {item.mountpoint for item in plan.items}))

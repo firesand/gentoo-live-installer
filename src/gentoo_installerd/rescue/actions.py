@@ -428,7 +428,7 @@ def _verify_fstab(b: PlanBuilder, text: str) -> str:
 
 
 # ---- file system checks -----------------------------------------------------------------------------------------------------------------------------------
-CHECK_COMMANDS = {
+CHECK_COMMANDS: dict[str, dict[str, tuple[list[str], tuple[int, ...]]]] = {
     "ext": {"check": (["e2fsck", "-n", "-f"], (0, 4)), "repair": (["e2fsck", "-f", "-p"], (0, 1, 2)), "repair_force": (["e2fsck", "-f", "-y"], (0, 1, 2))},
     "xfs": {"check": (["xfs_repair", "-n"], (0, 1, 2)), "repair": (["xfs_repair"], (0,)), "repair_force": (["xfs_repair", "-L"], (0,))},  # -n: 1 corruption found, 2 the log is not clean
     "vfat": {"check": (["fsck.vfat", "-n"], (0, 1)), "repair": (["fsck.vfat", "-a"], (0, 1))},

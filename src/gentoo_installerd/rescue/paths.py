@@ -31,7 +31,7 @@ import secrets
 import stat
 from collections import deque
 from dataclasses import dataclass
-from typing import Iterator
+from typing import Iterator, Literal
 
 from .errors import RescueError
 
@@ -398,7 +398,7 @@ class RootFS:
             except (OSError, RescueError):
                 continue
             if len(header) >= 20 and header[:4] == b"\x7fELF":
-                order = "little" if header[5] == 1 else "big"
+                order: Literal["little", "big"] = "little" if header[5] == 1 else "big"
                 return _ELF_MACHINES.get(int.from_bytes(header[18:20], order), "unknown")
         return ""
 
