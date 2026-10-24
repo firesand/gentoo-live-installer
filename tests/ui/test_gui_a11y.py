@@ -244,6 +244,28 @@ def test_a_launcher_that_fails_says_what_to_do(make_window, monkeypatch):
     assert shown[1][0] == "Restart" and "manually" in shown[1][1]
 
 
+def test_network_settings_failure_is_explained(make_window, monkeypatch):
+    window = make_window()
+    shown = []
+    monkeypatch.setattr(app_module.QProcess, "startDetached", staticmethod(lambda program, arguments=[]: False))
+    monkeypatch.setattr(QMessageBox, "information", lambda parent, title, text, *a, **k: shown.append((title, text)))
+    window.readiness.networkSettingsRequested.emit()
+    assert shown[0][0] == "Network settings" and "nmtui" in shown[0][1]
+
+
+def test_locales_come_from_glibc_with_a_short_fallback(tmp_path):
+    from gentoo_installer.pages.accounts import COMMON_LOCALES, load_locales
+
+    supported = tmp_path / "SUPPORTED"
+    supported.write_text(
+        "# comment\nde_DE.UTF-8 UTF-8\nde_DE ISO-8859-1\naa_ER UTF-8\nca_ES@valencia UTF-8\nen_US.UTF-8 UTF-8\nfoo ISO-8859-1\n")
+    assert load_locales(supported) == ["en_US.UTF-8", "aa_ER.UTF-8", "ca_ES.UTF-8@valencia", "de_DE.UTF-8"]
+    assert load_locales(tmp_path / "missing") == list(COMMON_LOCALES)
+    empty = tmp_path / "empty"
+    empty.write_text("# nothing usable\n")
+    assert load_locales(empty) == list(COMMON_LOCALES)
+
+
 def test_a_missing_browser_shows_the_handbook_address(make_window, monkeypatch):
     window = make_window()
     monkeypatch.setattr(app_module.QDesktopServices, "openUrl", staticmethod(lambda url: False))

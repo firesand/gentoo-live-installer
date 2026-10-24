@@ -141,6 +141,13 @@ def test_switching_to_a_disk_with_identity_resets_the_approval(make_window):
     assert window.manifest.storage.device_id_kind == "" and window.manifest.storage.device_id == "S5Y1NX0T123456"
 
 
+def test_a_disk_that_is_too_small_is_refused_for_the_guided_layout(make_window):
+    window = make_window(info=info_with(DiskInfo("/dev/sdb", "Tiny", 8 * GIB, serial="t")))
+    window.storage.disk_group.set_value("/dev/sdb")
+    valid, message = window.storage.validate_page()
+    assert not valid and "only 8.0 GiB" in message and "at least 16 GiB" in message
+
+
 # --- the live medium and read-only disks --------------------------------------------------------------------
 
 

@@ -158,7 +158,7 @@ def test_continue_buttons_traverse_full_wizard_before_starting_install(window, m
     assert reached[-1] == 6
 
 
-@pytest.mark.parametrize("scenario_name", ["openrc", "systemd", "uefi-luks", "bios"])
+@pytest.mark.parametrize("scenario_name", ["openrc", "systemd", "uefi-luks", "bios", "defaults"])
 def test_vm_harness_manifests_survive_real_wizard_roundtrip(qtbot, monkeypatch, tmp_path, scenario_name):
     harness = load_vm_module()
     scenario = harness.SCENARIO_MAP[scenario_name]
@@ -181,7 +181,7 @@ def test_vm_harness_manifests_survive_real_wizard_roundtrip(qtbot, monkeypatch, 
         widget.next.click()
         assert widget.current == expected_page, (scenario_name, expected_page)
     assert widget.manifest.to_dict(redact=False) == expected_manifest
-    assert widget.manifest.accounts.disable_root_login is True
+    assert widget.manifest.accounts.disable_root_login is (not scenario.defaults)  # the defaults scenario keeps root login
     assert widget.manifest.accounts.root_password == harness.TEST_ROOT_PASSWORD
     widget.review.confirmation.setText("/dev/vda")
     widget.next.click()

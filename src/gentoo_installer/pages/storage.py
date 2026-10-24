@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
 
 from .. import theme
 from ..manifest import InstallManifest
-from ..system_info import DiskInfo, SystemInfo
+from ..system_info import MIN_DISK_BYTES, DiskInfo, SystemInfo
 from ..widgets import Card, ChoiceGroup, FormGrid, Page, wrapped_label
 from .manual_storage import ManualLayoutEditor
 
@@ -342,6 +342,8 @@ class StoragePage(Page):
             return False, "The selected disk is read-only."
         if storage.mode == "erase" and disk.mounted:
             return False, "The selected disk has mounted partitions. Unmount them before erasing it."
+        if storage.mode == "erase" and disk.size < MIN_DISK_BYTES:
+            return False, f"{disk.path} is only {disk.size_text}. A Gentoo installation needs a disk of at least 16 GiB."
         if not disk.has_identity:
             if not disk.by_path:
                 return False, f"{disk.path} has no serial number and no stable hardware path, so it cannot be identified safely. {NO_IDENTITY_HINT}"

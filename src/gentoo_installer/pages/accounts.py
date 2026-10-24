@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import zoneinfo
+from pathlib import Path
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QPushButton
@@ -8,6 +9,29 @@ from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QL
 from ..keyboard import CONSOLE_KEYMAP_CHOICES
 from ..manifest import InstallManifest
 from ..widgets import Card, Page, wrapped_label
+
+
+SUPPORTED_LOCALES = Path("/usr/share/i18n/SUPPORTED")
+COMMON_LOCALES = ("en_US.UTF-8", "en_GB.UTF-8", "de_DE.UTF-8", "es_ES.UTF-8", "fr_FR.UTF-8", "it_IT.UTF-8", "ja_JP.UTF-8", "nl_NL.UTF-8", "pl_PL.UTF-8", "pt_BR.UTF-8", "tr_TR.UTF-8")
+
+
+def load_locales(path: Path = SUPPORTED_LOCALES) -> list[str]:
+    """UTF-8 locales glibc can generate (en_US.UTF-8 first); a short list when
+    the file is not there."""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return list(COMMON_LOCALES)
+    found: set[str] = set()
+    for line in lines:
+        parts = line.split()
+        if len(parts) != 2 or parts[1] != "UTF-8" or line.startswith("#"):
+            continue
+        name, _, modifier = parts[0].partition("@")
+        found.add(name.split(".")[0] + ".UTF-8" + (f"@{modifier}" if modifier else ""))
+    if not found:
+        return list(COMMON_LOCALES)
+    return sorted(found, key=lambda locale: (locale != "en_US.UTF-8", locale))
 
 
 class AccountsPage(Page):
@@ -59,7 +83,7 @@ class AccountsPage(Page):
         regional_form = QFormLayout()
         self.locale_box = QComboBox()
         self.locale_box.setEditable(True)
-        self.locale_box.addItems(["en_US.UTF-8", "en_GB.UTF-8", "de_DE.UTF-8", "es_ES.UTF-8", "fr_FR.UTF-8", "it_IT.UTF-8", "ja_JP.UTF-8", "nl_NL.UTF-8", "pl_PL.UTF-8", "pt_BR.UTF-8", "tr_TR.UTF-8"])
+        self.locale_box.addItems(load_locales())
         regional_form.addRow("System locale", self.locale_box)
         self.timezone = QComboBox()
         self.timezone.setEditable(True)

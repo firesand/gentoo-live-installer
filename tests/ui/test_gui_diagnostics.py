@@ -195,6 +195,21 @@ def test_save_diagnostics_from_the_failure_panel_includes_the_visible_log(make_w
     assert "Saved diagnostics" in window.progress.notice.text()
 
 
+def test_the_bundle_thread_never_touches_widgets(make_window, qtbot, tmp_path, monkeypatch, gui_log):
+    monkeypatch.setattr(diagnostics, "run_command", lambda argv, **kw: "ok")
+    window = make_window()
+    threads = []
+    original = window.progress.visible_text
+    window.progress.visible_text = lambda: (threads.append(threading.current_thread()), original())[1]
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "d.json"), ""))
+    from PySide6.QtWidgets import QMessageBox
+
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    with qtbot.waitSignal(window.progress.logSaved, timeout=10000):
+        window.save_diagnostics("x")
+    assert threads == [threading.main_thread()]
+
+
 def test_cancelling_the_save_dialog_writes_nothing(make_window, tmp_path, monkeypatch):
     window = make_window()
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: ("", ""))

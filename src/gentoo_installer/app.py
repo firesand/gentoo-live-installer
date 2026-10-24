@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import copy
 import importlib
 import json
 import logging
@@ -168,6 +169,7 @@ class InspectWorker(QThread):
             info = SystemInfo.pending()
             info.inspected = True
             info.source = "local"
+            info.network = False  # unknown: do not leave the row on "Checking..."
             info.errors = [f"The hardware check failed: {exc}"]
         self.done.emit(info, self.generation)
 
@@ -245,7 +247,7 @@ class InstallerWindow(QMainWindow):
         self.welcome.importRequested.connect(self.import_settings)
         self.welcome.keyboardChanged.connect(self._keyboard_changed)
         self.readiness.refreshRequested.connect(self.refresh_readiness)
-        self.readiness.networkSettingsRequested.connect(lambda: QProcess.startDetached("nm-connection-editor", []))
+        self.readiness.networkSettingsRequested.connect(self.open_network_settings)
         self.readiness.diagnosticsRequested.connect(lambda: self.save_diagnostics("readiness"))
         self.readiness.clockSyncRequested.connect(self.sync_clock)
         self.review.importRequested.connect(self.import_settings)
@@ -707,10 +709,13 @@ class InstallerWindow(QMainWindow):
                 return None
             return {"state": self.info.daemon.kind if self.info.daemon else "", "document": daemon_client.fetch_diagnostics(self.socket_path)}
 
+        # The bundle is built on a worker thread: hand it snapshots, never widgets.
+        manifest, info, visible = copy.deepcopy(self.manifest), copy.deepcopy(self.info), self.progress.visible_text()
+
         def collect() -> dict[str, Any]:
             return diagnostics.collect_bundle(
-                manifest=self.manifest, info=self.info, socket_path=self.socket_path,
-                visible_log=self.progress.visible_text(), reason=reason, daemon_document=daemon_document)
+                manifest=manifest, info=info, socket_path=self.socket_path,
+                visible_log=visible, reason=reason, daemon_document=daemon_document)
 
         self.progress.save_diagnostics_to(path, collect)
 
@@ -734,6 +739,13 @@ class InstallerWindow(QMainWindow):
             QMessageBox.information(
                 self, "Application unavailable",
                 f"{name} could not be started. It is included in the live ISO; in a development environment it may not be installed.\n\nYou can also try it from a terminal: {name}")
+
+    def open_network_settings(self) -> None:
+        if not QProcess.startDetached("nm-connection-editor", []):
+            QMessageBox.information(
+                self, "Network settings",
+                "The network settings tool could not be started. Use the network icon in the panel to connect, "
+                "or open a terminal and run: nmtui")
 
     def open_handbook(self) -> None:
         if QDesktopServices.openUrl(QUrl(HANDBOOK_URL)):

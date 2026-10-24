@@ -214,7 +214,7 @@ class ReviewPage(Page):
         self.resume_check.setChecked(False)
 
     def resume_requested(self) -> bool:
-        return self.resume_check.isVisible() and self.resume_check.isChecked()
+        return self.resume_check.isVisibleTo(self) and self.resume_check.isChecked()
 
     def validate_page(self) -> tuple[bool, str]:
         wanted = required_confirmations(self.manifest, self.info)
