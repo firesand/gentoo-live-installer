@@ -99,3 +99,24 @@ def test_garbage_input_is_no_adapters():
     assert netdiag.parse_ip_addr("not json") == []
     assert netdiag.has_default_route("default via 10.0.0.1 dev eth0")
     assert not netdiag.resolved(None)
+
+
+def test_a_proxy_only_network_is_online_when_the_mirror_answers_though_ping_and_dns_fail():
+    diagnosis = netdiag.diagnose(runner(ip_addr(LO, WIRED_UP), ping=None, lookup=None), mirror=lambda: True, proxy=True)
+    assert diagnosis.problem == "" and diagnosis.online
+    assert [s.ok for s in diagnosis.steps][3:] == [None, None, True]
+
+
+def test_ping_failing_with_a_working_mirror_is_still_online_without_a_proxy():
+    diagnosis = netdiag.diagnose(runner(ip_addr(LO, WIRED_UP), ping=None), mirror=lambda: True)
+    assert diagnosis.online
+
+
+def test_ping_failing_and_the_mirror_failing_keeps_the_direct_problem():
+    assert netdiag.diagnose(runner(ip_addr(LO, WIRED_UP), ping=None), mirror=lambda: False, proxy=True).problem == "no_route"
+    assert netdiag.diagnose(runner(ip_addr(LO, WIRED_UP), lookup=None), mirror=lambda: False).problem == "no_dns"
+
+
+def test_static_needs_a_dns_server():
+    with pytest.raises(ValueError, match="DNS"):
+        netdiag.validate_static("192.168.1.50/24", "192.168.1.1", [])

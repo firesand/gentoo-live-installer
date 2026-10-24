@@ -406,6 +406,8 @@ class ReadinessPage(Page):
             problem = str(card.status.get("message") or "")
             if status == "error" and problem:
                 text = problem
+            if status == "ok":
+                card.show_reachable()  # the mirror answers, so ping or DNS failing by design is not a problem to show
             summary = card.summary()
             if summary:
                 text = f"{text}\n{summary}"

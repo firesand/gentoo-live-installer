@@ -289,7 +289,7 @@ The one deliberate change is `options.ssh`, now `true`.
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `keep_proxy` | bool | `true` | Keep the proxy in the new system's make.conf; false omits the proxy lines. A proxy with credentials is never written, whatever this says. |
-| `live_static` | object `{address, gateway, dns[]}` | all empty | Fixed address for the live session; if any part is set, all must be valid. The GUI applies it with `network_static` (Readiness page, Advanced); the daemon does not apply it by itself. |
+| `live_static` | object `{address, gateway, dns[]}` | all empty | Fixed address for the live session; if any part is set, all must be valid. The GUI applies it with `network_static` (Readiness page, Advanced); the daemon also applies it to the live connection when `start` begins a new install (not on resume), and refuses to start if that fails. |
 | `wireless_tools` | bool | `false` | Install `net-wireless/iw` and `net-wireless/wpa_supplicant`. The GUI ticks it when a Wi-Fi adapter is present and a manager other than NetworkManager is chosen. |
 | `ppp` | bool | `false` | Install `net-dialup/ppp` (DSL/PPPoE). |
 | `copy_live_wifi` | string (uuid) | `""` | uuid of a live NetworkManager Wi-Fi connection copied with its secret (I11) by configure; needs NetworkManager. A uuid that no longer exists is a warning in the install log, not an error. |

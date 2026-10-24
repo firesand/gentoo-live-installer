@@ -9,6 +9,7 @@ import pytest
 from gentoo_installer import netclient, remote_cli
 from gentoo_installer.daemon_client import DaemonState
 from gentoo_installer.manifest import InstallManifest
+from gentoo_installer.pages import network_tab
 from gentoo_installer.pages.network_card import NetworkCard
 from gentoo_installer.pages.readiness import ReadinessPage, proxy_has_credentials
 from gentoo_installer.pages.remote_dialog import RemoteAccessDialog
@@ -571,3 +572,60 @@ def test_calls_also_work_on_a_worker_thread(qtbot):
     assert widget.adapters.text() == "Wi-Fi: wlp4s0 (not connected)"
     qtbot.waitUntil(lambda: widget.network_list.count() == 3, timeout=5000)
     widget.wait()
+
+
+# ------------------------------------------------------------------ review fixes (F1, F2, F4)
+
+
+def test_the_router_dns_preset_means_the_gateway_address(card):
+    manifest = InstallManifest()
+    service = FakeService(network_status=STATUS_OK)
+    widget = card(service, manifest)
+    widget.refresh()
+    fill_static(widget)
+    assert widget.dns_preset.currentText().startswith("Router") and widget.dns_servers() == ["192.168.1.1"]
+    widget.apply_static()
+    assert service.payloads("network_static")[0]["dns"] == ["192.168.1.1"]
+    network = manifest.network
+    assert network.live_static.dns == ["192.168.1.1"] and network.dns == ["192.168.1.1"]
+    assert manifest.validate_sections()["network"] == []
+
+
+def test_an_own_dns_list_cannot_be_empty(card):
+    widget = card()
+    fill_static(widget)
+    widget.dns_preset.setCurrentIndex(widget.dns_preset.count() - 1)
+    widget.dns_own.setText("")
+    assert "DNS" in widget.static_error()
+
+
+def test_a_loaded_router_dns_shows_the_router_preset(card):
+    manifest = InstallManifest()
+    manifest.network.live_static.address, manifest.network.live_static.gateway = "10.0.0.5/24", "10.0.0.1"
+    manifest.network.live_static.dns = ["10.0.0.1"]
+    widget = card(manifest=manifest)
+    widget.load_manifest()
+    assert widget.dns_preset.currentText().startswith("Router")
+
+
+def test_the_page_hides_the_problem_and_the_wifi_box_when_the_mirror_is_reachable(qtbot):
+    page = page_with(qtbot, service=FakeService())  # the card's own tests say offline (ping or DNS fail on a proxy-only network)
+    card = page.network_card
+    card.refresh()
+    assert card.problem.isVisibleTo(card) and card.wifi_box.isVisibleTo(card)
+    info = sample_info()
+    info.network = True
+    page._network(info)
+    assert card.problem.isHidden() and card.wifi_box.isHidden() and card.why_button.isHidden()
+
+
+def test_wireless_tools_on_another_manager_say_wifi_will_not_connect_by_itself(make_window):
+    window, page = customize(make_window)
+    page.wireless_tools.setChecked(True)
+    page._manager_picked()
+    manager = page.network_manager.currentData()
+    if manager == "networkmanager":
+        page.network_manager.setCurrentIndex(next(i for i in range(page.network_manager.count()) if page.network_manager.itemData(i) == "dhcpcd"))
+        page._manager_picked()
+    assert "will not connect by itself" in page.network_note.text()
+    assert "will not join" in network_tab.WIRELESS_HELP

@@ -17,9 +17,9 @@ from . import daemon_client
 CONNECT_SECONDS = 75.0  # wifi_connect waits up to 45 s for the network and 60 s for the command
 DEFAULT_TIMEOUT = 12.0
 
-# (label, DNS servers): the presets of the static-address form. Router means "keep what the router offers".
+# (label, DNS servers): the presets of the static-address form. Router means "the gateway address" (filled in when the form is read).
 DNS_PRESETS: tuple[tuple[str, tuple[str, ...]], ...] = (
-    ("Router (automatic)", ()),
+    ("Router (its address, same as the gateway)", ()),
     ("Cloudflare (1.1.1.1, 1.0.0.1)", ("1.1.1.1", "1.0.0.1")),
     ("Quad9 (9.9.9.9, 149.112.112.112)", ("9.9.9.9", "149.112.112.112")),
     ("Google (8.8.8.8, 8.8.4.4)", ("8.8.8.8", "8.8.4.4")),

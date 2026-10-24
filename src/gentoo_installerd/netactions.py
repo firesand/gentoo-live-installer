@@ -284,7 +284,7 @@ def handle_network_status(request: dict, channel: Channel) -> None:
     adapters = collect_adapters(runner)
     proxy = str(request.get("proxy") or "")
     host = str(request.get("mirror") or "distfiles.gentoo.org")
-    mirror = (lambda: probe_mirror(host, proxy)) if request.get("check_mirror") else None
+    mirror = (lambda: probe_mirror(host, proxy)) if (request.get("check_mirror") or proxy) else None
 
     def run(argv: list[str]) -> str | None:
         return _run(runner, argv, STATUS_TIMEOUT)
@@ -463,19 +463,43 @@ def static_commands(connection: str, address: str, gateway: str, dns: list[str])
     return [modify, ["nmcli", "--wait", "30", "connection", "up", connection]]
 
 
+def _active_connection(runner: Runner) -> str:
+    """The name of the connected wired (else Wi-Fi) connection, '' when there is none."""
+    status = parse_device_status(_run(runner, ["nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status"], STATUS_TIMEOUT) or "")
+    active = [row for row in status if row["type"] in {"ethernet", "wifi"} and row["state"].startswith("connected") and row["connection"]]
+    active.sort(key=lambda row: row["type"] != "ethernet")
+    return active[0]["connection"] if active else ""
+
+
+def apply_live_static(live: Any, runner: Runner | None = None) -> None:
+    """Before an installation starts: give the live connection the fixed address of ``network.live_static`` (the GUI's Apply does the same).
+
+    Does nothing when no fixed address is set. Raises ActionError when it cannot be applied, so the install does not start on a
+    network the user did not choose.
+    """
+    if not live.is_set():
+        return
+    runner = runner or make_runner()
+    _need_nmcli(runner)
+    connection = _active_connection(runner)
+    if not connection:
+        raise ActionError("The fixed address for this session cannot be applied: there is no connected network. Connect first, or clear the fixed address.",
+                          ErrorCode.BAD_REQUEST)
+    for argv in static_commands(connection, live.address, live.gateway, list(live.dns)):
+        try:
+            runner.run(argv, timeout=CONNECT_TIMEOUT)
+        except RunnerError:
+            raise ActionError("The fixed address for this session could not be applied to the connection.", ErrorCode.BAD_REQUEST) from None
+
+
 def handle_network_static(request: dict, channel: Channel) -> None:
     """{address, gateway, dns: [..], connection?}: give the live connection a fixed address. {dhcp: true} puts it back."""
     _refuse_while_installing(channel)
     runner = make_runner()
     _need_nmcli(runner)
-    connection = str(request.get("connection") or "")
+    connection = str(request.get("connection") or "") or _active_connection(runner)
     if not connection:
-        status = parse_device_status(_run(runner, ["nmcli", "-t", "-f", "DEVICE,TYPE,STATE,CONNECTION", "device", "status"], STATUS_TIMEOUT) or "")
-        active = [row for row in status if row["type"] in {"ethernet", "wifi"} and row["state"].startswith("connected") and row["connection"]]
-        active.sort(key=lambda row: row["type"] != "ethernet")
-        if not active:
-            return _fail(channel, "no_device", "There is no connected network to change. Connect a cable or Wi-Fi first.")
-        connection = active[0]["connection"]
+        return _fail(channel, "no_device", "There is no connected network to change. Connect a cable or Wi-Fi first.")
     if request.get("dhcp") is True:
         # The runner refuses empty arguments, so the fixed values are removed (reset to their defaults) one by one.
         commands = [["nmcli", "connection", "modify", connection, "remove", f"ipv4.{name}"] for name in ("addresses", "gateway", "dns")]

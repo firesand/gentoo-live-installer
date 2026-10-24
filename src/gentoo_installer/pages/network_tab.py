@@ -31,7 +31,9 @@ MANAGER_NAMES = {"networkmanager": "NetworkManager (recommended, handles Wi-Fi a
 PORTABLE_WARNING = "Network card names differ between computers; use NetworkManager for a system you move around."
 WIFI_SECURITY_NOTE = "Very old Wi-Fi security (WEP, TKIP) will not connect."
 PPP_HELP = "Only needed if your internet comes from a DSL modem that asks for a user name and password."
-WIRELESS_HELP = "Installs iw and wpa_supplicant so this system can join Wi-Fi networks without NetworkManager."
+WIRELESS_HELP = ("Installs only the tools iw and wpa_supplicant. This system will not join a Wi-Fi network by itself without NetworkManager: "
+                 "after the first start you set up the connection yourself (see the Handbook).")
+WIFI_BY_HAND_NOTE = "Wi-Fi will not connect by itself on this system: only the tools are installed, you set up the connection after the first start."
 PROXY_HINT = ("Set on the first page of the installer (“My network needs a proxy”). Without a password it is also kept in the "
               "installed system's Portage settings; a proxy with a password is used for the installation only.")
 
@@ -252,6 +254,8 @@ class NetworkTabMixin:
             notes.append("Wi-Fi networks can be set up with NetworkManager only.")
         if self.wireless_tools.isChecked() or self._has_wifi_adapter():
             notes.append(WIFI_SECURITY_NOTE)
+        if self.wireless_tools.isChecked() and not networkmanager:
+            notes.append(WIFI_BY_HAND_NOTE)
         self.network_note.setText(" ".join(notes))
         self.network_note.setVisible(bool(notes))
         info = self.hardware.info

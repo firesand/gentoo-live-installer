@@ -2,7 +2,7 @@
 
 sshd starts at boot on the live image, but nobody can log in: root is locked and the live user ``gentoo`` has an empty password,
 which sshd refuses (``PermitEmptyPasswords no``). ``remote_enable`` gives ``gentoo`` a password (the one given, or a generated one
-that is easy to read aloud) and makes sure sshd runs; ``remote_disable`` empties the password again (the boot state).
+that is easy to read aloud) and makes sure sshd runs; ``remote_disable`` empties the password again (the boot state) and ends the open ssh sessions of that user.
 
 * ``remote_status`` -> ``{sshd_running, enabled, user, port, addresses, fingerprints}``
 * ``remote_enable`` ``{password}`` -> the status plus ``password`` (once)
@@ -166,4 +166,6 @@ def handle_remote_disable(request: dict, channel: Channel) -> None:
     except RunnerError:
         _reply(channel, False, "Remote access could not be turned off.")
         return
-    _reply(channel, True, "Remote access is off.", **status(runner))
+    # Logins that are already open keep working after the password is gone, so end the live user's ssh sessions too.
+    _try(runner, ["pkill", "-KILL", "-u", USER, "-f", f"^sshd: {USER}"])
+    _reply(channel, True, "Remote access is off. Open remote sessions were closed.", **status(runner))

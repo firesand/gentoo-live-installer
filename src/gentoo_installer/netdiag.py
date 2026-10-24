@@ -205,20 +205,24 @@ def diagnose(run: Run, *, adapters: list[Adapter] | None = None, mirror: Callabl
         return stop("no_route")
     ping = run(["ping", "-c", "1", "-W", "3", PING_ADDRESS])
     by_key["ping"].ok = ping is not None
-    if ping is None:
-        return stop("no_route")
-    lookup = run(["getent", "hosts", LOOKUP_NAME])
-    by_key["dns"].ok = resolved(lookup)
-    if not resolved(lookup):
-        return stop("no_dns")
-    if mirror is not None:
-        ok = bool(mirror())
-        by_key["mirror"].ok = ok
-        if not ok:
-            return stop("proxy" if proxy else "no_mirror")
-    else:
+    lookup = run(["getent", "hosts", LOOKUP_NAME]) if ping is not None else None
+    by_key["dns"].ok = resolved(lookup) if ping is not None else None
+    direct_failure = "no_route" if ping is None else "no_dns" if not resolved(lookup) else ""
+    if mirror is None:
+        if direct_failure:
+            return stop(direct_failure)
         by_key["mirror"].ok = None
-    return Diagnosis(adapters, steps)
+        return Diagnosis(adapters, steps)
+    ok = bool(mirror())
+    by_key["mirror"].ok = ok
+    if ok:
+        # A proxy, or a network that blocks ping or direct name lookups, still reaches the mirror: that is what the install needs.
+        for key in ("ping", "dns"):
+            if by_key[key].ok is not True:
+                by_key[key].ok = None
+                by_key[key].detail = "not needed: the download server is reachable"
+        return Diagnosis(adapters, steps)
+    return stop(direct_failure or ("proxy" if proxy else "no_mirror"))
 
 
 # ----------------------------------------------------------------------------- static address (NET-04)
@@ -240,6 +244,8 @@ def validate_static(address: str, gateway: str, dns: list[str]) -> tuple[str, st
         raise ValueError("The address and the gateway must both be IPv4, or both IPv6.")
     if gate not in interface.network:
         raise ValueError("The gateway is not in the same network as the address. Check the prefix length.")
+    if not [server for server in dns if server.strip()]:
+        raise ValueError("Add at least one DNS server (the router's address works at home), or the computer cannot look up names.")
     servers = []
     for server in dns:
         try:

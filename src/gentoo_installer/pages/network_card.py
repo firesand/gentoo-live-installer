@@ -274,6 +274,13 @@ class NetworkCard(Card):
             self.call("wifi_live_connections", {}, self.show_live_connections)
         self.statusChanged.emit()
 
+    def show_reachable(self) -> None:
+        """The page's own check reached the mirror: no problem sentence, 'Why not?' or Wi-Fi box, whatever the card's tests said."""
+        self.problem.hide()
+        self.why_button.hide()
+        self.why_button.setChecked(False)
+        self.wifi_box.hide()
+
     @staticmethod
     def _mark(ok: Any) -> str:
         return "✓" if ok is True else "×" if ok is False else "–"
@@ -420,6 +427,8 @@ class NetworkCard(Card):
 
     def dns_servers(self) -> list[str]:
         preset = self.dns_preset.currentData()
+        if preset is not None and not preset:
+            return [self.gateway.text().strip()]  # "Router": a fixed address has no DHCP to name a DNS server, so the router itself answers
         return list(preset) if preset is not None else self.dns_own.text().replace(",", " ").split()
 
     def static_error(self) -> str:
@@ -486,7 +495,8 @@ class NetworkCard(Card):
             self.static_check.setChecked(True)
             self.address.setText(live.address)
             self.gateway.setText(live.gateway)
-            index = next((i for i in range(self.dns_preset.count()) if self.dns_preset.itemData(i) == list(live.dns)), -1)
+            wanted = [] if list(live.dns) == [live.gateway] else list(live.dns)
+            index = next((i for i in range(self.dns_preset.count()) if self.dns_preset.itemData(i) == wanted), -1)
             if index >= 0:
                 self.dns_preset.setCurrentIndex(index)
             else:

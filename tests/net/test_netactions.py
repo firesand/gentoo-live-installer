@@ -285,3 +285,38 @@ def test_back_to_dhcp(fake):
     netactions.handle_network_static({"dhcp": True}, channel)
     assert ("nmcli", "connection", "modify", "Wired connection 1", "remove", "ipv4.addresses") in fake.commands
     assert fake.commands[-2][4:6] == ("ipv4.method", "auto") and channel.data["ok"]
+
+
+def test_a_proxy_makes_the_status_probe_the_mirror_and_a_proxy_only_network_is_online(fake):
+    fake.failures["ping"] = 9
+    fake.failures["getent"] = 9
+    channel = Channel()
+    netactions.handle_network_status({"proxy": "http://proxy.example:3128"}, channel)
+    assert channel.data["online"] is True and channel.data["problem"] == "" and channel.data["mirror"] is True
+
+
+def test_apply_live_static_runs_the_static_commands_before_an_install(fake):
+    from gentoo_installer.manifest import LiveStatic
+    netactions.apply_live_static(LiveStatic("192.168.1.50/24", "192.168.1.1", ["192.168.1.1"]), fake)
+    assert fake.commands[-2][3:] == ("Wired connection 1", "ipv4.method", "manual", "ipv4.addresses", "192.168.1.50/24", "ipv4.gateway",
+                                    "192.168.1.1", "ipv4.dns", "192.168.1.1", "ipv4.ignore-auto-dns", "yes")
+    assert fake.commands[-1] == ("nmcli", "--wait", "30", "connection", "up", "Wired connection 1")
+
+
+def test_apply_live_static_does_nothing_when_unset_and_refuses_without_a_connection(fake):
+    from gentoo_installer.manifest import LiveStatic
+    netactions.apply_live_static(LiveStatic(), fake)
+    assert not any("modify" in c for c in fake.commands)
+    fake.responses.insert(0, ("nmcli -t -f DEVICE,TYPE,STATE,CONNECTION device status", "lo:loopback:unmanaged:--\n"))
+    with pytest.raises(ActionError):
+        netactions.apply_live_static(LiveStatic("192.168.1.50/24", "192.168.1.1", ["1.1.1.1"]), fake)
+
+
+def test_start_applies_the_live_static_address_first(fake, monkeypatch):
+    from gentoo_installer.manifest import InstallManifest
+    from gentoo_installerd import server
+    manifest = InstallManifest()
+    manifest.network.live_static.address, manifest.network.live_static.gateway = "192.168.1.50/24", "192.168.1.1"
+    manifest.network.live_static.dns = ["192.168.1.1"]
+    server._apply_live_static(manifest)
+    assert any(c[:4] == ("nmcli", "connection", "modify", "Wired connection 1") for c in fake.commands)

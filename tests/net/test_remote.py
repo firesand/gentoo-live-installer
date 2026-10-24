@@ -105,3 +105,11 @@ def test_refused_on_an_installed_system(live, monkeypatch):
         with pytest.raises(ActionError):
             handler({}, Channel())
     assert live.commands == []
+
+
+def test_disable_also_ends_the_open_ssh_sessions(live):
+    channel = Channel()
+    remote.handle_remote_disable({}, channel)
+    assert ("pkill", "-KILL", "-u", "gentoo", "-f", "^sshd: gentoo") in live.commands
+    assert live.commands.index(("passwd", "-d", "gentoo")) < live.commands.index(("pkill", "-KILL", "-u", "gentoo", "-f", "^sshd: gentoo"))
+    assert "sessions were closed" in channel.sent[0].message
