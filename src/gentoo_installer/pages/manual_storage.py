@@ -112,11 +112,32 @@ class ManualLayoutEditor(QWidget):
     def disk(self) -> DiskInfo | None:
         return self.info.find_disk(self.disk_path) if self.info and self.disk_path else None
 
+    def other_disks(self) -> list[DiskInfo]:
+        """The other disks whose partitions may be used too: any disk that can be a target itself."""
+        selected = self.disk()
+        if self.info is None or selected is None:
+            return []
+        return [disk for disk in self.info.disks if disk.selectable and disk.path != selected.path]
+
     def candidates(self) -> list[PartitionInfo]:
         disk = self.disk()
         if disk is None:
             return []
-        return [part for part in disk.partitions if part.type == "part" or part.type in STACKED]
+        found = [part for part in disk.partitions if part.type == "part" or part.type in STACKED]
+        for other in self.other_disks():
+            found += [part for part in other.partitions if part.type == "part" or part.type in STACKED]
+        return found
+
+    def extra_disks(self) -> list[DiskInfo]:
+        """The other disks that the rows of the table live on (each one must be approved and confirmed)."""
+        used: list[DiskInfo] = []
+        selected = self.disk()
+        for row in self.rows():
+            part = self.info.find_partition(row.device) if self.info is not None and row.device else None
+            owner = self.info.find_disk(part.parent) if self.info is not None and part is not None else None
+            if owner is not None and selected is not None and owner.path != selected.path and owner not in used:
+                used.append(owner)
+        return used
 
     def _refresh_all(self) -> None:
         for row in range(self.table.rowCount()):
@@ -130,8 +151,12 @@ class ManualLayoutEditor(QWidget):
         combo.blockSignals(True)
         combo.clear()
         combo.addItem("— choose a partition —", "")
+        selected = self.disk()
+        names = {disk.path: disk for disk in self.other_disks()}
         for part in self.candidates():
             text = part.choice_text() + (f" · mounted at {', '.join(part.mountpoints)}" if part.mounted else "")
+            if selected is not None and part.parent != selected.path and part.parent in names:
+                text += f" · on {names[part.parent].model} ({part.parent})"
             combo.addItem(text, part.path)
         if keep and combo.findData(keep) < 0:
             combo.addItem(f"{keep} (not found on this disk)", keep)
@@ -361,9 +386,16 @@ class ManualLayoutEditor(QWidget):
                 elsewhere = self.info.find_partition(row.device)
                 if elsewhere is None:
                     problems.append(f"{row.device} was not found on this computer. Choose a partition from the list, or press Rescan disks.")
-                else:
-                    problems.append(f"{row.device} is on {elsewhere.parent}, not on the selected disk {disk.path}. Use partitions of one disk.")
-                continue
+                    continue
+                owner = self.info.find_disk(elsewhere.parent)
+                if owner is None or not owner.selectable:
+                    reason = owner.unavailable_reason if owner is not None and owner.unavailable_reason else "It cannot be used."
+                    problems.append(f"{row.device} is on {elsewhere.parent}, which cannot be used. {reason}")
+                    continue
+                if not owner.has_identity and not owner.by_path:
+                    problems.append(f"{row.device} is on {owner.path}, which has no serial number and no stable hardware path, so the installer cannot recognise it later. Use a disk that has one.")
+                    continue
+                part = elsewhere  # a partition of another disk is fine: that disk is approved and confirmed separately
             if part.mounted:
                 problems.append(f"{row.device} is mounted at {', '.join(part.mountpoints)}. Unmount it before using it.")
             if row.device in seen_devices:

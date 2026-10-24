@@ -145,7 +145,7 @@ def test_a_disk_that_is_too_small_is_refused_for_the_guided_layout(make_window):
     window = make_window(info=info_with(DiskInfo("/dev/sdb", "Tiny", 8 * GIB, serial="t")))
     window.storage.disk_group.set_value("/dev/sdb")
     valid, message = window.storage.validate_page()
-    assert not valid and "only 8.0 GiB" in message and "at least 16 GiB" in message
+    assert not valid and "only 8.0 GiB" in message and "at least 9.0 GiB" in message  # the minimal system plus the boot partition
 
 
 # --- the live medium and read-only disks --------------------------------------------------------------------
@@ -364,7 +364,7 @@ def test_a_device_that_is_not_in_the_scan_is_rejected(manual):
     assert not valid and "/dev/sdq9" in message
 
 
-def test_partitions_of_other_disks_mounted_or_duplicate_rows_are_rejected(make_window):
+def test_mounted_or_duplicate_rows_are_rejected_also_with_partitions_of_other_disks(make_window):
     other = DiskInfo("/dev/sdb", "Data", 100 * GIB, serial="D1", partitions=[PartitionInfo("/dev/sdb1", 50 * GIB, "ext4", parent="/dev/sdb")])
     mounted = laptop_disk()
     mounted.partitions[2].mountpoints = ("/mnt/old",)
@@ -378,7 +378,7 @@ def test_partitions_of_other_disks_mounted_or_duplicate_rows_are_rejected(make_w
         Partition("/dev/nvme0n1p1", "/", "vfat", format=False),
     ])
     problems = "\n".join(editor.problems("bios"))
-    assert "/dev/sdb1 is on /dev/sdb, not on the selected disk /dev/nvme0n1" in problems
+    assert "not on the selected disk" not in problems  # a partition of another disk is fine: that disk is approved and confirmed on its own
     assert "mounted at /mnt/old" in problems
     assert "used twice" in problems and "/ is used by two rows" in problems
 

@@ -145,13 +145,15 @@ class SystemPage(Page):
         self.bootloader.addItem("systemd-boot — UEFI only", "systemd-boot")
         self.bootloader.addItem("EFI stub / UKI — UEFI only", "efi-stub")
         self.bootloader.currentIndexChanged.connect(self._bootloader_changed)
+        self.bootloader.activated.connect(self._bootloader_picked)
         boot_form.addRow("Bootloader", self.bootloader)
         self.dual_boot = QCheckBox("Detect other operating systems with os-prober")
         boot_form.addRow(self.dual_boot)
         self.uki = QCheckBox("Build a Unified Kernel Image (UKI)")
         boot_form.addRow(self.uki)
         self.secure_boot = QCheckBox("Sign the boot chain for Secure Boot")
-        self.secure_boot.toggled.connect(self._secure_changed)
+        self.secure_boot.toggled.connect(lambda _=False: self._update_boot_rules())
+        self.secure_boot.clicked.connect(self._secure_clicked)
         boot_form.addRow(self.secure_boot)
         self.signing_key = QLineEdit()
         self.signing_key.setPlaceholderText("Absolute path to a private signing key")
@@ -260,9 +262,41 @@ class SystemPage(Page):
     # --- boot -------------------------------------------------------------------------------------------
 
     def _bootloader_changed(self) -> None:
+        self._update_boot_rules()
+
+    def _bootloader_picked(self, _index: int = 0) -> None:
+        """The user chose a bootloader: what only works with the other kinds is switched off."""
+        if self.bootloader.currentData() == "grub":
+            self.secure_boot.setChecked(False)  # signing needs a signed image that GRUB does not boot
+        else:
+            self.dual_boot.setChecked(False)  # os-prober belongs to GRUB
+        self._update_boot_rules()
+
+    def _secure_clicked(self, checked: bool) -> None:
+        if checked:
+            self.uki.setChecked(True)  # the signed boot file is a Unified Kernel Image
+        self._update_boot_rules()
+
+    def _update_boot_rules(self) -> None:
+        """Dual boot needs GRUB; Secure Boot needs UEFI and systemd-boot or the EFI stub, with a signed UKI.
+        Values that were loaded are only explained here, never changed: a box that is ticked stays editable."""
+        uefi = self.manifest.storage.firmware == "uefi"
         grub = self.bootloader.currentData() == "grub"
+        secure = self.secure_boot.isChecked()
         self.dual_boot.setEnabled(grub)
         self.dual_boot.setToolTip("" if grub else "systemd-boot finds Windows on a shared EFI partition by itself; os-prober is only needed with GRUB.")
+        possible = uefi and not grub
+        self.secure_boot.setEnabled(possible or secure)
+        if possible:
+            self.secure_boot.setToolTip("")
+        else:
+            self.secure_boot.setToolTip("Secure Boot signing needs UEFI firmware." if not uefi else "Secure Boot signing needs systemd-boot or the EFI stub. GRUB cannot be used with it.")
+        forced = secure and not grub and self.uki.isChecked()
+        self.uki.setEnabled(not forced and (uefi or self.uki.isChecked()))
+        self.uki.setToolTip(
+            "Secure Boot needs the signed Unified Kernel Image." if forced else "" if uefi else "A Unified Kernel Image needs UEFI firmware.")
+        self.signing_key.setEnabled(secure)
+        self.signing_cert.setEnabled(secure)
 
     def _refresh_bootloaders(self) -> None:
         """systemd-boot and EFI stub work on UEFI only: grey them out for a BIOS install."""
@@ -273,10 +307,6 @@ class SystemPage(Page):
                 item = model.item(index)
                 if item is not None:
                     item.setEnabled(uefi or self.bootloader.itemData(index) == "grub")
-
-    def _secure_changed(self, checked: bool) -> None:
-        self.signing_key.setEnabled(checked)
-        self.signing_cert.setEnabled(checked)
 
     # --- manifest -----------------------------------------------------------------------------------------
 
@@ -310,9 +340,8 @@ class SystemPage(Page):
             self.signing_key.setText(system.secure_boot_key)
             self.signing_cert.setText(system.secure_boot_certificate)
             self.world_update.setChecked(system.world_update)
-            self._secure_changed(system.secure_boot)
             self._refresh_bootloaders()
-            self._bootloader_changed()
+            self._update_boot_rules()
         finally:
             self._loading -= 1
         self._apply_family_constraints(user_change=False)
