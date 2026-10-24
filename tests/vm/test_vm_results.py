@@ -255,3 +255,69 @@ def test_cancel_cleanup_rejects_remaining_mounts_root_stack_or_swap():
         payload = {"target_mounts": [], "leftover_root_stack": [], "target_swaps": []}
         payload[field] = value
         assert vm.parse_cancel_cleanup(0, json.dumps(payload))["success"] is False
+
+
+# --- why a start-up failure has no events (T1 step 6) -----------------------------------------------
+
+def test_a_daemon_that_refuses_the_manifest_is_named_not_reported_as_silent():
+    output = "gentoo-installerd: error: Unknown system fields: kernel_cmdline_extra\n"
+    result = vm.parse_install_result(2, output)
+    assert result.success is False
+    assert "Unknown system fields: kernel_cmdline_extra" in result.error
+    assert "rebuild the test ISO" in result.error and "(exit 2)" in result.error
+
+
+def test_other_startup_noise_is_kept_short():
+    result = vm.parse_install_result(1, "x" * 1000)
+    assert len(result.error) < 400 and result.error.startswith("Backend output has no completed event (exit 1)")
+
+
+# --- result files stay small (TD-N6) ------------------------------------------------------------------
+
+def stream(logs: int) -> list[dict]:
+    events = [{"type": "stage", "stage": name, "data": {"status": status}}
+              for name in ("storage", "stage3", "packages") for status in ("running", "completed")]
+    events += [{"type": "log", "message": f"$ emerge --quiet package-{index}", "seq": index} for index in range(logs)]
+    events += [{"type": "error", "error": "something went wrong"}, {"type": "completed", "data": {"success": False}}]
+    return events
+
+
+def test_event_summary_counts_stages_errors_and_the_last_log_lines():
+    summary = vm.summarize_events(stream(500))
+    assert summary["events"] == 508 and summary["types"]["log"] == 500
+    assert summary["stages"] == {"storage": "completed", "stage3": "completed", "packages": "completed"}
+    assert summary["errors"] == ["something went wrong"] and summary["completed"] == {"success": False}
+    assert len(summary["last_log"]) == 50 and summary["last_log"][-1] == "$ emerge --quiet package-499"
+
+
+def test_slimming_a_report_moves_the_stream_to_a_sidecar(tmp_path):
+    report = {"success": True, "storage_skipped": True, "destructive_commands": [], "identity_mismatches": [],
+              "before": {"a": 1}, "after": {"a": 1}, "events": stream(2000)}
+    slim = vm.slim_report(report, tmp_path / "resume-events.jsonl")
+    assert "events" not in slim and slim["events_file"] == "resume-events.jsonl"
+    assert {key: slim[key] for key in ("success", "storage_skipped", "destructive_commands", "identity_mismatches")} == {
+        "success": True, "storage_skipped": True, "destructive_commands": [], "identity_mismatches": []}  # the keys the gate reads
+    assert len(json.dumps(slim)) < 20_000
+    lines = (tmp_path / "resume-events.jsonl").read_text().splitlines()
+    assert len(lines) == 2008 and json.loads(lines[-1]) == {"type": "completed", "data": {"success": False}}
+    assert len(report["events"]) == 2008  # the caller's report is not modified
+
+
+@pytest.mark.slow
+def test_a_multi_megabyte_install_leaves_small_result_files(tmp_path, monkeypatch):
+    from tests.vm.fake_env import Lab, guest_rules
+    lab = Lab(vm, tmp_path, monkeypatch)
+    big = [{"type": "log", "message": "x" * 400, "seq": n} for n in range(8000)]
+    big += [{"type": "completed", "data": {"success": True}}]
+    lab.rules = guest_rules(vm, "bios", install=big, extra=[
+        {"user": "^root$", "match": r"^gentoo-installerd .* --resume$", "events": big[:-1] + [
+            {"type": "stage", "stage": "storage", "data": {"status": "skipped"}}, {"type": "completed", "data": {"success": True}}]}])
+    assert lab.run("--scenario", "bios", "--check-resume", "--keep") == 0
+    run = lab.run_dir()
+    assert (run / "install.log").stat().st_size > 3_000_000  # the raw log is complete
+    for name in ("result.json", "install-result.json", "resume-result.json"):
+        assert (run / name).stat().st_size < 100_000, name
+    assert len((run / "events.jsonl").read_text().splitlines()) == 8001
+    assert (run / "resume-events.jsonl").is_file()
+    result = lab.result()
+    assert result["resume"]["success"] is True and "events" not in result["resume"]

@@ -34,8 +34,8 @@ def serve_qmp(path, on_execute):
     return thread
 
 
-def test_qmp_screendump_uses_output_path_and_checks_created_image(tmp_path):
-    socket_path = tmp_path / "qmp.sock"
+def test_qmp_screendump_uses_output_path_and_checks_created_image(tmp_path, sock_dir):
+    socket_path = sock_dir / "qmp.sock"
     output = tmp_path / "screen.ppm"
     requests = []
 

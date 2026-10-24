@@ -22,4 +22,19 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+# "." makes the tests package importable, "src" the installer packages and "scripts" the
+# vm_*.py helper modules, so a bare `pytest` (IDE, CI) collects the same suite as scripts/test.sh.
+pythonpath = [".", "src", "scripts"]
+# anyio and pkgcore are autoloaded from the system site-packages (the venv uses
+# include-system-site-packages) and are not needed here.
+addopts = "-ra -p no:anyio -p no:pkgcore"
+# Per-test limit in seconds: pytest-timeout when installed, tests/conftest.py otherwise.
+timeout = 120
+
+[tool.mypy]
+# scripts/check.sh compares the findings with scripts/mypy-baseline.txt.
+python_version = "3.13"
+mypy_path = "src:scripts"
+explicit_package_bases = true
+ignore_missing_imports = true
+show_error_codes = true
