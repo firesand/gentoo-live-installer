@@ -669,10 +669,12 @@ class ProgressPage(Page):
         label = STAGE_LABELS.get(failing, "")
         if self._cancelled:
             self.stage.setText("Installation cancelled")
-            self.detail.setText(
-                "The disk is partially installed; choose Resume or Back to settings."
-                if self._storage_started else "No disk has been changed. Choose Try again or Back to settings."
-            )
+            if not self._storage_started:
+                self.detail.setText("No disk has been changed. Choose Try again or Back to settings.")
+            elif self._can_resume():
+                self.detail.setText("The disk is partially installed; choose Resume or Back to settings.")
+            else:
+                self.detail.setText("The disk is partially installed; choose Start over or Back to settings.")
         elif self._busy:
             self.stage.setText("An installation is already running")
             self.detail.setText("Another installation is in progress on this computer. Reconnect to follow it.")
@@ -687,9 +689,13 @@ class ProgressPage(Page):
         self.secondary.hide()
         self._show_result_panel()
 
+    def _can_resume(self) -> bool:
+        """Whether the Resume button is offered: the storage stage finished (it is checkpointed) and the failure can be retried."""
+        return self._storage_done and (self._retryable is not False or self._cancelled) and self._manifest is not None and not self._busy
+
     def _show_result_panel(self) -> None:
         changed = self._storage_started
-        resumable = self._storage_done and (self._retryable is not False or self._cancelled) and self._manifest is not None and not self._busy
+        resumable = self._can_resume()
         bootable = self._bootable and not self._cancelled and not self._busy
         self.resume_button.setText("Resume installation")
         if self._busy:
@@ -703,7 +709,9 @@ class ProgressPage(Page):
             self.reboot.setVisible(True)
         elif self._cancelled:
             hint = "The installation was cancelled. " + (
-                "Your disk was already modified, so the system on it is incomplete. Resume continues where it stopped without formatting again; Start over erases the disk again."
+                "Your disk was already modified, so the system on it is incomplete. "
+                + ("Resume continues where it stopped without formatting again; " if resumable else "")
+                + "Start over erases the disk again."
                 if changed else "Nothing on your disks was changed."
             )
         elif changed:
@@ -772,6 +780,8 @@ class ProgressPage(Page):
         box.setWindowTitle("Cancel the installation?")
         if self._storage_done:
             box.setText("The disk has already been modified. Cancelling leaves a partially installed system that cannot boot; you can resume later or start over.")
+        elif self._storage_started:
+            box.setText("The disk is being changed right now. Cancelling stops this half-way and leaves the disk half-prepared, so it cannot boot; you can only start over.")
         else:
             box.setText("No disk has been changed yet. The installation will stop at the next safe point.")
         keep = box.addButton("Keep installing", QMessageBox.ButtonRole.RejectRole)

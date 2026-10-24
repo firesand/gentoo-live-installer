@@ -863,6 +863,7 @@ class InstallerWindow(QMainWindow):
             box.update(ok=False, message=str(event.get("error") or event.get("message") or "The action failed."))
 
     def _action_finished(self, action: str, box: dict[str, Any]) -> None:
+        self.readiness.sync_button.setEnabled(True)  # sync_clock() switched it off for the attempt, whichever action it was
         if box["ok"] is not None:
             what = {"sync_time": "The clock", "set_time": "The clock", "reboot_firmware": "The restart"}.get(action, "The action")
             self.readiness.show_action_result(bool(box["ok"]), box["message"] or (f"{what} was changed." if box["ok"] else f"{what} could not be changed."))
