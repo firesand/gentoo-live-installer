@@ -614,9 +614,8 @@ def desktop_igpu_idle(dest: Path, source: Path | None = None) -> Path:
     for connector in ("DP-1", "HDMI-A-1"):
         writer.link(f"/sys/class/drm/card0-{connector}", f"../../devices/pci0000:00/0000:00:02.0/drm/card0/card0-{connector}")
         writer.write_file(f"/sys/class/drm/card0-{connector}/status", "disconnected\n")
-    ids = dest / "usr/share/hwdata/pci.ids"
-    _vendors, devices = hardware.parse_pci_ids(Path("/usr/share/hwdata/pci.ids").read_text(errors="replace"), [("8086", "a780")])
-    ids.write_text(ids.read_text().replace("8086  Intel Corporation\n", "8086  Intel Corporation\n\ta780  " + devices[("8086", "a780")] + "\n", 1))
+    ids = dest / "usr/share/hwdata/pci.ids"  # a fixed name: this runs inside the tests and must not depend on the local hwdata
+    ids.write_text(ids.read_text().replace("8086  Intel Corporation\n", "8086  Intel Corporation\n\ta780  Raptor Lake-S GT1 [UHD Graphics 770]\n", 1))
     writer.finish(None)
     meta = json.loads((dest / ".capture.json").read_text())
     meta.update({"synthetic": True, "summary": hardware.probe(dest, now=meta["now"]).summary()})

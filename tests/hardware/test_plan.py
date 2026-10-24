@@ -380,6 +380,37 @@ def test_hwmonux_gets_nvidia_sensors_only_after_the_proprietary_driver_installed
     assert not [s for s in plan(nvidia_manifest(options={"install_hwmonux": False}), machine).post_steps if "hwmonux" in " ".join(s)]
 
 
+def test_best_effort_post_steps_can_never_fail_the_installation(tmp_path):
+    """A sensor plugin or a group membership must not abort an install; only the initramfs rebuild is allowed to fail."""
+    import os
+    import shutil
+    import subprocess
+
+    result = plan(nvidia_manifest(), profile(gpus=(gpu("nvidia", "turing+"),)))
+    strict = [s for s in result.post_steps if "dracut" in " ".join(s)]
+    assert len(strict) == 1 and "exit 0" not in strict[0][2]
+    lenient = [s for s in result.post_steps if s not in strict]
+    assert len(lenient) == 2 and all(s[2].rstrip().endswith("exit 0") for s in lenient)
+    # Run both with emerge and usermod failing: the shell must still exit 0 and must remove the HWMonux USE flag again.
+    sh = shutil.which("sh")
+    assert sh
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    for name, code in (("emerge", 1), ("usermod", 1), ("getent", 0)):
+        (bin_dir / name).write_text(f"#!/bin/sh\nexit {code}\n")
+        (bin_dir / name).chmod(0o755)
+    (tmp_path / "nvidia.conf").write_text("")
+    (tmp_path / "pkg-1").mkdir()
+    env = {**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}
+    for step in lenient:
+        script = (step[2].replace("/etc/modprobe.d/nvidia.conf", str(tmp_path / "nvidia.conf")).replace("/var/db/pkg/app-misc/hwmonux-*", str(tmp_path / "pkg-*"))
+                  .replace("/etc/portage/package.use/installer-hwmonux-nvidia", str(tmp_path / "flag")))
+        done = subprocess.run([sh, "-c", script, *step[3:]], env=env, capture_output=True, text=True)
+        assert done.returncode == 0, (script, done.stderr)
+        assert not (tmp_path / "flag").exists()
+
+
+
 # -- laptop power ---------------------------------------------------------------------------------------
 
 def services(result, optional=True):

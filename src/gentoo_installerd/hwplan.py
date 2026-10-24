@@ -667,7 +667,7 @@ class _Planner:
         self.use(A_PIPEWIRE, "sound-server")
         if self.m.hardware.pipewire_alsa:
             self.use(A_PIPEWIRE, "pipewire-alsa")
-        self.post("sh", "-c", 'if getent group pipewire >/dev/null; then usermod -aG pipewire "$1"; fi', "sh", self.m.accounts.username)
+        self.post("sh", "-c", 'if getent group pipewire >/dev/null; then usermod -aG pipewire "$1"; fi; exit 0', "sh", self.m.accounts.username)
 
     # Boot, display ------------------------------------------------------------------------------------------------------------
 
@@ -693,11 +693,18 @@ class _Planner:
             self.file("/etc/skel/.config/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml", xfce_xsettings(dpi))
 
     def companions(self) -> None:
-        """COMP-NEW-3: HWMonux reads NVIDIA sensors through NVML only when the proprietary driver is installed."""
+        """COMP-NEW-3: HWMonux reads NVIDIA sensors through NVML only when the proprietary driver is installed.
+
+        dev-python/nvidia-ml-py needs the licence-masked nvidia-drivers, so the flag is not a static package.use line
+        (a failed driver build would then abort the whole base stage). The step rebuilds HWMonux only when the driver
+        really installed and never fails the installation: a failed rebuild removes the flag again.
+        """
         if self.proprietary and self.m.options.install_hwmonux:
+            flag_file = "/etc/portage/package.use/installer-hwmonux-nvidia"
             script = ("set -- /var/db/pkg/app-misc/hwmonux-*; "
                       "if [ -f /etc/modprobe.d/nvidia.conf ] && [ -d \"$1\" ]; then "
-                      "echo 'app-misc/hwmonux nvidia' > /etc/portage/package.use/installer-hwmonux-nvidia && emerge --oneshot app-misc/hwmonux; fi")
+                      f"echo 'app-misc/hwmonux nvidia' > {flag_file} && emerge --oneshot app-misc/hwmonux "
+                      f"|| {{ rm -f {flag_file}; echo 'HWMonux NVIDIA sensors skipped'; }}; fi; exit 0")
             self.post("sh", "-c", script)
 
     # Finish ---------------------------------------------------------------------------------------------------------------------

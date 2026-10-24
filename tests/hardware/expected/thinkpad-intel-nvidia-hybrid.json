@@ -65,7 +65,7 @@
      [
       "sh",
       "-c",
-      "if getent group pipewire >/dev/null; then usermod -aG pipewire \"$1\"; fi",
+      "if getent group pipewire >/dev/null; then usermod -aG pipewire \"$1\"; fi; exit 0",
       "sh",
       "gentoo"
      ]
@@ -211,14 +211,14 @@
      [
       "sh",
       "-c",
-      "if getent group pipewire >/dev/null; then usermod -aG pipewire \"$1\"; fi",
+      "if getent group pipewire >/dev/null; then usermod -aG pipewire \"$1\"; fi; exit 0",
       "sh",
       "gentoo"
      ],
      [
       "sh",
       "-c",
-      "set -- /var/db/pkg/app-misc/hwmonux-*; if [ -f /etc/modprobe.d/nvidia.conf ] && [ -d \"$1\" ]; then echo 'app-misc/hwmonux nvidia' > /etc/portage/package.use/installer-hwmonux-nvidia && emerge --oneshot app-misc/hwmonux; fi"
+      "set -- /var/db/pkg/app-misc/hwmonux-*; if [ -f /etc/modprobe.d/nvidia.conf ] && [ -d \"$1\" ]; then echo 'app-misc/hwmonux nvidia' > /etc/portage/package.use/installer-hwmonux-nvidia && emerge --oneshot app-misc/hwmonux || { rm -f /etc/portage/package.use/installer-hwmonux-nvidia; echo 'HWMonux NVIDIA sensors skipped'; }; fi; exit 0"
      ]
     ],
     "required_atoms": [],
@@ -348,14 +348,14 @@
      [
       "sh",
       "-c",
-      "if getent group pipewire >/dev/null; then usermod -aG pipewire \"$1\"; fi",
+      "if getent group pipewire >/dev/null; then usermod -aG pipewire \"$1\"; fi; exit 0",
       "sh",
       "gentoo"
      ],
      [
       "sh",
       "-c",
-      "set -- /var/db/pkg/app-misc/hwmonux-*; if [ -f /etc/modprobe.d/nvidia.conf ] && [ -d \"$1\" ]; then echo 'app-misc/hwmonux nvidia' > /etc/portage/package.use/installer-hwmonux-nvidia && emerge --oneshot app-misc/hwmonux; fi"
+      "set -- /var/db/pkg/app-misc/hwmonux-*; if [ -f /etc/modprobe.d/nvidia.conf ] && [ -d \"$1\" ]; then echo 'app-misc/hwmonux nvidia' > /etc/portage/package.use/installer-hwmonux-nvidia && emerge --oneshot app-misc/hwmonux || { rm -f /etc/portage/package.use/installer-hwmonux-nvidia; echo 'HWMonux NVIDIA sensors skipped'; }; fi; exit 0"
      ]
     ],
     "required_atoms": [],
@@ -480,7 +480,7 @@
      [
       "sh",
       "-c",
-      "if getent group pipewire >/dev/null; then usermod -aG pipewire \"$1\"; fi",
+      "if getent group pipewire >/dev/null; then usermod -aG pipewire \"$1\"; fi; exit 0",
       "sh",
       "gentoo"
      ]
