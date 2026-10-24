@@ -16,6 +16,8 @@
 # and there is no network, so no test can change the host system. --full first fetches the Rust crates in a
 # sandbox that has the network (into .cache/cargo-home, not ~/.cargo). NO_SANDBOX=1 runs on the host instead
 # (only for a system without bubblewrap or user namespaces; the gate then says so).
+# While it runs it holds one of the PC's test slots (scripts/test-slot.sh), so that parallel agents never run more
+# heavy suites at once than the memory allows.
 # Environment: PYTHON (interpreter), SKIP_RUST=1, SKIP_PKGCHECK=1, NO_SANDBOX=1,
 # CARGO_FLAGS (default: --locked --offline), CARGO_TARGET_DIR (Rust build directory).
 # Exit status: 0 when every step that ran passed, 1 otherwise.
@@ -33,7 +35,7 @@ for argument in "$@"; do
     case "$argument" in
         --full) full=1 ;;
         --update-baseline) update=1 ;;
-        -h|--help) sed -n '2,21p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+        -h|--help) sed -n '2,23p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "check.sh: unknown option: $argument" >&2; exit 2 ;;
     esac
 done
@@ -46,7 +48,7 @@ if [ "${GENTOO_INSTALLER_SANDBOX:-0}" != 1 ]; then
             echo "==> cargo fetch (portagehub crates, the only step with network)"
             scripts/sandbox.sh --net cargo fetch --locked --quiet --manifest-path apps/portagehub/Cargo.toml || echo "    cargo fetch failed; the cargo steps will say why" >&2
         fi
-        exec scripts/sandbox.sh "$0" "$@"
+        exec scripts/test-slot.sh scripts/sandbox.sh "$0" "$@"
     else
         echo "check.sh: scripts/sandbox.sh cannot run here (bubblewrap or user namespaces missing); set NO_SANDBOX=1 to run on the host" >&2
         exit 1

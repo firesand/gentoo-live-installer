@@ -5,8 +5,11 @@
 #
 # Inside the sandbox:
 #   * the host's file system is read-only. Only this checkout (the repository or worktree that holds this script), each
-#     --writable DIR, and fresh, empty tmpfs mounts on /tmp, /var/tmp, /run and $HOME can be written; the tmpfs
-#     contents are gone when the command ends. From a git worktree, the main checkout is visible read-only (its .venv).
+#     --writable DIR, fresh empty tmpfs mounts on /run and $HOME, and fresh empty /tmp and /var/tmp can be written.
+#     /tmp and /var/tmp are directories on disk below the checkout's .cache/sandbox-tmp, not RAM: eleven parallel test
+#     runs with RAM-backed /tmp once filled the PC's memory. Everything written there is removed when the command ends
+#     (and a run that was killed is cleaned up by the next one). From a git worktree, the main checkout is visible
+#     read-only (its .venv).
 #   * /dev holds only null, zero, full, random, urandom, tty, shm and a private pts: no disk, partition, GPU or input
 #     device exists, so no command can read or write a host disk. --kvm adds /dev/kvm for the VM harness.
 #   * there is no network unless --net is given (the VM harness and a first `cargo fetch` need it).
@@ -49,6 +52,25 @@ uid=$(id -u)
 cargo_home=$root/.cache/cargo-home
 mkdir -p "$cargo_home"
 
+# Disk-backed /tmp and /var/tmp for this run. A run holds a lock on its directory's .lock file for as long as it (or
+# anything it started) lives; a lock works across PID namespaces, which a process id does not: a nested sandbox
+# cannot see the outer run's pid and must never take its /tmp away. A directory older than a minute whose lock is
+# free belongs to a run that was killed, and is removed.
+scratch_base=$root/.cache/sandbox-tmp
+mkdir -p "$scratch_base"
+for stale in "$scratch_base"/run.*; do
+	[[ -d $stale && -n $(find "$stale" -maxdepth 0 -mmin +1 2>/dev/null) ]] || continue
+	if flock --nonblock "$stale/.lock" true 2>/dev/null; then
+		rm -rf -- "$stale"
+	fi
+done
+scratch=$(mktemp -d "$scratch_base/run.XXXXXX")
+exec 8>"$scratch/.lock"
+flock 8
+mkdir -m 0700 "$scratch/tmp" "$scratch/var-tmp"
+cleanup() { [[ -n ${scratch:-} && $scratch == "$scratch_base"/run.* ]] && rm -rf -- "$scratch"; }
+trap cleanup EXIT  # for the usage errors below; after the exec at the end the watcher takes over
+
 # The root is bubblewrap's own empty tmpfs, owned by the sandbox user; only what programs need is bound into it,
 # read-only. (Binding the host's / itself would show it as owned by "nobody" in the user namespace, and the
 # installer rightly refuses to trust such directories.) /boot, /root, /mnt, /media and the rest of $HOME are absent.
@@ -68,8 +90,8 @@ args+=(
 	--dir /media
 	--dev /dev
 	--proc /proc
-	--tmpfs /tmp
-	--tmpfs /var/tmp
+	--bind "$scratch/tmp" /tmp
+	--bind "$scratch/var-tmp" /var/tmp
 	--tmpfs /run
 	--dir "/run/user/$uid"
 	--tmpfs "$home"
@@ -119,5 +141,15 @@ args+=(
 	--unsetenv DOCKER_HOST
 	--unsetenv SUDO_ASKPASS
 )
-# The working directory must exist inside: outside the writable places it is only readable, which is fine.
+# bubblewrap replaces this script (exec), so signals and the terminal reach it exactly as before. It must not be
+# started as a background job: such a job ignores SIGINT, and every program inside would inherit that and could no
+# longer be stopped with Ctrl-C. A detached watcher removes the scratch directory once this process (then bwrap) is
+# gone; it keeps no stdout/stderr (callers that read our output would wait for it) and does not hold the lock.
+trap - EXIT
+(
+	exec 8>&- </dev/null >/dev/null 2>&1
+	# shellcheck disable=SC2016  # the script is for the new bash, with its own $1 and $2
+	exec bash -c 'while kill -0 "$1" 2>/dev/null; do sleep 1; done
+case $2 in */.cache/sandbox-tmp/run.*) rm -rf -- "$2" ;; esac' sandbox-cleanup "$$" "$scratch"
+) &
 exec bwrap "${args[@]}" -- "$@"
