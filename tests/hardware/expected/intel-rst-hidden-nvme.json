@@ -6,6 +6,11 @@
    "description": "the GUI defaults (KDE, OpenRC, binary packages)",
    "issues": [
     {
+     "code": "hw.nvidia_skipped",
+     "message": "The NVIDIA driver is available for NVIDIA GeForce GTX 1050 Mobile, but its licence has not been accepted, so the open nouveau driver is used. Accept the licence on the Hardware page to use the NVIDIA driver.",
+     "severity": "info"
+    },
+    {
      "code": "hw.st_disk_missing",
      "message": "/dev/nvme0n1 was not found on this PC. Only the installer's own medium is visible: the internal disk may be hidden by the storage mode in the firmware settings.",
      "severity": "error"
@@ -95,6 +100,7 @@
      ],
      "form_factor": "laptop",
      "gpu_driver": "open",
+     "gpu_mode": "nouveau",
      "gpu_vendors": [
       "intel",
       "nvidia"
@@ -108,6 +114,7 @@
      "memory_heavy_jobs": 4,
      "microcode": "intel",
      "nvidia_branch": "",
+     "nvidia_reason": "NVIDIA GeForce GTX 1050 Mobile is from the GeForce GTX 900 and 10 series era: driver 580 with closed kernel modules is the last NVIDIA driver that supports it.",
      "nvk": "no",
      "power": "ppd",
      "prime": "offload",
@@ -130,7 +137,13 @@
      "Power: power-profiles-daemon and thermald",
      "Boot: fallback boot path is always written"
     ],
-    "warnings": []
+    "warnings": [
+     {
+      "code": "hw.nvidia_skipped",
+      "message": "The NVIDIA driver is available for NVIDIA GeForce GTX 1050 Mobile, but its licence has not been accepted, so the open nouveau driver is used. Accept the licence on the Hardware page to use the NVIDIA driver.",
+      "severity": "info"
+     }
+    ]
    }
   },
   "nvidia-this": {
@@ -167,15 +180,20 @@
       420
      ]
     ],
+    "first_steps": [
+     "If the screen stays black after an update, choose \"Gentoo Linux (safe graphics)\" in the boot menu; it starts without the NVIDIA driver.",
+     "The NVIDIA modules are rebuilt by emerge after every kernel update (USE=dist-kernel). If an update reports that the build failed, run: emerge --ask @module-rebuild"
+    ],
     "kernel_cmdline": [
-     "nvidia-drm.modeset=1",
-     "nvidia-drm.fbdev=1"
+     "nvidia-drm.modeset=1"
     ],
     "make_conf": {
      "VIDEO_CARDS": "${VIDEO_CARDS} nvidia"
     },
     "notes": [
      "NVIDIA proprietary driver 580 (long-term, last branch for Maxwell, Pascal and Volta); if it fails to build, the open nouveau driver stays in use.",
+     "The NVIDIA driver is not on the binary host: it is downloaded from download.nvidia.com and compiled on this PC, which adds several minutes and needs internet access to that address.",
+     "Two graphics cards: programs run on the integrated card; start one on the NVIDIA card with prime-run.",
      "With 15.0 GiB of memory (and the swap), the packages that need about 4 GiB per compile job (pyside, qtwebengine, llvm, clang, webkit-gtk) get 4 compile jobs when they are built from source."
     ],
     "optional_atoms": [
@@ -236,6 +254,14 @@
      [
       "sh",
       "-c",
+      "if [ ! -f /etc/modprobe.d/nvidia.conf ] && [ -d \"/home/$1\" ]; then printf \"%s\\n\" \"$2\" >> \"/home/$1/first-steps.txt\"; chown \"$1:$(id -gn \"$1\")\" \"/home/$1/first-steps.txt\"; fi; exit 0",
+      "sh",
+      "gentoo",
+      "The NVIDIA driver could not be installed during the installation, so this PC runs on the open nouveau driver. To try again once the network works: emerge --ask x11-drivers/nvidia-drivers && dracut --force --regenerate-all (the driver is downloaded from download.nvidia.com and compiled on this PC)."
+     ],
+     [
+      "sh",
+      "-c",
       "if getent group pipewire >/dev/null; then usermod -aG pipewire \"$1\"; fi; exit 0",
       "sh",
       "gentoo"
@@ -256,8 +282,10 @@
       "Intel graphics",
       "Wi-Fi"
      ],
+     "first_user": "gentoo",
      "form_factor": "laptop",
      "gpu_driver": "nvidia",
+     "gpu_mode": "nvidia",
      "gpu_vendors": [
       "intel",
       "nvidia"
@@ -271,10 +299,21 @@
      "memory_heavy_jobs": 4,
      "microcode": "intel",
      "nvidia_branch": "580",
+     "nvidia_flavour": "closed",
+     "nvidia_reason": "NVIDIA GeForce GTX 1050 Mobile is from the GeForce GTX 900 and 10 series era: driver 580 with closed kernel modules is the last NVIDIA driver that supports it.",
+     "nvidia_rtd3": "off",
      "nvk": "no",
      "power": "ppd",
      "prime": "offload",
      "removable_fallback": "always",
+     "safe_graphics": {
+      "cmdline": [
+       "nomodeset",
+       "modprobe.blacklist=nvidia,nvidia_drm,nvidia_modeset,nvidia_uvm,nouveau",
+       "rd.driver.blacklist=nvidia,nvidia_drm,nvidia_modeset,nvidia_uvm,nouveau"
+      ],
+      "title": "Gentoo Linux (safe graphics)"
+     },
      "sof_firmware": "yes",
      "target": "this",
      "thermald": "yes",
@@ -330,9 +369,12 @@
       420
      ]
     ],
+    "first_steps": [
+     "If the screen stays black after an update, choose \"Gentoo Linux (safe graphics)\" in the boot menu; it starts without the NVIDIA driver.",
+     "The NVIDIA modules are rebuilt by emerge after every kernel update (USE=dist-kernel). If an update reports that the build failed, run: emerge --ask @module-rebuild"
+    ],
     "kernel_cmdline": [
-     "nvidia-drm.modeset=1",
-     "nvidia-drm.fbdev=1"
+     "nvidia-drm.modeset=1"
     ],
     "make_conf": {
      "VIDEO_CARDS": "${VIDEO_CARDS} nvidia"
@@ -340,6 +382,8 @@
     "notes": [
      "Portable install: both Intel and AMD microcode are installed.",
      "NVIDIA proprietary driver 580 (long-term, last branch for Maxwell, Pascal and Volta); if it fails to build, the open nouveau driver stays in use.",
+     "The NVIDIA driver is not on the binary host: it is downloaded from download.nvidia.com and compiled on this PC, which adds several minutes and needs internet access to that address.",
+     "Two graphics cards: programs run on the integrated card; start one on the NVIDIA card with prime-run.",
      "With 15.0 GiB of memory (and the swap), the packages that need about 4 GiB per compile job (pyside, qtwebengine, llvm, clang, webkit-gtk) get 4 compile jobs when they are built from source."
     ],
     "optional_atoms": [
@@ -391,6 +435,14 @@
      [
       "sh",
       "-c",
+      "if [ ! -f /etc/modprobe.d/nvidia.conf ] && [ -d \"/home/$1\" ]; then printf \"%s\\n\" \"$2\" >> \"/home/$1/first-steps.txt\"; chown \"$1:$(id -gn \"$1\")\" \"/home/$1/first-steps.txt\"; fi; exit 0",
+      "sh",
+      "gentoo",
+      "The NVIDIA driver could not be installed during the installation, so this PC runs on the open nouveau driver. To try again once the network works: emerge --ask x11-drivers/nvidia-drivers && dracut --force --regenerate-all (the driver is downloaded from download.nvidia.com and compiled on this PC)."
+     ],
+     [
+      "sh",
+      "-c",
       "if getent group pipewire >/dev/null; then usermod -aG pipewire \"$1\"; fi; exit 0",
       "sh",
       "gentoo"
@@ -412,8 +464,10 @@
       "Intel graphics",
       "Wi-Fi"
      ],
+     "first_user": "gentoo",
      "form_factor": "laptop",
      "gpu_driver": "nvidia",
+     "gpu_mode": "nvidia",
      "gpu_vendors": [
       "intel",
       "nvidia"
@@ -427,10 +481,21 @@
      "memory_heavy_jobs": 4,
      "microcode": "both",
      "nvidia_branch": "580",
+     "nvidia_flavour": "closed",
+     "nvidia_reason": "NVIDIA GeForce GTX 1050 Mobile is from the GeForce GTX 900 and 10 series era: driver 580 with closed kernel modules is the last NVIDIA driver that supports it.",
+     "nvidia_rtd3": "off",
      "nvk": "no",
      "power": "none",
      "prime": "offload",
      "removable_fallback": "always",
+     "safe_graphics": {
+      "cmdline": [
+       "nomodeset",
+       "modprobe.blacklist=nvidia,nvidia_drm,nvidia_modeset,nvidia_uvm,nouveau",
+       "rd.driver.blacklist=nvidia,nvidia_drm,nvidia_modeset,nvidia_uvm,nouveau"
+      ],
+      "title": "Gentoo Linux (safe graphics)"
+     },
      "sof_firmware": "yes",
      "target": "portable",
      "thermald": "no",
@@ -454,6 +519,11 @@
   "xfce-systemd-source": {
    "description": "Xfce on systemd, everything built from source",
    "issues": [
+    {
+     "code": "hw.nvidia_skipped",
+     "message": "The NVIDIA driver is available for NVIDIA GeForce GTX 1050 Mobile, but its licence has not been accepted, so the open nouveau driver is used. Accept the licence on the Hardware page to use the NVIDIA driver.",
+     "severity": "info"
+    },
     {
      "code": "hw.st_disk_missing",
      "message": "/dev/nvme0n1 was not found on this PC. Only the installer's own medium is visible: the internal disk may be hidden by the storage mode in the firmware settings.",
@@ -486,7 +556,7 @@
     "kernel_cmdline": [],
     "make_conf": {
      "CPU_FLAGS_X86": "aes avx avx2 bmi1 bmi2 f16c fma3 mmx mmxext pclmul popcnt rdrand sse sse2 sse3 sse4_1 sse4_2 ssse3",
-     "VIDEO_CARDS": "intel nouveau"
+     "VIDEO_CARDS": "intel nouveau nvk"
     },
     "notes": [
      "With 15.0 GiB of memory (and the swap), the packages that need about 4 GiB per compile job (pyside, qtwebengine, llvm, clang, webkit-gtk) get 4 compile jobs when they are built from source."
@@ -521,6 +591,9 @@
     },
     "package_mask": [],
     "package_use": {
+     "media-libs/mesa": [
+      "vulkan"
+     ],
      "media-video/pipewire": [
       "sound-server"
      ],
@@ -555,6 +628,7 @@
      ],
      "form_factor": "laptop",
      "gpu_driver": "open",
+     "gpu_mode": "nouveau",
      "gpu_vendors": [
       "intel",
       "nvidia"
@@ -568,7 +642,8 @@
      "memory_heavy_jobs": 4,
      "microcode": "intel",
      "nvidia_branch": "",
-     "nvk": "no",
+     "nvidia_reason": "NVIDIA GeForce GTX 1050 Mobile is from the GeForce GTX 900 and 10 series era: driver 580 with closed kernel modules is the last NVIDIA driver that supports it.",
+     "nvk": "yes",
      "power": "tlp",
      "prime": "offload",
      "removable_fallback": "always",
@@ -584,7 +659,7 @@
      "CPU: Intel Core i7-7700HQ CPU @ 2.80GHz, 8 threads; Intel microcode",
      "CPU flags: tuned for this CPU (packages are built, not downloaded)",
      "Graphics: Intel HD Graphics 630 - open Intel driver",
-     "Graphics: NVIDIA GeForce GTX 1050 Mobile - open driver (nouveau)",
+     "Graphics: NVIDIA GeForce GTX 1050 Mobile - open driver (nouveau + NVK)",
      "Graphics: two graphics cards; GPU switching helpers installed",
      "Firmware: Linux firmware (Intel graphics, Wi-Fi)",
      "Audio: Sound Open Firmware (many laptop audio chips need it)",
@@ -592,7 +667,13 @@
      "Boot: fallback boot path is always written",
      "Display: 240 dpi interface scale for Xfce"
     ],
-    "warnings": []
+    "warnings": [
+     {
+      "code": "hw.nvidia_skipped",
+      "message": "The NVIDIA driver is available for NVIDIA GeForce GTX 1050 Mobile, but its licence has not been accepted, so the open nouveau driver is used. Accept the licence on the Hardware page to use the NVIDIA driver.",
+      "severity": "info"
+     }
+    ]
    }
   }
  }

@@ -220,6 +220,16 @@ def intel_is_discrete(name: str, slot: str = "") -> bool:
 # ---------------------------------------------------------------------------
 
 NVIDIA_ATOM = "x11-drivers/nvidia-drivers"
+DIST_KERNELS = frozenset({"gentoo-kernel-bin", "gentoo-kernel"})
+# Desktops with a Wayland session the NVIDIA driver must support (USE=wayland pulls egl-gbm, egl-wayland, egl-wayland2 and egl-x11).
+# Until the desktop registry (B14) says it, this is the table: Plasma, GNOME and its light variant, and the Sway compositor.
+WAYLAND_DESKTOPS = frozenset({"kde", "gnome", "gnome-light", "sway"})
+# One sentence for the three places that refuse an out-of-tree kernel module under Secure Boot signing: the plan, the GUI and the text installer.
+# {what} names the thing that is refused ("The NVIDIA driver's kernel modules", "OpenRazer").
+SECURE_BOOT_MODULES_MESSAGE = (
+    "{what} cannot be used together with Secure Boot signing: it is built outside the kernel, so its modules carry no signature the firmware trusts. "
+    "A kernel that enforces signatures refuses to load them, and one that does not marks itself as tainted. "
+    "Turn Secure Boot signing off, or leave this out. Signed modules are not available yet.")
 # Branch -> what the tree offers. The licence is a table, not read at install
 # time: the Portage tree is not on the live image. tests/hardware/test_tree_evidence.py
 # re-checks every row against the pinned snapshot.
@@ -239,6 +249,42 @@ NVIDIA_BRANCHES: dict[str, dict[str, object]] = {
         "label": "580 (long-term, last branch for Maxwell, Pascal and Volta)",
     },
 }
+
+
+# Video memory of the cards that have a lot of it (MiB), by marketing name; the first match wins, so the longer names come first.
+# Laptop versions of a card have less memory than the desktop card of the same name, so a name with "Laptop" or "Mobile" is not matched.
+_VRAM_BY_NAME: tuple[tuple[re.Pattern[str], int], ...] = tuple((re.compile(pattern, re.I), mib) for pattern, mib in (
+    (r"RTX 5090", 32768), (r"RTX 5080", 16384), (r"RTX 5070 Ti", 16384), (r"RTX 5070", 12288),
+    (r"RTX 4090", 24576), (r"RTX 4080", 16384), (r"RTX 4070 Ti SUPER", 16384), (r"RTX 4070 Ti", 12288), (r"RTX 4070 SUPER", 12288), (r"RTX 4070", 12288),
+    (r"RTX 3090", 24576), (r"RTX 3080 Ti", 12288), (r"RTX 3080", 10240), (r"RTX 3070", 8192),
+    (r"TITAN RTX", 24576), (r"TITAN V\b", 12288), (r"TITAN Xp", 12288), (r"RTX 2080 Ti", 11264), (r"RTX A6000", 49152), (r"RTX A5000", 24576),
+))
+
+
+def nvidia_vram_mib(name: str) -> int:
+    """Video memory of a known desktop card from its name (0 when it is not in the table or is a laptop version)."""
+    if re.search(r"mobile|laptop|max-q", name or "", re.I):
+        return 0
+    return next((mib for pattern, mib in _VRAM_BY_NAME if pattern.search(name or "")), 0)
+
+
+def vram_from_resources(text: str) -> int:
+    """The video memory implied by a PCI device's ``resource`` file: its largest prefetchable memory window, when that is 2 GiB or more.
+
+    A card with a small window (no resizable BAR) reports 256 MiB there, which says nothing about its memory, so it gives 0.
+    """
+    best = 0
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        try:
+            start, end, flags = (int(part, 16) for part in parts[:3])
+        except ValueError:
+            continue
+        if flags & 0x200 and flags & 0x2000 and end > start:  # memory, prefetchable
+            best = max(best, (end - start + 1) // (1 << 20))
+    return best if best >= 2048 else 0
 
 
 def nvidia_branch_for(generation: str) -> str:

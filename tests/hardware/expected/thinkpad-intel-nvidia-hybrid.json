@@ -4,7 +4,13 @@
  "scenarios": {
   "kde-openrc": {
    "description": "the GUI defaults (KDE, OpenRC, binary packages)",
-   "issues": [],
+   "issues": [
+    {
+     "code": "hw.nvidia_skipped",
+     "message": "The NVIDIA driver is available for NVIDIA RTX A5000 Mobile, but its licence has not been accepted, so the open nouveau driver is used. Accept the licence on the Hardware page to use the NVIDIA driver.",
+     "severity": "info"
+    }
+   ],
    "plan": {
     "driver_atoms": [],
     "early_atoms": [
@@ -96,6 +102,7 @@
      ],
      "form_factor": "laptop",
      "gpu_driver": "open",
+     "gpu_mode": "nouveau",
      "gpu_vendors": [
       "intel",
       "nvidia"
@@ -109,6 +116,7 @@
      "memory_heavy_jobs": 8,
      "microcode": "intel",
      "nvidia_branch": "",
+     "nvidia_reason": "Recommended for NVIDIA RTX A5000 Mobile: the NVIDIA driver (version 595) with open kernel modules. Programs can be started on the NVIDIA card when they need it (render offload).",
      "nvk": "no",
      "power": "ppd",
      "prime": "offload",
@@ -132,7 +140,13 @@
      "Storage: weekly TRIM for the solid-state disk (cron)",
      "Boot: fallback boot path is always written"
     ],
-    "warnings": []
+    "warnings": [
+     {
+      "code": "hw.nvidia_skipped",
+      "message": "The NVIDIA driver is available for NVIDIA RTX A5000 Mobile, but its licence has not been accepted, so the open nouveau driver is used. Accept the licence on the Hardware page to use the NVIDIA driver.",
+      "severity": "info"
+     }
+    ]
    }
   },
   "nvidia-this": {
@@ -168,15 +182,18 @@
       420
      ]
     ],
-    "kernel_cmdline": [
-     "nvidia-drm.modeset=1",
-     "nvidia-drm.fbdev=1"
+    "first_steps": [
+     "If the screen stays black after an update, choose \"Gentoo Linux (safe graphics)\" in the boot menu; it starts without the NVIDIA driver.",
+     "The NVIDIA modules are rebuilt by emerge after every kernel update (USE=dist-kernel). If an update reports that the build failed, run: emerge --ask @module-rebuild"
     ],
+    "kernel_cmdline": [],
     "make_conf": {
      "VIDEO_CARDS": "${VIDEO_CARDS} nvidia"
     },
     "notes": [
      "NVIDIA proprietary driver 595 (current, open kernel modules); if it fails to build, the open nouveau driver stays in use.",
+     "The NVIDIA driver is not on the binary host: it is downloaded from download.nvidia.com and compiled on this PC, which adds several minutes and needs internet access to that address.",
+     "Two graphics cards: programs run on the integrated card; start one on the NVIDIA card with prime-run.",
      "With 29.6 GiB of memory (and the swap), the packages that need about 4 GiB per compile job (pyside, qtwebengine, llvm, clang, webkit-gtk) get 8 compile jobs when they are built from source."
     ],
     "optional_atoms": [
@@ -235,6 +252,14 @@
      [
       "sh",
       "-c",
+      "if [ ! -f /etc/modprobe.d/nvidia.conf ] && [ -d \"/home/$1\" ]; then printf \"%s\\n\" \"$2\" >> \"/home/$1/first-steps.txt\"; chown \"$1:$(id -gn \"$1\")\" \"/home/$1/first-steps.txt\"; fi; exit 0",
+      "sh",
+      "gentoo",
+      "The NVIDIA driver could not be installed during the installation, so this PC runs on the open nouveau driver. To try again once the network works: emerge --ask x11-drivers/nvidia-drivers && dracut --force --regenerate-all (the driver is downloaded from download.nvidia.com and compiled on this PC)."
+     ],
+     [
+      "sh",
+      "-c",
       "if getent group pipewire >/dev/null; then usermod -aG pipewire \"$1\"; fi; exit 0",
       "sh",
       "gentoo"
@@ -256,8 +281,10 @@
       "Wi-Fi",
       "Bluetooth"
      ],
+     "first_user": "gentoo",
      "form_factor": "laptop",
      "gpu_driver": "nvidia",
+     "gpu_mode": "nvidia",
      "gpu_vendors": [
       "intel",
       "nvidia"
@@ -271,10 +298,21 @@
      "memory_heavy_jobs": 8,
      "microcode": "intel",
      "nvidia_branch": "595",
+     "nvidia_flavour": "open",
+     "nvidia_reason": "Recommended for NVIDIA RTX A5000 Mobile: the NVIDIA driver (version 595) with open kernel modules. Programs can be started on the NVIDIA card when they need it (render offload).",
+     "nvidia_rtd3": "off",
      "nvk": "no",
      "power": "ppd",
      "prime": "offload",
      "removable_fallback": "always",
+     "safe_graphics": {
+      "cmdline": [
+       "nomodeset",
+       "modprobe.blacklist=nvidia,nvidia_drm,nvidia_modeset,nvidia_uvm,nouveau",
+       "rd.driver.blacklist=nvidia,nvidia_drm,nvidia_modeset,nvidia_uvm,nouveau"
+      ],
+      "title": "Gentoo Linux (safe graphics)"
+     },
      "sof_firmware": "yes",
      "target": "this",
      "thermald": "yes",
@@ -325,16 +363,19 @@
       420
      ]
     ],
-    "kernel_cmdline": [
-     "nvidia-drm.modeset=1",
-     "nvidia-drm.fbdev=1"
+    "first_steps": [
+     "If the screen stays black after an update, choose \"Gentoo Linux (safe graphics)\" in the boot menu; it starts without the NVIDIA driver.",
+     "The NVIDIA modules are rebuilt by emerge after every kernel update (USE=dist-kernel). If an update reports that the build failed, run: emerge --ask @module-rebuild"
     ],
+    "kernel_cmdline": [],
     "make_conf": {
      "VIDEO_CARDS": "${VIDEO_CARDS} nvidia"
     },
     "notes": [
      "Portable install: both Intel and AMD microcode are installed.",
      "NVIDIA proprietary driver 595 (current, open kernel modules); if it fails to build, the open nouveau driver stays in use.",
+     "The NVIDIA driver is not on the binary host: it is downloaded from download.nvidia.com and compiled on this PC, which adds several minutes and needs internet access to that address.",
+     "Two graphics cards: programs run on the integrated card; start one on the NVIDIA card with prime-run.",
      "With 29.6 GiB of memory (and the swap), the packages that need about 4 GiB per compile job (pyside, qtwebengine, llvm, clang, webkit-gtk) get 8 compile jobs when they are built from source."
     ],
     "optional_atoms": [
@@ -384,6 +425,14 @@
      [
       "sh",
       "-c",
+      "if [ ! -f /etc/modprobe.d/nvidia.conf ] && [ -d \"/home/$1\" ]; then printf \"%s\\n\" \"$2\" >> \"/home/$1/first-steps.txt\"; chown \"$1:$(id -gn \"$1\")\" \"/home/$1/first-steps.txt\"; fi; exit 0",
+      "sh",
+      "gentoo",
+      "The NVIDIA driver could not be installed during the installation, so this PC runs on the open nouveau driver. To try again once the network works: emerge --ask x11-drivers/nvidia-drivers && dracut --force --regenerate-all (the driver is downloaded from download.nvidia.com and compiled on this PC)."
+     ],
+     [
+      "sh",
+      "-c",
       "if getent group pipewire >/dev/null; then usermod -aG pipewire \"$1\"; fi; exit 0",
       "sh",
       "gentoo"
@@ -406,8 +455,10 @@
       "Wi-Fi",
       "Bluetooth"
      ],
+     "first_user": "gentoo",
      "form_factor": "laptop",
      "gpu_driver": "nvidia",
+     "gpu_mode": "nvidia",
      "gpu_vendors": [
       "intel",
       "nvidia"
@@ -421,10 +472,21 @@
      "memory_heavy_jobs": 8,
      "microcode": "both",
      "nvidia_branch": "595",
+     "nvidia_flavour": "open",
+     "nvidia_reason": "Recommended for NVIDIA RTX A5000 Mobile: the NVIDIA driver (version 595) with open kernel modules. Programs can be started on the NVIDIA card when they need it (render offload).",
+     "nvidia_rtd3": "off",
      "nvk": "no",
      "power": "none",
      "prime": "offload",
      "removable_fallback": "always",
+     "safe_graphics": {
+      "cmdline": [
+       "nomodeset",
+       "modprobe.blacklist=nvidia,nvidia_drm,nvidia_modeset,nvidia_uvm,nouveau",
+       "rd.driver.blacklist=nvidia,nvidia_drm,nvidia_modeset,nvidia_uvm,nouveau"
+      ],
+      "title": "Gentoo Linux (safe graphics)"
+     },
      "sof_firmware": "yes",
      "target": "portable",
      "thermald": "no",
@@ -447,7 +509,13 @@
   },
   "xfce-systemd-source": {
    "description": "Xfce on systemd, everything built from source",
-   "issues": [],
+   "issues": [
+    {
+     "code": "hw.nvidia_skipped",
+     "message": "The NVIDIA driver is available for NVIDIA RTX A5000 Mobile, but its licence has not been accepted, so the open nouveau driver is used. Accept the licence on the Hardware page to use the NVIDIA driver.",
+     "severity": "info"
+    }
+   ],
    "plan": {
     "driver_atoms": [],
     "early_atoms": [
@@ -548,6 +616,7 @@
      ],
      "form_factor": "laptop",
      "gpu_driver": "open",
+     "gpu_mode": "nouveau",
      "gpu_vendors": [
       "intel",
       "nvidia"
@@ -561,6 +630,7 @@
      "memory_heavy_jobs": 8,
      "microcode": "intel",
      "nvidia_branch": "",
+     "nvidia_reason": "Recommended for NVIDIA RTX A5000 Mobile: the NVIDIA driver (version 595) with open kernel modules. Programs can be started on the NVIDIA card when they need it (render offload).",
      "nvk": "yes",
      "power": "tlp",
      "prime": "offload",
@@ -591,7 +661,13 @@
      "Boot: fallback boot path is always written",
      "Display: 240 dpi interface scale for Xfce"
     ],
-    "warnings": []
+    "warnings": [
+     {
+      "code": "hw.nvidia_skipped",
+      "message": "The NVIDIA driver is available for NVIDIA RTX A5000 Mobile, but its licence has not been accepted, so the open nouveau driver is used. Accept the licence on the Hardware page to use the NVIDIA driver.",
+      "severity": "info"
+     }
+    ]
    }
   }
  }

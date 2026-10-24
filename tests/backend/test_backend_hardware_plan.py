@@ -151,7 +151,7 @@ class TestInstallOnCapturedMachines:
         assert "x11-drivers/nvidia-drivers" in emerged(runner)
         assert "x11-drivers/nvidia-drivers NVIDIA-2025" in configurer.files["etc/portage/package.license/installer-hardware"]
         assert "VIDEO_CARDS='${VIDEO_CARDS} nvidia'" in configurer.files["etc/portage/make.conf"]
-        assert any(argument == "nvidia-drm.modeset=1" for argument in configurer.files["etc/kernel/cmdline"].split())
+        assert not any(argument.startswith("nvidia-drm.") for argument in configurer.files["etc/kernel/cmdline"].split())  # 595 needs no argument
 
     def test_the_plan_summary_is_logged_and_sent_with_the_preflight_event(self, tmp_path, monkeypatch):
         _, _, _, events = dry_install(tmp_path, monkeypatch, "amd-laptop-sof")

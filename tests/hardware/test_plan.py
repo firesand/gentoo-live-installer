@@ -200,8 +200,9 @@ def test_detect_without_flags_warns_instead_of_writing_nothing_silently():
     ((gpu("amd", "r300"),), "radeon r300"),
     ((gpu("amd", "older"),), None),
     ((gpu("nvidia", "turing+"),), "nouveau nvk"),          # NVK (Vulkan) is part of a source build for Turing and newer
-    ((gpu("nvidia", "maxwell-volta"),), "nouveau"),
-    ((gpu("nvidia", "kepler"),), "nouveau"),
+    ((gpu("nvidia", "maxwell-volta"),), "nouveau nvk"),     # NVK drives Kepler and newer
+    ((gpu("nvidia", "kepler"),), "nouveau nvk"),
+    ((gpu("nvidia", "fermi"),), "nouveau"),
     ((gpu("intel", "gen8+", integrated=True), gpu("nvidia", "turing+")), "intel nouveau nvk"),
     ((gpu("amd", "gcn3+", integrated=True), gpu("amd", "gcn3+")), "amdgpu radeonsi"),
     ((gpu("virtio"),), "virgl"),
@@ -254,8 +255,8 @@ def test_proprietary_nvidia_on_turing_and_newer_uses_branch_595():
     assert result.package_use[NV] == ["dist-kernel", "wayland"]
     assert result.package_mask == []
     assert result.make_conf["VIDEO_CARDS"] == "${VIDEO_CARDS} nvidia"
-    assert result.kernel_cmdline == ["nvidia-drm.modeset=1", "nvidia-drm.fbdev=1"]
-    assert result.scalars["gpu_driver"] == "nvidia" and result.scalars["nvidia_branch"] == "595"
+    assert result.kernel_cmdline == []      # 595 needs no argument; fbdev=1 and modeset=1 are the driver's own defaults
+    assert result.scalars["gpu_driver"] == "nvidia" and result.scalars["nvidia_branch"] == "595" and result.scalars["nvidia_flavour"] == "open"
     assert ["sh", "-c", "if [ -f /etc/modprobe.d/nvidia.conf ]; then dracut --force --regenerate-all; fi"] in result.post_steps
     assert FW not in result.early_atoms or "NVIDIA" not in " ".join(result.scalars["firmware_reasons"])  # the open GSP firmware reason is dropped
 
@@ -265,6 +266,7 @@ def test_pascal_gets_the_long_term_branch_and_a_mask_that_pins_it():
     assert result.scalars["nvidia_branch"] == "580"
     assert result.package_mask == [">=x11-drivers/nvidia-drivers-581"]
     assert "kernel-open" not in result.package_use[NV]  # the open modules need Turing or newer
+    assert result.kernel_cmdline == ["nvidia-drm.modeset=1"] and result.scalars["nvidia_flavour"] == "closed"
 
 
 def test_branch_580_on_a_turing_card_uses_the_open_kernel_modules():
@@ -387,10 +389,10 @@ def test_best_effort_post_steps_can_never_fail_the_installation(tmp_path):
     import subprocess
 
     result = plan(nvidia_manifest(), profile(gpus=(gpu("nvidia", "turing+"),)))
-    strict = [s for s in result.post_steps if "dracut" in " ".join(s)]
+    strict = [s for s in result.post_steps if "dracut --force" in s[2] and "printf" not in s[2]]
     assert len(strict) == 1 and "exit 0" not in strict[0][2]
     lenient = [s for s in result.post_steps if s not in strict]
-    assert len(lenient) == 2 and all(s[2].rstrip().endswith("exit 0") for s in lenient)
+    assert len(lenient) == 3 and all(s[2].rstrip().endswith("exit 0") for s in lenient)   # HWMonux sensors, the pipewire group, the retry hint
     # Run both with emerge and usermod failing: the shell must still exit 0 and must remove the HWMonux USE flag again.
     sh = shutil.which("sh")
     assert sh

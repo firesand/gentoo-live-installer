@@ -256,7 +256,7 @@ def test_apply_defaults_never_fills_video_cards_or_the_nvidia_driver():
     for name in FIXTURE_NAMES:
         m = InstallManifest()
         rec.apply_defaults(m, fixture_dict(name), resolve_auto=True)
-        assert m.portage.video_cards == "" and m.hardware.gpu_driver == "nouveau" and not m.hardware.nvidia_license_accepted
+        assert m.portage.video_cards == "" and m.hardware.gpu_driver in ("auto", "nouveau") and not m.hardware.nvidia_license_accepted
 
 
 def test_the_firmware_seed_can_be_skipped_for_an_explicit_manifest():

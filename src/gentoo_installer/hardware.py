@@ -146,6 +146,7 @@ class GpuInfo:
     virtual: bool = False
     connected_outputs: int | None = None  # None: not read (device runtime-suspended or no DRM node)
     card: str = ""  # drm card name, e.g. card1
+    vram_mib: int = 0  # video memory in MiB: a known card's size, else the big memory window of the card; 0 when unknown
 
 
 @dataclass
@@ -904,6 +905,16 @@ def _warn(code: str, severity: str, message: str, action: str = "") -> HardwareW
     return HardwareWarning("hw." + code, severity, message, action)
 
 
+def physical_gpus(gpus: Sequence[GpuInfo]) -> list[GpuInfo]:
+    """The graphics cards that are real hardware: not paravirtual adapters and not a server's management chip."""
+    return [gpu for gpu in gpus if not gpu.virtual and gpu.vendor not in data.BMC_GPU_VENDORS]
+
+
+def is_detected(profile: HardwareProfile) -> bool:
+    """False for an empty profile (no probe ran): firmware, disk and driver checks would only produce noise."""
+    return bool(profile.cpu.threads or profile.gpus or profile.disks or profile.memory.total_kib)
+
+
 def is_hybrid(profile: HardwareProfile) -> bool:
     """Integrated + discrete GPU where switching helpers make sense.
 
@@ -1214,6 +1225,7 @@ class _Prober:
             gpu.virtual = vendor in data.VIRTUAL_GPU_VENDORS
             if vendor == "nvidia":
                 gpu.generation, gpu.generation_guess = data.classify_nvidia(name, dev.device_id)
+                gpu.vram_mib = data.nvidia_vram_mib(name) or data.vram_from_resources(self.fs.read(f"/sys/bus/pci/devices/{dev.slot}/resource", 1 << 16) or "")
             elif vendor == "amd":
                 gpu.generation = data.classify_amd(name, dev.driver)
                 gpu.integrated = data.amd_is_integrated(name)

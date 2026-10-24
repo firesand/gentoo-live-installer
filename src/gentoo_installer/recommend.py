@@ -298,7 +298,11 @@ def defaults_for(profile: HardwareProfile | Mapping[str, Any] | None, manifest: 
             if getattr(manifest.hardware, name) == "auto" and scalars.get(key) not in (None, "", "auto"):
                 changes[f"hardware.{name}"] = scalars[key]
         if manifest.hardware.gpu_driver == "auto":
-            changes["hardware.gpu_driver"] = "nouveau"
+            plan = _plan(manifest, hw)
+            if plan.scalars.get("gpu_driver") == "nvidia":
+                changes["hardware.gpu_driver"] = "nvidia"  # Automatic with the licence ticked and a supported card
+            elif not any(issue.code == "hw.nvidia_skipped" for issue in plan.warnings):
+                changes["hardware.gpu_driver"] = "nouveau"  # a skipped NVIDIA driver stays on Automatic: the licence tick would switch it on
     return changes
 
 
