@@ -17,9 +17,11 @@ LICENSE="GPL-2+"
 SLOT="0"
 # liquidctl and hidapi are ~amd64 only, so they are behind the liquidctl flag: with the
 # default flags the dependency graph solves on a stable system. HWMonux works without them
-# and without NVIDIA's NVML.
+# and without NVIDIA's NVML. nvidia stays off by default: nvidia-ml-py depends on the
+# licence-masked x11-drivers/nvidia-drivers. The installer enables it after the user accepts
+# the NVIDIA licence.
 KEYWORDS="amd64"
-IUSE="+nvidia liquidctl"
+IUSE="nvidia liquidctl"
 RESTRICT="mirror fetch"
 
 RDEPEND="

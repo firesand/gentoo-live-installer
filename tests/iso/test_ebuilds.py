@@ -147,7 +147,8 @@ def test_the_source_archive_contains_the_data_directory() -> None:
 def test_hwmonux_solves_on_a_stable_system_by_default() -> None:
     text = ebuild_of(HWMONUX).read_text()
     assert variable(text, "KEYWORDS") == "amd64"
-    assert variable(text, "IUSE").split() == ["+nvidia", "liquidctl"]
+    # nvidia is off by default: nvidia-ml-py needs the licence-masked nvidia-drivers.
+    assert variable(text, "IUSE").split() == ["nvidia", "liquidctl"]
     rdepend = variable(text, "RDEPEND")
     assert re.search(r"liquidctl\?\s*\(\s*app-misc/liquidctl\[", rdepend), "liquidctl is ~amd64 only: keep it behind its flag"
     assert not re.search(r"^\s*app-misc/liquidctl", rdepend, re.M), "an unconditional liquidctl dependency breaks stable systems"
