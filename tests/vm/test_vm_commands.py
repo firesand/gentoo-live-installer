@@ -6,6 +6,7 @@ from unittest.mock import Mock, patch
 
 import pytest
 
+from tests.vm import guard_fixtures
 from tests.vm.helpers import PUBLIC_KEY, load_vm_module
 
 
@@ -331,6 +332,7 @@ def test_main_does_not_print_pass_or_return_zero_for_false_runner_result(tmp_pat
 def test_check_resume_runs_original_manifest_as_root_after_disk_guard(tmp_path, monkeypatch):
     runner = object.__new__(vm.ScenarioRunner)
     runner.args = SimpleNamespace(ssh_user="root", command_timeout=10, install_timeout=30)
+    runner.scenario = vm.SCENARIO_MAP["openrc"]
     runner.run_dir = tmp_path
     calls = []
     storage = vm.parse_lsblk_snapshot(json.dumps({
@@ -347,6 +349,8 @@ def test_check_resume_runs_original_manifest_as_root_after_disk_guard(tmp_path, 
                 '{"type":"stage","stage":"storage","data":{"status":"skipped"}}',
                 '{"type":"completed","data":{"success":true}}',
             )))
+        if log_name == "resume-disk-guard.log":
+            log.write_text(guard_fixtures.answer_guard(remote))
         return 0, log
 
     runner.ssh = fake_ssh
@@ -398,6 +402,8 @@ def test_install_invokes_real_backend_cli(tmp_path):
         log = tmp_path / log_name
         if log_name == "install.log":
             log.write_text('{"type":"completed","data":{"success":true}}\n')
+        if log_name == "guest-disk-guard.log":
+            log.write_text(guard_fixtures.answer_guard(remote))
         return 0, log
 
     runner.ssh = fake_ssh

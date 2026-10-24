@@ -25,6 +25,23 @@ FAILED_STREAM = [
     {"type": "error", "error": "emerge failed: simulated"},
     {"type": "completed", "data": {"success": False}, "message": "failed"},
 ]
+RESUME_STREAM = [
+    {"type": "stage", "stage": "storage", "data": {"status": "skipped"}},
+    {"type": "completed", "data": {"success": True}, "message": "done"},
+]
+
+
+def lsblk_snapshot(disk: str = "/dev/vda") -> str:
+    """lsblk --json for an installed disk: a table, an ESP and a root filesystem."""
+    sep = "p" if disk[-1].isdigit() else ""
+    return json.dumps({"blockdevices": [{"path": disk, "type": "disk", "uuid": None, "fstype": None, "partuuid": None,
+                                         "parttype": None, "pttype": "gpt", "ptuuid": "table-id", "children": [
+        {"path": f"{disk}{sep}1", "type": "part", "uuid": "AAAA-AAAA", "fstype": "vfat", "partuuid": "p1",
+         "parttype": "c12a7328-f81f-11d2-ba4b-00a0c93ec93b", "pttype": None, "ptuuid": None},
+        {"path": f"{disk}{sep}2", "type": "part", "uuid": "root-uuid", "fstype": "ext4", "partuuid": "p2",
+         "parttype": "0fc63daf-8483-4772-8e79-3d69d8477de4", "pttype": None, "ptuuid": None}]}]})
+
+
 NETWORK = "2: eth0    inet 10.0.2.15/24 brd 10.0.2.255 scope global eth0\ndefault via 10.0.2.2 dev eth0\n"
 STATIC_NETWORK = json.dumps({
     "active": ["Installer wired static:eth0"], "method": "manual", "addresses": ["10.0.2.15/24"],
@@ -43,8 +60,9 @@ def free_port() -> int:
         return probe.getsockname()[1]
 
 
-def guest_rules(vm, scenario_name: str, *, guard: str = "GENTOO-VM-DISPOSABLE", install: list | None = None,
-                companions: bool = True, extra: list | None = None) -> list[dict]:
+def guest_rules(vm, scenario_name: str, *, guard: str = "vm_disk_guard", install: list | None = None,
+                companions: bool = True, extra: list | None = None, guard_options: dict | bool = True,
+                swap_mib: int = 512) -> list[dict]:
     """Rules for a guest that installs and boots successfully, in the order the harness needs them."""
     scenario = vm.SCENARIO_MAP[scenario_name]
     init = "systemd" if scenario.init == "systemd" else "init"
@@ -56,9 +74,12 @@ def guest_rules(vm, scenario_name: str, *, guard: str = "GENTOO-VM-DISPOSABLE", 
         {"user": "^root$", "match": "^true$", "rc": 0},
         target_ready,
         {"user": "^vmtest$", "match": "^true$", "rc": 255},
-        {"user": "^root$", "match": guard, "rc": 0},
+        {"user": "^root$", "match": guard, "guard": guard_options},
+        {"user": "^root$", "match": r"decoy-(?:prepare|check) '\{", "guest_tool": True},
         {"user": "^root$", "match": r"^cat > /run/gentoo-installer-vm-manifest\.json$", "stdin_to": "manifest.json"},
         {"user": "^root$", "match": r"^gentoo-installerd --manifest \S+ --yes$", "events": install or EVENT_STREAM},
+        {"user": "^root$", "match": r"^gentoo-installerd --manifest \S+ --yes --resume$", "events": RESUME_STREAM},
+        {"user": "^root$", "match": r"^lsblk --json --output PATH,TYPE,UUID", "stdout": lsblk_snapshot()},
         {"user": "^root$", "match": "^poweroff$", "shutdown_vm": "live"},
         {"user": "^vmtest$", "match": r"^ps -p 1 -o comm=$", "stdout": init + "\n"},
         {"user": "^vmtest$", "match": r"^hostname$", "stdout": scenario.hostname + "\n"},
@@ -66,6 +87,17 @@ def guest_rules(vm, scenario_name: str, *, guard: str = "GENTOO-VM-DISPOSABLE", 
         {"user": "^vmtest$", "match": r"ip -4 -o address show", "stdout": NETWORK},
         {"user": "^vmtest$", "match": r"^getent ahostsv4", "stdout": "151.101.1.1 STREAM distfiles.gentoo.org\n"},
         {"user": "^vmtest$", "match": r"^emerge --search", "stdout": "* sys-apps/portage\n"},
+    ]
+    uuid = "0a1b2c3d-1111-2222-3333-444455556666"
+    cmdline = f"BOOT_IMAGE=/vmlinuz-6.12 root=UUID={uuid} ro quiet"
+    if scenario.luks:
+        cmdline += f" rd.luks.uuid={uuid} rd.luks.name={uuid}=gentoo-root console=tty0 console=ttyS0,115200n8"
+    rules += [
+        {"user": "^vmtest$", "match": r"^test -d /sys/firmware/efi", "stdout": scenario.firmware + "\n"},
+        {"user": "^vmtest$", "match": r"^cat /proc/cmdline$", "stdout": cmdline + "\n"},
+        {"user": "^vmtest$", "match": r"^findmnt -no SOURCE /$",
+         "stdout": ("/dev/mapper/gentoo-root" if scenario.luks else "/dev/vda2") + "\n"},
+        {"user": "^vmtest$", "match": r"^swapon ", "stdout": f"/dev/vda3 partition {swap_mib * 2**20 - 4096}\n"},
     ]
     if companions:
         rules += [
@@ -110,7 +142,7 @@ class Lab:
         (fake_firmware_dir / "code.fd").write_bytes(b"code")
         (fake_firmware_dir / "vars.fd").write_bytes(b"vars")
         self.firmware = vm.OvmfFirmware(fake_firmware_dir / "code.fd", fake_firmware_dir / "vars.fd")
-        monkeypatch.setattr(vm, "detect_ovmf", lambda candidates=None: self.firmware)
+        monkeypatch.setattr(vm, "detect_ovmf", lambda candidates=None, **_: self.firmware)
         self.write()
 
     def write(self) -> None:

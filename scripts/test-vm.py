@@ -5,12 +5,15 @@ from __future__ import annotations
 
 import argparse
 import base64
+import binascii
+import dataclasses
 import functools
 import hashlib
 import ipaddress
 import json
 import os
 import re
+import secrets
 import shlex
 import shutil
 import signal
@@ -23,7 +26,7 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Callable, Sequence
+from typing import Any, Callable, Sequence
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
@@ -31,6 +34,9 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from gentoo_installer.manifest import InstallManifest  # noqa: E402
+import vm_guard  # noqa: E402
+import vm_hw  # noqa: E402
+from vm_hw import VMHardware  # noqa: E402
 from vm_qmp import (  # noqa: E402
     SUN_PATH_MAX, TEST_LUKS_PASSPHRASE, connect_unix, screen_digest, screendump as qmp_screendump,
     type_luks_passphrase as qmp_type_luks_passphrase,
@@ -42,7 +48,6 @@ TARGET_SERIAL = "GENTOO-VM-DISPOSABLE"
 TEST_USERNAME = "vmtest"
 TEST_PASSWORD = "vmtest-only-password"
 TEST_ROOT_PASSWORD = "vmtest-only-root-password"
-SCENARIOS = ("openrc", "systemd", "uefi-luks", "bios", "defaults")
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 # The passphrase prompt of both unlock paths, matched case-insensitively:
 #   systemd-cryptsetup: "Please enter passphrase for disk root (gentoo-root):"
@@ -99,12 +104,12 @@ class TerminationRequested(KeyboardInterrupt):
         self.signum = signum
 
 
-def install_termination_handlers() -> dict[int, object]:
+def install_termination_handlers() -> dict[int, Any]:
     """Turn SIGTERM/SIGHUP into TerminationRequested; return the previous handlers."""
     def handler(signum: int, _frame: object) -> None:
         raise TerminationRequested(signum)
 
-    previous: dict[int, object] = {}
+    previous: dict[int, Any] = {}
     for name in ("SIGTERM", "SIGHUP"):
         number = getattr(signal, name)
         previous[number] = signal.signal(number, handler)
@@ -129,6 +134,11 @@ def die_with_parent(parent_pid: int | None = None) -> None:
 
 @dataclass(frozen=True)
 class Scenario:
+    """One VM test: how the machine looks (``hardware``) and what is installed on it.
+
+    The first five fields and every default below reproduce the original scenarios exactly;
+    the rest are the hardware and configuration dimensions of the wider matrix (docs/TESTING.md).
+    """
     name: str
     init: str
     firmware: str
@@ -136,10 +146,31 @@ class Scenario:
     # Keep every InstallManifest default (the untouched GUI path) instead of
     # the fast minimal install the other scenarios use.
     defaults: bool = False
+    table: str = ""                  # "" = dos on BIOS, gpt on UEFI
+    filesystem: str = "ext4"
+    bootloader: str = "grub"
+    lvm: bool = False
+    hw_target: str = "this"          # manifest.hardware.target: "this" machine or a "portable" install
+    guest_tools: str = "none"        # "none" keeps the validated scenarios free of hypervisor tooling
+    hardware: VMHardware = VMHardware()
+    decoy: bool = False              # extra disks are decoys: marker + checksum before, unchanged after
+    reinstall: bool = False          # install a second time over the first installation
+    expect_refusal: str = ""         # regex the installer's refusal must match (nothing may be written)
+    disk_gib: int = 0                # 0 = use --disk-size
+    in_all: bool = True              # run by --all (the fast, validated scenarios)
+    note: str = ""
 
     @property
     def hostname(self) -> str:
         return f"gentoo-vm-{self.name}"
+
+    @property
+    def resolved_table(self) -> str:
+        return self.table or ("dos" if self.firmware == "bios" else "gpt")
+
+
+def _hw(**changes) -> VMHardware:
+    return VMHardware(**changes)
 
 
 SCENARIO_MAP = {
@@ -147,10 +178,57 @@ SCENARIO_MAP = {
     "systemd": Scenario("systemd", "systemd", "uefi"),
     "uefi-luks": Scenario("uefi-luks", "systemd", "uefi", luks=True),
     "bios": Scenario("bios", "openrc", "bios"),
-    "defaults": Scenario("defaults", "openrc", "uefi", defaults=True),
+    # The untouched GUI defaults install the full default desktop (hours): run it explicitly.
+    "defaults": Scenario("defaults", "openrc", "uefi", defaults=True, in_all=False,
+                         note="every InstallManifest default; the GUI must detect firmware, table and disk"),
+    # --- the wider matrix: each runs on request until it has passed once on real QEMU ---------------
+    "bios-gpt": Scenario("bios-gpt", "openrc", "bios", table="gpt", in_all=False,
+                         note="SeaBIOS + GPT: BIOS-boot partition and grub i386-pc on a legacy PC"),
+    "openrc-luks": Scenario("openrc-luks", "openrc", "uefi", luks=True, in_all=False,
+                            note="OpenRC (the default init) with dracut's non-systemd passphrase prompt"),
+    "uefi-fresh-nvram": Scenario("uefi-fresh-nvram", "openrc", "uefi", in_all=False,
+                                 hardware=_hw(ovmf_vars="fresh-on-target"),
+                                 note="boots the installed disk with empty NVRAM: needs the removable fallback"),
+    "decoy-disk": Scenario("decoy-disk", "openrc", "uefi", decoy=True, in_all=False,
+                           hardware=_hw(extra_disks=(256,)),
+                           note="a second disk with data that must survive the installation untouched"),
+    "nvme-uefi": Scenario("nvme-uefi", "openrc", "uefi", in_all=False,
+                          hardware=_hw(disk_bus="nvme", nic="e1000e", vga="std"),
+                          note="NVMe naming (p1/p2), Intel NIC, standard VGA"),
+    "sata-bios": Scenario("sata-bios", "openrc", "bios", in_all=False,
+                          hardware=_hw(disk_bus="sata", nic="rtl8139", vga="qxl", machine="pc"),
+                          note="an old PC: i440FX, SATA (sda), Realtek NIC, QXL display"),
+    "usb-portable": Scenario("usb-portable", "openrc", "uefi", hw_target="portable", in_all=False,
+                             hardware=_hw(disk_bus="usb", removable=True, ovmf_vars="fresh-on-target"),
+                             note="a removable USB install that must boot on firmware that never saw it"),
+    "serial-less": Scenario("serial-less", "openrc", "uefi", in_all=False,
+                            hardware=_hw(disk_serial=False),
+                            note="a disk without serial number: approved by its by-path identity"),
+    "uefi-4kn": Scenario("uefi-4kn", "systemd", "uefi", in_all=False,
+                         hardware=_hw(disk_bus="nvme", sector_size=4096),
+                         note="NVMe with 4096-byte sectors"),
+    "laptop-smbios": Scenario("laptop-smbios", "openrc", "uefi", guest_tools="auto", in_all=False,
+                              hardware=_hw(smbios="laptop-lenovo", cpu="Haswell"),
+                              note="notebook DMI strings and chassis type, a named CPU model"),
+    "vmware-guest": Scenario("vmware-guest", "openrc", "uefi", guest_tools="auto", in_all=False,
+                             hardware=_hw(smbios="vmware", vga="vmware", nic="e1000e"),
+                             note="hypervisor detection from VMware's DMI strings (run with --memory 2048)"),
+    "reinstall": Scenario("reinstall", "openrc", "uefi", reinstall=True, in_all=False,
+                          note="installs twice onto the same disk (stale signatures at reused offsets)"),
+    "small-disk": Scenario("small-disk", "openrc", "uefi", disk_gib=6, in_all=False,
+                           expect_refusal=r"(?i)too small|at least|capacity|not enough",
+                           note="the installer must refuse a disk that is too small before it writes anything"),
+    "btrfs-root": Scenario("btrfs-root", "openrc", "uefi", filesystem="btrfs", in_all=False),
+    "xfs-root": Scenario("xfs-root", "systemd", "uefi", filesystem="xfs", in_all=False),
+    "lvm-root": Scenario("lvm-root", "openrc", "uefi", lvm=True, in_all=False),
+    "systemd-boot": Scenario("systemd-boot", "systemd", "uefi", bootloader="systemd-boot", in_all=False),
 }
-# The defaults scenario installs the full default desktop (hours); run it explicitly.
-ALL_SCENARIOS = tuple(name for name, scenario in SCENARIO_MAP.items() if not scenario.defaults)
+SCENARIOS = tuple(SCENARIO_MAP)
+# What --all runs: the fast scenarios whose installs have passed on real QEMU.
+ALL_SCENARIOS = tuple(name for name, scenario in SCENARIO_MAP.items() if scenario.in_all)
+# Manifest fields the GUI determines from the machine it runs on. In --gui-detect mode the harness
+# leaves them at the wizard's defaults and asserts what the GUI chose.
+DETECTED_FIELDS = ("storage.device", "storage.device_id", "storage.device_id_kind", "storage.firmware", "storage.table")
 
 
 @dataclass(frozen=True)
@@ -172,6 +250,8 @@ class ProbeResult:
     success: bool
     output: str
     error: str = ""
+    # An advisory probe records a finding without failing the scenario (unless --strict-probes).
+    advisory: bool = False
 
 
 def companion_selection(manifest: InstallManifest) -> dict[str, bool]:
@@ -183,8 +263,15 @@ def companion_selection(manifest: InstallManifest) -> dict[str, bool]:
 
 
 def build_manifest(scenario: Scenario, ssh_public_key: str, companions: str = "both", *,
-                   build_jobs: int | None = None, swap_mib: int | None = None) -> InstallManifest:
-    """Build the scenario manifest; None resource values keep the scenario's own default."""
+                   build_jobs: int | None = None, swap_mib: int | None = None,
+                   device: str = TARGET_DEVICE, device_id: str = TARGET_SERIAL,
+                   device_id_kind: str = "") -> InstallManifest:
+    """Build the scenario manifest; None resource values keep the scenario's own default.
+
+    ``device``, ``device_id`` and ``device_id_kind`` name the disk the guard resolved in the
+    guest ("path" ids for a disk without a serial number); the defaults are the original
+    /dev/vda with its serial.
+    """
     if not re.fullmatch(r"(?:ssh-(?:ed25519|rsa)|ecdsa-sha2-nistp(?:256|384|521)|sk-ssh-ed25519@openssh\.com) [A-Za-z0-9+/=]+(?: .*)?", ssh_public_key.strip()):
         raise HarnessError("The SSH public key is missing or invalid")
     if companions not in {"both", "portagehub", "none"}:
@@ -192,8 +279,9 @@ def build_manifest(scenario: Scenario, ssh_public_key: str, companions: str = "b
     if (build_jobs is not None and not 1 <= build_jobs <= 256) or (swap_mib is not None and not 0 <= swap_mib <= 131072):
         raise HarnessError("Build jobs must be 1–256 and target swap must be 0–131072 MiB")
     manifest = InstallManifest()
-    manifest.storage.device = TARGET_DEVICE
-    manifest.storage.device_id = TARGET_SERIAL
+    manifest.storage.device = device
+    manifest.storage.device_id = device_id
+    manifest.storage.device_id_kind = device_id_kind
     if scenario.defaults:
         # Only the disposable disk, test credentials and probe access differ
         # from what an untouched GUI run would send.
@@ -214,7 +302,9 @@ def build_manifest(scenario: Scenario, ssh_public_key: str, companions: str = "b
     build_jobs = 2 if build_jobs is None else build_jobs
     swap_mib = 512 if swap_mib is None else swap_mib
     manifest.storage.firmware = scenario.firmware
-    manifest.storage.table = "dos" if scenario.firmware == "bios" else "gpt"
+    manifest.storage.table = scenario.resolved_table
+    manifest.storage.filesystem = scenario.filesystem
+    manifest.storage.lvm = scenario.lvm
     manifest.storage.swap_mib = swap_mib
     manifest.storage.luks = scenario.luks
     manifest.storage.luks_passphrase = TEST_LUKS_PASSPHRASE if scenario.luks else ""
@@ -224,10 +314,12 @@ def build_manifest(scenario: Scenario, ssh_public_key: str, companions: str = "b
     manifest.system.desktop = "minimal"
     manifest.system.kernel = "gentoo-kernel-bin"
     manifest.system.initramfs = "dracut"
-    manifest.system.bootloader = "grub"
+    manifest.system.bootloader = scenario.bootloader
     if scenario.luks:
         # Without it the unlock prompt only exists on the emulated VGA screen.
         manifest.system.kernel_cmdline_extra = SERIAL_CONSOLE_ARGUMENTS
+    manifest.hardware.target = scenario.hw_target
+    manifest.hardware.guest_tools = scenario.guest_tools
     manifest.portage.binhost = True
     manifest.portage.features = ["getbinpkg"]
     manifest.portage.make_opts = f"-j{build_jobs}"
@@ -258,29 +350,35 @@ def build_manifest(scenario: Scenario, ssh_public_key: str, companions: str = "b
     return manifest
 
 
-def ovmf_candidates() -> list[tuple[Path, Path]]:
-    roots = (
-        Path("/usr/share/OVMF"),
-        Path("/usr/share/edk2/ovmf"),
-        Path("/usr/share/edk2/OvmfX64"),
-        Path("/usr/share/edk2/x64"),
-        Path("/usr/share/qemu"),
+OVMF_ROOTS = (
+    Path("/usr/share/OVMF"),
+    Path("/usr/share/edk2/ovmf"),
+    Path("/usr/share/edk2/OvmfX64"),
+    Path("/usr/share/edk2-ovmf"),
+    Path("/usr/share/edk2/x64"),
+    Path("/usr/share/qemu"),
+)
+
+
+def ovmf_candidates(secure: bool = False) -> list[tuple[Path, Path]]:
+    """(code, variables) file pairs OVMF packages install; ``secure`` selects the Secure Boot builds."""
+    names = (
+        (("OVMF_CODE.secboot.fd", "OVMF_VARS.secboot.fd"),
+         ("OVMF_CODE_4M.secboot.fd", "OVMF_VARS_4M.secboot.fd"),
+         ("OVMF_CODE.secboot.4m.fd", "OVMF_VARS.4m.fd"),
+         ("edk2-x86_64-secure-code.fd", "edk2-i386-vars.fd"))
+        if secure else
+        (("OVMF_CODE.fd", "OVMF_VARS.fd"),
+         ("OVMF_CODE_4M.fd", "OVMF_VARS_4M.fd"),
+         ("OVMF_CODE.4m.fd", "OVMF_VARS.4m.fd"),
+         ("edk2-x86_64-code.fd", "edk2-i386-vars.fd"),
+         ("ovmf-x86_64-code.bin", "ovmf-x86_64-vars.bin"))
     )
-    pairs: list[tuple[Path, Path]] = []
-    for root in roots:
-        for code_name, vars_name in (
-            ("OVMF_CODE.fd", "OVMF_VARS.fd"),
-            ("OVMF_CODE_4M.fd", "OVMF_VARS_4M.fd"),
-            ("OVMF_CODE.4m.fd", "OVMF_VARS.4m.fd"),
-            ("edk2-x86_64-code.fd", "edk2-i386-vars.fd"),
-            ("ovmf-x86_64-code.bin", "ovmf-x86_64-vars.bin"),
-        ):
-            pairs.append((root / code_name, root / vars_name))
-    return pairs
+    return [(root / code_name, root / vars_name) for root in OVMF_ROOTS for code_name, vars_name in names]
 
 
-def detect_ovmf(candidates: Sequence[tuple[Path, Path]] | None = None) -> OvmfFirmware | None:
-    for code, variables in candidates if candidates is not None else ovmf_candidates():
+def detect_ovmf(candidates: Sequence[tuple[Path, Path]] | None = None, *, secure: bool = False) -> OvmfFirmware | None:
+    for code, variables in candidates if candidates is not None else ovmf_candidates(secure):
         if code.is_file() and variables.is_file():
             return OvmfFirmware(code.resolve(), variables.resolve())
     return None
@@ -310,7 +408,23 @@ def validate_command_paths(iso: Path, disk: Path, run_dir: Path) -> None:
         raise HarnessError(f"Refusing non-file virtual disk: {disk}")
 
 
-def firmware_arguments(scenario: Scenario, firmware: OvmfFirmware | None, run_dir: Path) -> list[str]:
+def extra_disk_path(run_dir: Path, index: int) -> Path:
+    """Where the index-th (1-based) extra disk lives: always a regular file inside the run directory."""
+    return run_dir / f"extra-{index}.img"
+
+
+def extra_disk_serial(index: int) -> str:
+    return f"GENTOO-VM-EXTRA-{index}"
+
+
+def firmware_arguments(scenario: Scenario, firmware: OvmfFirmware | None, run_dir: Path, *,
+                       vars_mode: str = "persist", vars_template: Path | None = None) -> list[str]:
+    """pflash drives for a UEFI scenario; the writable variable store is a per-run copy.
+
+    ``vars_template`` replaces the firmware package's pristine variable store as the copy's
+    source (a store with enrolled keys, for Secure Boot tests). ``vars_mode`` "readonly" maps
+    the store read-only, so the firmware cannot save boot entries (efibootmgr fails).
+    """
     if scenario.firmware == "bios":
         return []
     if firmware is None:
@@ -320,10 +434,11 @@ def firmware_arguments(scenario: Scenario, firmware: OvmfFirmware | None, run_di
     if variables.is_symlink():
         raise HarnessError("Refusing symlink firmware variables")
     if not variables.exists():
-        shutil.copyfile(firmware.variables, variables)
+        shutil.copyfile(vars_template or firmware.variables, variables)
+    store = "if=pflash,format=raw,readonly=on," if vars_mode == "readonly" else "if=pflash,format=raw,"
     return [
         "-drive", f"if=pflash,format=raw,readonly=on,file={firmware.code}",
-        "-drive", f"if=pflash,format=raw,file={variables}",
+        "-drive", f"{store}file={variables}",
     ]
 
 
@@ -340,31 +455,58 @@ def qemu_command(
     cpus: int,
     qemu_binary: str = "qemu-system-x86_64",
     firmware: OvmfFirmware | None = None,
+    hardware: VMHardware | None = None,
+    nonce: str = "",
+    cd_first: bool = False,
+    vars_template: Path | None = None,
 ) -> list[str]:
+    """The complete QEMU command line. Every optional argument keeps the original machine.
+
+    ``hardware`` overrides the scenario's machine shape, ``nonce`` is the per-run value the disk
+    guard reads back from the guest's SMBIOS, ``cd_first`` gives the live CD boot priority over
+    an installed disk (a second live boot of the same disk), ``vars_template`` seeds the
+    variable store from a given file.
+    """
     validate_command_paths(iso, disk, run_dir)
     validate_loopback(ssh_host)
     if not 1 <= ssh_port <= 65535 or memory_mib < 512 or not 1 <= cpus <= 64:
         raise HarnessError("Invalid SSH port, memory size, or CPU count")
+    hw = hardware if hardware is not None else scenario.hardware
+    try:
+        hw.require_valid()
+    except ValueError as exc:
+        raise HarnessError(str(exc)) from exc
     args = [
         qemu_binary,
         "-name", f"gentoo-installer-{scenario.name}",
-        "-machine", "q35,accel=kvm:tcg",
+        *vm_hw.machine_arguments(hw),
         "-m", str(memory_mib),
         "-smp", str(cpus),
         "-drive", f"file={disk},if=none,id=target,format=qcow2",
-        "-device", f"virtio-blk-pci,drive=target,serial={TARGET_SERIAL}",
+        *vm_hw.disk_device_arguments(hw, "target", TARGET_SERIAL if hw.disk_serial else "", 0),
     ]
+    for index, _ in enumerate(hw.extra_disks, start=1):
+        extra = extra_disk_path(run_dir, index)
+        if any(char in str(extra) for char in (",", "\n", "\r", "\x00")) or extra.is_symlink():
+            raise HarnessError("Extra disks must be plain files inside the run directory")
+        args.extend(("-drive", f"file={extra},if=none,id=extra{index},format=raw",
+                     *vm_hw.disk_device_arguments(hw, f"extra{index}", extra_disk_serial(index), index)))
     if live:
-        args.extend(("-drive", f"file={iso},media=cdrom,readonly=on,format=raw"))
-    args.extend(firmware_arguments(scenario, firmware, run_dir))
+        if cd_first:
+            args.extend(("-drive", f"file={iso},if=none,id=cd0,media=cdrom,readonly=on,format=raw",
+                         "-device", "ide-cd,drive=cd0,bootindex=0"))
+        else:
+            args.extend(("-drive", f"file={iso},media=cdrom,readonly=on,format=raw"))
+    args.extend(firmware_arguments(scenario, firmware, run_dir, vars_mode=hw.ovmf_vars, vars_template=vars_template))
     args.extend([
         "-boot", "order=d,strict=on" if live else "order=c,strict=on",
         "-netdev", f"user,id=net0,hostfwd=tcp:{ssh_host}:{ssh_port}-:22",
-        "-device", "virtio-net-pci,netdev=net0",
+        *vm_hw.nic_arguments(hw),
         "-device", "virtio-rng-pci",
-        "-vga", "virtio",
+        "-vga", hw.vga,
         "-display", "none",
         "-monitor", "none",
+        *vm_hw.smbios_arguments(hw, run_dir, nonce),
         "-chardev", f"socket,id=serial0,path={socket_argument(run_dir, SOCKET_NAMES[0])},server=on,wait=off",
         "-serial", "chardev:serial0",
         "-qmp", f"unix:{socket_argument(run_dir, SOCKET_NAMES[1])},server=on,wait=off",
@@ -526,7 +668,7 @@ def poll_gui_environment(probe: Callable[[int, int], tuple[int, Path]], *, timeo
 def decode_gui_artifact(name: str, payload: str) -> bytes:
     try:
         data = base64.b64decode(payload.strip(), validate=True)
-    except (ValueError, base64.binascii.Error) as exc:
+    except (ValueError, binascii.Error) as exc:
         raise HarnessError(f"GUI artifact {name} was not valid base64") from exc
     if not data:
         raise HarnessError(f"GUI artifact {name} was empty")
@@ -535,7 +677,11 @@ def decode_gui_artifact(name: str, payload: str) -> bytes:
     return data
 
 
-def parse_lsblk_snapshot(output: str) -> dict[str, dict[str, str]]:
+BIOS_BOOT_PARTTYPE = "21686148-6449-6e6f-744e-656564454649"
+
+
+def parse_lsblk_snapshot(output: str, disk: str = TARGET_DEVICE) -> dict[str, dict[str, str]]:
+    """Partition identities of ``disk`` and its partitions from ``lsblk --json`` output."""
     try:
         payload = json.loads(output)
     except json.JSONDecodeError as exc:
@@ -547,7 +693,7 @@ def parse_lsblk_snapshot(output: str) -> dict[str, dict[str, str]]:
 
     def visit(node: dict) -> None:
         path = node.get("path")
-        if isinstance(path, str) and path.startswith("/dev/vda"):
+        if isinstance(path, str) and path.startswith(disk):
             flattened[path] = {key: str(node.get(key) or "") for key in
                                ("type", "uuid", "fstype", "partuuid", "parttype", "pttype", "ptuuid")}
         children = node.get("children") or []
@@ -559,13 +705,14 @@ def parse_lsblk_snapshot(output: str) -> dict[str, dict[str, str]]:
     for device in devices:
         if isinstance(device, dict):
             visit(device)
-    disk = flattened.get("/dev/vda")
-    partitions = [row for path, row in flattened.items() if path != "/dev/vda" and row["type"] == "part"]
-    if not disk or disk["type"] != "disk" or not partitions:
-        raise HarnessError("lsblk did not report /dev/vda and its partition children")
-    if any(not row["uuid"] or not row["fstype"] for row in partitions):
-        raise HarnessError("A /dev/vda partition had an empty filesystem UUID or type")
-    if not disk["pttype"] or not disk["ptuuid"]:
+    whole = flattened.get(disk)
+    partitions = [row for path, row in flattened.items() if path != disk and row["type"] == "part"]
+    if not whole or whole["type"] != "disk" or not partitions:
+        raise HarnessError(f"lsblk did not report {disk} and its partition children")
+    # The BIOS-boot partition (EF02) carries raw GRUB code: no filesystem, so no UUID or type.
+    if any((not row["uuid"] or not row["fstype"]) and row["parttype"].lower() != BIOS_BOOT_PARTTYPE for row in partitions):
+        raise HarnessError(f"A {disk} partition had an empty filesystem UUID or type")
+    if not whole["pttype"] or not whole["ptuuid"]:
         raise HarnessError("lsblk did not report the disposable disk's partition table identity")
     return dict(sorted(flattened.items()))
 
@@ -756,8 +903,7 @@ def companion_probe_plan(manifest: InstallManifest) -> list[tuple[str, str, Call
                     "print('present' if present else 'absent'); sys.exit(bool(present))"
                 )
             )
-            plan.append((f"disabled-{name}-absent", package_check,
-                         lambda code, output, name=name: parse_companion_absent(name, code, output)))
+            plan.append((f"disabled-{name}-absent", package_check, functools.partial(parse_companion_absent, name)))
     return plan
 
 
@@ -843,6 +989,195 @@ print(json.dumps({
 }))'''
     command = shlex.join(("python3", "-c", script))
     return command, lambda code, output: parse_static_network_probe(code, output, expected)
+
+
+# --- probes of the installed system (all pure parsers, tested without a VM) ------------------------
+
+LIVE_ARGUMENT_RE = re.compile(r"root=live:\S*|rd\.live\.\S+|\S*CDLABEL=\S*|\S*rd\.live\S*")
+STABLE_ROOT_RE = re.compile(r"root=(?:UUID=|PARTUUID=|LABEL=|PARTLABEL=|/dev/mapper/|/dev/disk/by-)\S+")
+UNSTABLE_ROOT_RE = re.compile(r"root=/dev/(?:vd|sd|hd|nvme|mmcblk|xvd)\S*")
+PROBE_STDIN = "stdin"
+
+
+def parse_cmdline_probe(returncode: int, output: str, manifest: InstallManifest) -> ProbeResult:
+    """The installed kernel's command line must survive another disk order, another machine and an encrypted root."""
+    result = parse_probe_result("cmdline", returncode, output)
+    if not result.success:
+        return result
+    tokens = result.output.split()
+    problems: list[str] = []
+    roots = [token for token in tokens if token.startswith("root=")]
+    if not any(STABLE_ROOT_RE.fullmatch(token) for token in roots):
+        problems.append("no stable root= argument (UUID=, PARTUUID=, LABEL= or a /dev/mapper name)")
+    if any(UNSTABLE_ROOT_RE.fullmatch(token) for token in roots):
+        problems.append("root= names a kernel device (it breaks when the disks are enumerated in another order)")
+    if manifest.storage.luks and not any(token.startswith("rd.luks.uuid=") for token in tokens):
+        problems.append("the encrypted root has no rd.luks.uuid= argument")
+    for wanted in manifest.system.kernel_cmdline_extra.split():
+        if wanted not in tokens:
+            problems.append(f"the requested argument {wanted} is missing")
+    leaked = LIVE_ARGUMENT_RE.findall(result.output)
+    if leaked:
+        problems.append("arguments of the live system leaked into the installed kernel: " + ", ".join(leaked))
+    return ProbeResult("cmdline", not problems, result.output, "; ".join(problems))
+
+
+def parse_swap_probe(returncode: int, output: str, manifest: InstallManifest) -> ProbeResult:
+    """A swap partition of the requested size must be active (zram swap does not count)."""
+    result = parse_probe_result("swap", returncode, output)
+    if not result.success:
+        return result
+    wanted = manifest.storage.swap_mib * (1 << 20)
+    if manifest.storage.mode != "erase" or wanted == 0:
+        return ProbeResult("swap", True, result.output, "")
+    sizes = []
+    for line in result.output.splitlines():
+        fields = line.split()
+        if len(fields) >= 2 and not fields[0].startswith("/dev/zram") and fields[-1].isdigit():
+            sizes.append(int(fields[-1]))
+    if not any(size >= wanted * 0.9 for size in sizes):
+        return ProbeResult("swap", False, result.output, f"no active swap of about {manifest.storage.swap_mib} MiB")
+    return ProbeResult("swap", True, result.output, "")
+
+
+def parse_root_source_probe(returncode: int, output: str, manifest: InstallManifest) -> ProbeResult:
+    result = parse_probe_result("root-source", returncode, output)
+    if not result.success:
+        return result
+    source = re.sub(r"\[.*\]$", "", result.output.strip())  # Btrfs adds the subvolume: /dev/vda2[/@]
+    if not source.startswith("/dev/"):
+        return ProbeResult("root-source", False, result.output, "the root filesystem is not on a block device")
+    if (manifest.storage.luks or manifest.storage.lvm) and not source.startswith("/dev/mapper/"):
+        return ProbeResult("root-source", False, result.output, "an encrypted or LVM root must be mounted from /dev/mapper")
+    return ProbeResult("root-source", True, result.output, "")
+
+
+def parse_firmware_probe(returncode: int, output: str, expected: str) -> ProbeResult:
+    """The installed system must have booted in the firmware mode it was installed for."""
+    return parse_probe_result("firmware", returncode, output, expected)
+
+
+def parse_dmi_probe(returncode: int, output: str, preset: vm_hw.SmbiosPreset) -> ProbeResult:
+    """The VM must really present the DMI identity the scenario asked for (a harness self-check)."""
+    result = parse_probe_result("dmi", returncode, output)
+    if not result.success:
+        return result
+    lines = result.output.splitlines()
+    problems = []
+    if lines[:1] != [preset.manufacturer]:
+        problems.append(f"sys_vendor is {lines[:1]!r}, expected {preset.manufacturer!r}")
+    if preset.chassis_type and lines[1:2] != [str(preset.chassis_type)]:
+        problems.append(f"chassis_type is {lines[1:2]!r}, expected {preset.chassis_type}: QEMU did not apply the SMBIOS chassis file")
+    return ProbeResult("dmi", not problems, result.output, "; ".join(problems))
+
+
+def parse_receipt_probe(returncode: int, output: str, manifest: InstallManifest) -> ProbeResult:
+    """/etc/gentoo-live-installer/install.json (docs/contracts.md): absent is advisory, wrong is a failure."""
+    if returncode != 0 or not output.strip():
+        return ProbeResult("receipt", False, output.strip(), "the install receipt is missing", advisory=True)
+    try:
+        receipt = json.loads(output)
+    except json.JSONDecodeError as exc:
+        return ProbeResult("receipt", False, output.strip()[:300], f"the install receipt is not JSON: {exc}")
+    problems = []
+    if receipt.get("firmware") != manifest.storage.firmware:
+        problems.append(f"firmware {receipt.get('firmware')!r} != {manifest.storage.firmware!r}")
+    if receipt.get("init") != manifest.system.init:
+        problems.append(f"init {receipt.get('init')!r} != {manifest.system.init!r}")
+    root = receipt.get("root") if isinstance(receipt.get("root"), dict) else {}
+    if not manifest.storage.luks and root.get("fstype") not in (None, manifest.storage.filesystem):
+        problems.append(f"root.fstype {root.get('fstype')!r} != {manifest.storage.filesystem!r}")
+    if bool(root.get("luks_uuid")) != bool(manifest.storage.luks):
+        problems.append("root.luks_uuid does not match the encryption choice")
+    return ProbeResult("receipt", not problems, json.dumps(receipt, sort_keys=True)[:600], "; ".join(problems))
+
+
+def parse_sudo_probe(returncode: int, output: str) -> ProbeResult:
+    result = parse_probe_result("sudo", returncode, output)
+    return ProbeResult("sudo", result.success, result.output,
+                       "" if result.success else "the new user cannot use sudo with their password", advisory=True)
+
+
+def parse_root_lock_probe(returncode: int, output: str, manifest: InstallManifest) -> ProbeResult:
+    result = parse_probe_result("root-lock", returncode, output)
+    if not result.success:
+        return ProbeResult("root-lock", False, result.output, "root's password status could not be read (needs sudo)", advisory=True)
+    fields = result.output.split()
+    expected = "L" if manifest.accounts.disable_root_login else "P"
+    if len(fields) < 2 or fields[0] != "root" or fields[1] != expected:
+        return ProbeResult("root-lock", False, result.output,
+                           f"root's password status is {fields[1:2]!r}, expected {expected!r}")
+    return ProbeResult("root-lock", True, result.output, "")
+
+
+def installed_system_probes(manifest: InstallManifest, scenario: Scenario) -> list[tuple]:
+    """Probes of what the installer produced, beyond 'it boots': (name, command, parser[, stdin])."""
+    password = (TEST_PASSWORD + "\n").encode()
+    probes: list[tuple] = [
+        ("firmware", "test -d /sys/firmware/efi && echo uefi || echo bios",
+         lambda c, o: parse_firmware_probe(c, o, manifest.storage.firmware)),
+        ("cmdline", "cat /proc/cmdline", lambda c, o: parse_cmdline_probe(c, o, manifest)),
+        ("root-source", "findmnt -no SOURCE /", lambda c, o: parse_root_source_probe(c, o, manifest)),
+        ("swap", "swapon --noheadings --bytes --show=NAME,TYPE,SIZE", lambda c, o: parse_swap_probe(c, o, manifest)),
+        ("receipt", "cat /etc/gentoo-live-installer/install.json", lambda c, o: parse_receipt_probe(c, o, manifest)),
+        ("sudo", "sudo -S -p '' true", parse_sudo_probe, password),
+        ("root-lock", "sudo -S -p '' passwd -S root", lambda c, o: parse_root_lock_probe(c, o, manifest), password),
+    ]
+    preset = vm_hw.SMBIOS_PRESETS[scenario.hardware.smbios]
+    if preset.manufacturer:
+        probes.append(("dmi", "cat /sys/class/dmi/id/sys_vendor /sys/class/dmi/id/chassis_type",
+                       lambda c, o: parse_dmi_probe(c, o, preset)))
+    return probes
+
+
+# --- result files (TD-N6): a summary in the JSON, the full event stream in a sidecar ----------------
+
+def summarize_events(events: list[dict]) -> dict:
+    """Counts, final stage states, errors and the last log lines of an installer event stream."""
+    types: dict[str, int] = {}
+    stages: dict[str, str] = {}
+    errors: list[str] = []
+    logs: list[str] = []
+    completed = None
+    for event in events:
+        kind = str(event.get("type"))
+        types[kind] = types.get(kind, 0) + 1
+        if kind == "stage":
+            stages[str(event.get("stage"))] = str((event.get("data") or {}).get("status", ""))
+        elif kind == "error":
+            errors.append(str(event.get("error") or event.get("message") or "")[:500])
+        elif kind == "log":
+            logs.append(str(event.get("message", ""))[:300])
+        elif kind == "completed":
+            completed = event.get("data")
+    return {"events": len(events), "types": types, "stages": stages, "errors": errors[:20],
+            "completed": completed, "last_log": logs[-50:]}
+
+
+def write_events(path: Path, events: list[dict]) -> Path:
+    path.write_text("".join(json.dumps(event, separators=(",", ":")) + "\n" for event in events))
+    return path
+
+
+def slim_report(report: dict, sidecar: Path) -> dict:
+    """The report without its event stream (written to ``sidecar``) plus a summary of it."""
+    events = report.get("events") or []
+    write_events(sidecar, events)
+    slim = {key: value for key, value in report.items() if key != "events"}
+    slim["event_summary"] = summarize_events(events)
+    slim["events_file"] = sidecar.name
+    return slim
+
+
+def choose_by_path(target: dict) -> str:
+    """The by-path link name recorded as the identity of a disk without a serial number."""
+    names = [name for name in target.get("by_path", []) if "-part" not in name]
+    preferred = sorted((name for name in names if name.startswith("pci-")), key=lambda name: (len(name), name))
+    if preferred:
+        return preferred[0]
+    if names:
+        return sorted(names, key=lambda name: (len(name), name))[0]
+    raise HarnessError("The disk has no /dev/disk/by-path link, so it has no identity without a serial number")
 
 
 def tail(path: Path, lines: int = 25) -> str:
@@ -1132,7 +1467,26 @@ class VMProcess:
             self.serial.close()
 
 
+def manifest_overrides(expected: dict, defaults: dict, ignore: Sequence[str] = DETECTED_FIELDS) -> dict:
+    """What a person typing into the wizard would change: every field that differs from the
+    wizard's defaults, except the ones the GUI determines from the machine (``ignore``)."""
+    overrides: dict = {}
+    for section, values in expected.items():
+        if not isinstance(values, dict):
+            continue
+        for key, value in values.items():
+            if f"{section}.{key}" not in ignore and defaults.get(section, {}).get(key) != value:
+                overrides.setdefault(section, {})[key] = value
+    return overrides
+
+
 class ScenarioRunner:
+    # Defaults for runners built without __init__ (unit tests) or by tools that never ran a guard.
+    target_device = TARGET_DEVICE
+    guard_report: dict | None = None
+    installed = False
+    nonce = ""
+
     def __init__(self, args: argparse.Namespace, scenario: Scenario, public_key: str, firmware: OvmfFirmware | None) -> None:
         self.args = args
         self.scenario = scenario
@@ -1146,6 +1500,9 @@ class ScenarioRunner:
         self.iso = args.iso.resolve()
         self.vms: list[VMProcess] = []
         self.logs: list[Path] = []
+        self.nonce = secrets.token_hex(8)
+
+    # --- machine -----------------------------------------------------------------------------------
 
     def vm_arguments(self, live: bool) -> list[str]:
         return qemu_command(
@@ -1153,14 +1510,47 @@ class ScenarioRunner:
             ssh_host=self.args.ssh_host, ssh_port=self.args.ssh_port,
             memory_mib=self.args.memory, cpus=self.args.cpus,
             qemu_binary=self.args.qemu_binary, firmware=self.firmware,
+            nonce=self.nonce, cd_first=live and self.installed,
+            vars_template=getattr(self.args, "ovmf_vars_file", None),
         )
 
     def start_vm(self, live: bool) -> VMProcess:
         label = "live" if live else "target"
+        if not live and self.scenario.hardware.ovmf_vars == "fresh-on-target":
+            self.reset_firmware_variables()
         vm = VMProcess(self.vm_arguments(live), self.run_dir, label)
         self.vms.append(vm)
         vm.start()
         return vm
+
+    def reset_firmware_variables(self) -> None:
+        """Boot the installed disk with an empty NVRAM, as on firmware that never saw this installation."""
+        variables = self.run_dir / "OVMF_VARS.fd"
+        if variables.exists():
+            variables.replace(self.run_dir / "OVMF_VARS.live.fd")  # kept: which entries did the installer register?
+
+    def disk_sizes(self) -> list[int]:
+        """Exact byte sizes of the target and the extra disks (see vm_guard.unusual_sizes)."""
+        cached = self.__dict__.get("_disk_sizes")
+        if cached is None:
+            gib = self.scenario.disk_gib or getattr(self.args, "disk_size", 40)
+            salt = int(self.nonce[:8], 16) if self.nonce else 0
+            cached = vm_guard.unusual_sizes([gib * 1024, *self.scenario.hardware.extra_disks], salt)
+            self.__dict__["_disk_sizes"] = cached
+        return cached
+
+    def create_disks(self) -> None:
+        sizes = self.disk_sizes()
+        log = self.run_dir / "qemu-img.log"
+        images = [(self.disk, "qcow2", sizes[0])]
+        images += [(extra_disk_path(self.run_dir, index), "raw", size) for index, size in enumerate(sizes[1:], start=1)]
+        for path, image_format, size in images:
+            code = run_logged((self.args.qemu_img, "create", "-f", image_format, str(path), str(size)),
+                              log, self.args.command_timeout)
+            if code != 0:
+                raise HarnessError(f"qemu-img could not create the disposable disk {path.name}; see {log}")
+
+    # --- remote access -----------------------------------------------------------------------------
 
     def ssh(self, user: str, remote: str, log_name: str, timeout: int, *, stdin: bytes | None = None) -> tuple[int, Path]:
         known_hosts = self.run_dir / ("known_hosts.live" if user == self.args.ssh_user else "known_hosts.target")
@@ -1193,6 +1583,96 @@ class ScenarioRunner:
             ),
             timeout=timeout, command_timeout=self.args.command_timeout, run_dir=self.run_dir,
         )
+
+    def guest_tool(self, command: str, payload: dict, log_name: str) -> dict:
+        """Run a vm_guest.py sub-command in the live guest; returns its report or raises."""
+        source = (PROJECT_ROOT / "scripts" / "vm_guest.py").read_text()
+        code, log = self.ssh(self.args.ssh_user, shlex.join(("python3", "-c", source, command, json.dumps(payload))),
+                             log_name, self.args.command_timeout)
+        output = log.read_text(errors="replace") if log.exists() else ""
+        for line in reversed(output.strip().splitlines()):
+            try:
+                report = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(report, dict) and report.get("type") == "vm_guest":
+                if not report.get("ok"):
+                    raise HarnessError(f"{command} failed in the guest: {report.get('error')}; see {log}")
+                return report
+        raise HarnessError(f"{command} returned no report (exit {code}); see {log}")
+
+    # --- the disposable-disk guard (TD-N2) -----------------------------------------------------------
+
+    def guard_spec(self, *, blank: bool | None) -> vm_guard.GuardSpec:
+        hardware = self.scenario.hardware
+        facts = hardware.facts
+        sizes = self.disk_sizes()
+        common = {"model": facts["model"], "tran": facts["tran"], "pci_vendors": list(facts["pci_vendors"]),
+                  "log_sec": hardware.sector_size}
+        disks = [vm_guard.DiskExpectation(
+            role="target", size=sizes[0], serial=TARGET_SERIAL if hardware.disk_serial else "",
+            removable=True if hardware.removable else None, blank=blank, **common)]
+        for index in range(1, len(sizes)):
+            disks.append(vm_guard.DiskExpectation(role=f"decoy-{index}", size=sizes[index],
+                                                  serial=extra_disk_serial(index), **common))
+        return vm_guard.GuardSpec(disks=disks, nonce=self.nonce)
+
+    def run_guard(self, log_name: str, *, blank: bool | None) -> dict:
+        """Prove in the guest that the disk about to be erased is this run's disk and nothing else is attached."""
+        spec = self.guard_spec(blank=blank)
+        code, log = self.ssh(self.args.ssh_user, shlex.join(vm_guard.guest_command(spec)), log_name, self.args.command_timeout)
+        output = log.read_text(errors="replace") if log.exists() else ""
+        try:
+            report = vm_guard.parse_report(code, output)
+        except ValueError as exc:
+            raise HarnessError(f"Guest does not expose the expected disposable disk: {exc}; see {log}") from None
+        (self.run_dir / f"{Path(log_name).stem}.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+        if not report["ok"]:
+            raise HarnessError("Disposable-disk guard refused: " + "; ".join(report["problems"]) + f"; see {log}")
+        self.target_device = report["target"]["path"]
+        self.guard_report = report
+        return report
+
+    def disk_identity(self) -> tuple[str, str, str]:
+        """(device, device_id, device_id_kind) for the manifest, from what the guard saw."""
+        target = (self.guard_report or {}).get("target")
+        if not target:
+            return TARGET_DEVICE, TARGET_SERIAL, ""
+        if self.scenario.hardware.disk_serial:
+            return target["path"], TARGET_SERIAL, ""
+        return target["path"], f"{choose_by_path(target)}|{target['size']}|{target['model']}", "path"
+
+    # --- decoys ------------------------------------------------------------------------------------
+
+    def prepare_decoys(self) -> dict:
+        """Give every extra disk a GPT, a filesystem and a marker, and remember its checksum."""
+        report = self.run_guard("guest-decoy-guard.log", blank=True)
+        prepared: dict = {}
+        for role, disk in report["disks"].items():
+            if role.startswith("decoy"):
+                prepared[role] = self.guest_tool("decoy-prepare", {"role": role, "path": disk["path"], "size": disk["size"]},
+                                                 f"decoy-prepare-{role}.log")
+        (self.run_dir / "decoys.json").write_text(json.dumps(prepared, indent=2, sort_keys=True) + "\n")
+        return prepared
+
+    def check_decoys(self, prepared: dict, stage: str) -> None:
+        for role, disk in prepared.items():
+            check = self.guest_tool("decoy-check", {"path": disk["path"], "size": disk["size"], "sha256": disk["sha256"]},
+                                    f"decoy-check-{stage}-{role}.log")
+            if not check["unchanged"]:
+                raise HarnessError(f"The decoy disk {role} ({disk['path']}) changed {stage}: the installer wrote to a disk it was not given")
+
+    def check_decoy_images(self, prepared: dict) -> None:
+        """After every VM has stopped: the raw image file is byte for byte what the guest prepared."""
+        for index, role in enumerate(sorted(prepared), start=1):
+            digest = hashlib.sha256()
+            with extra_disk_path(self.run_dir, index).open("rb") as stream:
+                while chunk := stream.read(4 << 20):
+                    digest.update(chunk)
+            if digest.hexdigest() != prepared[role]["sha256"]:
+                raise HarnessError(f"The decoy image {extra_disk_path(self.run_dir, index).name} changed during the run")
+
+    # --- LUKS --------------------------------------------------------------------------------------
 
     def unlock_luks(self, target: VMProcess) -> dict:
         """Unlock the encrypted target boot and write luks-unlock-receipt.json.
@@ -1249,11 +1729,12 @@ class ScenarioRunner:
         print(instructions, flush=True)
 
     def capture_storage_snapshot(self, name: str) -> dict[str, dict[str, str]]:
-        command = "lsblk --json --output PATH,TYPE,UUID,FSTYPE,PARTUUID,PARTTYPE,PTTYPE,PTUUID /dev/vda"
+        command = ("lsblk --json --output PATH,TYPE,UUID,FSTYPE,PARTUUID,PARTTYPE,PTTYPE,PTUUID "
+                   + shlex.quote(self.target_device))
         code, log = self.ssh(self.args.ssh_user, command, f"{name}-lsblk.log", self.args.command_timeout)
         if code != 0:
             raise HarnessError(f"Could not capture {name} storage identity; see {log}")
-        snapshot = parse_lsblk_snapshot(log.read_text(errors="replace"))
+        snapshot = parse_lsblk_snapshot(log.read_text(errors="replace"), self.target_device)
         (self.run_dir / f"{name}-storage-identities.json").write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n")
         return snapshot
 
@@ -1276,11 +1757,7 @@ class ScenarioRunner:
     def check_resume(self) -> dict:
         if self.args.ssh_user != "root":
             raise HarnessError("--check-resume requires root SSH to rerun the daemon with the original manifest")
-        guard = "from pathlib import Path; import stat; p=Path('/sys/class/block/vda/serial'); p=p if p.exists() else Path('/sys/class/block/vda/device/serial'); assert p.read_text().strip() == 'GENTOO-VM-DISPOSABLE'; assert stat.S_ISBLK(Path('/dev/vda').stat().st_mode)"
-        code, log = self.ssh(self.args.ssh_user, shlex.join(("python3", "-c", guard)),
-                             "resume-disk-guard.log", self.args.command_timeout)
-        if code != 0:
-            raise HarnessError(f"Resume disk guard failed; see {log}")
+        self.run_guard("resume-disk-guard.log", blank=False)
         before = self.capture_storage_snapshot("before-resume")
         remote_manifest = "/run/gentoo-installer-vm-manifest.json"
         command = shlex.join(("gentoo-installerd", "--manifest", remote_manifest, "--yes", "--resume"))
@@ -1289,21 +1766,49 @@ class ScenarioRunner:
         # Capture post-resume identities even when the daemon reports failure.
         after = self.capture_storage_snapshot("after-resume")
         report = parse_resume_regression(code, output, before, after)
+        report = slim_report(report, self.run_dir / "resume-events.jsonl")
         (self.run_dir / "resume-result.json").write_text(json.dumps(report, indent=2) + "\n")
         if not report["success"]:
             raise HarnessError(f"Resume regression failed: {report['error']}; see {log} and {self.run_dir / 'resume-result.json'}")
         return report
 
-    def install(self, *, cancel_at_stage3: bool = False) -> None:
-        guard = "from pathlib import Path; import stat; p=Path('/sys/class/block/vda/serial'); p=p if p.exists() else Path('/sys/class/block/vda/device/serial'); assert p.read_text().strip() == 'GENTOO-VM-DISPOSABLE'; assert stat.S_ISBLK(Path('/dev/vda').stat().st_mode)"
-        code, log = self.ssh(self.args.ssh_user, shlex.join(("python3", "-c", guard)), "guest-disk-guard.log", self.args.command_timeout)
-        if code != 0:
-            raise HarnessError(f"Guest does not expose the expected disposable disk; see {log}")
+    def gui_detect_enabled(self) -> bool:
+        """Whether the GUI must detect firmware, partition table and disk itself (TD-N1).
+
+        On by default for the untouched-defaults scenario, whose point is that nothing is
+        pre-filled; ``--gui-detect`` / ``--no-gui-detect`` decide for every other scenario.
+        """
+        choice = getattr(self.args, "gui_detect", None)
+        return self.scenario.defaults if choice is None else bool(choice)
+
+    def gui_plan(self, manifest: InstallManifest, spec: vm_guard.GuardSpec) -> dict:
+        detect = self.gui_detect_enabled()
+        plan: dict = {"guard": json.loads(spec.to_json()), "detect": detect, "target": (self.guard_report or {}).get("target"),
+                      "overrides": {}, "detected": {}}
+        if detect:
+            plan["overrides"] = manifest_overrides(manifest.to_dict(redact=False), InstallManifest().to_dict(redact=False))
+            storage = manifest.storage
+            table = self.scenario.table or ("gpt" if storage.firmware == "uefi" else None)
+            plan["detected"] = {"storage.device": storage.device, "storage.device_id": storage.device_id,
+                                "storage.device_id_kind": storage.device_id_kind, "storage.firmware": storage.firmware,
+                                "storage.table": table}
+        return plan
+
+    def install(self, *, cancel_at_stage3: bool = False, reinstall: bool = False) -> dict | None:
+        """Install onto the guarded disk; returns the refusal report for a scenario that must be refused."""
+        self.run_guard("guest-disk-guard.log", blank=not reinstall)
+        device, device_id, device_id_kind = self.disk_identity()
+        swap_mib = getattr(self.args, "swap_mib", None)
+        if reinstall:  # a different layout over the first one: stale signatures at reused offsets
+            swap_mib = (512 if swap_mib is None else swap_mib) + 256
         manifest = build_manifest(
             self.scenario, self.public_key, getattr(self.args, "companions", "both"),
-            build_jobs=getattr(self.args, "build_jobs", None), swap_mib=getattr(self.args, "swap_mib", None),
+            build_jobs=getattr(self.args, "build_jobs", None), swap_mib=swap_mib,
+            device=device, device_id=device_id, device_id_kind=device_id_kind,
         )
         manifest_path = self.run_dir / "manifest.json"
+        if reinstall and manifest_path.exists():
+            manifest_path.replace(self.run_dir / "manifest-first.json")
         manifest.save(manifest_path, redact=False)
         selection = companion_selection(InstallManifest.load(manifest_path))
         (self.run_dir / "install.log.command-metadata.json").write_text(json.dumps({
@@ -1316,35 +1821,29 @@ class ScenarioRunner:
         )
         if code != 0:
             raise HarnessError(f"Could not upload the manifest; see {log}")
-        if getattr(self.args, "install_mode", "cli") == "gui":
-            driver = PROJECT_ROOT / "scripts/vm-gui-install.py"
-            code, log = self.ssh(self.args.ssh_user, "cat > /run/vm-gui-install.py", "gui-upload.log", self.args.command_timeout, stdin=driver.read_bytes())
-            if code != 0:
-                raise HarnessError(f"Could not upload the GUI driver; see {log}")
-            setup = f"chown gentoo:gentoo-installer {remote_manifest} && chmod 600 {remote_manifest} && chmod 644 /run/vm-gui-install.py"
-            code, log = self.ssh(self.args.ssh_user, setup, "gui-access.log", self.args.command_timeout)
-            if code != 0:
-                raise HarnessError(f"Could not prepare the non-root GUI session; see {log}")
-            environment = self.gui_environment()
-            env_args = [f"{key}={value}" for key, value in environment.items()]
+        gui = getattr(self.args, "install_mode", "cli") == "gui"
+        if gui:
             output_dir = "/tmp/gentoo-vm-gui-cancel" if cancel_at_stage3 else "/tmp/gentoo-vm-gui"
-            command = shlex.join(("runuser", "-u", "gentoo", "--", "env", *env_args,
-                                  "python3", "/run/vm-gui-install.py", remote_manifest,
-                                  "--output", output_dir, *( ("--cancel-at-stage3",) if cancel_at_stage3 else () )))
+            command = self.prepare_gui_driver(manifest, remote_manifest, output_dir, cancel_at_stage3)
         else:
             command = shlex.join(("gentoo-installerd", "--manifest", remote_manifest, "--yes"))
         code, log = self.ssh(self.args.ssh_user, command, "install.log", self.args.install_timeout)
         output = log.read_text(errors="replace")
         if cancel_at_stage3:
-            cancel_result = parse_cancel_regression(code, output)
+            cancel_result = slim_report(parse_cancel_regression(code, output), self.run_dir / "cancel-events.jsonl")
             (self.run_dir / "cancel-result.json").write_text(json.dumps(cancel_result, indent=2) + "\n")
             if not cancel_result["success"]:
                 raise HarnessError(f"GUI cancellation regression failed: {cancel_result['error']}; see {log} and {self.run_dir / 'cancel-result.json'}")
         else:
             result = parse_install_result(code, output)
-            (self.run_dir / "install-result.json").write_text(json.dumps(asdict(result), indent=2) + "\n")
-        if getattr(self.args, "install_mode", "cli") == "gui":
-            artifacts = ("review.png", "result.png", "gui.log")
+            write_events(self.run_dir / "events.jsonl", result.events)
+            (self.run_dir / "install-result.json").write_text(json.dumps({
+                "success": result.success, "error": result.error, "event_summary": summarize_events(result.events),
+                "events_file": "events.jsonl"}, indent=2) + "\n")
+            if self.scenario.expect_refusal and not reinstall:
+                return self.check_refusal(code, output, log)
+        if gui:
+            artifacts = ["review.png", "result.png", "gui.log"] + (["detected.json"] if self.gui_detect_enabled() else [])
             for name in artifacts:
                 remote_path = f"{output_dir}/{name}"
                 code, artifact_log = self.ssh(
@@ -1366,9 +1865,55 @@ class ScenarioRunner:
             if code != 0 or not daemon_log.stat().st_size:
                 raise HarnessError(f"Could not retrieve the daemon log; see {daemon_log}")
         if not cancel_at_stage3:
-            validate_install_outcome(
-                result, log, gui=getattr(self.args, "install_mode", "cli") == "gui",
-            )
+            validate_install_outcome(result, log, gui=gui)
+            self.installed = True
+        return None
+
+    def prepare_gui_driver(self, manifest: InstallManifest, remote_manifest: str, output_dir: str,
+                           cancel_at_stage3: bool) -> str:
+        """Upload the GUI driver, the guard module and the plan; return the command that runs the driver."""
+        uploads = (("/run/vm-gui-install.py", (PROJECT_ROOT / "scripts/vm-gui-install.py").read_bytes(), "gui-upload.log"),
+                   ("/run/vm_guard.py", (PROJECT_ROOT / "scripts/vm_guard.py").read_bytes(), "gui-guard-upload.log"),
+                   ("/run/vm-gui-plan.json",
+                    (json.dumps(self.gui_plan(manifest, self.guard_spec(blank=None)), indent=2) + "\n").encode(),
+                    "gui-plan-upload.log"))
+        for remote_path, data, log_name in uploads:
+            code, log = self.ssh(self.args.ssh_user, f"cat > {remote_path}", log_name, self.args.command_timeout, stdin=data)
+            if code != 0:
+                raise HarnessError(f"Could not upload {remote_path}; see {log}")
+        setup = (f"chown gentoo:gentoo-installer {remote_manifest} && chmod 600 {remote_manifest} && "
+                 "chmod 644 /run/vm-gui-install.py /run/vm_guard.py /run/vm-gui-plan.json")
+        code, log = self.ssh(self.args.ssh_user, setup, "gui-access.log", self.args.command_timeout)
+        if code != 0:
+            raise HarnessError(f"Could not prepare the non-root GUI session; see {log}")
+        environment = self.gui_environment()
+        env_args = [f"{key}={value}" for key, value in environment.items()]
+        return shlex.join(("runuser", "-u", "gentoo", "--", "env", *env_args,
+                           "python3", "/run/vm-gui-install.py", remote_manifest,
+                           "--output", output_dir, "--plan", "/run/vm-gui-plan.json",
+                           *(("--cancel-at-stage3",) if cancel_at_stage3 else ())))
+
+    def check_refusal(self, code: int, output: str, log: Path) -> dict:
+        """The installer must have refused this disk, said why, run nothing destructive and left it blank."""
+        result = parse_install_result(code, output)
+        problems = []
+        if result.success:
+            problems.append("the installer accepted a disk it should have refused")
+        elif not re.search(self.scenario.expect_refusal, result.error):
+            problems.append(f"the refusal {result.error!r} does not match {self.scenario.expect_refusal!r}")
+        destructive = destructive_runner_commands(output)
+        if destructive:
+            problems.append("destructive commands ran before the refusal: " + ", ".join(destructive))
+        try:
+            self.run_guard("refusal-disk-guard.log", blank=True)
+        except HarnessError as exc:
+            problems.append(f"the disk is no longer blank: {exc}")
+        report = {"success": not problems, "error": "; ".join(problems), "refusal": result.error,
+                  "destructive_commands": destructive}
+        (self.run_dir / "refusal-result.json").write_text(json.dumps(report, indent=2) + "\n")
+        if problems:
+            raise HarnessError("Refusal check failed: " + "; ".join(problems) + f"; see {log}")
+        return report
 
     def verify_cancel_cleanup(self) -> dict:
         if self.args.ssh_user != "root":
@@ -1380,7 +1925,7 @@ class ScenarioRunner:
                 "if len(fields := line.split()) > 4 and (fields[4] == '/mnt/gentoo' or fields[4].startswith('/mnt/gentoo/'))]; "
                 "left=[p for p in ('/dev/mapper/gentoo-root','/dev/gentoo/root') if Path(p).exists()]; "
                 "swaps=[line.split()[0] for line in Path('/proc/swaps').read_text().splitlines()[1:] "
-                "if line.split() and line.split()[0].startswith(('/dev/vda','/dev/mapper/gentoo','/dev/gentoo/'))]; "
+                f"if line.split() and line.split()[0].startswith(({self.target_device!r},'/dev/mapper/gentoo','/dev/gentoo/'))]; "
                 "print(json.dumps({'target_mounts':mounts,'leftover_root_stack':left,'target_swaps':swaps})); "
                 "sys.exit(bool(mounts or left or swaps))"
             )
@@ -1396,7 +1941,7 @@ class ScenarioRunner:
 
     def verify(self) -> list[ProbeResult]:
         expected_init = "systemd" if self.scenario.init == "systemd" else "init"
-        probes: list[tuple[str, str, Callable[[int, str], ProbeResult]]] = [
+        probes: list[tuple] = [
             ("init", "ps -p 1 -o comm=", lambda c, o: parse_probe_result("init", c, o, expected_init)),
             ("hostname", "hostname", lambda c, o: parse_probe_result("hostname", c, o, self.scenario.hostname)),
             ("user", "id -un", lambda c, o: parse_probe_result("user", c, o, TEST_USERNAME)),
@@ -1414,9 +1959,11 @@ class ScenarioRunner:
         if static_probe is not None:
             command, parser = static_probe
             probes.append(("network-static", command, parser))
+        probes.extend(installed_system_probes(manifest, self.scenario))
         results: list[ProbeResult] = []
-        for name, command, parser in probes:
-            code, log = self.ssh(TEST_USERNAME, command, f"verify-{name}.log", self.args.command_timeout)
+        for name, command, parser, *rest in probes:
+            code, log = self.ssh(TEST_USERNAME, command, f"verify-{name}.log", self.args.command_timeout,
+                                 stdin=rest[0] if rest else None)
             result = parser(code, log.read_text(errors="replace"))
             results.append(result)
         return results
@@ -1428,49 +1975,69 @@ class ScenarioRunner:
             return ProbeResult("portage", False, result.output, "Portage query returned no sys-apps/portage match")
         return result
 
+    def power_off_live(self, live: VMProcess) -> None:
+        code, log = self.ssh(self.args.ssh_user, "poweroff", "shutdown-live.log", self.args.command_timeout)
+        if code not in (0, 255):
+            raise HarnessError(f"Could not request live-environment shutdown; see {log}")
+        live.wait(self.args.shutdown_timeout)
+        live.cleanup()
+
     def run(self) -> dict:
         result = {"scenario": self.scenario.name, "success": False, "run_dir": str(self.run_dir),
                   "companions": None, "companion_probes": [], "disabled_companion_probes": [],
-                  "probes": [], "resume": None, "cancel": None, "luks_unlock": None}
+                  "probes": [], "resume": None, "cancel": None, "luks_unlock": None,
+                  "decoys": None, "refusal": None, "hardware": asdict(self.scenario.hardware),
+                  "firmware": self.scenario.firmware}
         try:
             validate_command_paths(self.iso, self.disk, self.run_dir)
             if self.disk.exists():
                 raise HarnessError("Refusing to overwrite an existing virtual disk")
-            code = run_logged(
-                (self.args.qemu_img, "create", "-f", "qcow2", str(self.disk), f"{self.args.disk_size}G"),
-                self.run_dir / "qemu-img.log", self.args.command_timeout,
-            )
-            if code != 0:
-                raise HarnessError(f"qemu-img could not create the disposable disk; see {self.run_dir / 'qemu-img.log'}")
+            self.create_disks()
             live = self.start_vm(live=True)
             self.wait_for_ssh(self.args.ssh_user, "live", live)
+            decoys = self.prepare_decoys() if self.scenario.decoy else None
+            result["decoys"] = decoys
             if self.args.cancel_then_resume:
                 self.install(cancel_at_stage3=True)
                 result["cancel"] = self.verify_cancel_cleanup()
                 result["resume"] = self.check_resume()
             else:
-                self.install()
+                refusal = self.install()
+                if refusal is not None:  # the installer refused the disk, as this scenario requires
+                    result["refusal"] = refusal
+                    self.power_off_live(live)
+                    result["success"] = True
+                    return result
+                if self.scenario.reinstall:
+                    self.install(reinstall=True)
             saved_manifest = InstallManifest.load(self.run_dir / "manifest.json")
             result["companions"] = companion_selection(saved_manifest)
             if self.args.check_resume:
                 result["resume"] = self.check_resume()
-            code, log = self.ssh(self.args.ssh_user, "poweroff", "shutdown-live.log", self.args.command_timeout)
-            if code not in (0, 255):
-                raise HarnessError(f"Could not request live-environment shutdown; see {log}")
-            live.wait(self.args.shutdown_timeout)
-            live.cleanup()
+            if decoys:
+                self.check_decoys(decoys, "during the installation")
+            self.power_off_live(live)
 
             target = self.start_vm(live=False)
             if self.scenario.luks:
                 result["luks_unlock"] = self.unlock_luks(target)
             self.wait_for_ssh(TEST_USERNAME, "target", target)
             probes = self.verify()
+            strict = getattr(self.args, "strict_probes", False)
             result["probes"] = [asdict(probe) for probe in probes]
             result["companion_probes"] = [asdict(probe) for probe in probes if probe.name in {"hwmonux", "portagehub"}]
             result["disabled_companion_probes"] = [asdict(probe) for probe in probes if probe.name.startswith("disabled-")]
-            failures = [f"{probe.name}: {probe.error}" for probe in probes if not probe.success]
+            result["advisory_findings"] = [asdict(probe) for probe in probes if not probe.success and probe.advisory]
+            for probe in probes:
+                if not probe.success and probe.advisory:
+                    print(f"WARNING {self.scenario.name}: advisory probe {probe.name} failed: {probe.error}", file=sys.stderr)
+            failures = [f"{probe.name}: {probe.error}" for probe in probes
+                        if not probe.success and (strict or not probe.advisory)]
             if failures:
                 raise HarnessError("Target verification failed: " + "; ".join(failures))
+            if decoys:
+                target.cleanup()  # every VM is stopped: the image files can be compared safely
+                self.check_decoy_images(decoys)
             result["success"] = True
             return result
         except BaseException as exc:
@@ -1499,8 +2066,10 @@ class ScenarioRunner:
             for name in ("serial.sock", "qmp.sock", "qemu-live.pid", "qemu-target.pid"):
                 (self.run_dir / name).unlink(missing_ok=True)
             if result["success"] and not self.args.keep:
-                for name in ("disk.qcow2", "OVMF_VARS.fd"):
-                    (self.run_dir / name).unlink(missing_ok=True)
+                for path in [self.run_dir / "OVMF_VARS.fd", self.run_dir / "OVMF_VARS.live.fd", self.disk,
+                             *self.run_dir.glob("extra-*.img")]:
+                    path.unlink(missing_ok=True)
+            result["disk"] = {"device": self.target_device, "bytes": self.disk_sizes()[0]}
             (self.run_dir / "result.json").write_text(json.dumps(result, indent=2) + "\n")
 
 
@@ -1589,9 +2158,14 @@ def preflight(args: argparse.Namespace, scenarios: Sequence[Scenario]) -> OvmfFi
         if shutil.which(getattr(args, attribute)) is None:
             raise HarnessError(f"Required executable not found: {getattr(args, attribute)}")
     check_port(args.ssh_host, args.ssh_port)
-    firmware = detect_ovmf()
+    template = getattr(args, "ovmf_vars_file", None)
+    if template is not None and not template.is_file():
+        raise HarnessError(f"--ovmf-vars-file does not exist: {template}")
+    secure = any(scenario.hardware.secure_boot for scenario in scenarios)
+    firmware = detect_ovmf(secure=True) if secure else detect_ovmf()
     if any(scenario.firmware == "uefi" for scenario in scenarios) and firmware is None:
-        raise HarnessError("OVMF was not found; UEFI scenarios cannot run (the bios scenario does not need OVMF)")
+        raise HarnessError("The Secure Boot build of OVMF was not found (OVMF_CODE.secboot.fd)" if secure else
+                           "OVMF was not found; UEFI scenarios cannot run (the bios scenario does not need OVMF)")
     return firmware
 
 
@@ -1605,6 +2179,62 @@ def positive_int(value: str) -> int:
     return number
 
 
+def disk_size_mib(value: str) -> int:
+    """'256M', '2G' or a bare number of GiB, as MiB."""
+    match = re.fullmatch(r"([0-9]+)([MmGg]?)", value.strip())
+    if not match:
+        raise argparse.ArgumentTypeError("use a size such as 256M or 2G")
+    number = int(match.group(1))
+    return number if match.group(2).upper() == "M" else number * 1024
+
+
+def apply_overrides(scenario: Scenario, args: argparse.Namespace) -> Scenario:
+    """The scenario with the command line's hardware options applied (an option left out keeps the scenario's own)."""
+    changes: dict = {}
+    for option in ("disk_bus", "sector_size", "nic", "vga", "cpu", "machine", "smbios", "ovmf_vars", "rtc"):
+        value = getattr(args, option, None)
+        if value is not None:
+            changes[option] = value
+    if getattr(args, "no_disk_serial", False):
+        changes["disk_serial"] = False
+    if getattr(args, "removable_disk", False):
+        changes["removable"] = True
+    if getattr(args, "secure_boot", False):
+        changes["secure_boot"] = True
+    if getattr(args, "extra_disk", None):
+        changes["extra_disks"] = tuple(args.extra_disk)
+    return dataclasses.replace(scenario, firmware=getattr(args, "firmware", None) or scenario.firmware,
+                               hardware=dataclasses.replace(scenario.hardware, **changes))
+
+
+def hardware_problems(scenario: Scenario, install_mode: str) -> list[str]:
+    """Combinations that cannot work, found before anything starts."""
+    problems = scenario.hardware.problems()
+    if scenario.firmware == "bios" and scenario.hardware.secure_boot:
+        problems.append("--secure-boot needs UEFI firmware")
+    if scenario.firmware == "bios" and scenario.hardware.ovmf_vars != "persist":
+        problems.append("--ovmf-vars only applies to UEFI firmware")
+    if scenario.hardware.vga == "none" and install_mode == "gui":
+        problems.append("--vga none leaves the graphical installer without a display; use --install-mode cli")
+    if scenario.luks and scenario.hardware.vga == "none":
+        problems.append("--vga none leaves no screen for the keystroke LUKS unlock; add console=ttyS0 and use the serial unlock")
+    return [f"{scenario.name}: {problem}" for problem in problems]
+
+
+def list_scenarios() -> str:
+    lines = [f"{'scenario':<18} {'init':<8} {'fw':<5} {'in --all':<9} machine and notes"]
+    for name, scenario in SCENARIO_MAP.items():
+        hw = scenario.hardware
+        shape = f"{hw.disk_bus}{'/4Kn' if hw.sector_size == 4096 else ''}{'' if hw.disk_serial else '/no-serial'}, {hw.nic}, {hw.vga}"
+        extras = [text for text in (f"smbios={hw.smbios}" if hw.smbios != "qemu" else "", f"cpu={hw.cpu}" if hw.cpu else "",
+                                    f"machine={hw.machine}" if hw.machine != "q35" else "", "luks" if scenario.luks else "",
+                                    f"+{len(hw.extra_disks)} extra disk(s)" if hw.extra_disks else "",
+                                    "fresh NVRAM on the target boot" if hw.ovmf_vars == "fresh-on-target" else "") if text]
+        lines.append(f"{name:<18} {scenario.init:<8} {scenario.firmware:<5} {'yes' if scenario.in_all else 'no':<9} "
+                     f"{shape}{'; ' + ', '.join(extras) if extras else ''}{' - ' + scenario.note if scenario.note else ''}")
+    return "\n".join(lines)
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     selection = parser.add_mutually_exclusive_group(required=True)
@@ -1612,6 +2242,7 @@ def build_parser() -> argparse.ArgumentParser:
     selection.add_argument("--all", action="store_true", help="Run the fast scenarios (see docs/TESTING.md)")
     selection.add_argument("--cleanup-stale", action="store_true",
                            help="Stop QEMU processes left behind by an earlier harness run (found through build/vm/*/qemu-*.pid) and exit")
+    selection.add_argument("--list-scenarios", action="store_true", help="Print the scenario catalogue and exit")
     parser.add_argument("--iso", type=Path, help="The (test-key) live ISO to boot")
     parser.add_argument("--ssh-host", help="Loopback address of the QEMU SSH forward (normally 127.0.0.1)")
     parser.add_argument("--ssh-port", type=positive_int, help="Unused host TCP port forwarded to guest SSH")
@@ -1642,6 +2273,33 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--install-mode", choices=("cli", "gui"), default="cli", help="Drive the real backend CLI or non-root graphical installer")
     parser.add_argument("--companions", choices=("both", "portagehub", "none"), default="both",
                         help="Install HWMonux and PortageHub (both), only PortageHub, or neither")
+    parser.add_argument("--gui-detect", action=argparse.BooleanOptionalAction, default=None,
+                        help="GUI mode: leave firmware, partition table and disk to the GUI's own detection and assert what "
+                             "it chose (default: on for the defaults scenario only)")
+    parser.add_argument("--strict-probes", action="store_true",
+                        help="Count advisory probe findings (sudo, root lock, install receipt) as failures")
+    hardware = parser.add_argument_group(
+        "machine shape", "Override the scenario's own hardware; an option left out keeps it (docs/TESTING.md)")
+    hardware.add_argument("--firmware", choices=("uefi", "bios"), help="Boot with UEFI (OVMF) or BIOS (SeaBIOS)")
+    hardware.add_argument("--disk-bus", choices=vm_hw.DISK_BUSES, help="How the target disk is attached")
+    hardware.add_argument("--no-disk-serial", action="store_true",
+                          help="Give the target disk no serial number (virtio only); the install is approved by its by-path identity")
+    hardware.add_argument("--sector-size", type=int, choices=vm_hw.SECTOR_SIZES, help="Logical and physical sector size of the disks")
+    hardware.add_argument("--removable-disk", action="store_true", help="The USB target disk reports itself removable")
+    hardware.add_argument("--nic", choices=vm_hw.NICS, help="Network card model")
+    hardware.add_argument("--vga", choices=vm_hw.VGAS, help="Display adapter")
+    hardware.add_argument("--cpu", metavar="MODEL", help="QEMU CPU model, for example Haswell, EPYC or host")
+    hardware.add_argument("--machine", choices=vm_hw.MACHINES, help="Chipset: q35 (default) or the older i440FX 'pc'")
+    hardware.add_argument("--smbios", choices=tuple(vm_hw.SMBIOS_PRESETS),
+                          help="DMI identity: a laptop or desktop vendor, or a hypervisor's strings")
+    hardware.add_argument("--extra-disk", action="append", type=disk_size_mib, metavar="SIZE",
+                          help="Attach another empty raw disk of this size (256M, 2G; repeatable)")
+    hardware.add_argument("--secure-boot", action="store_true", help="Use OVMF's Secure Boot build (setup mode unless the variable store enrols keys)")
+    hardware.add_argument("--ovmf-vars", choices=vm_hw.OVMF_VARS_MODES,
+                          help="persist: both boots share one NVRAM; fresh-on-target: the installed disk boots with an empty one; "
+                               "readonly: the firmware cannot save boot entries")
+    hardware.add_argument("--ovmf-vars-file", type=Path, help="Seed the NVRAM from this file instead of the firmware package's pristine one")
+    hardware.add_argument("--rtc", choices=vm_hw.RTC_MODES, help="Hardware clock in UTC (default) or local time")
     parser.add_argument("--qemu-binary", default="qemu-system-x86_64")
     parser.add_argument("--qemu-img", default="qemu-img")
     parser.add_argument("--ssh-binary", default="ssh")
@@ -1666,6 +2324,9 @@ def _main(argv: Sequence[str] | None = None) -> int:
         stopped = cleanup_stale()
         print(f"Stopped {len(stopped)} stale QEMU process(es)" + (": " + ", ".join(map(str, stopped)) if stopped else ""))
         return 0
+    if args.list_scenarios:
+        print(list_scenarios())
+        return 0
     if args.iso is None:
         parser.error("--iso is required")
     if args.cancel_then_resume and args.check_resume:
@@ -1674,7 +2335,11 @@ def _main(argv: Sequence[str] | None = None) -> int:
         parser.error("--cancel-then-resume requires --install-mode gui")
     if args.cancel_then_resume and args.ssh_user != "root":
         parser.error("--cancel-then-resume requires --ssh-user root")
-    scenarios = [SCENARIO_MAP[name] for name in ALL_SCENARIOS] if args.all else [SCENARIO_MAP[args.scenario]]
+    names = ALL_SCENARIOS if args.all else (args.scenario,)
+    scenarios = [apply_overrides(SCENARIO_MAP[name], args) for name in names]
+    problems = [problem for scenario in scenarios for problem in hardware_problems(scenario, args.install_mode)]
+    if problems:
+        parser.error("; ".join(problems))
     try:
         firmware = preflight(args, scenarios)
         public_key = public_key_from_private(args.ssh_keygen, args.ssh_private_key)

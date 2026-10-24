@@ -22,9 +22,9 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-# "." makes the tests package and scripts/ importable, "src" the installer packages,
-# so a bare `pytest` (IDE, CI) collects the same suite as scripts/test.sh.
-pythonpath = [".", "src"]
+# "." makes the tests package importable, "src" the installer packages and "scripts" the
+# vm_*.py helper modules, so a bare `pytest` (IDE, CI) collects the same suite as scripts/test.sh.
+pythonpath = [".", "src", "scripts"]
 # anyio and pkgcore are autoloaded from the system site-packages (the venv uses
 # include-system-site-packages) and are not needed here.
 addopts = "-ra -p no:anyio -p no:pkgcore"

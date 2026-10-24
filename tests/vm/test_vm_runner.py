@@ -21,7 +21,9 @@ from tests.vm.helpers import load_vm_module
 
 vm = load_vm_module()
 ROOT = Path(__file__).resolve().parents[2]
-PROBES = {"init", "hostname", "user", "network", "dns", "portage", "hwmonux", "portagehub"}
+PROBES = {"init", "hostname", "user", "network", "dns", "portage", "hwmonux", "portagehub",
+          "firmware", "cmdline", "root-source", "swap", "receipt", "sudo", "root-lock"}
+ADVISORY = {"receipt", "sudo", "root-lock"}
 
 
 @pytest.fixture
@@ -40,7 +42,9 @@ def test_cli_run_of_the_bios_scenario_passes_and_cleans_up(lab, capsys):
     result = lab.result()
     assert result["success"] is True
     assert PROBES | {"network-static"} == {probe["name"] for probe in result["probes"]}
-    assert all(probe["success"] for probe in result["probes"])
+    assert all(probe["success"] for probe in result["probes"] if not probe["advisory"])
+    # The fake guest has no sudo and no install receipt: advisory findings are recorded, not fatal.
+    assert {probe["name"] for probe in result["advisory_findings"]} == ADVISORY
     assert {probe["name"] for probe in result["companion_probes"]} == {"hwmonux", "portagehub"}
     assert f"PASS bios: result {run / 'result.json'}" in capsys.readouterr().out
     # Two VMs were started: the live ISO first, then the installed disk alone.
@@ -59,7 +63,8 @@ def test_cli_run_of_the_bios_scenario_passes_and_cleans_up(lab, capsys):
     assert uploaded["storage"]["firmware"] == "bios" and uploaded["accounts"]["hostname"] == "gentoo-vm-bios"
     remote = [call["remote"] for call in lab.ssh_calls()]
     assert "gentoo-installerd --manifest /run/gentoo-installer-vm-manifest.json --yes" in remote
-    assert all(call["matched"] is not None for call in lab.ssh_calls()), "an unexpected guest command ran"
+    unmatched = [call["remote"] for call in lab.ssh_calls() if call["matched"] is None]
+    assert len(unmatched) == 3 and all("install.json" in remote or "sudo" in remote for remote in unmatched), unmatched
 
 
 def test_uefi_run_shares_one_firmware_variable_store_between_both_boots(lab):
@@ -98,6 +103,13 @@ def test_a_failed_install_keeps_the_evidence_and_stops_every_vm(lab):
     captures = json.loads((run / "failure-screenshots.json").read_text())
     assert [capture["vm"] for capture in captures] == ["live"] and captures[0]["success"] == "true"
     assert not (run / "qemu-target.pid").exists()  # the installed disk was never booted
+
+
+def test_strict_probes_turn_advisory_findings_into_failures(lab):
+    lab.rules = guest_rules(vm, "bios")
+    assert lab.run("--scenario", "bios", "--strict-probes") == 1
+    error = lab.result()["error"]
+    assert all(f"{name}:" in error for name in ADVISORY)
 
 
 def test_probe_failures_are_reported_by_name(lab, capsys):
