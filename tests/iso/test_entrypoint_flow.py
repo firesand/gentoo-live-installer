@@ -6,6 +6,7 @@ import json
 import shlex
 import shutil
 import sys
+import textwrap
 from pathlib import Path
 
 import pytest
@@ -15,19 +16,36 @@ from .test_entrypoint import ENTRYPOINT, reuse, sandbox, stage1, write_receipt  
 
 verify = load_script("scripts/verify-iso.py", "verify_iso")
 ARCHIVE_NAME = "livecd-stage1-amd64-installer-20261018T124555Z.tar.gz"
+# What Catalyst leaves behind: a stage1 tarball whose package database (var/db/pkg) says when each package was built. The stub
+# builds one for every atom of RESEED_ATOMS, STUB_BUILT_OFFSET seconds after "now" (a negative offset is a package that was not
+# reinstalled).
+MAKE_STAGE1 = textwrap.dedent("""
+    import io, sys, tarfile, time
+    archive, offset, *atoms = sys.argv[1:]
+    built = int(time.time()) + int(offset)
+    with tarfile.open(archive, "w:gz") as tar:
+        for atom in atoms:
+            data = f"{built}\\n".encode()
+            info = tarfile.TarInfo(f"./var/db/pkg/{atom}-0.1.0-r5/BUILD_TIME")
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+""")
 
 
 def flow(sandbox, body: str, **env: str):
     """Run entrypoint functions after replacing run_catalyst by a recorder."""
     log = sandbox.tmp / "catalyst-calls.log"
+    helper = sandbox.tmp / "make-stage1.py"
+    helper.write_text(MAKE_STAGE1)
     prelude = f"""
 load_environment
 STAGE1_ARCHIVE={shlex.quote(str(sandbox.dirs['store'] / 'builds/23.0-default' / ARCHIVE_NAME))}
 export EMERGE_DEFAULT_OPTS='--getbinpkg'
 mkdir -p "$(dirname "$STAGE1_ARCHIVE")"
+new_stage1() {{ python3 {shlex.quote(str(helper))} "$STAGE1_ARCHIVE" "${{STUB_BUILT_OFFSET:-0}}" ${{RESEED_ATOMS:-}}; }}
 run_catalyst() {{
 	{{ echo "== $1"; echo "env EMERGE_DEFAULT_OPTS=$(printenv EMERGE_DEFAULT_OPTS)"; cat "$BUILD_DIR/catalyst.conf"; if [[ -f $1 ]]; then grep '^source_subpath' "$1"; fi; ls "$(dirname "$STAGE1_ARCHIVE")"; }} >> {shlex.quote(str(log))}
-	printf 'new stage1 %s' "$RANDOM" > "$STAGE1_ARCHIVE"
+	new_stage1
 }}
 """
     result = sandbox.run(prelude + body, **env)
@@ -92,12 +110,49 @@ def test_the_reseed_spec_differs_from_the_stage1_spec_only_in_its_source(sandbox
     archive.parent.mkdir(parents=True, exist_ok=True)
     archive.write_bytes(b"x")
     keep = sandbox.tmp / "kept-spec"
-    result, _ = flow(sandbox, f'PLAN=reseed\nRESEED_ATOMS="app-misc/hwmonux"\nrun_catalyst() {{ cp "$1" {shlex.quote(str(keep))}; printf y > "$STAGE1_ARCHIVE"; }}\nbuild_stage1')
+    result, _ = flow(sandbox, f'PLAN=reseed\nRESEED_ATOMS="app-misc/hwmonux"\nrun_catalyst() {{ cp "$1" {shlex.quote(str(keep))}; new_stage1; }}\nbuild_stage1')
     assert result.returncode == 0, result.stderr
     original = (sandbox.dirs["build"] / "livecd-stage1.spec").read_text().splitlines()
     reseed = keep.read_text().splitlines()
     differing = [(a, b) for a, b in zip(original, reseed) if a != b]
     assert len(original) == len(reseed) and len(differing) == 1 and differing[0][0].startswith("source_subpath:")
+
+
+def test_a_reseed_that_reinstalled_nothing_leaves_no_receipt(sandbox) -> None:
+    """The first real reseed did exactly this: Catalyst finished, the archive still held the old installer, and the receipt vouched for it."""
+    render_specs(sandbox)
+    archive = sandbox.dirs["store"] / "builds/23.0-default" / ARCHIVE_NAME
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    archive.write_bytes(b"previous stage1")
+    old_receipt = Path(str(archive) + ".receipt.json")
+    old_receipt.write_text("{}")
+    result, _calls = flow(sandbox, 'PLAN=reseed\nRESEED_ATOMS="app-admin/gentoo-live-installer app-misc/hwmonux"\nbuild_stage1\necho not reached',
+                          STUB_BUILT_OFFSET="-3600")
+    assert result.returncode != 0 and "not reached" not in result.stdout
+    assert "the reseed did not reinstall app-admin/gentoo-live-installer app-misc/hwmonux" in result.stderr
+    assert "app-admin/gentoo-live-installer was built at" in result.stderr and "before the reseed started" in result.stderr
+    assert "--reuse none" in result.stderr
+    assert not old_receipt.exists(), "no receipt at all: the next build starts from scratch instead of trusting this archive"
+    assert not [p for p in archive.parent.iterdir() if "completed" in p.name], "the seed copy is removed even then"
+
+
+def test_a_reseed_that_left_one_package_old_is_refused_naming_it(sandbox) -> None:
+    render_specs(sandbox)
+    archive = sandbox.dirs["store"] / "builds/23.0-default" / ARCHIVE_NAME
+    archive.parent.mkdir(parents=True, exist_ok=True)
+    archive.write_bytes(b"previous stage1")
+    # the stub builds hwmonux fresh, but the installer's entry is not in the archive at all
+    result, _calls = flow(sandbox, 'PLAN=reseed\nRESEED_ATOMS="app-misc/hwmonux app-admin/gentoo-live-installer"\n'
+                                   'new_stage1() { python3 "' + str(sandbox.tmp / "make-stage1.py") + '" "$STAGE1_ARCHIVE" 0 app-misc/hwmonux; }\nbuild_stage1')
+    assert result.returncode != 0
+    assert "app-admin/gentoo-live-installer is not installed in the new archive" in result.stderr and "app-misc/hwmonux is not" not in result.stderr
+    assert not Path(str(archive) + ".receipt.json").exists()
+
+
+def test_the_proof_applies_to_a_reseed_only(sandbox) -> None:
+    render_specs(sandbox)
+    result, _calls = flow(sandbox, "PLAN=full\nwrite_catalyst_config\nbuild_stage1", STUB_BUILT_OFFSET="-3600")
+    assert result.returncode == 0, result.stderr
 
 
 # --- publishing ------------------------------------------------------------------------------

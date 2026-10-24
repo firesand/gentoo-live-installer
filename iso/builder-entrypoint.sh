@@ -4,7 +4,8 @@
 # Environment from scripts/build-iso.sh: JOBS, LOAD_AVERAGE, BUILD_MODE, ISO_FLAVOR,
 # GENTOO_TEST_SSH_PUBLIC_KEY, CATALYST_BUILDER_IMAGE, BUILDER_IMAGE_ID, HOST_UID, HOST_GID.
 # BUILD_MODE: full (default), stage1-only, stage2-only, reseed or auto (choose from the
-# receipt of the last stage1, see iso/stage_reuse.py).
+# receipt of the last stage1, see iso/stage_reuse.py: auto reuses a stage1 that nothing changed
+# and builds stage1 fresh otherwise; it never reseeds, only BUILD_MODE=reseed does).
 set -Eeuo pipefail
 
 WORKSPACE=${WORKSPACE:-/workspace}
@@ -344,7 +345,7 @@ build_stage1() {
 		seed_subpath="23.0-default/livecd-stage1-amd64-${VERSION_STAMP}-completed"
 		python3 "${WORKSPACE}/iso/stage_reuse.py" reseed-spec "${BUILD_DIR}/livecd-stage1.spec" "${seed_subpath}" \
 			> "${BUILD_DIR}/livecd-stage1-reseed.spec"
-		local atom reinstall= saved_options=${EMERGE_DEFAULT_OPTS}
+		local atom reinstall= saved_options=${EMERGE_DEFAULT_OPTS} started
 		for atom in ${RESEED_ATOMS}; do
 			reinstall+="${reinstall:+ }--reinstall-atoms=${atom}"
 		done
@@ -352,9 +353,16 @@ build_stage1() {
 		# (envvars); the reinstall options apply to this run only.
 		export EMERGE_DEFAULT_OPTS="${saved_options} ${reinstall}"
 		write_catalyst_config
+		started=$(date +%s)
 		run_catalyst "${BUILD_DIR}/livecd-stage1-reseed.spec"
 		export EMERGE_DEFAULT_OPTS="${saved_options}"
 		rm -f -- "${seed}"
+		# Catalyst is just as content with a reseed that reinstalled nothing (the first real one did
+		# exactly that), so the archive has to show it: every package must have been built since the
+		# reseed started. Without that proof there is no receipt, and the next build starts from scratch.
+		# shellcheck disable=SC2086
+		python3 "${WORKSPACE}/iso/stage_reuse.py" reinstalled --archive "${STAGE1_ARCHIVE}" --since "${started}" ${RESEED_ATOMS} \
+			|| die "the reseed did not reinstall ${RESEED_ATOMS}; ${STAGE1_ARCHIVE} has no receipt and is not used again. Build once with --reuse none"
 	else
 		log "Building Catalyst livecd-stage1"
 		run_catalyst "${BUILD_DIR}/livecd-stage1.spec"
