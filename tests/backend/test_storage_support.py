@@ -28,12 +28,37 @@ SWAP = "0657fd6d-a4ab-43c4-84e5-0933c84b4f4f"
 WRITE_EXECUTABLES = {"sgdisk", "wipefs", "mkswap", "pvcreate", "vgcreate", "lvcreate"}
 
 
+def dm_name(vg: str, lv: str) -> str:
+    """The device-mapper name LVM gives a logical volume: both parts with their hyphens doubled, joined by one hyphen."""
+    return vg.replace("-", "--") + "-" + lv.replace("-", "--")
+
+
+def dm_split(name: str) -> tuple[str, str, str]:
+    """(volume group, volume, layer) of a device-mapper name, as libdm's dm_split_lvm_name reads it.
+
+    A single hyphen separates the parts, a doubled one is a hyphen inside a name. Layered devices of thin pools,
+    snapshots and RAID volumes have a third part (vg0-pool-tpool).
+    """
+    parts, current, i = [], "", 0
+    while i < len(name):
+        if name[i] == "-" and name[i + 1 : i + 2] == "-":
+            current, i = current + "-", i + 2
+        elif name[i] == "-":
+            parts.append(current)
+            current, i = "", i + 1
+        else:
+            current, i = current + name[i], i + 1
+    parts.append(current)
+    group, volume, layer = (parts + ["", ""])[:3]
+    return group, volume, layer
+
+
 def is_write(argv: tuple[str, ...]) -> bool:
     exe = argv[0]
     return (
         exe.startswith("mkfs.")
         or exe in WRITE_EXECUTABLES
-        or (exe == "parted" and ("mklabel" in argv or "mkpart" in argv))
+        or (exe == "parted" and any(word in argv for word in ("mklabel", "mkpart", "set", "disk_set")))
         or (exe == "cryptsetup" and "luksFormat" in argv)
         or (exe == "btrfs" and "mkswapfile" in argv)
     )
@@ -57,6 +82,13 @@ class Holder:
         for child in self.children:
             yield from child.walk()
 
+    def walk_active(self):
+        """This device and what is below it, but only while every device on the way is active (stopping an array hides its partitions)."""
+        if self.active:
+            yield self
+            for child in self.children:
+                yield from child.walk_active()
+
 
 class FakeDisk:
     def __init__(
@@ -76,7 +108,11 @@ class FakeDisk:
     ) -> None:
         self.path, self.size, self.serial, self.wwn, self.model, self.pttype, self.kind = path, size, serial, wwn, model, pttype, kind
         self.log_sec, self.ro, self.removable = log_sec, ro, removable
-        self.parts = [dict(p) for p in (partitions or [])]  # num, start, size, fstype, parttype, label, mounts, holders
+        self.pmbr_boot = False  # GPT: the protective MBR entry carries the boot flag (parted disk_set pmbr_boot on)
+        self.holders: list[Holder] = []  # stacked devices on the whole disk (an Intel RST container)
+        self.fstype: str | None = None  # a signature on the whole disk
+        self.uuid: str | None = None
+        self.parts = [dict(p) for p in (partitions or [])]  # num, start, size, fstype, parttype, label, mounts, holders, flags
         for part in self.parts:
             part.setdefault("start", 1 * MiB)
             part.setdefault("holders", [])
@@ -135,9 +171,30 @@ class StatefulRunner:
 
     def all_holders(self):
         for d in self.disks.values():
+            for h in d.holders:
+                yield from h.walk()
             for p in d.parts:
                 for h in p.get("holders", []):
                     yield from h.walk()
+
+    def active_holders(self):
+        """The stacked devices that exist right now: an inactive one takes everything below it away."""
+        for d in self.disks.values():
+            for h in d.holders:
+                yield from h.walk_active()
+            for p in d.parts:
+                for h in p.get("holders", []):
+                    yield from h.walk_active()
+
+    def present(self, device: str) -> bool:
+        """Whether the device node exists right now (what a command that opens the device needs)."""
+        return (
+            device in self.disks
+            or self.part(device)[1] is not None
+            or any(h.path == device for h in self.active_holders())
+            or any(lv["path"] == device for lv in self.lvs)
+            or (device.startswith("/dev/mapper/") and device.rsplit("/", 1)[1] in self.mapper)
+        )
 
     def busy(self, part: dict) -> bool:
         return any(h.active for h in part.get("holders", []))
@@ -149,6 +206,17 @@ class StatefulRunner:
 
     def _mounted_at(self, device: str) -> list[str]:
         return [dest for dest, (source, _) in self.mounts.items() if source == device]
+
+    def dm_taken(self, name: str) -> bool:
+        """Whether a device-mapper device of this name exists: the kernel allows each name once (EBUSY).
+
+        LVM names its devices <vg>-<lv>, so an LV and a dm-crypt mapping can clash.
+        """
+        return (
+            name in self.mapper
+            or any(dm_name(lv["vg"], lv["name"]) == name for lv in self.lvs)
+            or any(h.active and h.path == f"/dev/mapper/{name}" for h in self.all_holders())
+        )
 
     # -- lsblk -----------------------------------------------------------------------
     def _node(self, path: str, kind: str, size: int, **extra) -> dict:
@@ -187,10 +255,11 @@ class StatefulRunner:
                                            mountpoints=self._mounted_at(mapper_path) + (["[SWAP]"] if mapper_path in self.swaps else []) or [None])
                         crypt["children"] = self._lv_nodes(mapper_path)
                         children.append(crypt)
-                kids.append(self._node(dev, "part", p["size"], fstype=p.get("fstype"), parttype=p.get("parttype"), label=p.get("label"),
+                kids.append(self._node(dev, "part", p["size"], fstype=p.get("fstype"), parttype=p.get("parttype"), label=p.get("label"), uuid=p.get("uuid"),
                                        mountpoints=mounts or [None], children=children))
+            kids += [self._holder_json(h) for h in d.holders if h.active]
             roots.append(self._node(d.path, d.kind, d.size, model=d.model, serial=d.serial or None, wwn=d.wwn or None, pttype=d.pttype or None,
-                                    ro=d.ro, rm=d.removable, **{"log-sec": d.log_sec}, children=kids))
+                                    fstype=d.fstype, uuid=d.uuid, ro=d.ro, rm=d.removable, **{"log-sec": d.log_sec}, children=kids))
         return json.dumps({"blockdevices": roots})
 
     # -- the Runner protocol ----------------------------------------------------------------
@@ -265,6 +334,7 @@ class StatefulRunner:
         if args[1] == "--zap-all":
             disk.parts.clear()
             disk.pttype = "gpt"
+            disk.pmbr_boot = False  # a fresh protective MBR: sgdisk writes its entry with status 0x00 (mbr.cc: "unbootable")
             return self.ok(args, "GPT data structures destroyed!")
         m = re.match(r"--new=(\d+):0:(.+)", args[1])
         if m:
@@ -279,11 +349,35 @@ class StatefulRunner:
             disk.parts.append({"num": num, "start": start, "size": length, "fstype": None, "parttype": guid, "mounts": [], "holders": []})
         return self.ok(args)
 
+    def _parted_print(self, disk: FakeDisk) -> str:
+        """`parted --script --machine DISK print`: one line for the disk, one per partition (flags last, joined by ", ")."""
+        lines = ["BYT;", f"{disk.path}:{disk.size}B:file:{disk.log_sec}:{disk.log_sec}:{'msdos' if disk.pttype == 'dos' else disk.pttype}::{'pmbr_boot' if disk.pmbr_boot else ''};"]
+        for part in sorted(disk.parts, key=lambda p: p["num"]):
+            end = part["start"] + part["size"] - 1
+            lines.append(f"{part['num']}:{part['start']}B:{end}B:{part['size']}B:{part.get('fstype') or ''}::{', '.join(sorted(part.get('flags', ())))};")
+        return "\n".join(lines) + "\n"
+
     def _cmd_parted(self, args):
+        if "--machine" in args:
+            return self.ok(args, self._parted_print(self.disks[args[-2]]))
         disk = self.disks[args[2]]
         if args[3] == "mklabel":
             disk.parts.clear()
             disk.pttype = "dos"
+            disk.pmbr_boot = False
+        elif args[3] == "set":  # parted DISK set NUMBER FLAG on|off
+            part = next((p for p in disk.parts if p["num"] == int(args[4])), None)
+            if part is None:
+                raise RunnerError(args, 1, "Error: Partition doesn't exist.")
+            flags = part.setdefault("flags", set())
+            if args[6] == "on":
+                flags.add(args[5])
+            else:
+                flags.discard(args[5])
+        elif args[3] == "disk_set":  # parted DISK disk_set FLAG on|off
+            if disk.pttype != "gpt" or args[4] != "pmbr_boot":
+                raise RunnerError(args, 1, f"parted: invalid token: {args[4]}")
+            disk.pmbr_boot = args[5] == "on"
         elif args[3] == "mkpart":
             def mib(x: str) -> int:
                 return disk.size if x == "100%" else int(x.removesuffix("MiB")) * MiB
@@ -298,6 +392,8 @@ class StatefulRunner:
 
     def _cmd_wipefs(self, args):
         dev = args[-1]
+        if not self.present(dev):
+            raise RunnerError(args, 1, f"wipefs: error: {dev}: probing initialization failed: No such file or directory")
         d, p = self.part(dev)
         if p is not None:
             if self.busy(p):
@@ -307,7 +403,7 @@ class StatefulRunner:
             p["fstype"] = None
             p["holders"] = []
         elif dev in self.disks:
-            if "--force" not in args and any(self.busy(q) for q in self.disks[dev].parts):
+            if "--force" not in args and (any(self.busy(q) for q in self.disks[dev].parts) or any(h.active for h in self.disks[dev].holders)):
                 raise RunnerError(args, 1, "busy")
             self.disks[dev].pttype = ""
         return self.ok(args)
@@ -376,9 +472,13 @@ class StatefulRunner:
         return self.ok(args)
 
     def _cmd_lvs(self, args):
-        for h in self.all_holders():
-            if h.path == args[-1] and h.kind == "lvm":
+        # LVM 2.03 skip_dev_dir(): a /dev/mapper name with a layer (vg0-pool-tpool) cannot be split, so it is taken for a volume group name.
+        layered = bool(dm_split(args[-1].rsplit("/", 1)[-1])[2])
+        for h in self.all_holders():  # lvs reads the metadata: an inactive volume is still found
+            if h.path == args[-1] and h.kind == "lvm" and not layered:
                 return self.ok(args, f"  {h.vg}\n")
+        if layered:
+            raise RunnerError(args, 5, f"  Volume group \"{args[-1].rsplit('/', 1)[-1]}\" not found\n  Cannot process volume group {args[-1].rsplit('/', 1)[-1]}")
         raise RunnerError(args, 5, "Failed to find logical volume")
 
     def _cmd_pvs(self, args):
@@ -409,6 +509,8 @@ class StatefulRunner:
             if p is not None:
                 p["fstype"] = "crypto_LUKS"
         elif sub == "open":
+            if self.dm_taken(args[-1]):
+                raise RunnerError(args, 5, f"Device {args[-1]} already exists.")
             self.mapper[args[-1]] = {"backing": args[-2]}
         elif sub == "status":
             name = args[2]
@@ -433,6 +535,11 @@ class StatefulRunner:
         return self.ok(args)
 
     def _cmd_dmsetup(self, args):
+        if args[1] == "splitname":  # dmsetup splitname [--noheadings] [-o fields] NAME [SUBSYSTEM]
+            fields = args[args.index("-o") + 1].split(",") if "-o" in args else ["vg_name", "lv_name", "lv_layer"]
+            group, volume, layer = dm_split(next(a for a in args[2:] if not a.startswith("-") and a not in fields and a != "LVM"))
+            values = {"vg_name": group, "lv_name": volume, "lv_layer": layer}
+            return self.ok(args, ":".join(values[name] for name in fields) + "\n")
         if args[1] == "remove":
             for h in self.all_holders():
                 if h.name == args[-1] and not h.sticky:
@@ -448,6 +555,8 @@ class StatefulRunner:
 
     def _cmd_lvcreate(self, args):
         name, vg = args[args.index("--name") + 1], args[-1]
+        if self.dm_taken(dm_name(vg, name)):
+            raise RunnerError(args, 5, f"device-mapper: create ioctl on {dm_name(vg, name)} failed: Device or resource busy\n  Failed to activate new LV.")
         self.lvs.append({"vg": vg, "name": name, "path": f"/dev/{vg}/{name}", "pv": self.pv_device})
         return self.ok(args)
 

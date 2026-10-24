@@ -804,7 +804,9 @@ class Installer:
             return
         self.target_root.mkdir(parents=True, exist_ok=True)
         self.stage3.notify = self.log
-        extra: dict[str, Any] = {"allowed_existing": [entry.mountpoint for entry in self.storage.layout if entry.mountpoint]}
+        # Mount points are not leftovers, and neither is the installer's own swap file (made inside the new root before this stage).
+        allowed = [entry.mountpoint for entry in self.storage.layout if entry.mountpoint] + [entry.source for entry in self.storage.layout if entry.source]
+        extra: dict[str, Any] = {"allowed_existing": allowed}
         if self.manifest.network.proxy:
             extra["proxy"] = self.manifest.network.proxy
         if self.manifest.portage.mirror_fallbacks:

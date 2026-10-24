@@ -562,15 +562,22 @@ class Stage3Manager:
     def extract(self, archive: Path, target_root: Path) -> None:
         root = target_root.resolve()
         root.mkdir(parents=True, exist_ok=True)
+
+        def checked(member: tarfile.TarInfo, _path: str) -> tarfile.TarInfo | None:
+            self._check_cancel()  # unpacking takes minutes on a slow disk: Cancel is looked at between members
+            return self._checked_member(member, root)
+
         try:
             with tarfile.open(archive, "r:*") as tar:
-                members = tar.getmembers()
-                for member in members:
+                members: list[tarfile.TarInfo] = []
+                for member in tar:  # the first pass over the whole archive (every header is read)
+                    self._check_cancel()
                     self._checked_member(member, root)
+                    members.append(member)
                 # The data filter changes ownership and strips SUID bits, which makes
                 # a Gentoo stage3 unusable. Preserve archive metadata after checking
                 # each destination and link against the mounted target root.
-                tar.extractall(root, members=members, filter=lambda member, _: self._checked_member(member, root), numeric_owner=True)
+                tar.extractall(root, members=members, filter=checked, numeric_owner=True)
                 self._restore_extended_attributes(members, root)
         except (tarfile.TarError, OSError) as exc:
             raise Stage3Error(f"Safe stage3 extraction failed: {exc}") from exc

@@ -16,15 +16,18 @@ that can be checked before the first command that writes. The order matters:
  6. LVM / md members are looked up explicitly (live auto-activation is off, lsblk shows
     nothing active) and active volumes are listed: they are refused unless the manifest
     consents to deactivating them;
- 7. the stack names this installer creates (gentoo-root, VG gentoo) are free;
+ 7. the names this installer creates (the LUKS mapping, the root volume's device-mapper name, VG gentoo)
+    are free;
  8. consented volumes are released and the identity is checked once more;
- 9. only then: wipefs, partition table, partitions, signature clean-up, mkfs, mounts.
+ 9. only then: wipefs, partition table, partitions, signature clean-up, mkfs, mounts. Legacy BIOS
+    disks also get the boot flag that strict BIOS firmware looks for (protective MBR or active partition).
 """
 
 from __future__ import annotations
 
 import datetime
 import os
+import re
 import signal
 import time
 from dataclasses import asdict, dataclass
@@ -35,10 +38,11 @@ from gentoo_installer import blockdev
 from gentoo_installer import layout as guided_layout
 from gentoo_installer.manifest import InstallManifest, Partition
 
-from .inspect import BY_PATH_DIR, MD_MEMBER_TYPES, PROC_CMDLINE, Disk, Discovery, find_disk, find_volume_sets, holders, parent_disks, resolve_by_path
+from .inspect import BY_PATH_DIR, MD_MEMBER_TYPES, PROC_CMDLINE, Disk, Discovery, VolumeSet, find_disk, find_volume_sets, holders, parent_disks, resolve_by_path
 from .runner import Runner, RunnerError
 
 BIOS_BOOT_GUID = "21686148-6449-6e6f-744e-656564454649"
+ESP_GUID = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
 # Filesystems that may legitimately sit behind a declared type (ext4 mounts ext2/ext3).
 COMPATIBLE_FSTYPES = {"ext4": {"ext4", "ext3", "ext2"}, "xfs": {"xfs"}, "btrfs": {"btrfs"}, "vfat": {"vfat"}, "swap": {"swap"}}
 # cryptsetup(8) RETURN CODES
@@ -189,6 +193,8 @@ class StorageManager:
                 continue
             if find_disk(fresh, entry.device).mountpoints:
                 raise StorageError(f"Refusing to mount an already mounted target: {entry.device}", "storage.mounted")
+        if not erase:
+            self._mark_manual_disk_bootable(fresh)
         self._mount_layout(dry_run=False)
         self._create_swap_file(dry_run=False)
         return self.layout
@@ -409,15 +415,22 @@ class StorageManager:
     # ---- holders, signatures, name collisions
 
     def _check_name_collisions(self, rewritten: Sequence[Disk]) -> None:
-        """The stack names this installer creates (mapper gentoo-root, VG gentoo) must be free.
+        """The names this installer creates (the LUKS mapping, the root volume's device-mapper name, VG gentoo) must be free.
 
         Checked before the first write; anything that lives on the devices about to be rewritten
         does not count, it disappears with them (and is released first).
         """
         s = self.manifest.storage
-        if s.luks and (self.dev_root / "mapper" / "gentoo-root").exists():
-            if "gentoo-root" not in {holder.name for node in rewritten for holder in holders(node)}:
-                raise StorageError("A device-mapper volume named gentoo-root is already active; close it (cryptsetup close gentoo-root) and retry", "storage.collision")
+        releasing = {holder.name for node in rewritten for holder in holders(node)}
+        wanted: list[tuple[str, str]] = []  # (device-mapper name, the command that frees it)
+        if s.luks:
+            mapper = guided_layout.luks_mapper_name(s)
+            wanted.append((mapper, f"cryptsetup close {mapper}"))
+        if s.lvm:
+            wanted.append(("gentoo-root", "dmsetup remove gentoo-root"))  # LVM names the volume <group>-<volume>
+        for name, command in wanted:
+            if (self.dev_root / "mapper" / name).exists() and name not in releasing:
+                raise StorageError(f"A device-mapper volume named {name} is already active; close it ({command}) and retry", "storage.collision")
         if s.lvm:
             try:
                 listing = self.runner.run(("pvs", "--noheadings", "--separator", ":", "-o", "pv_name,vg_name")).stdout
@@ -440,12 +453,13 @@ class StorageManager:
 
         Covers active LVM / dm-crypt / md volumes and active swap (lsblk shows them) and LVM / md sets
         that span other disks (found with pvs and mdadm --examine, because the live system does not
-        assemble or activate them by itself any more).
+        assemble or activate them by itself any more) and Btrfs / ZFS / bcachefs pools with a member on
+        another disk (lsblk shows the same filesystem UUID on every member).
         """
         consent = self.manifest.storage.release_holders
         found = [(node, holder) for node in rewritten for holder in holders(node)]
         swaps = [sub.path for node in rewritten for sub in node.walk() if "[SWAP]" in sub.mountpoints]
-        sets = find_volume_sets(self.runner, disks, rewritten)
+        sets: list[VolumeSet | blockdev.FilesystemPool] = [*find_volume_sets(self.runner, disks, rewritten), *blockdev.filesystem_pools(disks, rewritten)]
         spanning = [item for item in sets if item.spans_other_disks]
         for item in sets:
             if not item.spans_other_disks:
@@ -475,12 +489,10 @@ class StorageManager:
         containers: list[Disk] = []
         for _, holder in found:
             if holder.type == "lvm":
-                group = self.runner.run(("lvs", "--noheadings", "-o", "vg_name", holder.path)).stdout.strip()
-                if not group:
-                    raise StorageError(f"Cannot determine the volume group of {holder.path}", "storage.holders")
+                group = self._volume_group_of(holder)
                 if group not in volume_groups:
                     volume_groups.add(group)
-                    self._run(("vgchange", "-an", group))
+                    self._deactivate_group(group)
             elif holder.type == "crypt":
                 self._run(("cryptsetup", "close", holder.name))
             elif holder.type == "md":
@@ -499,6 +511,32 @@ class StorageManager:
                 raise StorageError(f"Volumes on {node.path} are still active after deactivation; stop them manually and retry", "storage.holders")
         return fresh
 
+    def _volume_group_of(self, holder: Disk) -> str:
+        """The volume group of an active logical volume, read from its device-mapper name.
+
+        Not with lvs: it cannot resolve the hidden and layered devices of thin pools, snapshots and RAID
+        volumes (/dev/mapper/vg0-pool-tpool). dmsetup splitname only parses the name and knows the layers.
+        """
+        try:
+            group = self.runner.run(("dmsetup", "splitname", "--noheadings", "-o", "vg_name", holder.name, "LVM")).stdout.strip()
+        except (RunnerError, OSError):
+            group = ""
+        if not group:
+            raise StorageError(
+                f"Cannot determine the volume group of {holder.path}; deactivate it yourself (vgchange -an <volume group>) and try again",
+                "storage.holders",
+            )
+        return group
+
+    def _deactivate_group(self, group: str) -> None:
+        try:
+            self.runner.run(("vgchange", "-an", group))
+        except RunnerError as exc:
+            raise StorageError(
+                f"Cannot deactivate the LVM volume group {group}: something still uses it. Stop that, run \"vgchange -an {group}\" yourself and try again",
+                "storage.holders",
+            ) from exc
+
     # ------------------------------------------------------------------ layout
 
     def _partition_device(self, disk: str, number: int) -> str:
@@ -509,8 +547,10 @@ class StorageManager:
         canonical = os.path.realpath(disk)
         for node in self._target_nodes:
             if os.path.realpath(node.path) == canonical:
+                # The disk's own partitions only (lsblk lists MBR logical partitions flat next to the others). The
+                # partitions of an md array or a multipath map sit deeper and are gone once that volume is released.
                 # An MBR extended-partition container shows up as a 1 KiB "part"; it holds no signature to wipe.
-                return [child.path for child in node.walk()[1:] if child.type == "part" and child.size >= guided_layout.MIB]
+                return [child.path for child in node.children if child.type == "part" and child.size >= guided_layout.MIB]
         return []
 
     def use_btrfs_subvolumes(self) -> bool:
@@ -547,11 +587,13 @@ class StorageManager:
         elif s.table == "gpt":
             self._new_partition(number, f"+{guided_layout.BIOS_BOOT_MIB}MiB", "EF02", "BIOS")
             number += 1
+        boot_number = 0
         if s.luks:
             boot = self._partition_device(disk, number)
             self._new_partition(number, f"+{guided_layout.BOOT_MIB}MiB", "8300", "boot")
             entries.append(LayoutEntry(boot, "/boot", "ext4"))
             created.append(boot)
+            boot_number = number
             number += 1
         swap_device = ""
         home_device = ""
@@ -570,6 +612,8 @@ class StorageManager:
         created.append(root_device)
         self._run(("partprobe", disk))
         self._run(("udevadm", "settle"))
+        if s.firmware == "bios":
+            self._mark_disk_bootable(disk, boot_number or number)
         for device in created:
             self._run(("wipefs", "--all", device))
         self._run(("udevadm", "settle"))
@@ -589,6 +633,83 @@ class StorageManager:
             entries.append(LayoutEntry(home_device, "/home", s.filesystem))
         self._format(entries)
         return entries
+
+    def _mark_disk_bootable(self, disk: str, partition: int) -> None:
+        """Legacy BIOS: flag the new disk the way BIOS firmware that insists on a bootable entry expects.
+
+        GPT: the boot flag of the protective MBR. MBR: the active flag of ``partition`` (the one that
+        holds /boot, else the root). sgdisk and `parted mkpart` leave both off and grub-install
+        --target=i386-pc only writes boot.img and core.img, so a strict BIOS says "no bootable device".
+        Never for UEFI: it does not need either, and some UEFI firmware ignores a disk whose protective
+        MBR is active.
+        """
+        if self.manifest.storage.table == "gpt":
+            self._run(("parted", "--script", disk, "disk_set", "pmbr_boot", "on"))
+        else:
+            self._run(("parted", "--script", disk, "set", str(partition), "boot", "on"))
+        self._run(("partprobe", disk))
+        self._run(("udevadm", "settle"))
+
+    def _mark_manual_disk_bootable(self, disks: Sequence[Disk]) -> None:
+        """Legacy BIOS with a manual layout: the same flags as a guided one, but only where they cannot hurt.
+
+        The disk holds partitions the installer does not touch, so a flag that is already there stays and
+        a disk that UEFI firmware may also start from (it carries an EFI System Partition) is left alone.
+        Nothing here may stop the installation: without the flag most computers still start.
+        """
+        s = self.manifest.storage
+        if s.firmware != "bios":
+            return
+        command: tuple[str, ...]
+        try:
+            disk = find_disk(disks, s.device)
+            if disk.type not in {"disk", "loop"}:
+                return  # an assembled array or volume has no partition table of its own
+            if disk.pttype == "gpt":
+                if any(sub.parttype.lower() == ESP_GUID for sub in disk.walk()):
+                    return
+                command = ("parted", "--script", s.device, "disk_set", "pmbr_boot", "on")
+                done = f"Legacy BIOS: the boot flag of the protective MBR of {s.device} is set, as some BIOS firmware requires it"
+            elif disk.pttype == "dos":
+                partition = self._boot_partition_number(disk)
+                if partition is None:
+                    return
+                listing = self.runner.run(("parted", "--script", "--machine", s.device, "print")).stdout
+                if self._active_partitions(listing):
+                    return  # for example Windows' own: its flag stays
+                command = ("parted", "--script", s.device, "set", str(partition), "boot", "on")
+                done = f"Legacy BIOS: {self._partition_device(s.device, partition)} is now the active (bootable) partition of {s.device}, as some BIOS firmware requires it"
+            else:
+                return
+            self.runner.run(command)
+            self.runner.run(("partprobe", s.device))
+            self.runner.run(("udevadm", "settle"))
+            self.notes.append(done)
+        except (RunnerError, OSError, ValueError) as exc:
+            reason = str(exc).splitlines()[0] if str(exc) else type(exc).__name__
+            self.notes.append(
+                f"Could not set the boot flag on {s.device} ({reason}). If the computer does not start from this disk, "
+                "set the boot flag with a partitioning tool such as GParted"
+            )
+
+    def _boot_partition_number(self, disk: Disk) -> int | None:
+        """Number of the primary partition of ``disk`` that holds /boot (else the root); None when it is not one."""
+        rows = self.manifest.storage.partitions
+        row = next((r for r in rows if r.mountpoint == "/boot"), None) or next((r for r in rows if r.mountpoint == "/"), None)
+        if row is None:
+            return None
+        match = re.fullmatch(re.escape(os.path.realpath(disk.path)) + r"p?(\d+)", os.path.realpath(row.device))
+        return int(match.group(1)) if match and 1 <= int(match.group(1)) <= 4 else None  # logical partitions cannot be active
+
+    @staticmethod
+    def _active_partitions(parted_listing: str) -> list[str]:
+        """Numbers of the partitions that `parted --script --machine DISK print` shows with the boot (active) flag."""
+        active: list[str] = []
+        for line in parted_listing.splitlines():
+            fields = line.strip().rstrip(";").split(":")
+            if len(fields) >= 7 and fields[0].isdigit() and "boot" in {flag.strip() for flag in fields[-1].split(",")}:
+                active.append(fields[0])
+        return active
 
     def _new_partition(self, number: int, size: str, typecode: str, name: str) -> None:
         s = self.manifest.storage
@@ -634,7 +755,7 @@ class StorageManager:
         s = self.manifest.storage
         current = device
         if s.luks:
-            mapper = f"gentoo-{name}"
+            mapper = guided_layout.luks_mapper_name(s, name)
             if (self.dev_root / "mapper" / mapper).exists():
                 raise StorageError(f"Mapper already exists: {mapper}", "storage.collision")
             self._stack["luks_device"] = current

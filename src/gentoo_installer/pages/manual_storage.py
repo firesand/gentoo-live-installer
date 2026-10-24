@@ -29,7 +29,7 @@ from ..widgets import FlowLayout, wrapped_label
 
 MOUNT_CHOICES = ("/", "/boot", "/efi", "/home", "swap")
 FILESYSTEMS = (
-    ("ext4", "ext4"), ("xfs", "XFS"), ("btrfs", "Btrfs"), ("vfat", "FAT32 (EFI)"), ("swap", "swap"), ("none", "none (do not mount)"),
+    ("ext4", "ext4"), ("xfs", "XFS"), ("btrfs", "Btrfs"), ("vfat", "FAT32 (EFI)"), ("swap", "swap"),
 )
 # lsblk filesystem names that a declared filesystem may keep without formatting.
 COMPATIBLE = {"ext4": {"ext2", "ext3", "ext4"}, "xfs": {"xfs"}, "btrfs": {"btrfs"}, "vfat": {"vfat", "fat32", "fat16"}, "swap": {"swap"}}
@@ -241,7 +241,7 @@ class ManualLayoutEditor(QWidget):
             filesystem = str(fs.currentData())
             if text.lower() == "swap":
                 filesystem, text = "swap", ""
-            elif filesystem in {"swap", "none"}:
+            elif filesystem == "swap":
                 text = ""
             result.append(Partition(
                 device=self._device(row), mountpoint=text, filesystem=filesystem,
@@ -404,7 +404,7 @@ class ManualLayoutEditor(QWidget):
                 if row.mountpoint in seen_mounts:
                     problems.append(f"{row.mountpoint} is used by two rows.")
                 seen_mounts.add(row.mountpoint)
-            if not row.format and row.filesystem not in {"none"}:
+            if not row.format:
                 if not part.fstype:
                     problems.append(f"{row.device} has no filesystem yet. Tick Format to create one.")
                 elif part.fstype not in COMPATIBLE.get(row.filesystem, set()):

@@ -266,7 +266,7 @@ class PackageAndServiceTests(unittest.TestCase):
             root = Path(temporary)
             Configurer(runner, root).configure_initramfs(m, "/dev/gentoo/root", "/dev/sda3")
             self.assertIn(f"rd.luks.uuid={uuid}", (root / "etc/kernel/cmdline").read_text())
-            self.assertIn(f"rd.luks.name={uuid}=gentoo-root", (root / "etc/kernel/cmdline").read_text())
+            self.assertIn(f"rd.luks.name={uuid}=gentoo-crypt", (root / "etc/kernel/cmdline").read_text())  # LVM owns the name gentoo-root
             self.assertIn(f"rd.luks.uuid={uuid}", (root / "etc/default/grub").read_text())
             self.assertIn("rd.lvm.lv=gentoo/root", (root / "etc/default/grub").read_text())
             self.assertIn("crypt lvm", (root / "etc/dracut.conf.d/gentoo-installer.conf").read_text())
