@@ -1,25 +1,47 @@
 FROM gentoo/stage3:amd64-openrc@sha256:d60b786ab715b2bd5ec0efdbe90a55b261b68ba3f56c0a7f6b3de6ff768f034e
 
 ARG GENTOO_TREEISH=8694f43d32823e774da57921c6927f3a76c063a1
+# 40 hex digits, from iso/pins.env (scripts/build-iso.sh passes it).
+ARG GENTOO_TREEISH_SIGNER_FPR
 
 SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
 RUN install -d /etc/portage/package.accept_keywords /etc/portage/package.use \
     && printf 'dev-util/catalyst ~amd64\n' > /etc/portage/package.accept_keywords/catalyst \
     && printf '>=sys-apps/util-linux-2.42.3 python\n>=sys-boot/grub-2.14-r5 grub_platforms_efi-32\n' > /etc/portage/package.use/catalyst
-RUN install -d /var/db/repos/gentoo \
-    && curl --proto '=https' --tlsv1.2 -fL --retry 4 \
+
+# Step 1: a bootstrap copy of the pinned tree, only so that Portage can install the tools
+# below (git, the OpenPGP keyrings, Catalyst). Nothing trusts it: step 2 replaces it.
+RUN install -d /var/db/repos/gentoo /tmp/bootstrap \
+    && curl --proto '=https' --tlsv1.2 -fL --retry 4 -o /tmp/bootstrap/gentoo.tar.gz \
         "https://codeload.github.com/gentoo/gentoo/tar.gz/${GENTOO_TREEISH}" \
-        | tar -xz --strip-components=1 -C /var/db/repos/gentoo \
+    && tar -xzf /tmp/bootstrap/gentoo.tar.gz --strip-components=1 -C /var/db/repos/gentoo \
+    && rm -rf /tmp/bootstrap \
     && emerge --noreplace --verbose \
         app-arch/pixz \
         app-arch/zstd \
         app-cdr/cdrtools \
         dev-lang/rust-bin \
+        dev-libs/libisoburn \
         dev-util/catalyst \
         dev-vcs/git \
         net-misc/curl \
+        sec-keys/openpgp-keys-gentoo-auth \
+        sec-keys/openpgp-keys-gentoo-developers \
         sec-keys/openpgp-keys-gentoo-release \
         sys-fs/squashfs-tools-ng
+
+# Step 2: the tree the image keeps is the exact commit that iso/pins.env names, fetched
+# with git and accepted only when it carries a good signature of the pinned developer key.
+COPY verify-snapshot.sh /usr/local/sbin/verify-gentoo-snapshot
+RUN chmod 0755 /usr/local/sbin/verify-gentoo-snapshot \
+    && git init --bare --quiet /tmp/gentoo.git \
+    && git -C /tmp/gentoo.git remote add origin https://github.com/gentoo/gentoo.git \
+    && git -C /tmp/gentoo.git fetch --depth=1 origin "${GENTOO_TREEISH}" \
+    && /usr/local/sbin/verify-gentoo-snapshot /tmp/gentoo.git "${GENTOO_TREEISH}" "${GENTOO_TREEISH_SIGNER_FPR}" \
+    && rm -rf /var/db/repos/gentoo \
+    && install -d /var/db/repos/gentoo \
+    && git -C /tmp/gentoo.git archive "${GENTOO_TREEISH}" | tar -x -C /var/db/repos/gentoo \
+    && rm -rf /tmp/gentoo.git
 
 COPY builder-entrypoint.sh /usr/local/sbin/build-gentoo-installer-iso
 RUN chmod 0755 /usr/local/sbin/build-gentoo-installer-iso
