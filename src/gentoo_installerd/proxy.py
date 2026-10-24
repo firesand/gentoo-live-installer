@@ -60,9 +60,13 @@ def proxy_environment(proxy: str) -> dict[str, str]:
     return environment
 
 
-def make_conf_settings(proxy: str) -> dict[str, str]:
-    """Proxy variables that are safe to keep in the installed system's make.conf."""
-    if not proxy or has_credentials(proxy):
+def make_conf_settings(proxy: str, keep: bool = True) -> dict[str, str]:
+    """Proxy variables that are safe to keep in the installed system's make.conf.
+
+    Nothing is kept when the proxy has credentials (they never reach the installed system) or when ``keep`` is False
+    (``network.keep_proxy``: the proxy is for the installation only).
+    """
+    if not proxy or not keep or has_credentials(proxy):
         return {}
     return {"http_proxy": proxy, "https_proxy": proxy, "ftp_proxy": proxy}
 

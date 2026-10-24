@@ -85,6 +85,7 @@ class ConfigurerBase:
         def resolve_console_keymap(self, manifest: InstallManifest) -> str: ...  # configure_system
         def luks_prompt_uses_console_keymap(self, manifest: InstallManifest) -> bool: ...  # configure_system
         def wants_cron(self, manifest: InstallManifest) -> bool: ...  # configure_system
+        def network_atoms(self, manifest: InstallManifest) -> list[str]: ...  # configure_network
         def service_installed(self, name: str, init: str) -> bool: ...  # configure_system
         def desktop_atoms(self, manifest: InstallManifest, plan: object | None = None) -> DesktopAtoms: ...  # configure_desktop
         def early_boot_atoms(self, manifest: InstallManifest, plan: object | None = None) -> list[str]: ...  # configure_boot

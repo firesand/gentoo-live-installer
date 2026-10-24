@@ -155,7 +155,7 @@ def rewrite_keyfile(text: str, *, portable: bool = False) -> ImportedProfile | N
             section = line[1:-1]
         elif section == "connection" and line.startswith("permissions="):
             continue
-        elif portable and section == "connection" and line.startswith("interface-name=") and connection_type in {"ethernet", "802-3-ethernet"}:
+        elif portable and section == "connection" and line.startswith("interface-name=") and connection_type in {"ethernet", "802-3-ethernet", "wifi", "802-11-wireless"}:
             continue
         elif section.startswith("802-1x") and "=" in line and line.partition("=")[0] in _NM_CERTIFICATE_KEYS:
             key, _, value = line.partition("=")
@@ -169,7 +169,26 @@ def rewrite_keyfile(text: str, *, portable: bool = False) -> ImportedProfile | N
     return ImportedProfile("\n".join(out) + "\n", connection_type, certificates)
 
 
+WIFI_NOTE = "Very old Wi-Fi security (WEP, TKIP) will not connect."
+
+
+def network_atoms(manifest: InstallManifest) -> list[str]:
+    """Packages the network choices add on top of the manager itself (NET-05, NET-06)."""
+    n = manifest.network
+    atoms: list[str] = []
+    if n.manager == "netifrc" and n.dhcp:
+        atoms.append("net-misc/dhcpcd")  # netifrc's "dhcp" needs a client
+    if n.wireless_tools:
+        atoms.extend(("net-wireless/iw", "net-wireless/wpa_supplicant"))
+    if n.ppp:
+        atoms.append("net-dialup/ppp")
+    return atoms
+
+
 class NetworkMixin(ConfigurerBase):
+    def network_atoms(self, manifest: InstallManifest) -> list[str]:
+        return network_atoms(manifest)
+
     def configure_network(self, manifest: InstallManifest) -> None:
         n = manifest.network
         if n.manager == "networkmanager":
@@ -180,6 +199,8 @@ class NetworkMixin(ConfigurerBase):
                 self._write_profile("installer-wired.nmconnection", render_nm_wired(n))
             if n.import_live_profiles:
                 self.import_live_network_profiles(manifest)
+            elif n.copy_live_wifi:
+                self.copy_live_wifi_profile(manifest)
         elif n.manager == "dhcpcd":
             if not n.dhcp:
                 render_dhcpcd_static(manifest)  # validates the settings now; the block is added once the package exists
@@ -204,6 +225,34 @@ class NetworkMixin(ConfigurerBase):
             stock = "" if self.dry_run else self.read_text("etc/dhcpcd.conf")
             if marker not in stock:
                 self.write("etc/dhcpcd.conf", stock.rstrip("\n") + ("\n" if stock else "") + render_dhcpcd_static(manifest))
+
+    def copy_live_wifi_profile(self, manifest: InstallManifest) -> str:
+        """Copy the one live Wi-Fi connection named by ``network.copy_live_wifi`` (with its secret) to the target.
+
+        Returns the profile's file name, or '' when it was not copied. A uuid that no longer exists is a warning, not an error.
+        """
+        wanted = manifest.network.copy_live_wifi
+        if self.dry_run or not wanted or not self.live_network_dir.is_dir():
+            return ""
+        portable = manifest.hardware.target == "portable"
+        pattern = re.compile(rf"^uuid={re.escape(wanted)}\s*$", re.MULTILINE | re.IGNORECASE)
+        for source in sorted(self.live_network_dir.glob("*.nmconnection")):
+            if source.name.startswith("installer-") or not source.is_file():
+                continue
+            try:
+                text = source.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            if not pattern.search(text):
+                continue
+            profile = rewrite_keyfile(text, portable=portable)
+            if profile is None or profile.connection_type not in {"wifi", "802-11-wireless"}:
+                break
+            self._write_profile(source.name, profile.text)
+            self.notify(f"Copied the Wi-Fi connection {source.stem} from this session")
+            return source.name
+        self.notify(f"warning: the Wi-Fi connection {wanted} of this session was not found; the installed system will not know it")
+        return ""
 
     def import_live_network_profiles(self, manifest: InstallManifest) -> list[str]:
         """Copy this session's NetworkManager connections (Wi-Fi, VPN, enterprise) to the target."""

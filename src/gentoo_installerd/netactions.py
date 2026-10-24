@@ -300,10 +300,10 @@ def handle_network_status(request: dict, channel: Channel) -> None:
         "wifi_present": wifi_present, "wifi_enabled": bool(wifi_enabled) if wifi_present else False, "rfkill_hard": hard,
         "devices": [{"name": a.name, "kind": a.kind, "state": a.state, "driver": a.driver, "connection": a.connection,
                      "ipv4": a.ipv4, "ipv6": a.ipv6} for a in adapters],
-        "problem": diagnosis.problem, "message": diagnosis.message,
+        "problem": diagnosis.problem,
         "steps": [{"key": s.key, "label": s.label, "ok": s.ok, "detail": s.detail} for s in diagnosis.steps],
     }
-    _reply(channel, True, diagnosis.message or "The network works.", **data)
+    _reply(channel, True, diagnosis.message, **data)
 
 
 def handle_wifi_scan(request: dict, channel: Channel) -> None:
@@ -500,8 +500,10 @@ def handle_network_static(request: dict, channel: Channel) -> None:
             return _fail(channel, "no_device", "There is no connected network to change. Connect a cable or Wi-Fi first.")
         connection = active[0]["connection"]
     if request.get("dhcp") is True:
-        commands = [["nmcli", "connection", "modify", connection, "ipv4.method", "auto", "ipv4.addresses", "", "ipv4.gateway", "",
-                     "ipv4.dns", "", "ipv4.ignore-auto-dns", "no"], ["nmcli", "--wait", "30", "connection", "up", connection]]
+        # The runner refuses empty arguments, so the fixed values are removed (reset to their defaults) one by one.
+        commands = [["nmcli", "connection", "modify", connection, "remove", f"ipv4.{name}"] for name in ("addresses", "gateway", "dns")]
+        commands += [["nmcli", "connection", "modify", connection, "ipv4.method", "auto", "ipv4.ignore-auto-dns", "no"],
+                     ["nmcli", "--wait", "30", "connection", "up", connection]]
     else:
         raw_dns = request.get("dns") or []
         try:
