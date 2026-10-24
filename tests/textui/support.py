@@ -11,6 +11,7 @@ import io
 import json
 import socket
 import threading
+import time
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -23,6 +24,7 @@ from tests.hardware.helpers import fixture_dict
 CTRL_C = object()  # an answer: the user presses Ctrl-C
 END = object()  # an answer: the input ends (Ctrl-D)
 DROP = object()  # a reply item: the service closes the connection at this point
+STALL = object()  # a reply item: the service says nothing for a while (the client's read timeout is shortened in the test)
 ALL_TOOLS = {
     "lsblk": True, "findmnt": True, "blkid": True, "sgdisk": True, "parted": True, "partprobe": True, "udevadm": True,
     "wipefs": True, "mkfs.ext4": True, "mkfs.xfs": True, "mkfs.btrfs": True, "mkfs.vfat": True, "mkswap": True, "swapon": True,
@@ -270,6 +272,11 @@ class FakeInstaller:
         self.log_lines = ["2026-10-24T12:00:00Z log [storage] first line", "2026-10-24T12:00:01Z log [base] last line"]
         self.action_replies: dict[str, dict[str, Any]] = {"sync_time": {"ok": True, "message": "The clock was set from the network."}, "set_time": {"ok": True, "message": "The clock was set."}}
         self.inspect_error: str = ""
+        self.die_after_drop = False  # the service goes away for good when it drops a connection
+        self.refuse_start = False  # close the connection on a start without a word
+        self.stall_seconds = 1.0
+        self.resumable_override: bool | None = None  # what the status says about resuming, whatever the job's own events said
+        self.stall_at: int | None = None  # after this many job events of the next start, stay silent for stall_seconds
         self.cancelled = False
         self.current: list[dict[str, Any]] = []
         self._lock = threading.Lock()
@@ -303,7 +310,12 @@ class FakeInstaller:
                 request = json.loads(line)
                 for event in self.respond(request):
                     if event is DROP:
+                        if self.die_after_drop:
+                            self.close()
                         return
+                    if event is STALL:
+                        time.sleep(self.stall_seconds)
+                        continue
                     stream.write(json.dumps(event).encode() + b"\n")
                     stream.flush()
         except OSError:
@@ -359,7 +371,16 @@ class FakeInstaller:
         script = self.jobs.pop(0) if len(self.jobs) > 1 else self.jobs[0]
         self.current = self._numbered(script)
         self.state.update(status="running", seq=len(self.current), stage="", progress=None)
+        if self.refuse_start:
+            self.state["status"] = "idle"
+            return [DROP]
         out: list[Any] = [{"type": "status", "job_id": "job-1", "message": "Installation started", "data": {"status": "running", "job_id": "job-1"}}]
+        if self.stall_at is not None:
+            out.extend(self.current[: self.stall_at])
+            out.append(STALL)
+            out.extend(self.current[self.stall_at:])
+            self.stall_at = None
+            return out
         if self.drop_after is not None:
             out.extend(self.current[: self.drop_after])
             out.append(DROP)
@@ -388,7 +409,8 @@ class FakeInstaller:
         failure = next((event for event in self.current if event["type"] == "error"), None)
         cancelled = failure is not None and failure["data"].get("code") == "install.cancelled"
         self.state.update(
-            status="completed" if success else "cancelled" if cancelled else "failed", resumable=bool(done["data"].get("resumable")),
+            status="completed" if success else "cancelled" if cancelled else "failed",
+            resumable=bool(done["data"].get("resumable")) if self.resumable_override is None else self.resumable_override,
             error=failure["message"] if failure else "", log_path="/var/lib/gentoo-installer/install.log",
         )
 
@@ -407,3 +429,11 @@ def run_main(argv: Sequence[str], script: Script, host: FakeHost, *, environ: di
     err = io.StringIO()
     code = main(list(argv), stdin=script.stdin, stdout=script.out, stderr=err, environ={"TERM": "dumb", **(environ or {})}, host=host)  # type: ignore[arg-type]
     return Result(code, script.text, err.getvalue())
+
+
+def valid_manifest(device: str = "/dev/vda", serial: str = "VDA-SERIAL-0001") -> InstallManifest:
+    """A manifest the daemon accepts, for tests that talk to the fake service without the wizard."""
+    manifest = InstallManifest()
+    manifest.storage.device, manifest.storage.device_id = device, serial
+    manifest.accounts.password = manifest.accounts.root_password = "correct-horse-1"
+    return manifest
