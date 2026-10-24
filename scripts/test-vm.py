@@ -1069,7 +1069,8 @@ def live_inspection_problems(data: dict, *, firmware: str, memory_mib: int, targ
         problems.append(f"the installer sees {seen >> 20} MiB of memory in a {memory_mib} MiB VM")
     if not data.get("network"):
         problems.append("the live system has no working network on this machine's NIC (the installer cannot download anything)")
-    disks = data.get("disks") if isinstance(data.get("disks"), list) else []
+    raw_disks = data.get("disks")
+    disks: list = raw_disks if isinstance(raw_disks, list) else []
     if not any(isinstance(disk, dict) and int(disk.get("size") or 0) == target_size and not disk.get("mountpoints") for disk in disks):
         problems.append(f"no unmounted disk of {target_size} bytes is offered: the installer does not see the VM's disk")
     missing = [tool for tool, present in (data.get("tools") or {}).items() if not present and tool in REQUIRED_LIVE_TOOLS]
