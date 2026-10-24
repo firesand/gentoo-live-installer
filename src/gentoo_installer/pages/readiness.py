@@ -90,7 +90,7 @@ class ReadinessPage(Page):
         self.content.addWidget(self.continue_anyway)
 
         actions = QHBoxLayout()
-        self.refresh_button = QPushButton("&Check again")
+        self.refresh_button = QPushButton("Check &again")
         self.refresh_button.clicked.connect(self.refreshRequested)
         actions.addWidget(self.refresh_button)
         network = QPushButton("&Network settings")

@@ -143,6 +143,23 @@ def test_mnemonics_on_the_navigation_and_the_readiness_actions(make_window):
     assert "&" in window.readiness.refresh_button.text()
 
 
+def test_no_two_visible_buttons_of_a_page_share_a_mnemonic(make_window):
+    from PySide6.QtWidgets import QAbstractButton, QLabel
+
+    window = make_window()
+    for index in range(7):
+        window._show_page(index)
+        keys: dict[str, str] = {}
+        widgets = [w for w in window.findChildren(QAbstractButton) + window.findChildren(QLabel) if w.isVisibleTo(window)]
+        for widget in widgets:
+            text = widget.text() if hasattr(widget, "text") else ""
+            if "&" in text and "&&" not in text:
+                key = text.split("&", 1)[1][:1].lower()
+                other = keys.setdefault(key, text)
+                # a label and its buddy field are meant to share the key; two buttons are not
+                assert other == text or isinstance(widget, QLabel), (index, key, other, text)
+
+
 def test_the_current_step_stays_readable_even_when_disabled(themed, make_window):
     window = make_window()
     window.install_started = True

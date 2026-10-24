@@ -70,7 +70,7 @@ class WelcomePage(Page):
         self.content.addSpacing(8)
 
         actions = QHBoxLayout()
-        live = QPushButton("&Continue trying the live desktop")
+        live = QPushButton("Continue trying the live desktop")
         live.clicked.connect(self.tryLiveRequested)
         actions.addWidget(live)
         handbook = QPushButton("Open the AMD64 &Handbook")
