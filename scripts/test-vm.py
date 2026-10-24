@@ -1691,9 +1691,10 @@ def _main(argv: Sequence[str] | None = None) -> int:
             if not result.get("success"):
                 raise HarnessError(f"Scenario result marked unsuccessful: {result.get('error', 'unknown error')}")
             print(f"PASS {scenario.name}: result {runner.run_dir / 'result.json'}", flush=True)
-        except (HarnessError, OSError) as exc:
+        except Exception as exc:  # a bug in one scenario must not hide the others' results
             failures += 1
-            print(f"FAIL {scenario.name}: {exc}", file=sys.stderr)
+            detail = str(exc) if isinstance(exc, (HarnessError, OSError)) else f"{type(exc).__name__}: {exc}"
+            print(f"FAIL {scenario.name}: {detail}", file=sys.stderr)
             for log in (runner.run_dir / "install.log", runner.run_dir / "serial-target.log", runner.run_dir / "qemu-live.log"):
                 excerpt = tail(log)
                 if excerpt:
