@@ -997,6 +997,11 @@ LIVE_ARGUMENT_RE = re.compile(r"root=live:\S*|rd\.live\.\S+|\S*CDLABEL=\S*|\S*rd
 STABLE_ROOT_RE = re.compile(r"root=(?:UUID=|PARTUUID=|LABEL=|PARTLABEL=|/dev/mapper/|/dev/disk/by-)\S+")
 UNSTABLE_ROOT_RE = re.compile(r"root=/dev/(?:vd|sd|hd|nvme|mmcblk|xvd)\S*")
 PROBE_STDIN = "stdin"
+# What a machine that cannot boot shows on its serial console or screen (rescue evidence).
+BROKEN_BOOT_MARKERS = ("grub>", "grub rescue>", "error: file", "error: unknown filesystem", "Kernel panic",
+                       "VFS: Unable to mount root", "Entering emergency mode", "UEFI Interactive Shell",
+                       "No bootable device", "Boot failed")
+RESCUE_BREAKS = ("none", "grub-cfg", "initramfs", "fstab-uuid")
 
 
 def parse_cmdline_probe(returncode: int, output: str, manifest: InstallManifest) -> ProbeResult:
@@ -1486,6 +1491,7 @@ class ScenarioRunner:
     guard_report: dict | None = None
     installed = False
     nonce = ""
+    SSH_RETRY_SECONDS = 3.0  # pause between SSH readiness probes
 
     def __init__(self, args: argparse.Namespace, scenario: Scenario, public_key: str, firmware: OvmfFirmware | None) -> None:
         self.args = args
@@ -1518,6 +1524,7 @@ class ScenarioRunner:
         label = "live" if live else "target"
         if not live and self.scenario.hardware.ovmf_vars == "fresh-on-target":
             self.reset_firmware_variables()
+        (self.run_dir / f"known_hosts.{label}").unlink(missing_ok=True)  # every boot generates its own SSH host keys
         vm = VMProcess(self.vm_arguments(live), self.run_dir, label)
         self.vms.append(vm)
         vm.start()
@@ -1570,7 +1577,7 @@ class ScenarioRunner:
             code = run_logged(command, log, min(20, self.args.command_timeout))
             if code == 0:
                 return
-            time.sleep(3)
+            time.sleep(min(self.SSH_RETRY_SECONDS, max(0.0, deadline - time.monotonic())))
         raise HarnessError(f"SSH did not become ready within {limit}s; see {log}")
 
     def gui_environment(self) -> dict[str, str]:
@@ -1827,7 +1834,8 @@ class ScenarioRunner:
             command = self.prepare_gui_driver(manifest, remote_manifest, output_dir, cancel_at_stage3)
         else:
             command = shlex.join(("gentoo-installerd", "--manifest", remote_manifest, "--yes"))
-        code, log = self.ssh(self.args.ssh_user, command, "install.log", self.args.install_timeout)
+        code, log = self.ssh(self.args.ssh_user, command, "install-2.log" if reinstall else "install.log",
+                             self.args.install_timeout)
         output = log.read_text(errors="replace")
         if cancel_at_stage3:
             cancel_result = slim_report(parse_cancel_regression(code, output), self.run_dir / "cancel-events.jsonl")
@@ -1939,7 +1947,8 @@ class ScenarioRunner:
             raise HarnessError(f"Cancellation cleanup check failed: {report['error']}; see {log}")
         return report
 
-    def verify(self) -> list[ProbeResult]:
+    def verify(self, label: str = "") -> list[ProbeResult]:
+        """Run every probe of the installed system; ``label`` keeps the logs of a second round apart."""
         expected_init = "systemd" if self.scenario.init == "systemd" else "init"
         probes: list[tuple] = [
             ("init", "ps -p 1 -o comm=", lambda c, o: parse_probe_result("init", c, o, expected_init)),
@@ -1962,7 +1971,7 @@ class ScenarioRunner:
         probes.extend(installed_system_probes(manifest, self.scenario))
         results: list[ProbeResult] = []
         for name, command, parser, *rest in probes:
-            code, log = self.ssh(TEST_USERNAME, command, f"verify-{name}.log", self.args.command_timeout,
+            code, log = self.ssh(TEST_USERNAME, command, f"verify-{name}{label}.log", self.args.command_timeout,
                                  stdin=rest[0] if rest else None)
             result = parser(code, log.read_text(errors="replace"))
             results.append(result)
@@ -1982,19 +1991,156 @@ class ScenarioRunner:
         live.wait(self.args.shutdown_timeout)
         live.cleanup()
 
+    def boot_and_verify(self, result: dict, key: str = "probes", label: str = "") -> VMProcess:
+        """Boot the installed disk alone, unlock it if needed, and run every probe of the installed system."""
+        target = self.start_vm(live=False)
+        if self.scenario.luks:
+            result["luks_unlock"] = self.unlock_luks(target)
+        self.wait_for_ssh(TEST_USERNAME, "target", target)
+        probes = self.verify(label)
+        strict = getattr(self.args, "strict_probes", False)
+        result[key] = [asdict(probe) for probe in probes]
+        result["companion_probes"] = [asdict(probe) for probe in probes if probe.name in {"hwmonux", "portagehub"}]
+        result["disabled_companion_probes"] = [asdict(probe) for probe in probes if probe.name.startswith("disabled-")]
+        result["advisory_findings"] = [asdict(probe) for probe in probes if not probe.success and probe.advisory]
+        for probe in probes:
+            if not probe.success and probe.advisory:
+                print(f"WARNING {self.scenario.name}: advisory probe {probe.name} failed: {probe.error}", file=sys.stderr)
+        failures = [f"{probe.name}: {probe.error}" for probe in probes if not probe.success and (strict or not probe.advisory)]
+        if failures:
+            raise HarnessError("Target verification failed: " + "; ".join(failures))
+        return target
+
+    # --- rescue (TD-N4): damage an installed system from the live ISO, show it is broken, repair it ---------
+
+    def boot_live(self) -> VMProcess:
+        live = self.start_vm(live=True)
+        self.wait_for_ssh(self.args.ssh_user, "live", live)
+        return live
+
+    def stop_vm(self, guest: VMProcess) -> None:
+        """Press the power button, then make sure the guest is gone."""
+        guest.qmp("system_powerdown")
+        if guest.process is not None:
+            try:
+                guest.process.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                pass
+        guest.cleanup()
+
+    def attach_target_image(self) -> None:
+        """Use an existing disk image as the target through a copy-on-write overlay: the image itself is never written."""
+        image = Path(self.args.target_image)
+        if image.is_symlink() or not image.is_file() or image.suffix.lower() not in {".qcow2", ".img", ".raw"}:
+            raise HarnessError(f"--target-image must name a regular .qcow2, .img or .raw file: {image}")
+        image = image.resolve()
+        if self.run_dir in image.parents or any(char in str(image) for char in (",", "\n", "\r", "\x00")):
+            raise HarnessError("--target-image must be outside the run directory and have no commas in its path")
+        info_log = self.run_dir / "qemu-img-info.log"
+        if run_logged((self.args.qemu_img, "info", "--output=json", str(image)), info_log, self.args.command_timeout) != 0:
+            raise HarnessError(f"qemu-img could not read {image}; see {info_log}")
+        try:
+            info = json.loads(info_log.read_text())
+            image_format, size = str(info["format"]), int(info["virtual-size"])
+        except (ValueError, KeyError, TypeError) as exc:
+            raise HarnessError(f"qemu-img info returned no usable format and size for {image}: {exc}") from None
+        if image_format not in {"qcow2", "raw"}:
+            raise HarnessError(f"--target-image has format {image_format}; only qcow2 and raw images are supported")
+        code = run_logged((self.args.qemu_img, "create", "-f", "qcow2", "-b", str(image), "-F", image_format, str(self.disk)),
+                          self.run_dir / "qemu-img.log", self.args.command_timeout)
+        if code != 0:
+            raise HarnessError(f"qemu-img could not create the overlay; see {self.run_dir / 'qemu-img.log'}")
+        status = image.stat()
+        self.__dict__["_base_image"] = (image, status.st_size, status.st_mtime_ns)
+        self.__dict__["_disk_sizes"] = [size]
+        manifest = Path(getattr(self.args, "target_manifest", None) or image.parent / "manifest.json")
+        if not manifest.is_file():
+            raise HarnessError(f"The manifest the image was installed with is needed for the probes: {manifest} (use --target-manifest)")
+        shutil.copyfile(manifest, self.run_dir / "manifest.json")
+        self.installed = True
+
+    def check_base_image_untouched(self) -> bool:
+        image, size, mtime = self.__dict__["_base_image"]
+        status = image.stat()
+        if (status.st_size, status.st_mtime_ns) != (size, mtime):
+            raise HarnessError(f"The base image {image} changed during the run: it must only ever be a read-only backing file")
+        return True
+
+    def break_installed_system(self, mode: str) -> dict:
+        """In the running live system: damage the installed system on the guarded disk."""
+        report = self.run_guard("rescue-disk-guard.log", blank=False)
+        disk = report["target"]
+        details = self.guest_tool("rescue-break", {"mode": mode, "path": disk["path"], "size": disk["size"]}, "rescue-break.log")
+        (self.run_dir / "rescue-break.json").write_text(json.dumps(details, indent=2, sort_keys=True) + "\n")
+        return details
+
+    def prove_broken(self, mode: str, details: dict) -> dict:
+        """The damage must be real: the machine does not come up (or, for the fstab, findmnt rejects it)."""
+        if mode == "fstab-uuid":
+            # A wrong fstab does not always stop the boot, so the proof is the guest's own verification.
+            if details.get("findmnt_exit", 0) == 0:
+                raise HarnessError("findmnt --verify accepts the damaged fstab: the break did not take effect")
+            return {"proof": "findmnt --verify", "exit": details["findmnt_exit"], "output": details.get("findmnt_output", "")}
+        timeout = getattr(self.args, "broken_timeout", 120)
+        target = self.start_vm(live=False)
+        try:
+            self.wait_for_ssh(TEST_USERNAME, "broken", target, timeout=timeout)
+        except HarnessError as exc:
+            reason = str(exc)
+        else:
+            raise HarnessError(f"The system still boots after breaking {mode}: a repair test on it would prove nothing")
+        evidence: dict = {"proof": "no SSH", "reason": reason, "timeout": timeout}
+        try:
+            evidence["screenshot"] = target.screendump(self.run_dir / "broken-boot.ppm").name
+        except (OSError, RuntimeError, ValueError) as exc:
+            evidence["screenshot_error"] = str(exc)
+        excerpt = tail(target.serial_log, 40)
+        (self.run_dir / "broken-boot-serial.txt").write_text(excerpt + "\n")
+        evidence["markers"] = [marker for marker in BROKEN_BOOT_MARKERS if marker in excerpt]
+        target.cleanup()
+        return evidence
+
+    def run_repair(self, command: str) -> dict:
+        """Run the repair command as root in the live system; {device} stands for the guarded target disk."""
+        remote = command.replace("{device}", shlex.quote(self.target_device))
+        code, log = self.ssh(self.args.ssh_user, remote, "rescue-command.log", getattr(self.args, "rescue_timeout", 1800))
+        report = {"command": remote, "exit": code, "log": log.name}
+        if code != 0:
+            raise HarnessError(f"The rescue command failed with exit status {code}; see {log}")
+        return report
+
+    def rescue_cycle(self, mode: str, command: str, live: VMProcess | None = None) -> dict:
+        """Break the installed system, show it is broken, repair it. Leaves no VM running."""
+        rescue: dict = {"break": mode, "command": command or None, "disk": str(self.disk)}
+        live = live or self.boot_live()
+        if mode != "none":
+            rescue["details"] = self.break_installed_system(mode)
+            self.power_off_live(live)
+            live = None
+            rescue["broken"] = self.prove_broken(mode, rescue["details"])
+        if command:
+            live = live or self.boot_live()
+            rescue["repair"] = self.run_repair(command)
+        if live is not None:
+            self.power_off_live(live)
+        return rescue
+
     def run(self) -> dict:
         result = {"scenario": self.scenario.name, "success": False, "run_dir": str(self.run_dir),
                   "companions": None, "companion_probes": [], "disabled_companion_probes": [],
                   "probes": [], "resume": None, "cancel": None, "luks_unlock": None,
-                  "decoys": None, "refusal": None, "hardware": asdict(self.scenario.hardware),
+                  "decoys": None, "refusal": None, "rescue": None, "hardware": asdict(self.scenario.hardware),
                   "firmware": self.scenario.firmware}
+        mode = getattr(self.args, "rescue_break", "none")
+        command = getattr(self.args, "rescue_command", None) or ""
         try:
             validate_command_paths(self.iso, self.disk, self.run_dir)
             if self.disk.exists():
                 raise HarnessError("Refusing to overwrite an existing virtual disk")
+            if getattr(self.args, "target_image", None):
+                return self.run_on_existing_image(result, mode, command)
             self.create_disks()
-            live = self.start_vm(live=True)
-            self.wait_for_ssh(self.args.ssh_user, "live", live)
+            live = self.boot_live()
             decoys = self.prepare_decoys() if self.scenario.decoy else None
             result["decoys"] = decoys
             if self.args.cancel_then_resume:
@@ -2017,24 +2163,14 @@ class ScenarioRunner:
             if decoys:
                 self.check_decoys(decoys, "during the installation")
             self.power_off_live(live)
-
-            target = self.start_vm(live=False)
-            if self.scenario.luks:
-                result["luks_unlock"] = self.unlock_luks(target)
-            self.wait_for_ssh(TEST_USERNAME, "target", target)
-            probes = self.verify()
-            strict = getattr(self.args, "strict_probes", False)
-            result["probes"] = [asdict(probe) for probe in probes]
-            result["companion_probes"] = [asdict(probe) for probe in probes if probe.name in {"hwmonux", "portagehub"}]
-            result["disabled_companion_probes"] = [asdict(probe) for probe in probes if probe.name.startswith("disabled-")]
-            result["advisory_findings"] = [asdict(probe) for probe in probes if not probe.success and probe.advisory]
-            for probe in probes:
-                if not probe.success and probe.advisory:
-                    print(f"WARNING {self.scenario.name}: advisory probe {probe.name} failed: {probe.error}", file=sys.stderr)
-            failures = [f"{probe.name}: {probe.error}" for probe in probes
-                        if not probe.success and (strict or not probe.advisory)]
-            if failures:
-                raise HarnessError("Target verification failed: " + "; ".join(failures))
+            rescuing = mode != "none" or bool(command)
+            target = self.boot_and_verify(result, "probes_before_break" if rescuing else "probes",
+                                          "-before-break" if rescuing else "")
+            if rescuing:
+                self.stop_vm(target)
+                result["rescue"] = self.rescue_cycle(mode, command)
+                if command:
+                    target = self.boot_and_verify(result)
             if decoys:
                 target.cleanup()  # every VM is stopped: the image files can be compared safely
                 self.check_decoy_images(decoys)
@@ -2046,31 +2182,49 @@ class ScenarioRunner:
                 result["interrupted"] = getattr(exc, "signum", int(signal.SIGINT))
             raise
         finally:
-            saved_manifest_path = self.run_dir / "manifest.json"
-            if saved_manifest_path.is_file():
-                try:
-                    saved_manifest = InstallManifest.load(saved_manifest_path)
-                    result["companions"] = companion_selection(saved_manifest)
-                except Exception as exc:
-                    result["companion_metadata_error"] = f"Could not read saved manifest metadata: {exc}"
-                    if result["success"]:
-                        result["success"] = False
-                        result["error"] = result["companion_metadata_error"]
-            if not result["success"]:
-                try:
-                    result["failure_screenshots"] = self.capture_failure_screenshots()
-                except OSError as exc:
-                    result["failure_screenshots_error"] = str(exc)
-            for vm in reversed(self.vms):
-                vm.cleanup()
-            for name in ("serial.sock", "qmp.sock", "qemu-live.pid", "qemu-target.pid"):
-                (self.run_dir / name).unlink(missing_ok=True)
-            if result["success"] and not self.args.keep:
-                for path in [self.run_dir / "OVMF_VARS.fd", self.run_dir / "OVMF_VARS.live.fd", self.disk,
-                             *self.run_dir.glob("extra-*.img")]:
-                    path.unlink(missing_ok=True)
-            result["disk"] = {"device": self.target_device, "bytes": self.disk_sizes()[0]}
-            (self.run_dir / "result.json").write_text(json.dumps(result, indent=2) + "\n")
+            self.finish_run(result)
+
+    def run_on_existing_image(self, result: dict, mode: str, command: str) -> dict:
+        """Boot, damage, repair and verify a disk that was installed earlier (or by another distribution's installer)."""
+        self.attach_target_image()
+        live = self.boot_live()
+        self.run_guard("guest-disk-guard.log", blank=False)
+        result["companions"] = companion_selection(InstallManifest.load(self.run_dir / "manifest.json"))
+        result["rescue"] = rescue = self.rescue_cycle(mode, command, live)
+        if mode == "none" and not command:
+            rescue["note"] = "no break and no repair requested: the image was only booted and verified"
+        self.boot_and_verify(result)
+        rescue["base_image_unchanged"] = self.check_base_image_untouched()
+        result["success"] = True
+        return result
+
+    def finish_run(self, result: dict) -> None:
+        saved_manifest_path = self.run_dir / "manifest.json"
+        if saved_manifest_path.is_file():
+            try:
+                saved_manifest = InstallManifest.load(saved_manifest_path)
+                result["companions"] = companion_selection(saved_manifest)
+            except Exception as exc:
+                result["companion_metadata_error"] = f"Could not read saved manifest metadata: {exc}"
+                if result["success"]:
+                    result["success"] = False
+                    result["error"] = result["companion_metadata_error"]
+        if not result["success"]:
+            try:
+                result["failure_screenshots"] = self.capture_failure_screenshots()
+            except OSError as exc:
+                result["failure_screenshots_error"] = str(exc)
+        for vm in reversed(self.vms):
+            vm.cleanup()
+        for name in ("serial.sock", "qmp.sock", "qemu-live.pid", "qemu-target.pid"):
+            (self.run_dir / name).unlink(missing_ok=True)
+        keep = self.args.keep or bool(result.get("rescue"))  # a rescue run exists to leave a disk behind
+        if result["success"] and not keep:
+            for path in [self.run_dir / "OVMF_VARS.fd", self.run_dir / "OVMF_VARS.live.fd", self.disk,
+                         *self.run_dir.glob("extra-*.img")]:
+                path.unlink(missing_ok=True)
+        result["disk"] = {"device": self.target_device, "bytes": self.disk_sizes()[0]}
+        (self.run_dir / "result.json").write_text(json.dumps(result, indent=2) + "\n")
 
 
 def find_stale_qemu(vm_root: Path | None = None, proc_root: Path = Path("/proc")) -> list[tuple[Path, int]]:
@@ -2207,6 +2361,16 @@ def apply_overrides(scenario: Scenario, args: argparse.Namespace) -> Scenario:
                                hardware=dataclasses.replace(scenario.hardware, **changes))
 
 
+def rescue_problems(scenario: Scenario, args: argparse.Namespace) -> list[str]:
+    """Rescue combinations that cannot work with this scenario."""
+    problems = []
+    if args.target_image is not None and (scenario.decoy or scenario.reinstall or scenario.expect_refusal):
+        problems.append("--target-image cannot be combined with a decoy, reinstall or refusal scenario")
+    if args.target_image is not None and args.install_mode == "gui":
+        problems.append("--target-image does not install, so --install-mode gui has nothing to drive")
+    return [f"{scenario.name}: {problem}" for problem in problems]
+
+
 def hardware_problems(scenario: Scenario, install_mode: str) -> list[str]:
     """Combinations that cannot work, found before anything starts."""
     problems = scenario.hardware.problems()
@@ -2278,6 +2442,23 @@ def build_parser() -> argparse.ArgumentParser:
                              "it chose (default: on for the defaults scenario only)")
     parser.add_argument("--strict-probes", action="store_true",
                         help="Count advisory probe findings (sudo, root lock, install receipt) as failures")
+    rescue = parser.add_argument_group(
+        "rescue", "Test repairing a system that does not boot (docs/TESTING.md). These runs keep the disk.")
+    rescue.add_argument("--rescue-break", choices=RESCUE_BREAKS, default="none",
+                        help="After a verified install, boot the live ISO again, damage the installed system (grub.cfg, the "
+                             "initramfs images or the root UUID in fstab) and show that it no longer boots")
+    rescue.add_argument("--rescue-command", metavar="COMMAND",
+                        help="Run this as root in the live system to repair it ({device} is the target disk), then boot the "
+                             "disk again and verify it")
+    rescue.add_argument("--broken-timeout", type=positive_int, default=120,
+                        help="Seconds a damaged system gets to come up before it counts as broken (default: 120)")
+    rescue.add_argument("--rescue-timeout", type=positive_int, default=1800,
+                        help="Seconds the rescue command may run (default: 1800)")
+    rescue.add_argument("--target-image", type=Path, metavar="PATH",
+                        help="Use an existing qcow2/raw image (a kept run's disk.qcow2, or another distribution's) instead of "
+                             "installing; it is only read, changes go to an overlay")
+    rescue.add_argument("--target-manifest", type=Path, metavar="PATH",
+                        help="Manifest the --target-image was installed with (default: manifest.json beside it)")
     hardware = parser.add_argument_group(
         "machine shape", "Override the scenario's own hardware; an option left out keeps it (docs/TESTING.md)")
     hardware.add_argument("--firmware", choices=("uefi", "bios"), help="Boot with UEFI (OVMF) or BIOS (SeaBIOS)")
@@ -2335,9 +2516,21 @@ def _main(argv: Sequence[str] | None = None) -> int:
         parser.error("--cancel-then-resume requires --install-mode gui")
     if args.cancel_then_resume and args.ssh_user != "root":
         parser.error("--cancel-then-resume requires --ssh-user root")
+    rescuing = args.rescue_break != "none" or args.rescue_command or args.target_image
+    if rescuing:
+        if args.all:
+            parser.error("rescue options need one --scenario, not --all")
+        if args.cancel_then_resume or args.check_resume:
+            parser.error("rescue options cannot be combined with --cancel-then-resume or --check-resume")
+        if args.target_image is None and (args.target_manifest is not None):
+            parser.error("--target-manifest only applies to --target-image")
+        if SCENARIO_MAP[args.scenario].luks:
+            parser.error("rescue runs support unencrypted installs only")
+        args.keep = True  # the whole point of a rescue run is the disk it leaves behind
     names = ALL_SCENARIOS if args.all else (args.scenario,)
     scenarios = [apply_overrides(SCENARIO_MAP[name], args) for name in names]
-    problems = [problem for scenario in scenarios for problem in hardware_problems(scenario, args.install_mode)]
+    problems = [problem for scenario in scenarios for problem in
+                (*hardware_problems(scenario, args.install_mode), *rescue_problems(scenario, args))]
     if problems:
         parser.error("; ".join(problems))
     try:

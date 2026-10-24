@@ -20,6 +20,8 @@ from tests.vm.fake_env import EVENT_STREAM, FAILED_STREAM, Lab, guest_rules, pro
 from tests.vm.helpers import load_vm_module
 
 vm = load_vm_module()
+
+pytestmark = pytest.mark.slow  # real processes and sockets: about a second per scenario
 ROOT = Path(__file__).resolve().parents[2]
 PROBES = {"init", "hostname", "user", "network", "dns", "portage", "hwmonux", "portagehub",
           "firmware", "cmdline", "root-source", "swap", "receipt", "sudo", "root-lock"}

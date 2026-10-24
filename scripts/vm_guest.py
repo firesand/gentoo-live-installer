@@ -126,14 +126,16 @@ def choose_partitions(lsblk: dict, disk: str) -> dict:
 def break_root_tree(mode: str, root: Path) -> dict:
     """Damage a mounted installation. Returns what was changed; raises if there was nothing to break."""
     if mode == "grub-cfg":
-        config = root / "boot" / "grub" / "grub.cfg"
-        if not config.is_file():
+        # Gentoo and Debian keep it in boot/grub, Fedora and SUSE in boot/grub2.
+        configs = [root / name for name in ("boot/grub/grub.cfg", "boot/grub2/grub.cfg") if (root / name).is_file()]
+        if not configs:
             raise GuestError("boot/grub/grub.cfg is missing: this installation has nothing to break")
-        size = config.stat().st_size
-        config.unlink()
-        return {"removed": ["boot/grub/grub.cfg"], "bytes": size}
+        size = sum(config.stat().st_size for config in configs)
+        for config in configs:
+            config.unlink()
+        return {"removed": [str(config.relative_to(root)) for config in configs], "bytes": size}
     if mode == "initramfs":
-        images = sorted(path for path in (root / "boot").glob("initramfs*") if path.is_file())
+        images = sorted(path for pattern in ("initramfs*", "initrd*") for path in (root / "boot").glob(pattern) if path.is_file())
         if not images:
             raise GuestError("No initramfs image in /boot: this installation has nothing to break")
         for image in images:
@@ -164,13 +166,18 @@ def rescue_break(args: dict, runner=run) -> dict:
                                                   "PATH,TYPE,SIZE,FSTYPE,PARTTYPE"]).stdout), path)
     mount_point = tempfile.mkdtemp(prefix="harness-root-")
     runner(["mount", layout["root"], mount_point])
+    proof: dict = {}
     try:
         changes = break_root_tree(mode, Path(mount_point))
         runner(["sync"])
+        if mode == "fstab-uuid":
+            # Booting may still succeed with a wrong fstab, so the defect is proven here, read-only.
+            check = runner(["findmnt", "--verify", "--tab-file", str(Path(mount_point) / "etc" / "fstab")], check=False)
+            proof = {"findmnt_exit": check.returncode, "findmnt_output": check.stdout[-800:]}
     finally:
         runner(["umount", mount_point], check=False)
         os.rmdir(mount_point)
-    return {"mode": mode, **layout, **changes}
+    return {"mode": mode, **layout, **changes, **proof}
 
 
 COMMANDS = {"decoy-prepare": decoy_prepare, "decoy-check": decoy_check, "rescue-break": rescue_break}

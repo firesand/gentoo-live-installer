@@ -145,6 +145,7 @@ class Lab:
         self.bin = tmp_path / "bin"
         self.bin.mkdir(parents=True)
         monkeypatch.setattr(vm, "VM_ROOT", self.root)
+        monkeypatch.setattr(vm.ScenarioRunner, "SSH_RETRY_SECONDS", 0.2)
         self.iso = tmp_path / "installer.iso"
         self.iso.write_bytes(b"iso")
         self.key = tmp_path / "id_test"

@@ -11,6 +11,8 @@ from tests.vm.helpers import load_vm_module
 
 vm = load_vm_module()
 
+pytestmark = pytest.mark.slow  # real processes and sockets: about a second per scenario
+
 
 @pytest.fixture
 def lab(tmp_path, monkeypatch):

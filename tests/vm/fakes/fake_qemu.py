@@ -3,7 +3,7 @@
 
 It starts nothing: it parses the harness's QEMU command line, creates the serial and QMP
 sockets the harness connects to, answers the QMP commands the harness uses (capabilities,
-quit, screendump, input-send-event), can print a LUKS prompt on the serial socket, records
+quit, system_powerdown, screendump, input-send-event), can print a LUKS prompt on the serial socket, records
 what it saw next to itself, and exits on SIGTERM, on QMP ``quit`` or after a scripted delay.
 
 Behaviour comes from the JSON file named by FAKE_QEMU_CONFIG (all keys optional):
@@ -109,7 +109,7 @@ def qmp_client(client: socket.socket) -> None:
                 append("fake-qmp-keys.jsonl", json.dumps(arguments) + "\n")
             stream.write(json.dumps({"return": {}}).encode() + b"\r\n")
             stream.flush()
-            if command == "quit":
+            if command in ("quit", "system_powerdown"):  # a powered-down guest ends the QEMU process
                 STOP.set()
                 return
     except (OSError, ValueError):

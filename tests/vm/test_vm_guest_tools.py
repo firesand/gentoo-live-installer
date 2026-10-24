@@ -178,6 +178,17 @@ def test_unknown_break_modes_are_refused(tmp_path):
         vm_guest.rescue_break({"mode": "mkfs", "path": "/dev/vda", "size": 1}, Recorder(size=1))
 
 
+def test_the_fstab_breakage_is_proven_with_findmnt_before_the_unmount(tmp_path, monkeypatch):
+    mount_point = installed_tree(tmp_path / "mnt")
+    recorder = Recorder(size=100, lsblk=LSBLK)
+    monkeypatch.setattr(vm_guest.tempfile, "mkdtemp", lambda prefix: str(mount_point))
+    monkeypatch.setattr(vm_guest.os, "rmdir", lambda path: None)
+    report = vm_guest.rescue_break({"mode": "fstab-uuid", "path": "/dev/vda", "size": 100}, recorder)
+    assert [c[0] for c in recorder.commands] == ["blockdev", "lsblk", "mount", "sync", "findmnt", "umount"]
+    assert recorder.commands[4] == ["findmnt", "--verify", "--tab-file", str(mount_point / "etc" / "fstab")]
+    assert report["replaced"] == ["UUID=2222-bbbb"] and report["findmnt_exit"] == 0  # the fake runner is happy; the real one is not
+
+
 def test_rescue_break_mounts_breaks_syncs_and_unmounts(tmp_path, monkeypatch):
     mount_point = installed_tree(tmp_path / "mnt")
     recorder = Recorder(size=100, lsblk=LSBLK)
