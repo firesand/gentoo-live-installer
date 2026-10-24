@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 from gentoo_installer.manifest import InstallManifest
@@ -34,11 +35,13 @@ class StageMixin:
     events: list
 
     def make(self, m: InstallManifest | None = None, runner: ScriptedRunner | None = None, *, layout: list[LayoutEntry] | None = None,
-             plan: object | None = None, dry_run: bool = False, **kwargs: object) -> Installer:
+             plan: object | None = None, dry_run: bool = False, runner_factory: Callable[[Path], ScriptedRunner] | None = None,
+             **kwargs: object) -> Installer:
+        """``runner_factory(target)`` builds the runner for a fake that needs to know where the target tree is."""
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)  # type: ignore[attr-defined]
         self.base = Path(temporary.name)
-        self.runner = runner or ScriptedRunner()
+        self.runner = runner or (runner_factory(self.base / "target") if runner_factory else ScriptedRunner())
         self.events = []
         installer = Installer(m or target_manifest(), runner=self.runner, target_root=self.base / "target", state_dir=self.base / "state",
                               cache_dir=self.base / "cache", dry_run=dry_run, inspector=FakeInspector(), emit=self.events.append, **kwargs)  # type: ignore[arg-type]
@@ -68,15 +71,17 @@ class PortageRunner(ScriptedRunner):
 
     # flag -> files (relative to the target) the ebuilds of systemd and systemd-utils install for it
     FILES = {
-        "boot": ["usr/bin/bootctl", "usr/lib/systemd/boot/efi/systemd-bootx64.efi", "usr/lib/systemd/boot/efi/systemd-bootia32.efi"],
+        "boot": ["usr/bin/bootctl", "usr/lib/systemd/boot/efi/systemd-bootx64.efi", "usr/lib/systemd/boot/efi/systemd-bootia32.efi",
+                 "usr/lib/systemd/boot/efi/linuxx64.efi.stub", "usr/lib/systemd/boot/efi/linuxia32.efi.stub"],
         "ukify": ["usr/bin/ukify"],
         "cryptsetup": ["usr/lib/systemd/systemd-cryptsetup"],
     }
 
-    def __init__(self, target: Path, installed: tuple[str, ...] = ("sys-apps/systemd-utils",)) -> None:
+    def __init__(self, target: Path, installed: tuple[str, ...] = ("sys-apps/systemd-utils",), files: dict[str, list[str]] | None = None) -> None:
         super().__init__()
         self.target = target
         self.installed = set(installed)
+        self.files = self.FILES if files is None else files
         self.rebuilds: list[str] = []
 
     def flags_for(self, atom: str) -> set[str]:
@@ -94,21 +99,25 @@ class PortageRunner(ScriptedRunner):
 
     def install_files(self, atom: str) -> None:
         for flag in self.flags_for(atom):
-            for name in self.FILES.get(flag, []):
+            for name in self.files.get(flag, []):
                 path = self.target / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text("x")
 
     def run(self, argv, **kwargs):  # type: ignore[no-untyped-def]
         args = tuple(argv)
-        prefix = ("chroot", str(self.target))
-        if args[:2] == prefix and len(args) > 2:
+        if args[:2] == ("chroot", str(self.target)) and len(args) > 2:
             command = args[2:]
             if command[0] == "emerge":
                 self.model_emerge(command[1:])
-            elif command[0] in {"bootctl", "ukify"} and not (self.target / "usr/bin" / command[0]).is_file():
-                super().run(argv, **kwargs)  # recorded like any other command
-                raise RunnerError(args, 127, f"chroot: failed to run command '{command[0]}': No such file or directory")
+            elif command[0] in {"bootctl", "ukify"}:
+                result = super().run(argv, **kwargs)  # recorded like any other command
+                if not (self.target / "usr/bin" / command[0]).is_file():
+                    raise RunnerError(args, 127, f"chroot: failed to run command '{command[0]}': No such file or directory")
+                images = list((self.target / "usr/lib/systemd/boot/efi").glob("systemd-boot*.efi"))
+                if command[0] == "bootctl" and "install" in command and not images:
+                    raise RunnerError(args, 1, 'Failed to open "/usr/lib/systemd/boot/efi/systemd-bootx64.efi": No such file or directory')
+                return result
         return super().run(argv, **kwargs)
 
     def model_emerge(self, arguments: tuple[str, ...]) -> None:

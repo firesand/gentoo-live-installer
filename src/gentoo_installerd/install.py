@@ -906,12 +906,16 @@ class Installer:
         batch = self.configurer.kernel_stage_atoms(self.manifest, self.storage.layout, plan)
         if batch:
             self.configurer.emerge(self.manifest, ("--noreplace", *batch))
-        if self.manifest.system.init == "systemd" and self.manifest.storage.luks:
-            # systemd is already installed in its stage3, so --noreplace would
-            # retain the build without systemd-cryptsetup in the initramfs.
-            self.configurer.emerge(self.manifest, ("--update", "--newuse", "--oneshot", "sys-apps/systemd"))
-            if not self.dry_run and not self.configurer.path("usr/lib/systemd/systemd-cryptsetup").is_file():
-                raise InstallError("systemd-cryptsetup is missing after enabling systemd[cryptsetup]")
+        # systemd (systemd-utils on OpenRC) is already installed in its stage3, so --noreplace would keep the
+        # build without the flags the installer wrote: cryptsetup for the initramfs, boot and ukify for
+        # systemd-boot and a Unified Kernel Image. One rebuild, and a stop right here if a tool is still missing.
+        rebuild = self.configurer.flag_rebuild(self.manifest, plan)
+        if rebuild is not None:
+            atom, expected = rebuild
+            self.configurer.emerge(self.manifest, ("--update", "--newuse", "--oneshot", atom))
+            for relative, message in expected:
+                if not self.dry_run and not self.configurer.path(relative).exists():
+                    raise InstallError(message)
         self.configurer.emerge(self.manifest, ("--noreplace", "sys-kernel/installkernel", f"sys-kernel/{kernel}"))
         # Files and out-of-tree drivers from the hardware plan must exist before the initramfs is built.
         self.configurer.write_plan_files(plan)

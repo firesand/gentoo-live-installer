@@ -762,6 +762,11 @@ def grub_efi_target(plan: object | None) -> str:
     return target if target in GRUB_EFI_FILES else "x86_64-efi"
 
 
+def efi_arch(plan: object | None) -> str:
+    """The suffix of systemd's EFI files (systemd-boot<arch>.efi, linux<arch>.efi.stub): x64, or ia32 on 32-bit UEFI firmware."""
+    return "ia32" if grub_efi_target(plan) == "i386-efi" else "x64"
+
+
 class Configurer:
     def __init__(self, runner: Runner, target_root: str | Path, *, dry_run: bool = False,
                  companion_bundle: str | Path = "/usr/local/share/gentoo-installer",
@@ -921,7 +926,7 @@ class Configurer:
             # os-prober needs grub's mount support to read the other systems' filesystems.
             _require_use(package_use, "sys-boot/grub", "mount")
         if system.uki or system.bootloader == "systemd-boot":
-            atom = "sys-apps/systemd" if system.init == "systemd" else "sys-apps/systemd-utils"
+            atom = self.systemd_package(system)
             boot_flags = ["boot", *(["kernel-install"] if system.init == "openrc" else []), *(["ukify"] if system.uki else [])]
             package_use[atom] = [flag for flag in package_use.get(atom, []) if flag not in ("-boot", "-kernel-install", "-ukify")]
             package_use[atom].extend(flag for flag in boot_flags if flag not in package_use[atom])
@@ -1242,9 +1247,48 @@ class Configurer:
             atoms.append("sys-kernel/dracut")
         return atoms
 
+    @staticmethod
+    def systemd_package(system: System) -> str:
+        """The stage3 package that carries bootctl, ukify, the systemd-boot images and (on systemd) the cryptsetup helper."""
+        return "sys-apps/systemd" if system.init == "systemd" else "sys-apps/systemd-utils"
+
+    def flag_rebuild(self, manifest: InstallManifest, plan: object | None = None) -> tuple[str, list[tuple[str, str]]] | None:
+        """The stage3 package whose USE flags the installer changes, and what must exist once they took effect.
+
+        systemd (systemd-utils on OpenRC) is part of every stage3, so ``emerge --noreplace`` skips it and the
+        flags written to package.use (cryptsetup for the initramfs, boot for systemd-boot, ukify for a Unified
+        Kernel Image) would never apply. The package is rebuilt once with ``--update --newuse``. The pairs are a
+        path in the target and the sentence for when that file is missing afterwards; None when nothing is needed.
+        """
+        system = manifest.system
+        crypt_helper = system.init == "systemd" and manifest.storage.luks
+        systemd_boot = system.bootloader == "systemd-boot"
+        if not (crypt_helper or systemd_boot or system.uki):
+            return None
+        atom = self.systemd_package(system)
+        arch = efi_arch(self._plan(plan))
+        images = "usr/lib/systemd/boot/efi"
+
+        def missing(name: str, flag: str, purpose: str) -> str:
+            return f"{name} is missing after rebuilding {atom} with the {flag} USE flag, so {purpose}"
+
+        expected: list[tuple[str, str]] = []
+        if crypt_helper:
+            expected.append(("usr/lib/systemd/systemd-cryptsetup", "systemd-cryptsetup is missing after enabling systemd[cryptsetup]"))
+        if systemd_boot:
+            purpose = "systemd-boot cannot be installed"
+            if system.init == "openrc":  # systemd always has bootctl; its images come with the boot flag
+                expected.append(("usr/bin/bootctl", missing("bootctl", "boot", purpose)))
+            expected.append((f"{images}/systemd-boot{arch}.efi", missing(f"systemd-boot{arch}.efi", "boot", purpose)))
+        if system.uki:
+            purpose = "the Unified Kernel Image cannot be built"
+            expected.append(("usr/bin/ukify", missing("ukify", "ukify", purpose)))
+            expected.append((f"{images}/linux{arch}.efi.stub", missing(f"linux{arch}.efi.stub", "boot", purpose)))
+        return atom, expected
+
     def bootloader_atoms(self, manifest: InstallManifest) -> list[str]:
         system = manifest.system
-        systemd_package = "sys-apps/systemd" if system.init == "systemd" else "sys-apps/systemd-utils"
+        systemd_package = self.systemd_package(system)
         atoms = [{"grub": "sys-boot/grub", "systemd-boot": systemd_package, "efi-stub": "sys-boot/efibootmgr"}[system.bootloader]]
         if system.bootloader == "grub" and system.dual_boot:
             atoms.append("sys-boot/os-prober")
@@ -1361,12 +1405,17 @@ class Configurer:
         """
         if not atoms:
             return
+        # --noreplace never looks at a package that is installed, so the rebuild that the kernel stage does for
+        # the flags of systemd(-utils) (see flag_rebuild) gets its own run; it shows what the new flags pull in.
+        rebuild = self.flag_rebuild(manifest)
         for attempt in range(MAX_CYCLE_BREAKS + 1):
             try:
                 # Same sources as the real install (binary packages included): the gate must predict
                 # whether the installation would fail, not be stricter than it. scripts/lint-plan.py is
                 # the strict, source-only check that runs in development.
                 self.emerge(manifest, ("--pretend", "--noreplace", "--verbose=n", *atoms))
+                if rebuild is not None:
+                    self.emerge(manifest, ("--pretend", "--oneshot", "--update", "--newuse", "--verbose=n", rebuild[0]))
                 return
             except RunnerError as exc:
                 suggestion = cycle_break_suggestion(exc.output)
