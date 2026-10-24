@@ -8,6 +8,7 @@ import shutil
 from pathlib import Path
 from typing import Mapping, MutableMapping, Sequence
 
+from gentoo_installer import desktops
 from gentoo_installer.manifest import ATOM_RE, InstallManifest, USE_TOKEN_RE
 
 from .configure_base import _plan_list, ConfigurationError, ConfigurerBase, shell_value
@@ -22,15 +23,9 @@ PACKAGE_USE_ATOM = re.compile(r"\*/\*|" + ATOM_RE.pattern)
 
 
 # What the installer writes under /etc/portage so that its own package choices resolve without
-# autounmask. These are configuration, never left to the binary package host (CRITIC-0/1).
-DESKTOP_USE: Mapping[str, Mapping[str, tuple[str, ...]]] = {
-    # kde-apps-meta -> kdeutils-meta -> kweather needs qtpositioning[geoclue]
-    "kde": {"dev-qt/qtpositioning": ("geoclue",)},
-    # samba -> libngtcp2 needs the GnuTLS crypto backend
-    "gnome": {"net-libs/ngtcp2": ("gnutls",)},
-    # xfce4-panel needs libdbusmenu[gtk3]
-    "xfce": {"dev-libs/libdbusmenu": ("gtk3",)},
-}
+# autounmask comes from the desktop registry (gentoo_installer.desktops.package_use). These are
+# configuration, never left to the binary package host (CRITIC-0/1).
+DESKTOP_USE: Mapping[str, Mapping[str, tuple[str, ...]]] = {key: desktops.package_use(key) for key in desktops.DESKTOPS}
 
 
 # The package.env of the hardware plan (hwplan.MEMORY_HEAVY_ATOMS): the compile jobs the memory-heavy packages may use.
