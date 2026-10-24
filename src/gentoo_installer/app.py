@@ -36,7 +36,7 @@ from .pages.customize import CustomizePage
 from .pages.dialogs import ask_utc_time
 from .pages.progress import ProgressPage
 from .pages.readiness import ReadinessPage
-from .pages.review import ReviewPage, blocking_problems, disk_description, format_lines, storage_plan_details
+from .pages.review import ReviewPage, ReviewSource, blocking_problems, disk_description, format_lines, storage_plan_details
 from .pages.storage import StoragePage
 from .pages.system import SystemPage
 from .pages.welcome import WelcomePage
@@ -277,6 +277,11 @@ class InstallerWindow(QMainWindow):
         self.readiness.clockSyncRequested.connect(self.run_hardware_action)
         self.readiness.hardwareActionRequested.connect(self.run_hardware_action)
         self.review.importRequested.connect(self.import_settings)
+        self.review.set_sources([
+            ReviewSource("storage", STORAGE, STEPS[STORAGE][0], self.storage), ReviewSource("system", SYSTEM, STEPS[SYSTEM][0], self.system),
+            ReviewSource("customization", CUSTOMIZE, STEPS[CUSTOMIZE][0], self.customize), ReviewSource("accounts", ACCOUNTS, STEPS[ACCOUNTS][0], self.accounts)])
+        self.review.editRequested.connect(self.go_to)
+        self.review.readyChanged.connect(lambda _: self._update_navigation())
         self.storage.manual_editor.rescanRequested.connect(self.refresh_readiness)
         self.storage.rescanRequested.connect(self.refresh_readiness)
         self.accounts.keyboardChangeRequested.connect(lambda: self.go_to(WELCOME))
@@ -440,12 +445,18 @@ class InstallerWindow(QMainWindow):
             button.style().polish(button)
         self.back.setVisible(index > 0 and index < INSTALL and not self.install_started)
         self.next.setVisible(index < INSTALL)
-        self.next.setText("&Start installation" if index == REVIEW else "&Continue")
-        self.next.setObjectName("dangerButton" if index == REVIEW else "primaryButton")
+        # The last step: Start stays grey, and says what is missing, until the disk name was typed (CORE-06).
+        start_ready = index == REVIEW and self.review.confirmation_matches()
+        if index == REVIEW:
+            self.next.setText("&Start installation" if start_ready else self.review.START_HINT)
+            self.next.setObjectName("dangerButton" if start_ready else "startWaiting")
+        else:
+            self.next.setText("&Continue")
+            self.next.setObjectName("primaryButton")
         self.next.style().unpolish(self.next)
         self.next.style().polish(self.next)
         # Page 1 needs the finished inspection; Continue waits for it.
-        self.next.setEnabled(not (index == READINESS and not self.info.inspected))
+        self.next.setEnabled(start_ready if index == REVIEW else not (index == READINESS and not self.info.inspected))
         self.mode.setEnabled(index < INSTALL and not self.install_started)
 
     def go_to(self, index: int) -> None:

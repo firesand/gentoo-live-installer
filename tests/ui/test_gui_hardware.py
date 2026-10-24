@@ -661,8 +661,7 @@ def test_choosing_the_nvidia_driver_never_ticks_the_licence_for_the_user(make_wi
 
 
 def summary_rows(window) -> dict[str, str]:
-    table = window.review.summary
-    return {table.item(row, 0).text(): table.item(row, 1).text() for row in range(table.rowCount())}
+    return {label: value for _, label, value in window.review.rows()}
 
 
 def test_the_review_says_what_encryption_covers(make_window):

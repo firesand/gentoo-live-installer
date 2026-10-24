@@ -192,7 +192,7 @@ def test_review_names_the_disk_by_model_serial_and_contents_and_keeps_the_typed_
     assert window.review.validate_page()[0] is False
     window.review.confirmation.setText("/dev/nvme0n1")  # the typed phrase is exactly the device path
     assert window.review.validate_page() == (True, "")
-    disk_row = next(window.review.summary.item(r, 1).text() for r in range(window.review.summary.rowCount()) if window.review.summary.item(r, 0).text() == "Disk")
+    disk_row = next(value for _, label, value in window.review.rows() if label == "Disk")
     assert "Samsung SSD 870" in disk_row and "serial …123456" in disk_row
 
 
