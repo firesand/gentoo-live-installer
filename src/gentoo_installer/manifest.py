@@ -4,7 +4,7 @@ import json
 import re
 from dataclasses import dataclass, field, fields, is_dataclass
 from pathlib import Path
-from typing import Any, get_args, get_origin, get_type_hints
+from typing import Any, ClassVar, get_args, get_origin, get_type_hints
 
 
 SCHEMA_VERSION = 1
@@ -20,6 +20,13 @@ class ManifestError(ValueError):
 
 @dataclass
 class Partition:
+    """One manual-mode row: an existing partition or volume and what to do with it.
+
+    A swap row has filesystem "swap" and an empty mountpoint. label is applied when the
+    row is formatted. size_mib and flags are kept for draft compatibility only: the
+    installer uses existing partitions as they are, so only 0 and [] validate.
+    """
+
     device: str = ""
     mountpoint: str = "/"
     filesystem: str = "ext4"
@@ -27,6 +34,27 @@ class Partition:
     format: bool = True
     label: str = ""
     flags: list[str] = field(default_factory=list)
+
+    # Longest label (bytes) each mkfs/mkswap accepts.
+    LABEL_LIMITS: ClassVar[dict[str, int]] = {"ext4": 16, "xfs": 12, "btrfs": 255, "vfat": 11, "swap": 15}
+
+    def label_problem(self) -> str:
+        """Why ``label`` cannot be written ("" when it is fine or empty)."""
+        if not self.label:
+            return ""
+        name = self.device or "a partition"
+        limit = self.LABEL_LIMITS.get(self.filesystem)
+        if limit is None:
+            return f"A label cannot be set on {name}: filesystem {self.filesystem} has none"
+        if not self.format:
+            return f"The label of {name} would be ignored: labels are only written when the partition is formatted"
+        if any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in self.label) or self.label.startswith("-"):
+            return f"The label of {name} may not contain spaces or control characters, or start with a dash"
+        if self.filesystem == "vfat" and not re.fullmatch(r"[A-Za-z0-9_-]+", self.label):
+            return f"The label of {name} may contain only letters, digits, dashes and underscores (FAT)"
+        if len(self.label.encode()) > limit:
+            return f"The label of {name} is too long: {self.filesystem} labels hold at most {limit} characters"
+        return ""
 
 
 @dataclass
@@ -49,6 +77,44 @@ class Storage:
     lvm: bool = False
     raid_level: str = ""
     partitions: list[Partition] = field(default_factory=list)
+    # Manual mode: serial/WWN of every OTHER disk a partition row lives on (device_id keeps
+    # pinning `device`). An entry "<by-path link name>|<size in bytes>|<model>" approves a disk
+    # that has neither. The daemon refuses rows on a disk nobody approved. Erase mode leaves it empty.
+    additional_device_ids: list[str] = field(default_factory=list)
+    # Consent to deactivate LVM, dm-crypt and md volumes that sit on the target disk, and to erase
+    # a disk that belongs to a volume group or array spanning other disks.
+    release_holders: bool = False
+    # Manual mode with a preserved (format=false) root that already holds a system: consent to
+    # install the new system over its files (a backup of /etc is taken first).
+    overwrite_existing_system: bool = False
+
+    def raid_problem(self) -> str:
+        """Why the RAID setting cannot work ("" when there is none).
+
+        The installer does not create arrays: it installs onto an array that was assembled
+        beforehand (mdadm) and is selected as a manual-mode target.
+        """
+        if not self.raid_level:
+            return ""
+        if self.mode != "manual":
+            return "RAID is not created by the installer: assemble the array first (mdadm), then use manual mode with its /dev/md device"
+        if not self.device.startswith("/dev/md"):
+            return "RAID installations need the assembled /dev/md device as the target disk"
+        return ""
+
+    def encryption_summary(self) -> str:
+        """What the encryption setting really covers, for the Review page and the install receipt."""
+        if not self.luks:
+            return "Not enabled"
+        if self.mode == "manual":
+            plain = sorted({
+                p.mountpoint or "swap" for p in self.partitions
+                if p.mountpoint not in {"/", "/boot", "/efi", "/boot/efi"} and not p.device.startswith("/dev/mapper/")
+            })
+            text = "LUKS2 on the root volume only"
+            return text + (f"; NOT encrypted: {', '.join(plain)}" if plain else "") + " (/boot stays readable for the bootloader)"
+        swap = "root volume and swap file (inside the encrypted root)" if self.swap_mib else "root volume"
+        return f"LUKS2: {swap}; /boot stays readable for the bootloader"
 
 
 @dataclass
@@ -194,6 +260,12 @@ HARDWARE_CHOICES = {
 }
 
 
+def _is_path_identity(value: str) -> bool:
+    """Whether value has the shape of a by-path identity: "<link name>|<size in bytes>|<model>"."""
+    parts = value.split("|")
+    return len(parts) == 3 and bool(parts[0]) and "/" not in parts[0] and parts[1].isdigit() and not any(c in value for c in "\n\r\0")
+
+
 @dataclass
 class InstallManifest:
     storage: Storage = field(default_factory=Storage)
@@ -334,12 +406,23 @@ class InstallManifest:
             if root_partition and not root_partition.format and (storage.luks or storage.lvm):
                 errors.append("Preserved root cannot create a new LUKS/LVM stack; select an already opened volume with stack creation disabled")
             for partition in storage.partitions:
-                if not partition.device.startswith("/dev/"):
-                    errors.append(f"Invalid partition device for {partition.mountpoint}")
-                if not partition.mountpoint.startswith("/") or ".." in partition.mountpoint:
+                name = partition.mountpoint or partition.filesystem
+                if not partition.device.startswith("/dev/") or any(c.isspace() or ord(c) < 32 for c in partition.device) or ".." in partition.device:
+                    errors.append(f"Invalid partition device for {name}")
+                if partition.filesystem == "swap":
+                    if partition.mountpoint:
+                        errors.append(f"A swap partition has no mountpoint; leave it empty instead of {partition.mountpoint}")
+                elif not partition.mountpoint.startswith("/") or ".." in partition.mountpoint or any(c.isspace() or ord(c) < 32 for c in partition.mountpoint):
                     errors.append(f"Invalid mountpoint: {partition.mountpoint}")
                 if partition.filesystem not in {"ext4", "xfs", "btrfs", "vfat", "swap", "none"}:
                     errors.append(f"Unsupported filesystem: {partition.filesystem}")
+                if partition.size_mib:
+                    errors.append(f"Partition sizes are not supported for {partition.device}: the installer uses existing partitions as they are (leave the size at 0)")
+                if partition.flags:
+                    errors.append(f"Partition flags are not supported for {partition.device}: set them with a partitioning tool such as GParted before installing")
+                label_problem = partition.label_problem()
+                if label_problem:
+                    errors.append(label_problem)
             if storage.firmware == "uefi" and not any(p.mountpoint in {"/efi", "/boot/efi"} for p in storage.partitions):
                 errors.append("UEFI installations need an EFI System Partition mounted at /efi or /boot/efi")
             if storage.luks and not any(p.mountpoint == "/boot" and p.filesystem not in {"swap", "none"} for p in storage.partitions):
@@ -347,20 +430,32 @@ class InstallManifest:
             if storage.table == "dos":
                 if len(storage.partitions) > 4:
                     errors.append("DOS partition tables support at most four primary partitions; use GPT or reduce the layout")
-        elif storage.table == "dos":
-            required_partitions = 1 + int(storage.firmware == "uefi") + int(storage.swap_mib > 0) + int(storage.separate_home) + int(storage.luks)
-            if required_partitions > 4:
-                errors.append("This guided DOS layout needs more than four primary partitions; use GPT or reduce the layout")
+        else:
+            if storage.separate_home and storage.home_mib <= 0:
+                errors.append("A separate home partition needs a positive size")
+            if storage.luks and storage.separate_home:
+                errors.append(
+                    "A separate /home partition would be stored unencrypted next to the encrypted root: "
+                    "turn off 'separate /home' (it then lives inside the encrypted root) or turn encryption off"
+                )
+            if storage.table == "dos":
+                required_partitions = 1 + int(storage.firmware == "uefi") + int(storage.swap_mib > 0) + int(storage.separate_home) + int(storage.luks)
+                if required_partitions > 4:
+                    errors.append("This guided DOS layout needs more than four primary partitions; use GPT or reduce the layout")
         if storage.luks and len(storage.luks_passphrase) < 8:
             errors.append("The LUKS passphrase must contain at least 8 characters")
         if storage.raid_level and storage.raid_level not in {"0", "1", "5", "6", "10"}:
             errors.append("Unsupported RAID level")
         if storage.device_id_kind not in {"", "serial", "wwn", "path"}:
             errors.append("Unknown disk identity kind")
-        if storage.device_id_kind == "path":
-            parts = storage.device_id.split("|")
-            if len(parts) != 3 or not parts[0] or "/" in parts[0] or not parts[1].isdigit() or any(c in storage.device_id for c in "\n\r\0"):
-                errors.append("A disk without a serial number needs a by-path|size|model identity")
+        if storage.device_id_kind in {"serial", "wwn"} and not storage.device_id:
+            errors.append(f"The disk identity kind is {storage.device_id_kind} but no disk {storage.device_id_kind} is given")
+        if storage.device_id_kind == "path" and not _is_path_identity(storage.device_id):
+            errors.append("A disk without a serial number needs a by-path|size|model identity")
+        for approval in storage.additional_device_ids:
+            if not approval or any(c in approval for c in "\n\r\0") or ("|" in approval and not _is_path_identity(approval)):
+                errors.append("Additional disk approvals must be a serial number, a WWN or a by-path|size|model identity")
+                break
         return errors
 
     def _validate_system(self) -> list[str]:
