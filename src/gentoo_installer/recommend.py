@@ -25,6 +25,7 @@ from .manifest import InstallManifest, Storage
 KIB_PER_GIB = 1024 * 1024
 DEFAULT_SWAP_MIB = Storage().swap_mib
 LEGACY_MAKE_OPTS = "-j2"  # the old manifest default; "" means automatic
+HWMONUX_COMFORTABLE_GIB = 8  # below this, compiling PySide for HWMonux is slow and tight on memory
 
 
 # ---------------------------------------------------------------------------
@@ -197,6 +198,11 @@ def recommend(profile: HardwareProfile | Mapping[str, Any] | None, manifest: Ins
         elif gib < 4 and desktop in ("kde", "gnome"):
             out.append(Recommendation("rec.tight_memory", "info",
                                       f"This PC has {gib:.1f} GiB of memory. {desktop.upper()} will feel slow; Xfce needs less.", "system.desktop", "xfce"))
+        if manifest.options.install_hwmonux and nominal_ram_gib(total_kib) < HWMONUX_COMFORTABLE_GIB:
+            # The factory default stays on: the PC owner decides, with the time and the memory in front of them.
+            out.append(Recommendation("rec.hwmonux_low_memory", "info",
+                                      f"This PC has {gib:.1f} GiB of memory. HWMonux needs PySide6, which is compiled from source: about 40 minutes and up to 4 GiB of memory "
+                                      "per compile job. Turn HWMonux off if you do not need it.", "options.install_hwmonux", "false"))
         if hardware.hibernate:
             wanted = recommend_swap_mib(total_kib, hibernate=True)
             if manifest.storage.swap_mib < wanted:

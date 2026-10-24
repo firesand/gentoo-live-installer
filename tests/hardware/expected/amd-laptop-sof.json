@@ -15,11 +15,23 @@
       "/etc/cron.weekly/fstrim",
       "#!/bin/sh\n# Weekly TRIM of mounted solid-state filesystems (written by the Gentoo installer).\nexec /sbin/fstrim --all --quiet-unsupported\n",
       493
+     ],
+     [
+      "/etc/portage/env/installer-memory",
+      "# Written by the Gentoo installer: the compile jobs for packages that need a lot of memory per job.\nMAKEOPTS=\"-j4\"\n",
+      420
+     ],
+     [
+      "/etc/portage/package.env/installer-hardware",
+      "# Written by the Gentoo installer: packages that need a lot of memory per compile job.\ndev-python/pyside installer-memory\ndev-qt/qtwebengine installer-memory\nllvm-core/llvm installer-memory\nllvm-core/clang installer-memory\nnet-libs/webkit-gtk installer-memory\n",
+      420
      ]
     ],
     "kernel_cmdline": [],
     "make_conf": {},
-    "notes": [],
+    "notes": [
+     "With 14.8 GiB of memory (and the swap), the packages that need about 4 GiB per compile job (pyside, qtwebengine, llvm, clang, webkit-gtk) get 4 compile jobs when they are built from source."
+    ],
     "optional_atoms": [
      "sys-firmware/sof-firmware",
      "sys-power/power-profiles-daemon"
@@ -77,6 +89,7 @@
      "hypervisor": "",
      "init": "openrc",
      "luks_allow_discards": false,
+     "memory_heavy_jobs": 4,
      "microcode": "amd",
      "nvidia_branch": "",
      "nvk": "no",
@@ -122,11 +135,23 @@
       "/etc/cron.weekly/fstrim",
       "#!/bin/sh\n# Weekly TRIM of mounted solid-state filesystems (written by the Gentoo installer).\nexec /sbin/fstrim --all --quiet-unsupported\n",
       493
+     ],
+     [
+      "/etc/portage/env/installer-memory",
+      "# Written by the Gentoo installer: the compile jobs for packages that need a lot of memory per job.\nMAKEOPTS=\"-j4\"\n",
+      420
+     ],
+     [
+      "/etc/portage/package.env/installer-hardware",
+      "# Written by the Gentoo installer: packages that need a lot of memory per compile job.\ndev-python/pyside installer-memory\ndev-qt/qtwebengine installer-memory\nllvm-core/llvm installer-memory\nllvm-core/clang installer-memory\nnet-libs/webkit-gtk installer-memory\n",
+      420
      ]
     ],
     "kernel_cmdline": [],
     "make_conf": {},
-    "notes": [],
+    "notes": [
+     "With 14.8 GiB of memory (and the swap), the packages that need about 4 GiB per compile job (pyside, qtwebengine, llvm, clang, webkit-gtk) get 4 compile jobs when they are built from source."
+    ],
     "optional_atoms": [
      "sys-firmware/sof-firmware",
      "sys-power/power-profiles-daemon"
@@ -184,6 +209,7 @@
      "hypervisor": "",
      "init": "openrc",
      "luks_allow_discards": false,
+     "memory_heavy_jobs": 4,
      "microcode": "amd",
      "nvidia_branch": "",
      "nvk": "no",
@@ -228,7 +254,18 @@
      "sys-firmware/intel-microcode",
      "sys-kernel/linux-firmware"
     ],
-    "files": [],
+    "files": [
+     [
+      "/etc/portage/env/installer-memory",
+      "# Written by the Gentoo installer: the compile jobs for packages that need a lot of memory per job.\nMAKEOPTS=\"-j4\"\n",
+      420
+     ],
+     [
+      "/etc/portage/package.env/installer-hardware",
+      "# Written by the Gentoo installer: packages that need a lot of memory per compile job.\ndev-python/pyside installer-memory\ndev-qt/qtwebengine installer-memory\nllvm-core/llvm installer-memory\nllvm-core/clang installer-memory\nnet-libs/webkit-gtk installer-memory\n",
+      420
+     ]
+    ],
     "kernel_cmdline": [
      "nvidia-drm.modeset=1",
      "nvidia-drm.fbdev=1"
@@ -238,7 +275,8 @@
     },
     "notes": [
      "Portable install: both Intel and AMD microcode are installed.",
-     "NVIDIA proprietary driver 595 (current, open kernel modules); if it fails to build, the open nouveau driver stays in use."
+     "NVIDIA proprietary driver 595 (current, open kernel modules); if it fails to build, the open nouveau driver stays in use.",
+     "With 14.8 GiB of memory (and the swap), the packages that need about 4 GiB per compile job (pyside, qtwebengine, llvm, clang, webkit-gtk) get 4 compile jobs when they are built from source."
     ],
     "optional_atoms": [
      "sys-firmware/sof-firmware"
@@ -315,6 +353,7 @@
      "hypervisor": "",
      "init": "openrc",
      "luks_allow_discards": false,
+     "memory_heavy_jobs": 4,
      "microcode": "both",
      "nvidia_branch": "595",
      "nvk": "no",
@@ -349,6 +388,16 @@
     ],
     "files": [
      [
+      "/etc/portage/env/installer-memory",
+      "# Written by the Gentoo installer: the compile jobs for packages that need a lot of memory per job.\nMAKEOPTS=\"-j4\"\n",
+      420
+     ],
+     [
+      "/etc/portage/package.env/installer-hardware",
+      "# Written by the Gentoo installer: packages that need a lot of memory per compile job.\ndev-python/pyside installer-memory\ndev-qt/qtwebengine installer-memory\nllvm-core/llvm installer-memory\nllvm-core/clang installer-memory\nnet-libs/webkit-gtk installer-memory\n",
+      420
+     ],
+     [
       "/etc/skel/.config/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml",
       "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\n<channel name=\"xsettings\" version=\"1.0\">\n  <property name=\"Xft\" type=\"empty\">\n    <property name=\"DPI\" type=\"int\" value=\"144\"/>\n  </property>\n</channel>\n",
       420
@@ -359,7 +408,9 @@
      "CPU_FLAGS_X86": "aes avx avx2 bmi1 bmi2 f16c fma3 mmx mmxext pclmul popcnt rdrand sha sse sse2 sse3 sse4_1 sse4_2 sse4a ssse3",
      "VIDEO_CARDS": "amdgpu radeonsi"
     },
-    "notes": [],
+    "notes": [
+     "With 14.8 GiB of memory (and the swap), the packages that need about 4 GiB per compile job (pyside, qtwebengine, llvm, clang, webkit-gtk) get 4 compile jobs when they are built from source."
+    ],
     "optional_atoms": [
      "sys-firmware/sof-firmware",
      "sys-power/tlp"
@@ -420,6 +471,7 @@
      "hypervisor": "",
      "init": "systemd",
      "luks_allow_discards": false,
+     "memory_heavy_jobs": 4,
      "microcode": "amd",
      "nvidia_branch": "",
      "nvk": "no",

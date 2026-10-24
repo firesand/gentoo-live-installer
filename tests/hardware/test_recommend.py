@@ -121,6 +121,39 @@ def test_no_memory_advice_when_it_is_not_needed(ram, desktop):
     assert not {"rec.low_memory_desktop", "rec.tight_memory"} & set(found(manifest(system={"desktop": desktop}), profile(ram_gib=ram)))
 
 
+HWMONUX_LOW_MEMORY = "HWMonux needs PySide6, which is compiled from source: about 40 minutes and up to 4 GiB of memory per compile job."
+
+
+@pytest.mark.parametrize("desktop", ["kde", "xfce", "minimal"])
+@pytest.mark.parametrize("ram", [2.0, 3.8, 5.7])
+def test_hwmonux_is_advised_against_on_a_small_machine(ram, desktop):
+    advice = found(manifest(system={"desktop": desktop}), profile(ram_gib=ram))["rec.hwmonux_low_memory"]
+    assert (advice.field, advice.suggestion, advice.severity) == ("options.install_hwmonux", "false", "info")
+    assert HWMONUX_LOW_MEMORY in advice.message and f"{ram:.1f} GiB" in advice.message
+
+
+@pytest.mark.parametrize(("ram", "options"), [
+    (7.7, {}),                                  # an 8 GiB PC reports about 7.7 GiB
+    (15.5, {}),
+    (47, {}),
+    (0, {}),                                    # nothing is known about the memory
+    (3.8, {"install_hwmonux": False}),          # already off
+])
+def test_no_hwmonux_advice_when_the_memory_is_enough_or_it_is_off(ram, options):
+    assert "rec.hwmonux_low_memory" not in found(manifest(options=options), profile(ram_gib=ram))
+
+
+def test_the_default_of_hwmonux_stays_the_users_decision_on_a_small_machine():
+    """The advice is shown, the choice is not made: defaults_for and apply_defaults leave options.install_hwmonux alone (the VM harness expects HWMonux by default)."""
+    machine = profile(ram_gib=3.8, threads=2)
+    m = manifest()
+    assert m.options.install_hwmonux is True
+    assert "options.install_hwmonux" not in rec.defaults_for(machine, m)
+    assert "options.install_hwmonux" not in rec.defaults_for(machine, m, resolve_auto=True)
+    rec.apply_defaults(m, machine, resolve_auto=True)
+    assert m.options.install_hwmonux is True
+
+
 def test_swap_advice():
     assert found(manifest(), profile(ram_gib=16))["rec.swap_size"].suggestion == "8192"
     assert "rec.swap_size" not in found(manifest(storage={"swap_mib": 8192}), profile(ram_gib=16))       # a deliberate value is left alone
@@ -246,8 +279,10 @@ def test_resolving_auto_does_not_change_what_the_planner_decides(name, builder):
     """apply_defaults(resolve_auto=True) writes the planner's own answers, so the plan stays the same."""
     machine = fixture_dict(name)
     m = manifest() if builder == "openrc" else __import__("tests.hardware.builders", fromlist=["systemd"]).systemd()
+    m.storage.swap_mib = 6144  # a deliberate size, which the seeding leaves alone: the compile jobs of the heavy packages follow the swap
     before = hwplan.plan(m, machine).to_dict()
     resolved = manifest() if builder == "openrc" else __import__("tests.hardware.builders", fromlist=["systemd"]).systemd()
+    resolved.storage.swap_mib = 6144
     rec.apply_defaults(resolved, machine, resolve_auto=True, include_firmware=False)
     assert all(getattr(resolved.hardware, field) != "auto" for field in ("power", "thermald", "zram", "trim", "sof_firmware", "nvk", "prime", "removable_fallback", "hidpi"))
     after = hwplan.plan(resolved, machine).to_dict()
