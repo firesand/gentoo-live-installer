@@ -35,7 +35,7 @@ TARGET_SERIAL = "GENTOO-VM-DISPOSABLE"
 TEST_USERNAME = "vmtest"
 TEST_PASSWORD = "vmtest-only-password"
 TEST_ROOT_PASSWORD = "vmtest-only-root-password"
-SCENARIOS = ("openrc", "systemd", "uefi-luks", "bios")
+SCENARIOS = ("openrc", "systemd", "uefi-luks", "bios", "defaults")
 ANSI_RE = re.compile(r"\x1b\[[0-?]*[ -/]*[@-~]")
 GUI_DISPLAY_PROBE = r"""
 import json, os, pwd, re, stat
@@ -82,6 +82,9 @@ class Scenario:
     init: str
     firmware: str
     luks: bool = False
+    # Keep every InstallManifest default (the untouched GUI path) instead of
+    # the fast minimal install the other scenarios use.
+    defaults: bool = False
 
     @property
     def hostname(self) -> str:
@@ -93,7 +96,10 @@ SCENARIO_MAP = {
     "systemd": Scenario("systemd", "systemd", "uefi"),
     "uefi-luks": Scenario("uefi-luks", "systemd", "uefi", luks=True),
     "bios": Scenario("bios", "openrc", "bios"),
+    "defaults": Scenario("defaults", "openrc", "uefi", defaults=True),
 }
+# The defaults scenario installs the full default desktop (hours); run it explicitly.
+ALL_SCENARIOS = tuple(name for name, scenario in SCENARIO_MAP.items() if not scenario.defaults)
 
 
 @dataclass(frozen=True)
@@ -126,16 +132,36 @@ def companion_selection(manifest: InstallManifest) -> dict[str, bool]:
 
 
 def build_manifest(scenario: Scenario, ssh_public_key: str, companions: str = "both", *,
-                   build_jobs: int = 2, swap_mib: int = 512) -> InstallManifest:
+                   build_jobs: int | None = None, swap_mib: int | None = None) -> InstallManifest:
+    """Build the scenario manifest; None resource values keep the scenario's own default."""
     if not re.fullmatch(r"(?:ssh-(?:ed25519|rsa)|ecdsa-sha2-nistp(?:256|384|521)|sk-ssh-ed25519@openssh\.com) [A-Za-z0-9+/=]+(?: .*)?", ssh_public_key.strip()):
         raise HarnessError("The SSH public key is missing or invalid")
     if companions not in {"both", "portagehub", "none"}:
         raise HarnessError("Companions must be both, portagehub, or none")
-    if not 1 <= build_jobs <= 256 or not 0 <= swap_mib <= 131072:
+    if (build_jobs is not None and not 1 <= build_jobs <= 256) or (swap_mib is not None and not 0 <= swap_mib <= 131072):
         raise HarnessError("Build jobs must be 1–256 and target swap must be 0–131072 MiB")
     manifest = InstallManifest()
     manifest.storage.device = TARGET_DEVICE
     manifest.storage.device_id = TARGET_SERIAL
+    if scenario.defaults:
+        # Only the disposable disk, test credentials and probe access differ
+        # from what an untouched GUI run would send.
+        manifest.accounts.hostname = scenario.hostname
+        manifest.accounts.username = TEST_USERNAME
+        manifest.accounts.password = TEST_PASSWORD
+        manifest.accounts.root_password = TEST_ROOT_PASSWORD
+        manifest.accounts.ssh_authorized_keys = [ssh_public_key.strip()]
+        manifest.options.ssh = True
+        manifest.options.install_hwmonux = companions == "both"
+        manifest.options.install_portagehub = companions in {"both", "portagehub"}
+        if build_jobs is not None:
+            manifest.portage.make_opts = f"-j{build_jobs}"
+        if swap_mib is not None:
+            manifest.storage.swap_mib = swap_mib
+        manifest.require_valid()
+        return manifest
+    build_jobs = 2 if build_jobs is None else build_jobs
+    swap_mib = 512 if swap_mib is None else swap_mib
     manifest.storage.firmware = scenario.firmware
     manifest.storage.table = "dos" if scenario.firmware == "bios" else "gpt"
     manifest.storage.swap_mib = swap_mib
@@ -661,6 +687,27 @@ def companion_probe_plan(manifest: InstallManifest) -> list[tuple[str, str, Call
     return plan
 
 
+DESKTOP_PACKAGES = {
+    "kde": ("kde-plasma", "plasma-meta", "sddm"),
+    "gnome": ("gnome-base", "gnome", "gdm"),
+    "xfce": ("xfce-base", "xfce4-meta", "lightdm"),
+}
+
+
+def desktop_probe_plan(manifest: InstallManifest) -> list[tuple[str, str, Callable[[int, str], ProbeResult]]]:
+    """Check that the selected desktop and its display manager were installed and enabled."""
+    if manifest.system.desktop not in DESKTOP_PACKAGES:
+        return []
+    category, package, manager = DESKTOP_PACKAGES[manifest.system.desktop]
+    installed = f"ls -d /var/db/pkg/{category}/{package}-[0-9]*"
+    if manifest.system.init == "openrc":
+        expected = shlex.quote(f'DISPLAYMANAGER="{manager}"')
+        enabled = f"test -e /etc/runlevels/default/display-manager && grep -qxF {expected} /etc/conf.d/display-manager"
+    else:
+        enabled = f"systemctl is-enabled {manager}.service"
+    return [("desktop", f"{installed} && {enabled}", lambda code, output: parse_probe_result("desktop", code, output))]
+
+
 def parse_static_network_probe(returncode: int, output: str, expected: dict[str, object]) -> ProbeResult:
     name = "network-static"
     if returncode != 0:
@@ -1023,7 +1070,7 @@ class ScenarioRunner:
             raise HarnessError(f"Guest does not expose the expected disposable disk; see {log}")
         manifest = build_manifest(
             self.scenario, self.public_key, getattr(self.args, "companions", "both"),
-            build_jobs=getattr(self.args, "build_jobs", 2), swap_mib=getattr(self.args, "swap_mib", 512),
+            build_jobs=getattr(self.args, "build_jobs", None), swap_mib=getattr(self.args, "swap_mib", None),
         )
         manifest_path = self.run_dir / "manifest.json"
         manifest.save(manifest_path, redact=False)
@@ -1132,6 +1179,7 @@ class ScenarioRunner:
             raise HarnessError(f"Saved install manifest is missing; cannot derive companion probes: {manifest_path}")
         manifest = InstallManifest.load(manifest_path)
         probes.extend(companion_probe_plan(manifest))
+        probes.extend(desktop_probe_plan(manifest))
         static_probe = static_network_probe(manifest)
         if static_probe is not None:
             command, parser = static_probe
@@ -1298,10 +1346,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--disk-size", type=positive_int, default=40, help="Disposable qcow2 size in GiB (default: 40)")
     parser.add_argument("--memory", type=positive_int, default=4096, help="VM memory in MiB (default: 4096)")
     parser.add_argument("--cpus", type=positive_int, default=2)
-    parser.add_argument("--build-jobs", type=positive_int, default=2,
-                        help="Target Portage build jobs, 1–256 (default: 2)")
-    parser.add_argument("--swap-mib", type=int, default=512,
-                        help="Swap on the disposable target disk, 0–131072 MiB (default: 512)")
+    parser.add_argument("--build-jobs", type=positive_int, default=None,
+                        help="Target Portage build jobs, 1–256 (default: 2; the defaults scenario keeps the GUI default)")
+    parser.add_argument("--swap-mib", type=int, default=None,
+                        help="Swap on the disposable target disk, 0–131072 MiB (default: 512; the defaults scenario keeps the GUI default)")
     parser.add_argument("--boot-timeout", type=positive_int, default=900)
     parser.add_argument("--install-timeout", type=positive_int, default=21600)
     parser.add_argument("--shutdown-timeout", type=positive_int, default=120)
@@ -1333,7 +1381,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         parser.error("--cancel-then-resume requires --install-mode gui")
     if args.cancel_then_resume and args.ssh_user != "root":
         parser.error("--cancel-then-resume requires --ssh-user root")
-    scenarios = list(SCENARIO_MAP.values()) if args.all else [SCENARIO_MAP[args.scenario]]
+    scenarios = [SCENARIO_MAP[name] for name in ALL_SCENARIOS] if args.all else [SCENARIO_MAP[args.scenario]]
     try:
         firmware = preflight(args, scenarios)
         public_key = public_key_from_private(args.ssh_keygen, args.ssh_private_key)

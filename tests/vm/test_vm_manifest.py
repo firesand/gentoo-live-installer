@@ -8,7 +8,7 @@ from tests.vm.helpers import PUBLIC_KEY, load_vm_module
 vm = load_vm_module()
 
 
-@pytest.mark.parametrize("name", vm.SCENARIOS)
+@pytest.mark.parametrize("name", vm.ALL_SCENARIOS)
 def test_scenario_manifests_match_schema_and_fast_install_choices(name):
     scenario = vm.SCENARIO_MAP[name]
     manifest = vm.build_manifest(scenario, PUBLIC_KEY)
@@ -95,3 +95,54 @@ def test_companion_probe_plan_uses_saved_manifest_flags(tmp_path):
 def test_invalid_public_keys_are_rejected(key):
     with pytest.raises(vm.HarnessError, match="public key"):
         vm.build_manifest(vm.SCENARIO_MAP["openrc"], key)
+
+
+def test_defaults_scenario_keeps_every_gui_default_except_disk_and_access():
+    manifest = vm.build_manifest(vm.SCENARIO_MAP["defaults"], PUBLIC_KEY)
+    expected = InstallManifest()
+    expected.storage.device = vm.TARGET_DEVICE
+    expected.storage.device_id = vm.TARGET_SERIAL
+    expected.accounts.hostname = "gentoo-vm-defaults"
+    expected.accounts.username = vm.TEST_USERNAME
+    expected.accounts.password = vm.TEST_PASSWORD
+    expected.accounts.root_password = vm.TEST_ROOT_PASSWORD
+    expected.accounts.ssh_authorized_keys = [PUBLIC_KEY]
+    expected.options.ssh = True
+
+    assert manifest.validate() == []
+    assert manifest.to_dict() == expected.to_dict()
+    assert manifest.system.desktop == "kde"
+
+
+def test_defaults_scenario_applies_only_explicit_resource_overrides():
+    manifest = vm.build_manifest(vm.SCENARIO_MAP["defaults"], PUBLIC_KEY, build_jobs=1, swap_mib=8192)
+    assert manifest.portage.make_opts == "-j1"
+    assert manifest.storage.swap_mib == 8192
+    assert vm.build_manifest(vm.SCENARIO_MAP["openrc"], PUBLIC_KEY).storage.swap_mib == 512
+
+
+def test_all_excludes_the_long_defaults_scenario():
+    assert "defaults" in vm.SCENARIOS
+    assert "defaults" not in vm.ALL_SCENARIOS
+
+
+@pytest.mark.parametrize(("init", "desktop", "fragment"), [
+    ("openrc", "kde", "grep -qxF 'DISPLAYMANAGER=\"sddm\"' /etc/conf.d/display-manager"),
+    ("systemd", "gnome", "systemctl is-enabled gdm.service"),
+    ("openrc", "xfce", "/var/db/pkg/xfce-base/xfce4-meta-[0-9]*"),
+])
+def test_desktop_probe_checks_package_and_display_manager(init, desktop, fragment):
+    manifest = InstallManifest()
+    manifest.system.init = init
+    manifest.system.desktop = desktop
+    [(name, command, parser)] = vm.desktop_probe_plan(manifest)
+    assert name == "desktop"
+    assert fragment in command
+    assert parser(0, "ok").success
+    assert not parser(1, "").success
+
+
+def test_minimal_desktop_has_no_desktop_probe():
+    manifest = InstallManifest()
+    manifest.system.desktop = "minimal"
+    assert vm.desktop_probe_plan(manifest) == []
