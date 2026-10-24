@@ -90,8 +90,11 @@ describes the build). A production ISO has no SSH access, so the harness would o
 install -d -m 0700 build/vm-control
 testkey="build/vm-control/iso-test-$(date +%s)"
 ssh-keygen -q -t ed25519 -N '' -f "$testkey"
-GENTOO_TEST_SSH_PUBLIC_KEY="$(cat "$testkey.pub")" ISO_DIST_DIR=dist/test-only JOBS=2 ./scripts/build-iso.sh
+GENTOO_TEST_SSH_PUBLIC_KEY="$(cat "$testkey.pub")" ISO_DIST_DIR=build/test-dist JOBS=2 ./scripts/build-iso.sh
 ```
+
+`ISO_DIST_DIR` must be a directory outside `dist/`, not `dist/` and not a directory inside it: `build-iso.sh`
+refuses both, because a release is taken from `dist/` as a whole and an ISO with a root login must never be in it.
 
 If `GENTOO_TEST_SSH_PUBLIC_KEY` is exported in your shell, `build-iso.sh` forwards it silently:
 unset it before a normal build. The test ISO must be built from the same tree as the harness.
@@ -100,7 +103,7 @@ unset it before a normal build. The test ISO must be built from the same tree as
 
 ```sh
 python3 scripts/test-vm.py --list-scenarios
-python3 scripts/test-vm.py --scenario openrc --iso dist/test-only/<iso> \
+python3 scripts/test-vm.py --scenario openrc --iso build/test-dist/<iso> \
   --ssh-host 127.0.0.1 --ssh-port 40222 --ssh-private-key "$testkey"
 ```
 
@@ -148,7 +151,7 @@ them and even when the harness is killed with SIGKILL (the kernel sends QEMU SIG
 | `text-install` | the console installer: the ISO's text entry, then `gentoo-installer-text` with a device confirmation |
 | `rescue-debian` | Debian 13 cloud image: menu file deleted, repaired from the live ISO, booted with UEFI and BIOS |
 | `rescue-ubuntu` | Ubuntu 24.04 cloud image: the initramfs on the separate `/boot` partition deleted and rebuilt |
-| `rescue-fedora` | Fedora cloud image (btrfs, BLS, SELinux): menu file deleted and repaired; the first boot relabels and restarts |
+| `rescue-fedora` | Fedora cloud image (btrfs with a boot subvolume, BLS, SELinux): `/boot/grub2/grub.cfg` deleted and repaired; the first boot relabels and restarts |
 | `rescue-arch` | Arch cloud image: detected and diagnosed, every repair refused by design, the disk byte for byte unchanged |
 | `rescue-gentoo` | a minimal Gentoo installed first, then broken and repaired three times (menu file, initramfs, fstab) |
 
@@ -187,10 +190,12 @@ the graphical check of `--live-only`. `text-install` uses `--boot-entry text`.
 starts `gentoo-installer-text` or `gentoo-rescue` by itself on tty1 (`gentoo.autostart=`): such an
 installer would compete with the one the harness runs over SSH. `text-installer` and `rescue` are
 the names for those autostart entries, matched by title (`ALIASES` in `scripts/vm_iso.py`); the
-menu of `iso/cd_overlay/boot/grub/grub.cfg.in` has neither yet, so they match nothing until it does.
+menu of `iso/cd_overlay/boot/grub/grub.cfg.in` has both ("Install in text mode" and "Repair a system (text console)").
 The text console entry also asks for a keyboard layout; the initramfs waits ten seconds for an
 answer and then goes on, which the boot timeout covers. The ISOs built before Wave 1 (`dist/test*`)
-have only three "Boot LiveCD" entries, so every entry except `default` is missing there.
+have only three "Boot LiveCD" entries, so every entry except `default` is missing there. They are test
+images with a root login and are named like the release: move them out of `dist/` (for example to
+`build/test-dist/`) so that nothing which publishes `dist/` takes them along.
 
 ### What is checked after an install
 
@@ -382,8 +387,11 @@ test-vm.py --scenario bios --target-image build/vm/<run>/disk.qcow2 \
 `--rescue-break` removes `grub.cfg` (also `boot/grub2/`), every `initramfs*`/`initrd*` image, or
 replaces the root device in `/etc/fstab` (`UUID=`, `LABEL=` or `PARTUUID=`) with
 `UUID=00000000-dead-beef-0000-000000000000`. It works on files of a mounted root only: nothing is
-formatted, repartitioned or wiped; a separate `/boot` partition that the system's own fstab names
-is mounted too, and a system inside a btrfs subvolume is found. LUKS, LVM and RAID roots are
+formatted, repartitioned or wiped; a separate `/boot` that the system's own fstab names is mounted
+too (a partition of the disk, or a btrfs subvolume of the root file system with `-o subvol=NAME`:
+Fedora keeps its kernel, initramfs, `grub2/grub.cfg` and boot entries in the subvolume `boot`, not in
+the `/boot` directory of the subvolume `root`), and a system inside a btrfs subvolume is found.
+LUKS, LVM and RAID roots are
 reported as unsupported. The damage must be *real*: the installed disk has `--broken-timeout`
 seconds (default 120) to come up and a system that still boots is a failed test. The repair may run
 for `--rescue-timeout` seconds (default 1800). For the fstab, whose damage does not always stop the
@@ -415,7 +423,7 @@ serial console is the witness (all four print to `ttyS0`). A scenario does this:
    |---|---|---|---|
    | `rescue-debian` | ext4 root, BIOS boot, ESP | `grub-cfg` | `update-grub` |
    | `rescue-ubuntu` | ext4 root, BIOS boot, ESP, **a separate `/boot` partition** with the kernel, initramfs and `grub.cfg` | `initramfs` | `update-initramfs` |
-   | `rescue-fedora` | BIOS boot, ESP, btrfs root **in a subvolume**, BLS entries, SELinux | `grub-cfg` | `grub2-mkconfig` |
+   | `rescue-fedora` | BIOS boot, ESP (its `grub.cfg` is a stub), one btrfs file system with the subvolumes `root`, **`boot`**, `home` and `var` (`/boot` is the subvolume `boot`), BLS entries, SELinux | `grub-cfg` (`/boot/grub2/grub.cfg` in the subvolume `boot`) | `grub2-mkconfig` |
    | `rescue-arch` | BIOS boot, ESP, btrfs root | none | refused by design |
 
    `--rescue-break` chooses another damage for an image;
@@ -485,7 +493,7 @@ is what the entry is there to find out. 12 GiB + 4 GiB + the margin is the most 
 
 ```sh
 test-vm.py --list-matrix                                    # the table above, from the data
-test-vm.py --matrix wave3 --iso dist/test-only/<iso> --ssh-host 127.0.0.1 --ssh-port 40222 \
+test-vm.py --matrix wave3 --iso build/test-dist/<iso> --ssh-host 127.0.0.1 --ssh-port 40222 \
   --ssh-private-key "$testkey"                              # all of it
 test-vm.py --matrix wave3 --matrix-only rescue-debian,rescue-arch ...     # a part of it
 test-vm.py --matrix wave3 --matrix-parallel 1 ...                          # one at a time

@@ -8,7 +8,8 @@ Each sub-command takes one JSON argument and prints one JSON line:
                   manual-mode install is pointed at (nothing is formatted)
   rescue-break    damage the installed system on the target disk, from the live system, so a
                   repair tool has something to repair (grub.cfg, initramfs or the fstab UUID); finds the
-                  system inside a btrfs subvolume and mounts a separate /boot from the system's own fstab
+                  system inside a btrfs subvolume and mounts the system's /boot as its own fstab does:
+                  a partition of its own, or a btrfs subvolume of the root file system (Fedora)
   disk-hash       the sha256 of a whole disk, to show later that nothing wrote to it
 
 They are sent as ``python3 -c "$(cat vm_guest.py)" <sub-command> '<json>'`` and use only the
@@ -172,8 +173,8 @@ LSBLK_COLUMNS = "PATH,TYPE,SIZE,FSTYPE,PARTTYPE,LABEL,UUID,PARTUUID,PARTLABEL"
 SYSTEM_SUBVOLUMES = ("root", "@", "@root", "ROOT", "rootfs")
 
 
-def read_fstab(system: Path) -> list[tuple[str, str]]:
-    """(device field, mount point) of every entry of the system's /etc/fstab."""
+def read_fstab_entries(system: Path) -> list[tuple[str, str, str]]:
+    """(device field, mount point, options) of every entry of the system's /etc/fstab."""
     try:
         text = (system / "etc" / "fstab").read_text()
     except OSError:
@@ -182,8 +183,18 @@ def read_fstab(system: Path) -> list[tuple[str, str]]:
     for line in text.splitlines():
         fields = line.split()
         if len(fields) >= 2 and not fields[0].startswith("#"):
-            entries.append((fields[0], fields[1]))
+            entries.append((fields[0], fields[1], fields[3] if len(fields) >= 4 else ""))
     return entries
+
+
+def read_fstab(system: Path) -> list[tuple[str, str]]:
+    """(device field, mount point) of every entry of the system's /etc/fstab."""
+    return [(device, target) for device, target, _options in read_fstab_entries(system)]
+
+
+def subvolume_option(options: str) -> str:
+    """The subvol=NAME or subvolid=ID option of an fstab options field, '' when it has none."""
+    return next((option for option in options.split(",") if option.startswith(("subvol=", "subvolid="))), "")
 
 
 def resolve_spec(spec: str, partitions: list[dict]) -> str:
@@ -216,14 +227,29 @@ def find_system_root(mounted: Path) -> Path:
     raise GuestError("No installed system was found on the root partition" + (f": several directories have an /etc/fstab ({', '.join(child.name for child in found)})" if found else ""))
 
 
+def boot_mount(system: Path, root_device: str, partitions: list[dict]) -> tuple[str, str]:
+    """What the system's own fstab mounts at /boot, if it is more than a directory of the root: (device, mount option).
+
+    That is a partition of the disk of its own (Ubuntu: ``("/dev/vda16", "")``), or a subvolume of the root's Btrfs file system
+    (Fedora: ``("/dev/vda3", "subvol=boot")``, the kernel and grub.cfg are in that subvolume and the root subvolume has an empty
+    /boot). A device that is not a partition of this disk is never named.
+    """
+    entries = read_fstab_entries(system)
+    root_subvolume = next((subvolume_option(options) for _spec, target, options in entries if target == "/"), "")
+    for spec, target, options in entries:
+        if target != "/boot":
+            continue
+        device = resolve_spec(spec, partitions)
+        subvolume = subvolume_option(options)
+        if device and (device != root_device or (subvolume and subvolume != root_subvolume)):
+            return device, subvolume
+    return "", ""
+
+
 def boot_partition(system: Path, root_device: str, partitions: list[dict]) -> str:
     """The separate /boot partition the system's own fstab names, if it is one of the disk's partitions."""
-    for spec, target in read_fstab(system):
-        if target == "/boot":
-            device = resolve_spec(spec, partitions)
-            if device and device != root_device:
-                return device
-    return ""
+    device, _option = boot_mount(system, root_device, partitions)
+    return device if device != root_device else ""
 
 
 def initramfs_images(boot: Path) -> list[Path]:
@@ -275,7 +301,7 @@ def break_root_tree(mode: str, root: Path) -> dict:
 
 
 def rescue_break(args: dict, runner=run) -> dict:
-    """Damage the system on the guarded disk. Its root is found by size and file system; a btrfs subvolume and a separate /boot are handled."""
+    """Damage the system on the guarded disk. Its root is found by size and file system; a btrfs subvolume and a separate /boot (a partition or a subvolume) are handled."""
     mode, path, size = args["mode"], args["path"], int(args["size"])
     if mode not in BREAK_MODES:
         raise GuestError(f"Unknown break mode {mode!r}")
@@ -290,13 +316,15 @@ def rescue_break(args: dict, runner=run) -> dict:
     extra: dict = {}
     try:
         system = find_system_root(Path(mount_point))
-        boot = boot_partition(system, layout["root"], partitions)
+        boot, boot_option = boot_mount(system, layout["root"], partitions)
         if boot:
             boot_dir = system / "boot"
             boot_dir.mkdir(exist_ok=True)
-            runner(["mount", boot, str(boot_dir)])
+            # A subvolume is named from the top level of the file system, whichever subvolume the first mount showed.
+            runner(["mount", *(["-o", boot_option] if boot_option else []), boot, str(boot_dir)])
             mounted.append(str(boot_dir))
-        extra = {"boot_partition": boot, "system": str(system.relative_to(mount_point)) if system != Path(mount_point) else ""}
+        extra = {"boot_partition": boot if boot != layout["root"] else "", "boot_mount_option": boot_option,
+                 "system": str(system.relative_to(mount_point)) if system != Path(mount_point) else ""}
         changes = break_root_tree(mode, system)
         runner(["sync"])
         if mode == "fstab-uuid":

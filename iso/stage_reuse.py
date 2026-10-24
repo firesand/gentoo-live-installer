@@ -13,7 +13,9 @@ and the next run compares it with the current inputs:
     reseed   only the project's own packages changed (installer, HWMonux, PortageHub or
              their ebuilds): unpack the old stage1, let emerge reinstall exactly those
              packages, then run stage2. Packages are never removed this way, which is why
-             the specs, the Portage configuration and the pins must be unchanged.
+             the specs, the Portage configuration and the pins must be unchanged. The
+             builder runs a reseed only for BUILD_MODE=reseed; --reuse auto turns this
+             decision into a fresh stage1 until a reseed has been checked in a real build.
     fresh    anything else, or anything that cannot be proven: build stage1 from stage3.
 
 The module is stdlib only. The CLI is used by iso/builder-entrypoint.sh:
@@ -22,6 +24,8 @@ The module is stdlib only. The CLI is used by iso/builder-entrypoint.sh:
     stage_reuse.py receipt --workspace W --distfiles D --archive A --catalyst-version V
                            [--image-id ID] [--build-inputs FILE] > receipt.json
     stage_reuse.py reseed-spec SPEC SEED_SUBPATH      (prints the spec for the reseed run)
+    stage_reuse.py reinstalled --archive A --since EPOCH ATOM...
+                           (fails unless every ATOM in the new archive was built at or after EPOCH)
 """
 from __future__ import annotations
 
@@ -35,7 +39,9 @@ from pathlib import Path
 import re
 import stat
 import sys
+import tarfile
 from typing import Any, Iterable, Mapping
+import zlib
 
 SCHEMA_VERSION = 1
 RECEIPT_SUFFIX = ".receipt.json"
@@ -300,6 +306,45 @@ def render_reseed_spec(stage1_spec: str, seed_subpath: str) -> str:
     return "".join(lines)
 
 
+def _stamp(epoch: int) -> str:
+    return dt.datetime.fromtimestamp(epoch, dt.timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+
+
+def reinstalled_since(archive: Path, since: int, atoms: Iterable[str]) -> dict[str, int]:
+    """BUILD_TIME of each atom in a finished stage1 archive; ReuseError unless every one was built at or after ``since``.
+
+    A reseed asks emerge to reinstall the project's packages, but Catalyst finishes the run just as happily when emerge
+    reinstalled nothing: the first real reseed did exactly that, and its receipt then vouched for an archive that still held the
+    old installer. The package database inside the archive tells the truth: /var/db/pkg/<atom>-<version>/BUILD_TIME is when the
+    installed package was built.
+    """
+    patterns = {atom: re.compile(rf"var/db/pkg/{re.escape(atom)}-[0-9][^/]*/BUILD_TIME") for atom in atoms}
+    found: dict[str, int] = {}
+    try:
+        with tarfile.open(archive, "r|*") as tar:
+            for member in tar:
+                name = member.name.removeprefix("./")
+                if not member.isfile() or not name.startswith("var/db/pkg/"):
+                    continue
+                for atom, pattern in patterns.items():
+                    if atom not in found and pattern.fullmatch(name):
+                        stream = tar.extractfile(member)
+                        value = stream.read(64).decode("ascii", "replace").strip() if stream else ""
+                        if not value.isdigit():
+                            raise ReuseError(f"the BUILD_TIME of {atom} in the new archive is not a number: {value[:20]!r}")
+                        found[atom] = int(value)
+                if len(found) == len(patterns):
+                    break
+    except (tarfile.TarError, OSError, EOFError, zlib.error) as exc:
+        raise ReuseError(f"cannot read {archive}: {exc}") from exc
+    problems = [f"{atom} is not installed in the new archive" if atom not in found else
+                f"{atom} was built at {_stamp(found[atom])}, before the reseed started at {_stamp(since)}, so it was not reinstalled"
+                for atom in patterns if atom not in found or found[atom] < since]
+    if problems:
+        raise ReuseError("; ".join(problems))
+    return found
+
+
 def current_state(workspace: Path, distfiles: Path, catalyst_version: str = "") -> Current:
     return Current(
         compute_stage1_key(workspace),
@@ -343,6 +388,11 @@ def _cmd_reseed_spec(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_reinstalled(args: argparse.Namespace) -> int:
+    print(json.dumps(reinstalled_since(Path(args.archive), args.since, args.atoms), sort_keys=True))
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="stage_reuse.py", description=__doc__.split("\n\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -360,8 +410,12 @@ def main(argv: list[str] | None = None) -> int:
     p = sub.add_parser("reseed-spec")
     p.add_argument("spec")
     p.add_argument("seed_subpath")
+    p = sub.add_parser("reinstalled")
+    p.add_argument("--archive", required=True)
+    p.add_argument("--since", type=int, required=True, help="seconds since the epoch: when the reseed started")
+    p.add_argument("atoms", nargs="+")
     args = parser.parse_args(argv)
-    handlers = {"decide": _cmd_decide, "receipt": _cmd_receipt, "reseed-spec": _cmd_reseed_spec}
+    handlers = {"decide": _cmd_decide, "receipt": _cmd_receipt, "reseed-spec": _cmd_reseed_spec, "reinstalled": _cmd_reinstalled}
     try:
         return handlers[args.command](args)
     except (ReuseError, OSError, ValueError) as exc:

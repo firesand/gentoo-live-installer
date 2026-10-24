@@ -35,6 +35,30 @@ def test_test_key_cannot_use_the_release_directory_even_when_named(stubs, key_fi
     assert result.returncode != 0
 
 
+@pytest.mark.parametrize("inside", ["test-only", "test-r18/nested", "a/../b", "./c", "."])
+def test_test_key_cannot_use_a_directory_inside_dist_either(stubs, key_file: Path, inside: str) -> None:
+    """Whatever publishes dist/ as a tree (tar, rsync, an upload) would ship a test login that sits anywhere below it."""
+    # --check stops after the flavour rules and creates nothing, so a missing guard cannot leave directories in dist/
+    result = stubs.run("--check", "--test-key-file", str(key_file), extra_env={"ISO_DIST_DIR": str(ROOT / "dist" / inside)})
+    assert result.returncode != 0, inside
+    assert "dist/ or any directory below it" in result.stderr and "which is where releases go" in result.stderr
+    assert not stubs.runs() and not [c for c in stubs.calls() if c[0] == "build"]
+
+
+def test_a_neighbour_of_dist_is_not_inside_dist(stubs, key_file: Path) -> None:
+    """The rule is about the directory tree, not about the spelling: dist-test and a directory whose name only starts with dist are fine."""
+    for neighbour in ("dist-test", "distribution", "build/test-dist"):
+        result = stubs.run("--check", "--test-key-file", str(key_file), extra_env={"ISO_DIST_DIR": str(ROOT / neighbour)})
+        assert result.returncode == 0, (neighbour, result.stderr)
+        assert "flavour testkey" in result.stdout
+
+
+def test_the_messages_name_a_directory_outside_dist_as_the_example(stubs, key_file: Path) -> None:
+    result = stubs.run("--test-key-file", str(key_file), extra_env={"ISO_DIST_DIR": ""})
+    assert "build/test-dist" in result.stderr and "dist/test-only" not in result.stderr
+    assert "outside dist/" in stubs.run("--help").stdout
+
+
 def test_the_environment_variable_is_a_test_key_too_and_has_the_same_rule(stubs) -> None:
     result = stubs.run(extra_env={"GENTOO_TEST_SSH_PUBLIC_KEY": PUBLIC_KEY, "ISO_DIST_DIR": ""})
     assert result.returncode != 0 and "default dist/" in result.stderr

@@ -29,7 +29,7 @@
     "kernel": "/boot/gentoo",
     "initrd": "/boot/gentoo.igz",
     "min_entries": 12,
-    "required_arguments": ["nox", "dokeymap", "nomodeset", "rd.live.ram=1", "dospeakup", "console=ttyS0,115200n8", "acpi=off", "rd.debug", "gentoo.autostart=rescue", "gentoo.autostart=installer-text"],
+    "required_arguments": ["nox", "dokeymap", "nomodeset", "rd.live.ram=1", "console=ttyS0,115200n8", "acpi=off", "rd.debug", "gentoo.autostart=rescue", "gentoo.autostart=installer-text"],
     "required_argument_groups": [
       "nox dokeymap",
       "nox dokeymap gentoo.autostart=rescue",

@@ -48,11 +48,44 @@ def test_every_documented_option_and_variable_exists_in_the_script() -> None:
         assert variable in BUILD_SCRIPT and variable in ISO_DOC.read_text()
 
 
+def test_reuse_auto_is_described_as_it_behaves() -> None:
+    """--reuse auto reuses a stage1 that nothing changed and builds stage1 fresh otherwise. The reseed that reinstalls only the changed
+    project packages did not reinstall them in a real build: it runs only for BUILD_MODE=reseed inside the container (iso/builder-entrypoint.sh)."""
+    usage = BUILD_SCRIPT.split("--reuse MODE", 1)[1].split("--reuse-stage1", 1)[0]
+    lines = ISO_DOC.read_text().splitlines()
+    row = next(line for line in lines if line.startswith("| `--reuse auto`"))
+    reseed = next(line for line in lines if line.startswith("* **reseed**"))
+    for name, described in (("the usage text of build-iso.sh", usage), ("the --reuse auto row of docs/ISO.md", row)):
+        assert "fresh" in described and "reinstall" not in described, name
+    assert "BUILD_MODE=reseed" in reseed and "--reuse auto" in reseed and "not" in reseed
+    assert "needs no revision bump" not in ISO_DOC.read_text() and "reuse logic reinstalls it by name" not in ISO_DOC.read_text()
+
+
 def test_documented_test_iso_name_matches_the_builder(pins: dict[str, str]) -> None:
     expected = pins["ISO_NAME"].replace(".iso", "-TESTKEY.iso")
     assert expected in README.read_text()
     assert "dist/test-only/" + pins["ISO_NAME"] not in README.read_text(), "the old test ISO name must not be documented"
     assert pins["ISO_VOLID"].replace("_AMD64", "_TESTKEY") in README.read_text()
+
+
+def test_no_document_suggests_a_test_iso_in_or_below_dist() -> None:
+    """build-iso.sh refuses a test-key ISO in dist/ and in every directory below it, so no example may suggest one."""
+    for document in (README, USER_GUIDE, ISO_DOC, ROOT / "docs/TESTING.md"):
+        text = document.read_text()
+        for value in re.findall(r"ISO_DIST_DIR=(\S+)", text):
+            assert not re.match(r"[\"']?(\./)?dist(/|[\"']?$)", value), f"{document.name} builds a test ISO into {value}"
+        assert "dist/test-only" not in text, f"{document.name} still names dist/test-only"
+
+
+def test_no_document_offers_speech_output_the_disc_does_not_have() -> None:
+    """The disc has no speech synthesizer, screen reader or braille software. A document may say so, but must not offer them."""
+    for document in (README, USER_GUIDE, ISO_DOC, ROOT / "iso/README-live.txt"):
+        text = document.read_text()
+        assert document == ISO_DOC or "dospeakup" not in text, document.name
+        assert not re.search(r"(?im)^\s*(\|\s*)?accessibility\b", text), f"{document.name} lists an Accessibility boot entry"
+        for line in text.splitlines():
+            if re.search(r"speech|speak|screen reader|braille", line, re.I):
+                assert re.search(r"\b(no|not|cannot|without)\b", line, re.I), f"{document.name} offers speech output: {line.strip()}"
 
 
 def test_documentation_does_not_promise_what_the_kernel_cannot_do() -> None:

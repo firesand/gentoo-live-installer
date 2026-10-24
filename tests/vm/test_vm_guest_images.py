@@ -1,12 +1,14 @@
-"""scripts/vm_guest.py on the layouts of distribution images: a separate /boot partition (Ubuntu), a btrfs subvolume (Fedora, Arch),
-labels instead of UUIDs (Debian), and the disks of a manual layout across two disks.
+"""scripts/vm_guest.py on the layouts of distribution images: a separate /boot partition (Ubuntu), btrfs subvolumes with /boot in a
+subvolume of its own (Fedora), labels instead of UUIDs (Debian), and the disks of a manual layout across two disks.
 
-Mounting is done by a recorder that copies a fixture tree into the mount point and copies it back on umount, so the breaker's
-real file operations run on real directories while no device is touched.
+Mounting is done by a recorder that makes the mount point show the fixture tree of the device, so the breaker's real file
+operations run on real directories while no device is touched. Two mounts of one device (a Btrfs file system and a subvolume of
+it) show the same files, as they do on a real system.
 """
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -24,36 +26,62 @@ def write(root: Path, name: str, text: str = "x" * 2048) -> Path:
 
 
 class FakeDisk:
-    """Answers blockdev, lsblk, mount, umount and sync like the guest; ``devices`` maps a partition to the tree on it."""
+    """Answers blockdev, lsblk, mount, umount and sync like the guest; ``devices`` maps a partition to the tree on it.
+
+    A mount makes the target directory show the tree of the device (the target becomes a link to it, so what the breaker
+    changes is what is on the device), and a directory that is mounted over keeps its own content, hidden until the umount.
+    ``mount -o subvol=NAME`` shows the directory NAME of the device's tree, which is how the top level of a Btrfs file system
+    lists its subvolumes; a subvolume that is not there is an error, as it is for the real mount.
+    """
 
     def __init__(self, tmp_path: Path, size: int, lsblk: dict, devices: dict[str, Path]) -> None:
         self.size, self.lsblk, self.devices = size, lsblk, devices
         self.commands: list[list[str]] = []
-        self.mounted: dict[str, str] = {}
+        self.mounted: dict[str, tuple[str, Path]] = {}
         tmp_path.mkdir(parents=True, exist_ok=True)
         self.tmp = tmp_path
 
+    def mount(self, argv) -> tuple[int, str]:
+        arguments, options = list(argv[1:]), ""
+        if arguments[0] == "-o":
+            options, arguments = arguments[1], arguments[2:]
+        device, target = arguments
+        assert device in self.devices, f"the breaker mounted {device}, which is not a partition of the disk under test"
+        tree = self.devices[device]
+        for option in options.split(","):
+            if option.startswith("subvol="):
+                tree = tree / option.partition("=")[2].strip("/")
+            else:
+                assert not option, f"the fake knows no mount option {option!r}"
+        if not tree.is_dir():
+            return 32, f"mount: {target}: can't read superblock on {device}."
+        hidden = self.tmp / f"under-mount-{len(self.mounted)}-{Path(target).name}"
+        os.rename(target, hidden)
+        os.symlink(tree, target)
+        self.mounted[target] = (device, hidden)
+        return 0, ""
+
+    def umount(self, target: str) -> None:
+        _device, hidden = self.mounted.pop(target)
+        os.unlink(target)
+        os.rename(hidden, target)
+
     def __call__(self, argv, *, check=True, input_text=None):
         self.commands.append(list(argv))
-        out = ""
+        out, status = "", 0
         if argv[0] == "blockdev":
             out = f"{self.size}\n"
         elif argv[0] == "lsblk":
             out = json.dumps(self.lsblk)
         elif argv[0] == "mount":
-            device, target = argv[1], argv[2]
-            assert device in self.devices, f"the breaker mounted {device}, which is not a partition of the disk under test"
-            shutil.copytree(self.devices[device], target, symlinks=True, dirs_exist_ok=True)
-            self.mounted[target] = device
+            status, out = self.mount(argv)
         elif argv[0] == "umount":
-            device = self.mounted.pop(argv[1])
-            shutil.rmtree(self.devices[device])  # what is on the mount now is what is on the partition
-            shutil.copytree(argv[1], self.devices[device], symlinks=True)
-            for entry in list(Path(argv[1]).iterdir()):
-                shutil.rmtree(entry) if entry.is_dir() and not entry.is_symlink() else entry.unlink()
+            self.umount(argv[1])
         elif argv[0] == "findmnt":
             return subprocess.CompletedProcess(argv, 1, "unreachable on boot required source: UUID=00000000", "")
-        return subprocess.CompletedProcess(argv, 0, out, "")
+        if check and status != 0:
+            raise vm_guest.GuestError(f"{' '.join(argv)} failed ({status}): {out.strip()}")
+        return subprocess.CompletedProcess(argv, status, out, "")
 
 
 def lsblk_of(disk: str, partitions: list[dict]) -> dict:
@@ -75,6 +103,21 @@ def nothing_mounted(tmp_path, monkeypatch):
         return real(prefix=prefix, dir=str(tmp_path))
 
     monkeypatch.setattr(vm_guest.tempfile, "mkdtemp", mkdtemp)
+
+
+# What Fedora-Cloud-Base-Generic-44-1.7 really looks like (the fstab word for word, the files from the extracted image): p3 is one
+# Btrfs file system whose top level holds the subvolumes root, boot, home and var. The subvolume root has only an empty /boot/efi;
+# the kernel, the initramfs, grub2/grub.cfg and the BLS entries are in the subvolume boot, which fstab mounts at /boot. The grub.cfg
+# on the ESP is a three-line stub that reads /boot/grub2/grub.cfg.
+FEDORA_UUID = "15c26993-ac30-424a-9c4b-faec4434d234"
+FEDORA_FSTAB = (
+    f"UUID={FEDORA_UUID} / btrfs compress=zstd:1,defaults,subvol=root 0 1\n"
+    f"UUID={FEDORA_UUID} /boot btrfs compress=zstd:1,subvol=boot 0 0\n"
+    f"UUID={FEDORA_UUID} /home btrfs compress=zstd:1,subvol=home 0 0\n"
+    f"UUID={FEDORA_UUID} /var btrfs compress=zstd:1,subvol=var 0 0\n"
+    "UUID=5BCC-12A9 /boot/efi vfat defaults,umask=0077,shortname=winnt 0 0\n"
+)
+FEDORA_KERNEL = "6.19.10-300.fc44.x86_64"
 
 
 # --- fstab fields ------------------------------------------------------------------------------------------------
@@ -144,6 +187,38 @@ def test_a_separate_boot_is_only_named_when_it_is_another_partition_of_the_disk(
     assert vm_guest.boot_partition(tmp_path, "/dev/vda1", PARTITIONS) == ""
 
 
+def test_the_fstab_options_are_read_too(tmp_path):
+    write(tmp_path, "etc/fstab", "UUID=1111 /boot btrfs compress=zstd:1,subvol=boot 0 0\nLABEL=x\t/\text4\nUUID=2222 /home btrfs\n# UUID=3 /x ext4 defaults\n")
+    assert vm_guest.read_fstab_entries(tmp_path) == [("UUID=1111", "/boot", "compress=zstd:1,subvol=boot"), ("LABEL=x", "/", ""), ("UUID=2222", "/home", "")]
+    assert vm_guest.read_fstab_entries(tmp_path / "nowhere") == []
+    assert vm_guest.subvolume_option("compress=zstd:1,defaults,subvol=root") == "subvol=root"
+    assert vm_guest.subvolume_option("noatime,subvolid=257") == "subvolid=257"
+    assert vm_guest.subvolume_option("defaults,bind") == "" and vm_guest.subvolume_option("") == ""
+
+
+BTRFS_UUID = "1a2b3c4d-0000-4000-8000-00000000abcd"
+BTRFS_PARTITIONS = [
+    partition("/dev/vda3", 4, "btrfs", uuid=BTRFS_UUID),
+    partition("/dev/vda16", 2, "ext4", label="BOOT"),
+]
+
+
+@pytest.mark.parametrize(("fstab", "expected"), [
+    pytest.param(FEDORA_FSTAB.replace(FEDORA_UUID, BTRFS_UUID), ("/dev/vda3", "subvol=boot"), id="fedora-boot-subvolume"),
+    pytest.param(f"UUID={BTRFS_UUID} / btrfs subvol=@ 0 0\nUUID={BTRFS_UUID} /boot btrfs noatime,subvol=/@boot 0 0\n", ("/dev/vda3", "subvol=/@boot"), id="path-and-option-order"),
+    pytest.param(f"UUID={BTRFS_UUID} / btrfs subvolid=256 0 0\nUUID={BTRFS_UUID} /boot btrfs subvolid=257 0 0\n", ("/dev/vda3", "subvolid=257"), id="by-id"),
+    pytest.param(f"UUID={BTRFS_UUID} / btrfs subvol=root 0 0\nUUID={BTRFS_UUID} /boot btrfs subvol=root 0 0\n", ("", ""), id="same-subvolume-as-the-root"),
+    pytest.param(f"UUID={BTRFS_UUID} / btrfs subvol=root 0 0\n", ("", ""), id="no-boot-entry"),
+    pytest.param(f"UUID={BTRFS_UUID} / btrfs subvol=root 0 0\nUUID={BTRFS_UUID} /boot none bind 0 0\n", ("", ""), id="bind-mount"),
+    pytest.param(f"UUID={BTRFS_UUID} / btrfs subvol=root 0 0\nLABEL=BOOT /boot ext4 defaults 0 2\n", ("/dev/vda16", ""), id="partition-of-its-own"),
+    pytest.param(f"UUID={BTRFS_UUID} / btrfs subvol=root 0 0\nUUID=ffffffff-0000-4000-8000-000000000000 /boot btrfs subvol=boot 0 0\n", ("", ""), id="other-disk"),
+])
+def test_what_the_fstab_mounts_at_boot_is_a_partition_a_subvolume_or_nothing_separate(tmp_path, fstab, expected):
+    write(tmp_path, "etc/fstab", fstab)
+    assert vm_guest.boot_mount(tmp_path, "/dev/vda3", BTRFS_PARTITIONS) == expected
+    assert vm_guest.boot_partition(tmp_path, "/dev/vda3", BTRFS_PARTITIONS) == (expected[0] if expected[0] != "/dev/vda3" else "")
+
+
 def test_initramfs_images_are_found_in_boot_and_one_directory_per_kernel(tmp_path):
     write(tmp_path, "boot/initrd.img-6.8.0-45-generic")
     write(tmp_path, "boot/initramfs-0-rescue-abc.img")
@@ -206,8 +281,8 @@ def test_the_fstab_break_on_a_system_with_labels_is_proven_by_findmnt_on_the_sys
     assert f"UUID={vm_guest.DEAD_UUID}\t/\t" in (root / "etc/fstab").read_text()
 
 
-def fedora_like(tmp_path: Path) -> tuple[FakeDisk, Path]:
-    """One btrfs partition whose top level holds the subvolumes root and home; /boot is a directory of root."""
+def boot_inside_root_like(tmp_path: Path) -> tuple[FakeDisk, Path]:
+    """One btrfs partition whose top level holds the subvolumes root and home; /boot is a directory of the root subvolume."""
     top = tmp_path / "p3"
     write(top, "root/etc/fstab", "UUID=5555-aaaa\t/\tbtrfs\tsubvol=root,compress=zstd:1\t0 0\nUUID=1234-ABCD\t/boot/efi\tvfat\tumask=0077\t0 2\n")
     write(top, "root/etc/os-release", "ID=fedora\n")
@@ -219,8 +294,8 @@ def fedora_like(tmp_path: Path) -> tuple[FakeDisk, Path]:
     return FakeDisk(tmp_path / "work", 100, lsblk, {"/dev/vda3": top}), top
 
 
-def test_a_system_in_a_btrfs_subvolume_is_broken_inside_that_subvolume(tmp_path):
-    disk, top = fedora_like(tmp_path)
+def test_a_system_in_a_btrfs_subvolume_with_its_own_boot_directory_is_broken_inside_that_subvolume(tmp_path):
+    disk, top = boot_inside_root_like(tmp_path)
     report = vm_guest.rescue_break({"mode": "grub-cfg", "path": "/dev/vda", "size": 100}, disk)
     assert report["system"] == "root" and report["root_fstype"] == "btrfs" and report["removed"] == ["boot/grub2/grub.cfg"]
     assert not (top / "root/boot/grub2/grub.cfg").exists() and (top / "root/boot/initramfs-6.11.9-300.fc41.x86_64.img").exists()
@@ -228,10 +303,84 @@ def test_a_system_in_a_btrfs_subvolume_is_broken_inside_that_subvolume(tmp_path)
 
 
 def test_the_initramfs_break_of_a_subvolume_system_lists_paths_relative_to_the_system(tmp_path):
-    disk, top = fedora_like(tmp_path)
+    disk, top = boot_inside_root_like(tmp_path)
     report = vm_guest.rescue_break({"mode": "initramfs", "path": "/dev/vda", "size": 100}, disk)
     assert report["removed"] == ["boot/initramfs-6.11.9-300.fc41.x86_64.img"]
     assert (top / "root/boot/loader/entries/abc-6.11.9.conf").exists(), "boot entries are not initramfs images"
+
+
+def fedora44_like(tmp_path: Path) -> tuple[FakeDisk, Path, Path]:
+    """The three partitions of the image (BIOS boot, ESP, Btrfs) and the trees of p3 (top level) and p2 (ESP)."""
+    top, esp = tmp_path / "p3", tmp_path / "p2"
+    write(top, "root/etc/fstab", FEDORA_FSTAB)
+    write(top, "root/etc/os-release", "ID=fedora\nVERSION_ID=44\n")
+    (top / "root/boot/efi").mkdir(parents=True)
+    write(top, "boot/grub2/grub.cfg", "### BEGIN /etc/grub.d/10_linux ###\nblscfg\n" * 20)
+    write(top, "boot/grub2/grubenv", "# GRUB Environment Block\n")
+    write(top, "boot/grub2/i386-pc/core.0")
+    write(top, f"boot/initramfs-{FEDORA_KERNEL}.img")
+    write(top, f"boot/vmlinuz-{FEDORA_KERNEL}")
+    write(top, f"boot/config-{FEDORA_KERNEL}")
+    write(top, f"boot/loader/entries/b208e0c02ac84ca1a2150fc5ec1fa60e-{FEDORA_KERNEL}.conf",
+          f"title Fedora Linux ({FEDORA_KERNEL}) 44 (Cloud Edition)\nlinux /boot/vmlinuz-{FEDORA_KERNEL}\n"
+          f"initrd /boot/initramfs-{FEDORA_KERNEL}.img\noptions root=UUID={FEDORA_UUID} rootflags=subvol=root\n")
+    write(top, "home/user/.bashrc")
+    (top / "var").mkdir()
+    write(esp, "EFI/fedora/grub.cfg", f"search --fs-uuid --set=root {FEDORA_UUID}\nset prefix=($root)/boot/grub2\nconfigfile ($root)/boot/grub2/grub.cfg\n")
+    write(esp, "EFI/fedora/shimx64.efi")
+    lsblk = lsblk_of("/dev/vda", [
+        partition("/dev/vda1", 2, "", parttype="21686148-6449-6e6f-744e-656564454649"),
+        partition("/dev/vda2", 100, "vfat", uuid="5BCC-12A9", parttype="c12a7328-f81f-11d2-ba4b-00a0c93ec93b"),
+        partition("/dev/vda3", 4900, "btrfs", uuid=FEDORA_UUID, label="fedora"),
+    ])
+    return FakeDisk(tmp_path / "work", 100, lsblk, {"/dev/vda2": esp, "/dev/vda3": top}), top, esp
+
+
+def mount_commands(disk: FakeDisk) -> list[list[str]]:
+    return [c for c in disk.commands if c[0] in {"mount", "umount"}]
+
+
+@pytest.mark.parametrize(("mode", "gone"), [("grub-cfg", "boot/grub2/grub.cfg"), ("initramfs", f"boot/initramfs-{FEDORA_KERNEL}.img")])
+def test_the_real_fedora_layout_is_broken_in_the_boot_subvolume(tmp_path, mode, gone):
+    disk, top, esp = fedora44_like(tmp_path)
+    report = vm_guest.rescue_break({"mode": mode, "path": "/dev/vda", "size": 100}, disk)
+    assert not (top / gone).exists(), "the damage reached the files the boot loader reads"
+    assert report["removed"] == [gone] and report["system"] == "root" and report["root"] == "/dev/vda3"
+    assert report["boot_partition"] == "" and report["boot_mount_option"] == "subvol=boot"
+    kept = {"boot/grub2/grub.cfg", f"boot/initramfs-{FEDORA_KERNEL}.img"} - {gone}
+    assert all((top / name).is_file() for name in kept), "only the one kind of file is damaged"
+    assert (top / f"boot/vmlinuz-{FEDORA_KERNEL}").is_file() and (top / "boot/loader/entries").is_dir() and (top / "boot/grub2/grubenv").is_file()
+    assert [p.name for p in (top / "root/boot").iterdir()] == ["efi"], "the /boot directory of the root subvolume is left as it was"
+    assert (top / "home/user/.bashrc").exists() and (top / "var").is_dir(), "the other subvolumes are not touched"
+    assert (esp / "EFI/fedora/grub.cfg").is_file(), "the stub on the ESP is not the file that is broken, and the ESP is not mounted"
+    assert not disk.mounted
+
+
+def test_the_boot_subvolume_is_mounted_over_the_boot_directory_of_the_system_and_released_first(tmp_path):
+    disk, top, _esp = fedora44_like(tmp_path)
+    vm_guest.rescue_break({"mode": "grub-cfg", "path": "/dev/vda", "size": 100}, disk)
+    mounts = mount_commands(disk)
+    assert [c[0] for c in mounts] == ["mount", "mount", "umount", "umount"]
+    assert mounts[0][1] == "/dev/vda3" and mounts[0][:2] == ["mount", "/dev/vda3"]
+    assert mounts[1][:4] == ["mount", "-o", "subvol=boot", "/dev/vda3"] and mounts[1][4] == mounts[0][2] + "/root/boot"
+    assert mounts[2][1] == mounts[1][4] and mounts[3][1] == mounts[0][2], "the subvolume is released before the file system"
+    assert not any("/dev/vda2" in c or "subvol=home" in c or "subvol=var" in c for c in mounts), "only the boot subvolume is added"
+
+
+def test_a_missing_boot_subvolume_is_an_error_and_everything_is_released(tmp_path):
+    disk, top, _esp = fedora44_like(tmp_path)
+    shutil.rmtree(top / "boot")
+    with pytest.raises(vm_guest.GuestError, match="subvol=boot"):
+        vm_guest.rescue_break({"mode": "grub-cfg", "path": "/dev/vda", "size": 100}, disk)
+    assert not disk.mounted and [c[0] for c in disk.commands if c[0] == "umount"] == ["umount"]
+
+
+def test_the_fstab_break_of_the_real_fedora_image_changes_only_the_root_entry(tmp_path):
+    disk, top, _esp = fedora44_like(tmp_path)
+    report = vm_guest.rescue_break({"mode": "fstab-uuid", "path": "/dev/vda", "size": 100}, disk)
+    lines = (top / "root/etc/fstab").read_text().splitlines()
+    assert lines[0].startswith(f"UUID={vm_guest.DEAD_UUID} / btrfs") and lines[1:] == FEDORA_FSTAB.splitlines()[1:]
+    assert report["replaced"] == [f"UUID={FEDORA_UUID}"]
 
 
 def test_a_failure_while_breaking_still_releases_every_mount(tmp_path):

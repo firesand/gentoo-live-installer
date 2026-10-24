@@ -27,7 +27,7 @@ On a PC that runs **Windows with BitLocker or "Device encryption"**, look up you
 | **Install in text mode** | Install without a desktop. |
 | Desktop in RAM | Run from memory (needs 6 GiB), then remove the stick. |
 | Text console only | A shell, for experts and headless machines. |
-| More options | Verbose boot, compatibility mode, serial console, old firmware, IOMMU off, text console in RAM, speech output. Also Memtest86+, firmware setup, restart and power off. |
+| More options | Verbose boot, compatibility mode, serial console, old firmware, IOMMU off, text console in RAM. Also Memtest86+, firmware setup, restart and power off. |
 
 The text entries ask for a keyboard layout first (you type passwords in both tools), then start their tool by themselves after the login on the first console. You can also run `sudo gentoo-rescue` or `sudo gentoo-installer-text` yourself. `gentoo-chroot SESSION` opens a shell in a system you mounted with the repair tool.
 
@@ -37,7 +37,7 @@ The text entries ask for a keyboard layout first (you type passwords in both too
 |---|---|
 | **Works** | 64-bit x86 PCs, laptops and virtual machines. BIOS/CSM, 64-bit UEFI and 32-bit UEFI firmware (the ISO carries `bootx64.efi` and `bootia32.efi`). SATA/AHCI, NVMe (also behind Intel VMD), USB, SD/eMMC and virtio disks. Wi-Fi, Bluetooth and sound that the Linux 6.18 kernel and `linux-firmware` support. Intel, AMD and (with the open nouveau driver) NVIDIA graphics. The proprietary NVIDIA driver is an option of the installed system. |
 | **Needs a step from you** | Secure Boot off (above). If the disk does not show up, switch the firmware's SATA mode from Intel RST/"RAID" to AHCI (mind Windows). A wrong clock is corrected once the network is up; the live system never writes to the hardware clock. |
-| **Not supported** | 32-bit CPUs, ARM machines (Apple Silicon Macs, Windows-on-ARM laptops, Raspberry Pi), Intel Macs with a T2 chip (the internal SSD is not visible), ZFS root. |
+| **Not supported** | 32-bit CPUs, ARM machines (Apple Silicon Macs, Windows-on-ARM laptops, Raspberry Pi), Intel Macs with a T2 chip (the internal SSD is not visible), ZFS root, speech output or braille (the disc has no screen reader). |
 | **Known limits** | The live kernel has **no generic framebuffer driver** (no `simpledrm`/`efidrm`): a GPU that is too new for this kernel gets no desktop, only the text entries. `nomodeset` gives a text console, not a "safe graphics" desktop ([docs/ISO.md](docs/ISO.md) section 9). The image is built from a fixed snapshot (Linux 6.18.57, Gentoo tree 2026-10): hardware released after it may lack drivers. Real-hardware boots are not part of the automated tests, only QEMU with BIOS and UEFI firmware. |
 
 The live session never mounts or activates the PC's disks, volume groups or RAID arrays by itself. It ignores the lid switch and idle timers, so an installation or repair is not interrupted.
@@ -60,7 +60,7 @@ JOBS=4 ./scripts/build-iso.sh           # the release ISO into dist/
 ```
 
 * The result is `dist/gentoo-installer-amd64-<stamp>.iso` with `.sha512`, `.blake2b`, `.manifest.json` and `.packages.txt`. Every build writes a timestamped log to `dist/logs/`.
-* A following build reuses the stage1 of the previous one when nothing that goes into it changed (`--reuse auto`, the default). `--reuse none` always builds everything. Use it for a release when in doubt.
+* A following build reuses the stage1 of the previous one when nothing that goes into it changed (`--reuse auto`, the default). Otherwise it builds stage1 again; the binary package cache makes that shorter. `--reuse none` always builds everything. Use it for a release when in doubt.
 * The finished ISO is checked before it is published (`scripts/verify-iso.py`, rules in `iso/image-contract.json`): boot images, boot menu, initramfs, services, the repair and text-mode files, ownership, and no test access in a release.
 * Settings: `JOBS`, `LOAD_AVERAGE`, `BUILD_MEMORY` (container memory, default 8g), `BUILD_MIN_FREE_GIB`, `ISO_CACHE_DIR`, `ISO_DIST_DIR`, `ISO_LOG_DIR`, `ISO_SECCOMP`. `--clean` removes retained chroots and old stage1 archives.
 * The container needs `SYS_ADMIN`, `NET_ADMIN`, `MKNOD` and `SYS_CHROOT` and an open seccomp profile: the build runs the Gentoo ebuilds of about 500 packages as root inside the container. Build untrusted changes in a throwaway VM.
@@ -78,14 +78,14 @@ Tests that check packages against a Gentoo tree need `ISO_TREE=<path to the pinn
 
 ### Test ISO and VM checks
 
-The VM harness logs into the live system over SSH, so it needs an image with a temporary root key. Such an image is named and labelled `...-TESTKEY` (volume `GENTOO_INSTALLER_TESTKEY`), shows a "TEST BUILD" banner, and is refused in `dist/`:
+The VM harness logs into the live system over SSH, so it needs an image with a temporary root key. Such an image is named and labelled `...-TESTKEY` (volume `GENTOO_INSTALLER_TESTKEY`), shows a "TEST BUILD" banner, and is refused in `dist/` and in any directory below it (a release is taken from `dist/` as a whole):
 
 ```sh
 install -d -m 0700 build/vm-control
 testkey="build/vm-control/iso-test-$(date +%s)"
 ssh-keygen -q -t ed25519 -N '' -f "$testkey"
-ISO_DIST_DIR=dist/test-only JOBS=2 ./scripts/build-iso.sh --test-key-file "$testkey.pub"
-python3 scripts/test-vm.py --scenario openrc --iso dist/test-only/gentoo-installer-amd64-20261018T124555Z-TESTKEY.iso \
+ISO_DIST_DIR=build/test-dist JOBS=2 ./scripts/build-iso.sh --test-key-file "$testkey.pub"
+python3 scripts/test-vm.py --scenario openrc --iso build/test-dist/gentoo-installer-amd64-20261018T124555Z-TESTKEY.iso \
   --ssh-host 127.0.0.1 --ssh-port 40222 --ssh-private-key "$testkey"
 ```
 

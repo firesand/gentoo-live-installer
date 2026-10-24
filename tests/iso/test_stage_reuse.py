@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 import hashlib
+import io
 import json
 from pathlib import Path
 import shutil
 import subprocess
 import sys
+import tarfile
 
 import pytest
 
@@ -238,3 +240,82 @@ def test_reseed_spec_replaces_only_the_source() -> None:
     assert out.replace("23.0-default/livecd-stage1-amd64-x-completed", "23.0-default/@STAGE3_BASENAME@") == spec
     with pytest.raises(reuse.ReuseError):
         reuse.render_reseed_spec("target: x\n", "y")
+
+
+# --- the proof that a reseed reinstalled what it was asked to reinstall -----------------------------------------------------
+# Catalyst finishes a reseed that reinstalled nothing just as happily (the first real one did exactly that), so the archive
+# itself must show it: every installed package has BUILD_TIME in its /var/db/pkg entry.
+
+INSTALLER, HWMONUX = "app-admin/gentoo-live-installer", "app-misc/hwmonux"
+
+
+def stage1_archive(path: Path, built: dict[str, int], *, prefix: str = "./", noise: int = 3) -> Path:
+    """A stage1 tarball (gzip, names with a leading ./ as Catalyst writes them) holding the vdb entries of ``built`` (atom -> BUILD_TIME)."""
+    with tarfile.open(path, "w:gz") as tar:
+        def add(name: str, data: bytes) -> None:
+            info = tarfile.TarInfo(prefix + name)
+            info.size = len(data)
+            tar.addfile(info, io.BytesIO(data))
+
+        for number in range(noise):
+            add(f"usr/lib/python3.14/site-packages/other{number}/__init__.py", b"x")
+        for atom, when in built.items():
+            add(f"var/db/pkg/{atom}-0.1.0-r5/BUILD_TIME", f"{when}\n".encode())
+            add(f"var/db/pkg/{atom}-0.1.0-r5/CONTENTS", b"obj /usr/bin/x 0 0\n")
+        add("var/db/pkg/app-misc/hwmonux-extra-1.0/BUILD_TIME", b"1\n")  # a package whose name only starts like another one
+    return path
+
+
+def test_every_reinstalled_package_must_have_been_built_after_the_reseed_started(tmp_path: Path) -> None:
+    archive = stage1_archive(tmp_path / "s.tar.gz", {INSTALLER: 2000, HWMONUX: 2005})
+    assert reuse.reinstalled_since(archive, 1999, [INSTALLER, HWMONUX]) == {INSTALLER: 2000, HWMONUX: 2005}
+    assert reuse.reinstalled_since(archive, 2000, [INSTALLER]) == {INSTALLER: 2000}, "built in the same second is not before"
+    with pytest.raises(reuse.ReuseError) as raised:
+        reuse.reinstalled_since(archive, 2003, [INSTALLER, HWMONUX])  # the installer is still the old one, hwmonux is new
+    assert "app-admin/gentoo-live-installer was built" in str(raised.value) and "before the reseed started" in str(raised.value)
+    assert "app-misc/hwmonux" not in str(raised.value)
+    with pytest.raises(reuse.ReuseError) as both:
+        reuse.reinstalled_since(archive, 2006, [INSTALLER, HWMONUX])
+    assert "app-admin/gentoo-live-installer" in str(both.value) and "app-misc/hwmonux" in str(both.value)
+
+
+def test_a_package_that_is_not_in_the_archive_is_not_reinstalled(tmp_path: Path) -> None:
+    archive = stage1_archive(tmp_path / "s.tar.gz", {INSTALLER: 2000})
+    with pytest.raises(reuse.ReuseError, match="app-portage/portagehub is not installed in the new archive"):
+        reuse.reinstalled_since(archive, 1, ["app-portage/portagehub"])
+    with pytest.raises(reuse.ReuseError, match="app-misc/hwmonux is not installed"):
+        reuse.reinstalled_since(archive, 1, [HWMONUX])  # hwmonux-extra is a different package
+
+
+def test_names_without_the_leading_dot_slash_are_read_too(tmp_path: Path) -> None:
+    archive = stage1_archive(tmp_path / "s.tar.gz", {INSTALLER: 2000}, prefix="")
+    assert reuse.reinstalled_since(archive, 1, [INSTALLER]) == {INSTALLER: 2000}
+
+
+@pytest.mark.parametrize("content", [b"", b"not a tarball", b"\x1f\x8b garbage"])
+def test_an_archive_that_cannot_be_read_proves_nothing(tmp_path: Path, content: bytes) -> None:
+    archive = tmp_path / "s.tar.gz"
+    archive.write_bytes(content)
+    with pytest.raises(reuse.ReuseError, match="cannot read"):
+        reuse.reinstalled_since(archive, 1, [INSTALLER])
+    with pytest.raises(reuse.ReuseError, match="cannot read"):
+        reuse.reinstalled_since(tmp_path / "absent.tar.gz", 1, [INSTALLER])
+
+
+def test_a_build_time_that_is_not_a_number_proves_nothing(tmp_path: Path) -> None:
+    archive = tmp_path / "s.tar.gz"
+    with tarfile.open(archive, "w:gz") as tar:
+        info = tarfile.TarInfo(f"./var/db/pkg/{INSTALLER}-0.1.0/BUILD_TIME")
+        info.size = 4
+        tar.addfile(info, io.BytesIO(b"soon"))
+    with pytest.raises(reuse.ReuseError, match="BUILD_TIME"):
+        reuse.reinstalled_since(archive, 1, [INSTALLER])
+
+
+def test_cli_reinstalled_exit_status(tmp_path: Path) -> None:
+    archive = stage1_archive(tmp_path / "s.tar.gz", {INSTALLER: 2000, HWMONUX: 100})
+    ok = run_cli("reinstalled", "--archive", str(archive), "--since", "1500", INSTALLER)
+    assert ok.returncode == 0 and json.loads(ok.stdout) == {INSTALLER: 2000}
+    old = run_cli("reinstalled", "--archive", str(archive), "--since", "1500", INSTALLER, HWMONUX)
+    assert old.returncode == 1 and "app-misc/hwmonux was built" in old.stderr and "stage_reuse:" in old.stderr
+    assert run_cli("reinstalled", "--archive", str(archive), "--since", "soon", INSTALLER).returncode == 2
