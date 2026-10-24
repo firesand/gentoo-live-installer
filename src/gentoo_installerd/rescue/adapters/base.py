@@ -207,7 +207,7 @@ def _without_live_arguments(b: PlanBuilder, path: str, text: str) -> str:
                 if not any(token.startswith("root=") for token in options.split()) and b.view.root_uuid:
                     options = f"root=UUID={b.view.root_uuid} {options}".strip()
                 line = f"options {options}"
-        elif stripped and not stripped.startswith("#"):
+        elif stripped and not stripped.startswith("#") and contains_live_arguments(stripped):
             line = sanitize(line)
             if path == "/etc/kernel/cmdline" and "root=" not in line and b.view.root_uuid:
                 line = f"root=UUID={b.view.root_uuid} {line}".strip()

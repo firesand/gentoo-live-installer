@@ -299,6 +299,38 @@ def test_live_arguments_in_the_sources_are_removed_before_the_menu_is_regenerate
     assert len(backups) == 1 and LIVE_ARGS in backups[0].read_text()
 
 
+def test_ordinary_arguments_are_kept_and_do_not_fail_the_menu_check(lab_factory) -> None:
+    """nox, rd.debug and dokeymap are the user's own settings on an installed system: nothing is rewritten, and the regenerated menu still passes its checks."""
+    lab, tree = uefi_gentoo_lab(lab_factory)
+    defaults = fr.put(tree, "etc/default/grub", 'GRUB_DEFAULT=0\nGRUB_CMDLINE_LINUX="nox rd.debug"\n')
+    cmdline = tree / "etc/kernel/cmdline"
+    cmdline.parent.mkdir(parents=True, exist_ok=True)
+    cmdline.write_text(f"root=UUID={fr.ROOT_UUID} ro quiet dokeymap\n")
+    before = (defaults.read_text(), cmdline.read_text())
+    manager, sid, info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    assert "D21" not in {f["id"] for f in info["findings"]} and "boot.config" not in info["recommended"]
+    plan = manager.plan({"session_id": sid, "action_id": "boot.config"})
+    assert plan["diff"] == "" and not any("without the live system" in step["display"] for step in plan["steps"]) and not any("live system" in w for w in plan["warnings"])
+    plan, result, _ = plan_and_run(manager, sid, "boot.config")
+    assert result["outcome"] == "success" and all(check["ok"] for check in result["post_checks"]), result["post_checks"]
+    unmount(manager, sid)
+    assert (defaults.read_text(), cmdline.read_text()) == before
+    assert "nox rd.debug" in (tree / "boot/grub/grub.cfg").read_text()  # the menu was regenerated with the user's arguments
+    assert not list((tree / "etc").rglob("*.gentoo-rescue-*"))
+
+
+def test_only_the_line_with_a_live_argument_is_cleaned(lab_factory) -> None:
+    """A file that has a leak on one line and the user's own arguments on another keeps the second line exactly as it was."""
+    lab, tree = uefi_gentoo_lab(lab_factory)
+    cmdline = tree / "etc/cmdline.d/10-live.conf"
+    cmdline.parent.mkdir(parents=True, exist_ok=True)
+    cmdline.write_text(f"root=UUID={fr.ROOT_UUID} nox rd.debug\nquiet {LIVE_ARGS}\n")
+    manager, sid, _info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    plan_and_run(manager, sid, "boot.config")
+    unmount(manager, sid)
+    assert cmdline.read_text() == f"root=UUID={fr.ROOT_UUID} nox rd.debug\nquiet\n"
+
+
 def test_a_kernel_command_line_file_with_only_live_arguments_gets_the_root_back(lab_factory) -> None:
     lab, tree = uefi_gentoo_lab(lab_factory)
     (tree / "etc/kernel").mkdir(parents=True, exist_ok=True)
