@@ -28,7 +28,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass, field
-from typing import Any, Mapping, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 from gentoo_installer import hardware_data as data
 from gentoo_installer import recommend
@@ -117,6 +117,14 @@ class HardwarePlan:
     def system_files(self) -> list[tuple[str, str, int]]:
         return [item for item in self.files if not item[0].startswith("/etc/skel/")]
 
+    def services_to_enable(self, exists: Callable[[str], bool]) -> list[tuple[str, str]]:
+        """Services to enable on the target: ``services`` always, ``optional_services`` only when ``exists(name)``.
+
+        An optional service belongs to a best-effort package; when that emerge
+        failed its init script or unit is absent and must be skipped, not fail the install.
+        """
+        return [*self.services, *(item for item in self.optional_services if exists(item[0]))]
+
     def all_atoms(self) -> list[str]:
         return data.distinct([*self.early_atoms, *self.driver_atoms, *self.required_atoms, *self.optional_atoms])
 
@@ -187,6 +195,13 @@ def _target_disks(manifest: InstallManifest, hw: HardwareProfile) -> list[DiskIn
     return [disk for disk in hw.disks if disk.name in wanted or any(device == f"/dev/{part.name}" for device in devices for part in disk.partitions)]
 
 
+def _typed_flags(text: str) -> tuple[str, list[str]]:
+    """(valid CPU_FLAGS_X86 values typed by the user, tokens that were ignored); 'auto' and an empty field mean "decide for me"."""
+    tokens = [token for token in text.split() if token.lower() != "auto"]
+    valid = [token for token in dict.fromkeys(tokens) if token in data.CPU_FLAGS_X86_VALUES]
+    return " ".join(valid), [token for token in dict.fromkeys(tokens) if token not in data.CPU_FLAGS_X86_VALUES]
+
+
 def _is_mobile(hw: HardwareProfile) -> bool:
     return hw.machine.form_factor in ("laptop", "tablet")
 
@@ -238,9 +253,9 @@ def nvidia_decision(manifest: InstallManifest, hw: HardwareProfile) -> NvidiaDec
     else:
         branch = "595"
     if gpus and not portable:
+        covered: Sequence[str] = data.NVIDIA_BRANCHES[branch]["generations"] if branch else ()  # type: ignore[assignment]
         for gpu in gpus:
-            supported = data.NVIDIA_BRANCHES.get(branch, {}).get("generations", ()) if branch else ()
-            if gpu.generation not in supported:
+            if gpu.generation not in covered:
                 errors.append(Issue("hw.nvidia_unsupported_gpu", "error",
                                     f"{gpu_label(gpu) if gpu.name else 'This NVIDIA card'} is not supported by"
                                     + (f" driver branch {branch}" if branch else " any proprietary driver offered here")
@@ -354,7 +369,9 @@ class _Planner:
 
     def cpu_flags(self) -> None:
         choice = self.m.hardware.cpu_flags_mode
-        typed = self.m.portage.cpu_flags.strip()
+        typed, ignored = _typed_flags(self.m.portage.cpu_flags)
+        if ignored:
+            self.warn("cpu_flags_ignored", "warning", "These CPU flags are not valid CPU_FLAGS_X86 values and were ignored: " + " ".join(ignored) + ".")
         flags = self.hw.cpu.cpu_flags_x86
         value, mode = "", "profile"
         if choice == "manual" or (choice == "auto" and typed):
@@ -471,6 +488,8 @@ class _Planner:
 
     def video_cards(self, nvk: bool) -> None:
         explicit = self.m.portage.video_cards.strip()
+        if explicit.lower() == "auto":
+            explicit = ""
         if explicit:
             self.p.make_conf["VIDEO_CARDS"] = explicit
             return

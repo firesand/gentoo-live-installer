@@ -379,7 +379,7 @@ def _coerce(tp: Any, value: Any, default: Any) -> Any:
         item_type = typing.get_args(tp)[0] if typing.get_args(tp) else Any
         items = [_coerce(item_type, item, _MISSING) for item in value]
         return [item for item in items if item is not _MISSING]
-    if is_dataclass(tp):
+    if isinstance(tp, type) and is_dataclass(tp):
         return _from_dict(tp, value) if isinstance(value, Mapping) else default
     if tp is bool:
         return value if isinstance(value, bool) else default
@@ -487,9 +487,10 @@ class Fs:
         try:
             text = os.readlink(self._real(path))
         except (OSError, ValueError):
-            text = self._sidecar().get(path.rstrip("/"))
-            if text is None:
+            recorded = self._sidecar().get(path.rstrip("/"))
+            if recorded is None:
                 return None
+            text = recorded
         self._note("link", path)
         return text
 
@@ -1243,12 +1244,13 @@ class _Prober:
         for root in self.roots:
             if root.type != "disk" or data.IGNORED_DISK_RE.match(root.name):
                 continue
-            disk = disks.get(root.name)
-            if disk is None:
-                disk = DiskInfo(name=root.name, path=root.path, size=root.size, log_sec=root.log_sec, phy_sec=root.phy_sec,
-                                maj_min=root.maj_min, by_path=by_path.get(root.name, ""))
-                disk.bus = self._bus_of(root.name, "", root.transport)
-                disks[root.name] = disk
+            known = disks.get(root.name)
+            if known is None:  # a disk lsblk lists but /sys/block did not (a fixture without /sys/block)
+                known = DiskInfo(name=root.name, path=root.path, size=root.size, log_sec=root.log_sec, phy_sec=root.phy_sec,
+                                 maj_min=root.maj_min, by_path=by_path.get(root.name, ""))
+                known.bus = self._bus_of(root.name, "", root.transport)
+                disks[root.name] = known
+            disk = known
             disk.tran = root.transport
             if root.transport:
                 disk.bus = self._bus_of(root.name, fs.readlink(f"/sys/block/{root.name}") or "", root.transport)

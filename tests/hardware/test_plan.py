@@ -164,6 +164,26 @@ def test_manual_cpu_flags_and_the_legacy_explicit_value():
     assert "CPU_FLAGS_X86" not in empty.make_conf and any(w.code == "hw.cpu_flags_empty" for w in empty.warnings)
 
 
+@pytest.mark.parametrize("typed", ["auto", "AUTO", "  ", "", "auto auto"])
+def test_the_word_auto_in_the_cpu_flags_field_means_decide_for_me(typed):
+    """K5 reads portage.cpu_flags as ''/'auto'/<flags>; 'auto' must never reach make.conf as a flag."""
+    result = plan(manifest(portage={"cpu_flags": typed}), profile())
+    assert "CPU_FLAGS_X86" not in result.make_conf
+    assert plan(manifest(portage={"cpu_flags": typed, "binhost": False}), profile()).make_conf["CPU_FLAGS_X86"] == " ".join(DETECTED)
+
+
+def test_typed_cpu_flags_are_sanitised():
+    result = plan(manifest(portage={"cpu_flags": "aes avx2; rm -rf / sse4_1 ${CPU_FLAGS_X86} avx2"}), profile())
+    assert result.make_conf["CPU_FLAGS_X86"] == "aes sse4_1 avx2"
+    ignored = next(w for w in result.warnings if w.code == "hw.cpu_flags_ignored")
+    assert "rm" in ignored.message and "avx2;" in ignored.message and "${CPU_FLAGS_X86}" in ignored.message
+
+
+def test_auto_video_cards_means_decide_for_me():
+    assert "VIDEO_CARDS" not in plan(manifest(portage={"video_cards": "auto"}), profile(gpus=(gpu("amd", "gcn3+"),))).make_conf
+    assert plan(manifest(portage={"video_cards": "auto", "binhost": False}), profile(gpus=(gpu("amd", "gcn3+"),))).make_conf["VIDEO_CARDS"] == "amdgpu radeonsi"
+
+
 def test_detect_without_flags_warns_instead_of_writing_nothing_silently():
     result = plan(manifest(hardware={"cpu_flags_mode": "detect"}), profile(flags=()))
     assert "CPU_FLAGS_X86" not in result.make_conf and any(w.code == "hw.cpu_flags_unavailable" for w in result.warnings)
@@ -757,3 +777,14 @@ def test_32_bit_uefi_adds_the_efi_32_grub_platform():
     assert "GRUB_PLATFORMS" not in plan(manifest(system={"bootloader": "systemd-boot"}), machine).make_conf    # only GRUB has the platform list
     assert "GRUB_PLATFORMS" not in plan(manifest(), profile()).make_conf
     assert "GRUB_PLATFORMS" not in plan(manifest(storage={"firmware": "bios"}), machine).make_conf
+
+
+def test_optional_services_are_enabled_only_when_their_package_installed():
+    result = plan(manifest(**quiet()), profile(form="laptop", vendor="intel", ram_gib=4))
+    assert result.services == []
+    assert result.optional_services == [("power-profiles-daemon", "default"), ("thermald", "default"), ("zram-init", "default")]
+    assert result.services_to_enable(lambda name: True) == result.optional_services
+    assert result.services_to_enable(lambda name: name == "thermald") == [("thermald", "default")]
+    assert result.services_to_enable(lambda name: False) == []
+    trim = plan(systemd(**quiet()), profile())
+    assert trim.services_to_enable(lambda name: False) == [("fstrim.timer", "default")]       # a plain service needs no package of its own
