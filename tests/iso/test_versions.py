@@ -30,7 +30,7 @@ def test_scripts_do_not_repeat_versions_or_revisions() -> None:
 
 def test_installer_companion_install_uses_the_same_archive_names() -> None:
     """configure.py copies the distfiles into the target by name; the names must be the ebuilds' ${P}."""
-    text = (ROOT / "src/gentoo_installerd/configure.py").read_text()
+    text = "\n".join(path.read_text() for path in sorted((ROOT / "src/gentoo_installerd").glob("configure*.py")))
     found = dict(re.findall(r'"(hwmonux|portagehub)-(\d+\.\d+\.\d+)\.tar\.zst"', text))
     if not found:
         pytest.skip("configure.py no longer names the archives literally")
@@ -39,7 +39,7 @@ def test_installer_companion_install_uses_the_same_archive_names() -> None:
 
 
 def test_the_installer_reports_the_packaged_version() -> None:
-    text = (ROOT / "src/gentoo_installerd/configure.py").read_text()
+    text = "\n".join(path.read_text() for path in sorted((ROOT / "src/gentoo_installerd").glob("configure*.py")))
     receipt = re.search(r'"installer":\s*"(\d+\.\d+\.\d+)"', text)
     if receipt:
         assert receipt[1] == version("gentoo-live-installer")

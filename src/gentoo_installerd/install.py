@@ -28,6 +28,16 @@ from .proxy import proxy_environment
 from .runner import DryRunRunner, InstallCancelled, Runner, RunnerError, SubprocessRunner, redact_text
 from .stage3 import Stage3Manager
 from .storage import LayoutEntry, StorageManager
+from .stages.base import BaseStage
+from .stages.bootloader import BootloaderStage
+from .stages.context import InstallError, _chown_root, _timestamp, _write_private  # noqa: F401
+from .stages.desktop import DesktopStage
+from .stages.kernel import KernelStage
+from .stages.plan import PlanMixin
+from .stages.portage import PortageStage
+from .stages.repository import RepositoryStage
+from .stages.stage3 import Stage3Stage
+from .stages.storage import StorageStages
 
 LOG = logging.getLogger(__name__)
 
@@ -131,9 +141,6 @@ def tools_for_selection(manifest: InstallManifest) -> set[str]:
         tools.add("efibootmgr")
     return tools
 
-
-class InstallError(RuntimeError):
-    pass
 
 
 class CheckpointStore:
@@ -273,9 +280,6 @@ class _LogFile:
             os.close(self._fd)
 
 
-def _timestamp() -> str:
-    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
-
 
 def manifest_secrets(manifest: InstallManifest) -> tuple[str, ...]:
     """Every secret value of a manifest, for redaction (empty values are dropped)."""
@@ -288,28 +292,9 @@ def manifest_secrets(manifest: InstallManifest) -> tuple[str, ...]:
     return tuple(value for value in values if value)
 
 
-def _chown_root(path: Path | str) -> None:
-    """Files the installer writes into the target belong to root, not to the live daemon's group."""
-    if hasattr(os, "geteuid") and os.geteuid() == 0:
-        try:
-            os.chown(path, 0, 0)
-        except OSError:
-            pass
 
 
-def _write_private(path: Path, text: str) -> None:
-    """Write ``text`` to ``path`` (mode 0600, root-owned) atomically."""
-    temporary = path.with_name(path.name + ".tmp")
-    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write(text)
-        handle.flush()
-        os.fsync(handle.fileno())
-    _chown_root(temporary)
-    os.replace(temporary, path)
-
-
-class Installer:
+class Installer(Stage3Stage, RepositoryStage, PortageStage, KernelStage, BootloaderStage, BaseStage, DesktopStage, StorageStages, PlanMixin):
     def __init__(
         self,
         manifest: InstallManifest,
@@ -695,350 +680,12 @@ class Installer:
             return []
         return [f"The system clock is off by {describe_clock_offset(abs(skew))}. Set the date or connect to the network so it syncs, then try again."]
 
-    def _storage(self) -> None:
-        # What will happen to which disk goes into the log before anything is changed. A plan is
-        # information: failing to build one never stops the installation (prepare() does the checking).
-        plan = None
-        try:
-            plan = self.storage.describe(self.manifest, None if self.dry_run else self.storage.inventory())
-            for line in plan.lines():
-                self.log(f"Storage plan: {line}")
-        except Exception as exc:  # noqa: BLE001
-            self.log(f"Storage plan unavailable: {exc}")
-        layout = self.storage.prepare(self.manifest, dry_run=self.dry_run)
-        for note in self.storage.notes:
-            self.log(f"Storage note: {note}")
-        if not self.dry_run:
-            self.checkpoints.save_layout(layout, self.storage.snapshot())
-        self.emit("progress", "storage", "Storage layout prepared", data={"layout": [entry.__dict__ for entry in layout], "plan": plan.to_dict() if plan else None})
-
     # --- stage helpers -----------------------------------------------------------------
 
     @property
     def degraded(self) -> list[str]:
         """Optional pieces that could not be installed; the installation still finishes."""
         return self.__dict__.setdefault("_degraded", [])
-
-    # --- the hardware plan -----------------------------------------------------------------
-
-    def _plan(self) -> HardwarePlan | None:
-        """What this machine needs on top of the manifest (microcode, firmware, drivers, power, ...).
-
-        Decided once per job from the hardware probe of the inspection, or restored on a resume so
-        that the stages after the interruption follow the decisions of the stages before it. Every
-        installation has a plan: without probe data it is the generic one, which still decides
-        microcode and firmware from the manifest options.
-        """
-        if self.hardware_plan is None and not self._plan_attempted:
-            self._plan_attempted = True
-            self.hardware_plan = self._restore_plan()
-            if self.hardware_plan is None:
-                self.hardware_plan = self._make_plan()
-                if self.hardware_plan is not None:
-                    self._save_plan(self.hardware_plan)
-        return self.hardware_plan
-
-    def _make_plan(self) -> HardwarePlan | None:
-        hardware = getattr(self.inspection, "hardware", None) or None
-        try:
-            return plan_hardware(self.manifest, hardware)
-        except Exception as exc:  # noqa: BLE001 - a planning bug must not stop an install that can go on without it
-            self.log(f"WARNING: the hardware-specific setup could not be planned ({exc}); continuing with the generic setup")
-        if hardware is not None:
-            try:
-                return plan_hardware(self.manifest, None)
-            except Exception:  # noqa: BLE001
-                pass
-        self.degraded.append("The hardware-specific setup (microcode, firmware, drivers) could not be planned and was skipped")
-        return None
-
-    @property
-    def plan_path(self) -> Path:
-        return self.state_dir / "hardware-plan.json"
-
-    def _save_plan(self, plan: HardwarePlan) -> None:
-        """Keep the decision (private, bound to this manifest) so a resume does not decide again.
-
-        The file is on the live system only and holds the plan's file contents; the copy that goes
-        to the installed system keeps just their paths and hashes.
-        """
-        if self.dry_run:
-            return
-        record = {"version": 1, "fingerprint": self.checkpoints.fingerprint, "created": _timestamp(), "plan": plan.to_dict()}
-        try:
-            _write_private(self.plan_path, json.dumps(record, indent=2) + "\n")
-        except OSError as exc:
-            self.log(f"WARNING: the hardware-specific setup could not be saved ({exc}); a resume will decide it again")
-
-    def _restore_plan(self) -> HardwarePlan | None:
-        """The plan an earlier run of this job decided, or None when this is not a resume or none was saved."""
-        if not self.resume or self.dry_run:
-            return None
-        try:
-            raw = json.loads(self.plan_path.read_text())
-        except FileNotFoundError:
-            self.log("No saved hardware-specific setup was found; deciding it again")
-            return None
-        except (OSError, ValueError) as exc:
-            raise InstallError(f"The saved hardware-specific setup cannot be read ({exc}); start the installation again") from exc
-        plan = raw.get("plan") if isinstance(raw, dict) else None
-        if not isinstance(plan, dict) or raw.get("version") != 1 or raw.get("fingerprint") != self.checkpoints.fingerprint or plan.get("schema") != PLAN_SCHEMA:
-            raise InstallError("The saved hardware-specific setup does not belong to this installation; start the installation again")
-        self.log("Using the hardware-specific setup that was decided when this installation started")
-        return HardwarePlan.from_dict(plan)
-
-    def _root_device(self) -> str:
-        return next(entry.device for entry in self.storage.layout if entry.mountpoint == "/")
-
-    def _uuid_of(self, device: str) -> str:
-        if self.dry_run or not device:
-            return ""
-        try:
-            return self.runner.run(("blkid", "-s", "UUID", "-o", "value", device)).stdout.strip().splitlines()[0]
-        except (RunnerError, IndexError):
-            return ""
-
-    def _stage3(self) -> None:
-        if self.dry_run:
-            self.log("Would discover, signature-verify, hash-verify, download, and extract the selected official stage3")
-            return
-        self.target_root.mkdir(parents=True, exist_ok=True)
-        self.stage3.notify = self.log
-        # Mount points are not leftovers, and neither is the installer's own swap file (made inside the new root before this stage).
-        allowed = [entry.mountpoint for entry in self.storage.layout if entry.mountpoint] + [entry.source for entry in self.storage.layout if entry.source]
-        extra: dict[str, Any] = {"allowed_existing": allowed}
-        if self.manifest.network.proxy:
-            extra["proxy"] = self.manifest.network.proxy
-        if self.manifest.portage.mirror_fallbacks:
-            extra["fallback_mirrors"] = tuple(self.manifest.portage.mirror_fallbacks)
-        self._stage3_archive = self.stage3.install(
-            self.manifest.portage.mirror,
-            self.manifest.system.stage_variant,
-            self.target_root,
-            lambda current, total: self.emit("progress", "stage3", "Downloading stage3", current * 100 / total if total else None, downloaded=current, total=total),
-            **extra,
-        )
-
-    def _discard_stage3_archive(self) -> None:
-        """The unpacked stage3 is checkpointed, so the archive can go: the live system keeps its cache in memory."""
-        archive, self._stage3_archive = self._stage3_archive, None
-        if archive is None or self.dry_run:
-            return
-        try:
-            self.stage3.discard(archive)
-        except Exception as exc:  # noqa: BLE001 - a leftover archive costs memory, it must not fail the installation
-            self.log(f"The downloaded stage3 archive could not be removed ({exc})")
-
-    def _mounts(self) -> None:
-        if not self.dry_run:
-            for directory in ("dev", "proc", "sys", "run", "etc"):
-                self.configurer.path(directory).mkdir(parents=True, exist_ok=True)
-            try:
-                resolv = Path("/etc/resolv.conf").read_text()
-            except OSError as exc:
-                raise InstallError(f"The live system has no readable /etc/resolv.conf to copy into the new system ({exc}); connect to a network first") from exc
-            self.configurer.write("etc/resolv.conf", resolv)
-        mounts = [
-            (("mount", "--rbind", "/dev", str(self.configurer.path("dev"))), self.configurer.path("dev")),
-            (("mount", "--types", "proc", "proc", str(self.configurer.path("proc"))), self.configurer.path("proc")),
-            (("mount", "--rbind", "/sys", str(self.configurer.path("sys"))), self.configurer.path("sys")),
-            (("mount", "--rbind", "/run", str(self.configurer.path("run"))), self.configurer.path("run")),
-        ]
-        for command, path in mounts:
-            mounted = False
-            if not self.dry_run:
-                source = self.storage.mount_source(path)
-                mounted = bool(source)
-                if mounted:
-                    host_path = Path("/") / path.name
-                    expected = self.storage.mount_source(host_path)
-                    if not expected or source != expected:
-                        raise InstallError(f"Unrelated virtual filesystem mounted at {path}")
-            if not mounted:
-                self.runner.run(command)
-            if not self.dry_run and path not in self.storage.owned_mounts:
-                self.storage.owned_mounts.append(path)
-        self.runner.run(("mount", "--make-rprivate", str(self.configurer.path("dev"))))
-        self.runner.run(("mount", "--make-rprivate", str(self.configurer.path("sys"))))
-        self.runner.run(("mount", "--make-rprivate", str(self.configurer.path("run"))))
-
-    def _repository(self) -> None:
-        self.configurer.notify = self.log
-        # make.conf first: emerge-webrsync reads GENTOO_MIRRORS from it, and a proxy has to be
-        # known before the first download.
-        self.configurer.configure_portage(self.manifest, self._plan())
-        environment = proxy_environment(self.manifest.network.proxy)
-        if self.manifest.portage.rsync_mirror:
-            self.configurer.chroot(("emaint", "sync", "--auto"), env=environment)
-        else:
-            self.configurer.chroot(("emerge-webrsync",), env=environment)
-
-    def _portage(self) -> None:
-        self.configurer.notify = self.log
-        plan = self._plan()
-        self.configurer.configure_portage(self.manifest, plan)
-        self.configurer.chroot(("eselect", "profile", "set", self.manifest.effective_profile()))
-        # Resolve everything the later stages will emerge now: an impossible combination of
-        # options fails here, in minutes and with the disk still reusable, not hours later. That includes
-        # the tools of volumes that existed before (lvm2, mdadm) and the USE flag lvm2 needs for them.
-        stack = self._storage_stack()
-        self.configurer.prepare_stack_packages(stack)
-        required = [*self.configurer.kernel_stage_atoms(self.manifest, self.storage.layout, plan, stack),
-                    *self.configurer.kernel_atoms(self.manifest), *self.configurer.essential_atoms(self.manifest, plan),
-                    *self.configurer.bootloader_atoms(self.manifest), *self.configurer.desktop_atoms(self.manifest, plan).required]
-        try:
-            self.configurer.pretend(self.manifest, list(dict.fromkeys(required)))
-        except PackageInstallError as exc:
-            raise InstallError(str(exc)) from exc
-
-    def _kernel(self) -> None:
-        plan = self._plan()
-        self.configurer.notify = self.log
-        root = self._root_device()
-        stack = self._storage_stack()
-        if stack.unsupported:
-            raise InstallError(stack.unsupported)
-        self.configurer.configure_initramfs(self.manifest, root, self.storage._stack.get("luks_device"), plan, resume_device=self._resume_device(), stack=stack)
-        kernel = self.manifest.system.kernel
-        if kernel == "manual":
-            # "Manual kernel" is a command-line option: the graphical installer cannot pause for it.
-            if self.resume and self._verify_kernel():
-                self.log("Verified manually installed kernel and initramfs")
-                return
-            raise InstallError(f"Manual kernel selected. After cleanup, remount the saved target filesystems at {self.target_root}, chroot into that directory, install the kernel and initramfs under /boot, then resume")
-        # Dracut needs the target's storage utilities when it builds the image.
-        # Installing them in the later packages stage would produce an unusable
-        # encrypted/LVM/RAID root image (or fail generation altogether). Firmware
-        # packages also supply microcode and dracut configuration, and the filesystem
-        # userland lets the installed system check its own partitions; later --noreplace skips them.
-        self.configurer.prepare_stack_packages(stack)
-        batch = self.configurer.kernel_stage_atoms(self.manifest, self.storage.layout, plan, stack)
-        if batch:
-            self.configurer.emerge(self.manifest, ("--noreplace", *batch))
-        self.configurer.finish_stack(self.manifest, stack)
-        # systemd (systemd-utils on OpenRC) is already installed in its stage3, so --noreplace would keep the
-        # build without the flags the installer wrote: cryptsetup for the initramfs, boot and ukify for
-        # systemd-boot and a Unified Kernel Image. One rebuild, and a stop right here if a tool is still missing.
-        rebuild = self.configurer.flag_rebuild(self.manifest, plan)
-        if rebuild is not None:
-            atom, expected = rebuild
-            self.configurer.emerge(self.manifest, ("--update", "--newuse", "--oneshot", atom))
-            for relative, message in expected:
-                if not self.dry_run and not self.configurer.path(relative).exists():
-                    raise InstallError(message)
-        self.configurer.emerge(self.manifest, ("--noreplace", "sys-kernel/installkernel", f"sys-kernel/{kernel}"))
-        # Files and out-of-tree drivers from the hardware plan must exist before the initramfs is built.
-        self.configurer.write_plan_files(plan)
-        driver_atoms = [str(atom) for atom in getattr(plan, "driver_atoms", None) or []]
-        if driver_atoms:
-            try:
-                self.configurer.emerge(self.manifest, ("--noreplace", *driver_atoms))
-            except RunnerError as exc:
-                self.degraded.append(f"Hardware drivers ({', '.join(driver_atoms)}) could not be installed: {self.configurer.explain(exc).summary[:200]}")
-                self.log("WARNING: " + self.degraded[-1])
-        if self.manifest.system.initramfs == "dracut":
-            self.configurer.emerge(self.manifest, ("--noreplace", "sys-kernel/dracut"))
-            self.configurer.chroot(("dracut", "--force", "--regenerate-all"))
-
-    def _resume_device(self) -> str | None:
-        """The swap partition to resume from when hibernation is allowed (None when it is not).
-
-        The kernel only looks for a hibernation image where resume= points, so without a swap partition the
-        option cannot work: a swap file (the encrypted install's) cannot be named this way.
-        """
-        if not self.manifest.hardware.hibernate:
-            return None
-        swap = next((entry.device for entry in self.storage.layout if entry.filesystem == "swap" and not entry.source), None)
-        if swap is None:
-            raise InstallError("Hibernation is on, but this installation has no swap partition to resume from. "
-                               "Add a swap partition as large as the memory, or turn hibernation off.")
-        return swap
-
-    def _storage_stack(self) -> ExistingStack:
-        """The LVM volumes and md arrays under the layout that the installer did not create (manual storage only).
-
-        A guided install makes its own stack from the manifest flags. A manual layout may sit on a volume group or
-        an array that was activated before the installation; it is looked up once, in the live device tree.
-        """
-        stack: ExistingStack | None = self.__dict__.get("_existing_stack")
-        if stack is None:
-            disks = None
-            if self.manifest.storage.mode == "manual" and not self.dry_run:
-                disks = self.storage.inventory()
-                if disks is None:
-                    self.log("WARNING: the device tree could not be read, so the LVM volumes and RAID arrays under the layout were not looked for")
-            stack = self.configurer.detect_stack(self.storage.layout, disks, self._resume_device())
-            self.__dict__["_existing_stack"] = stack
-        return stack
-
-    def _target(self) -> None:
-        self.configurer.notify = self.log
-        self.configurer.configure_identity(self.manifest)
-        self.configurer.configure_accounts(self.manifest)
-        self.configurer.configure_network(self.manifest)
-        self._write_fstab()
-        self.configurer.configure_privileges(self.manifest)
-
-    def _write_fstab(self) -> None:
-        uuids: dict[str, str] = {}
-        for entry in self.storage.layout:
-            if entry.source or entry.device in uuids:
-                continue  # a swap file is named by its path, not by the UUID mkswap gave it; one lookup per device
-            result = self.runner.run(("blkid", "-s", "UUID", "-o", "value", entry.device))
-            if result.stdout.strip():
-                uuids[entry.device] = result.stdout.strip().splitlines()[0]
-        discard = bool(getattr(self._plan(), "scalars", {}).get("btrfs_discard_async"))
-        self.configurer.write("etc/fstab", render_fstab(self.storage.layout, uuids, btrfs_discard=discard))
-
-    def _base(self) -> None:
-        """Essential packages and services: after this the system can be managed from a console."""
-        self.configurer.notify = self.log
-        try:
-            self.configurer.install_essential(self.manifest, self._plan())
-        except PackageInstallError as exc:
-            raise InstallError(str(exc)) from exc
-        self.configurer.configure_network_late(self.manifest)
-        self.configurer.configure_services(self.manifest, self._plan(), phase="base")
-
-    def _bootloader(self) -> None:
-        self.configurer.notify = self.log
-        self.configurer.emerge(self.manifest, ("--noreplace", *self.configurer.bootloader_atoms(self.manifest)))
-        root = self._root_device()
-        efi = next((entry.device for entry in self.storage.layout if entry.mountpoint in {"/efi", "/boot/efi"}), None)
-        self.configurer.configure_bootloader(self.manifest, root, efi, self._plan())
-        self.configurer.write_receipt(self.manifest, root, self.storage.layout, self.storage._stack.get("luks_device"), self._plan(), stack=self._storage_stack())
-
-    def _desktop(self) -> None:
-        """Desktop and optional packages, installed after the bootloader.
-
-        The system is already bootable here, so a failure of an optional package is reported as a
-        warning (``degraded``); only a desktop environment that cannot be installed fails the stage,
-        flagged ``bootable`` so the front end can offer to reboot into the base system.
-        """
-        self.configurer.notify = self.log
-        plan = self._plan()
-        try:
-            result = self.configurer.install_desktop(self.manifest, plan)
-        except PackageInstallError as exc:
-            self.log(f"The base system is installed and bootable; only the desktop failed: {exc}")
-            error = InstallError(f"{exc} The base system is installed and bootable; reboot to use it or retry the desktop installation.")
-            error.bootable = True  # type: ignore[attr-defined]
-            raise error from exc
-        warnings = [*result.degraded, *self.configurer.configure_services(self.manifest, plan, phase="desktop")]
-        self.configurer.configure_desktop_session(self.manifest)
-        warnings.extend(self.configurer.run_plan_steps(plan))
-        # Only binary packages can leave the installed USE flags different from make.conf, so source
-        # installs skip the (minutes-long) check.
-        drift = self.configurer.world_drift(self.manifest) if self.manifest.portage.binhost else []
-        if drift:
-            # Visible in install.log; the next @world update will rebuild these with the configured USE.
-            self.log(f"NOTE: {len(drift)} installed package(s) differ from the configured USE flags: {', '.join(drift[:12])}"
-                     + (", ..." if len(drift) > 12 else ""))
-        if warnings:
-            self.degraded.extend(warnings)
-            for warning in warnings:
-                self.log("WARNING: " + warning)
-            self.emit("progress", "desktop", "Installed with warnings", degraded=warnings, bootable=True)
 
     def _validate(self) -> None:
         cfg = self.configurer
@@ -1121,31 +768,6 @@ class Installer:
         except Exception as exc:
             LOG.warning("Could not copy the install log into the new system: %s", exc)
             self._write_log_record("cleanup", message=f"Could not copy the install log into the new system: {exc}")
-
-    def _verify_storage(self) -> bool:
-        self.storage.restore(self.manifest, self.checkpoints.load_layout(), self.checkpoints.load_receipt())
-        return True
-
-    def _verify_kernel(self) -> bool:
-        boot = self.configurer.path("boot")
-        kernel = any(p.is_file() and p.stat().st_size for pattern in ("vmlinuz-*", "kernel-*") for p in boot.glob(pattern))
-        initramfs = self.manifest.system.initramfs == "none" or any(p.is_file() and p.stat().st_size for pattern in ("initramfs*", "initrd*") for p in boot.glob(pattern))
-        return bool(kernel and initramfs)
-
-    def _verify_bootloader(self) -> bool:
-        efi = self.configurer.efi_mountpoint(self.manifest).lstrip("/")
-        if self.manifest.system.uki and not self._target_file(f"{efi}/EFI/Linux/gentoo.efi"):
-            return False
-        if not self._target_file(RECEIPT_PATH):
-            return False
-        if self.manifest.system.bootloader == "efi-stub":
-            return "Gentoo" in self.runner.run(("efibootmgr",)).stdout
-        installed, removable = GRUB_EFI_FILES[grub_efi_target(self._plan())]
-        if self.manifest.system.bootloader == "grub" and self.manifest.storage.firmware == "uefi" \
-                and not (self._target_file(f"{efi}/EFI/Gentoo/{installed}") or self._target_file(f"{efi}/EFI/BOOT/{removable}")):
-            return False
-        path = "boot/grub/grub.cfg" if self.manifest.system.bootloader == "grub" else f"{efi}/loader/entries/gentoo.conf"
-        return self._target_file(path)
 
     def _target_file(self, path: str) -> bool:
         target = self.configurer.path(path)

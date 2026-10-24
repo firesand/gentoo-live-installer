@@ -439,7 +439,7 @@ class LiveProfileImportTests(unittest.TestCase):
         ca = self.live / "ca.pem"
         ca.write_text("CERT")
         (self.live / "Uni.nmconnection").write_text(self.ENTERPRISE.format(ca=ca))
-        with patch("gentoo_installerd.configure.CERTIFICATE_ROOTS", (str(self.base) + "/",)):
+        with patch("gentoo_installerd.configure_network.CERTIFICATE_ROOTS", (str(self.base) + "/",)):
             self.importer().import_live_network_profiles(target_manifest(network={"import_live_profiles": True}))
         profile = (self.root / "etc/NetworkManager/system-connections/Uni.nmconnection").read_text()
         copied = [line.partition("=")[2] for line in profile.splitlines() if line.startswith("ca-cert=")][0]

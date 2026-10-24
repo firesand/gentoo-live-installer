@@ -19,6 +19,34 @@ SIDEBAR_DISABLED = "#9d96b1"  # 6.6:1 on SIDEBAR; the old #716a83 was 3.2:1
 
 STATUS_COLORS = {"ok": "#27855c", "warning": "#b87818", "error": "#c33d50"}
 
+# Badges (pages/help.py): text colour and background per kind, for the light and the dark scheme.
+# Every pair keeps a contrast of at least 4.5:1 (a test checks it).
+BADGE_COLORS = {
+    "light": {
+        "Default": ("#3b3351", "#e8e5f1"),
+        "Alternative": ("#33313b", "#e9e8ee"),
+        "Optional": ("#4f4b5c", "#efeef3"),
+        "Recommended": ("#14573a", "#d9f0e4"),
+    },
+    "dark": {
+        "Default": ("#e4defa", "#3b3351"),
+        "Alternative": ("#dcd8e6", "#3a3743"),
+        "Optional": ("#cbc6d6", "#2f2c38"),
+        "Recommended": ("#a8e6c6", "#1f4a36"),
+    },
+}
+DARK = False  # set by apply_theme from the colour scheme
+
+
+def is_dark() -> bool:
+    return DARK
+
+
+def badge_colors(kind: str, dark: bool | None = None) -> tuple[str, str]:
+    """(text, background) of a badge of this kind in the light or dark scheme (the current one by default)."""
+    scheme = BADGE_COLORS["dark" if (DARK if dark is None else dark) else "light"]
+    return scheme.get(kind, scheme["Default"])
+
 
 def status_color(status: str) -> str:
     """Colour of a StatusRow indicator; read lazily so dark mode is honoured."""
@@ -26,8 +54,9 @@ def status_color(status: str) -> str:
 
 
 def apply_theme(app: QApplication) -> None:
-    global TEXT, MUTED, SURFACE, BACKGROUND, BORDER
+    global TEXT, MUTED, SURFACE, BACKGROUND, BORDER, DARK
     if app.styleHints().colorScheme() == Qt.ColorScheme.Dark:
+        DARK = True
         TEXT = "#ece9f2"
         MUTED = "#aaa4b5"
         SURFACE = "#292631"

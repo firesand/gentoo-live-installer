@@ -1,36 +1,26 @@
+"""CORE: the System page: init system, stage3 and profile, with the desktop and boot sections embedded."""
+
 from __future__ import annotations
 
 from PySide6.QtCore import Signal
-from PySide6.QtGui import QStandardItemModel
-from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QLabel, QLineEdit
+from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout
 
 from ..manifest import InstallManifest, derive_profile
-from ..widgets import Card, ChoiceGroup, Page, wrapped_label
+from ..widgets import Card, ChoiceGroup, Page
+from .boot_section import KERNELS, BootSection
+from .desktop_section import (  # noqa: F401 - the page used to define these
+    FAMILY_DESKTOP_SUPPORT,
+    FAMILY_LABELS,
+    FAMILY_PREFIX,
+    KDE_NEEDS_DESKTOP_STAGE,
+    UNVERIFIED_FAMILIES,
+    DesktopSection,
+    desktop_problem,
+    stage_family,
+)
 
 PROFILE_BASE = "default/linux/amd64/23.0"
 INITS = ("openrc", "systemd")
-
-# Stage3 families and what the installer can build on each. KDE Plasma needs
-# the desktop USE flags that only the Standard and Desktop profiles enable
-# (plasma-meta has unmet USE dependencies on No-multilib and Hardened); GNOME
-# and Xfce are unverified there. Minimal always works.
-FAMILY_PREFIX = {"standard": "amd64", "desktop": "amd64-desktop", "nomultilib": "amd64-nomultilib", "hardened": "amd64-hardened"}
-FAMILY_LABELS = {"standard": "Standard", "desktop": "Desktop", "nomultilib": "No multilib", "hardened": "Hardened"}
-FAMILY_DESKTOP_SUPPORT = {
-    "standard": {"kde", "gnome", "xfce"},
-    "desktop": {"kde", "gnome", "xfce"},
-    "nomultilib": {"gnome", "xfce"},
-    "hardened": {"gnome", "xfce"},
-}
-UNVERIFIED_FAMILIES = {"nomultilib", "hardened"}
-KERNELS = (
-    ("Distribution binary kernel — fastest, recommended", "gentoo-kernel-bin"),
-    ("Distribution source kernel — customizable", "gentoo-kernel"),
-)
-KDE_NEEDS_DESKTOP_STAGE = (
-    "KDE Plasma needs a Standard or Desktop stage3: the Hardened and No-multilib profiles do not enable the desktop USE flags Plasma requires, "
-    "so the package step would fail after your disk was erased. Choose a Standard stage3 or the Minimal system."
-)
 
 
 # One derivation for the wizard, the daemon and the plan lint.
@@ -42,24 +32,6 @@ PUBLISHED_PROFILES = frozenset(
     for middle in ("", "/desktop", "/desktop/plasma", "/desktop/gnome", "/hardened", "/no-multilib", "/no-multilib/hardened")
     for suffix in ("", "/systemd")
 )
-
-
-def stage_family(stage_variant: str) -> str:
-    if "hardened" in stage_variant:
-        return "hardened"
-    if "nomultilib" in stage_variant:
-        return "nomultilib"
-    if "desktop" in stage_variant:
-        return "desktop"
-    return "standard"
-
-
-def desktop_problem(stage_variant: str, desktop: str) -> str:
-    """Why this desktop cannot be installed on this stage3 ('' when it can)."""
-    if desktop in {"kde", "gnome", "xfce"} and desktop not in FAMILY_DESKTOP_SUPPORT[stage_family(stage_variant)]:
-        return KDE_NEEDS_DESKTOP_STAGE if desktop == "kde" else (
-            f"{desktop.upper()} is not available on this stage3: choose a Standard or Desktop stage3 or the Minimal system.")
-    return ""
 
 
 def profile_problem(profile: str, init: str, stage_variant: str) -> str:
@@ -111,62 +83,32 @@ class SystemPage(Page):
         self.init_group.selectionChanged.connect(self._init_changed)
         self.stage.currentIndexChanged.connect(self._stage_changed)
 
-        self.desktop_group = ChoiceGroup([
-            ("kde", "KDE Plasma", "A polished, flexible desktop with SDDM and a familiar application suite.", True),
-            ("gnome", "GNOME", "A focused, modern desktop with GDM and GNOME applications.", False),
-            ("xfce", "Xfce", "A lightweight desktop that works well on older or resource-limited hardware.", False),
-            ("minimal", "Minimal system", "No graphical desktop. Install only the base system and selected tools.", False),
-        ])
-        self.content.addWidget(QLabel("Desktop environment"))
-        self.content.addWidget(self.desktop_group)
-        self.family_note = wrapped_label("", muted=True)
-        self.family_note.hide()
-        self.content.addWidget(self.family_note)
-        self.desktop_group.selectionChanged.connect(self._desktop_selected)
+        # The sections own their widgets; the page keeps the old attribute names for them.
+        self.desktop_section = DesktopSection()
+        self.desktop_group = self.desktop_section.desktop_group
+        self.family_note = self.desktop_section.family_note
+        self.content.addWidget(self.desktop_section)
+        self.desktop_section.selectionChanged.connect(self._desktop_selected)
 
-        boot = Card("Kernel and boot")
-        boot_form = QFormLayout()
-        self.kernel = QComboBox()
-        for label, value in KERNELS:
-            self.kernel.addItem(label, value)
-        boot_form.addRow("Kernel", self.kernel)
-        self.initramfs = QComboBox()
-        self.initramfs.addItem("Dracut", "dracut")
-        self.initramfs.setEnabled(False)
-        boot_form.addRow("Initramfs", self.initramfs)
-        self.kernel_guidance = QLabel(
-            "Gentoo distribution kernels require Dracut, so it is selected for you. Fully custom kernel builds are not available in the graphical installer."
-        )
-        self.kernel_guidance.setProperty("muted", True)
-        self.kernel_guidance.setWordWrap(True)
-        boot_form.addRow("", self.kernel_guidance)
-        self.bootloader = QComboBox()
-        self.bootloader.addItem("GRUB — UEFI and legacy BIOS", "grub")
-        self.bootloader.addItem("systemd-boot — UEFI only", "systemd-boot")
-        self.bootloader.addItem("EFI stub / UKI — UEFI only", "efi-stub")
-        self.bootloader.currentIndexChanged.connect(self._bootloader_changed)
-        self.bootloader.activated.connect(self._bootloader_picked)
-        boot_form.addRow("Bootloader", self.bootloader)
-        self.dual_boot = QCheckBox("Detect other operating systems with os-prober")
-        boot_form.addRow(self.dual_boot)
-        self.uki = QCheckBox("Build a Unified Kernel Image (UKI)")
-        boot_form.addRow(self.uki)
-        self.secure_boot = QCheckBox("Sign the boot chain for Secure Boot")
-        self.secure_boot.toggled.connect(lambda _=False: self._update_boot_rules())
-        self.secure_boot.clicked.connect(self._secure_clicked)
-        boot_form.addRow(self.secure_boot)
-        self.signing_key = QLineEdit()
-        self.signing_key.setPlaceholderText("Absolute path to a private signing key")
-        boot_form.addRow("Signing key", self.signing_key)
-        self.signing_cert = QLineEdit()
-        self.signing_cert.setPlaceholderText("Absolute path to the signing certificate")
-        boot_form.addRow("Certificate", self.signing_cert)
-        boot.content.addLayout(boot_form)
-        self.content.addWidget(boot)
+        self.boot_section = BootSection(manifest)
+        self.kernel = self.boot_section.kernel
+        self.initramfs = self.boot_section.initramfs
+        self.kernel_guidance = self.boot_section.kernel_guidance
+        self.bootloader = self.boot_section.bootloader
+        self.dual_boot = self.boot_section.dual_boot
+        self.uki = self.boot_section.uki
+        self.secure_boot = self.boot_section.secure_boot
+        self.signing_key = self.boot_section.signing_key
+        self.signing_cert = self.boot_section.signing_cert
+        self.content.addWidget(self.boot_section)
         self.advance_on_enter(self.signing_key, self.signing_cert)
         self._refresh_stages()
         self.load_manifest()
         self.finish_layout()
+
+    def set_advanced(self, advanced: bool) -> None:
+        self.desktop_section.set_advanced(advanced)
+        self.boot_section.set_advanced(advanced)
 
     # --- stage3, profile, desktop ----------------------------------------------------------------
 
@@ -237,89 +179,12 @@ class SystemPage(Page):
             self.profile.setCurrentIndex(self.profile.count() - 1)
 
     def _apply_family_constraints(self, user_change: bool = True) -> None:
-        """Disable the desktops the chosen stage3 cannot build; when the user's
-        own change made the current desktop impossible, fall back to Minimal.
-        A manifest that is merely loaded is never changed here (the page then
-        refuses it instead)."""
         if not hasattr(self, "desktop_group"):
             return
         family = stage_family(self.stage.currentData() or "")
-        supported = FAMILY_DESKTOP_SUPPORT[family]
-        for key in ("kde", "gnome", "xfce"):
-            reason = "" if key in supported else desktop_problem(f"amd64-{family}", key)
-            self.desktop_group.set_card_enabled(key, key in supported, reason)
-        chosen = self.desktop_group.value()
-        if chosen and chosen != "minimal" and chosen not in supported and user_change and not self._loading:
-            name = {"kde": "KDE Plasma", "gnome": "GNOME", "xfce": "Xfce"}[chosen]
-            self.desktop_group.set_value("minimal")
-            self.family_note.setText(f"{name} needs a Standard or Desktop stage3, so the selection was changed to the Minimal system. Choose a Standard stage3 to use {name}.")
-            self.family_note.show()
-        elif family in UNVERIFIED_FAMILIES and chosen in {"gnome", "xfce"}:
-            self.family_note.setText("Not verified: GNOME and Xfce on this stage3 may need extra USE changes during the installation.")
-            self.family_note.show()
-        else:
-            self.family_note.hide()
-
-    # --- boot -------------------------------------------------------------------------------------------
-
-    def _bootloader_changed(self) -> None:
-        self._update_boot_rules()
-
-    def _bootloader_picked(self, _index: int = 0) -> None:
-        """The user chose a bootloader: what only works with the other kinds is switched off."""
-        if self.bootloader.currentData() == "grub":
-            self.secure_boot.setChecked(False)  # signing needs a signed image that GRUB does not boot
-        else:
-            self.dual_boot.setChecked(False)  # os-prober belongs to GRUB
-        self._update_boot_rules()
-
-    def _secure_clicked(self, checked: bool) -> None:
-        if checked:
-            self.uki.setChecked(True)  # the signed boot file is a Unified Kernel Image
-        self._update_boot_rules()
-
-    def _update_boot_rules(self) -> None:
-        """Dual boot needs GRUB; Secure Boot needs UEFI and systemd-boot or the EFI stub, with a signed UKI.
-        Values that were loaded are only explained here, never changed: a box that is ticked stays editable."""
-        uefi = self.manifest.storage.firmware == "uefi"
-        grub = self.bootloader.currentData() == "grub"
-        secure = self.secure_boot.isChecked()
-        self.dual_boot.setEnabled(grub)
-        self.dual_boot.setToolTip("" if grub else "systemd-boot finds Windows on a shared EFI partition by itself; os-prober is only needed with GRUB.")
-        possible = uefi and not grub
-        self.secure_boot.setEnabled(possible or secure)
-        if possible:
-            self.secure_boot.setToolTip("")
-        else:
-            self.secure_boot.setToolTip("Secure Boot signing needs UEFI firmware." if not uefi else "Secure Boot signing needs systemd-boot or the EFI stub. GRUB cannot be used with it.")
-        forced = secure and not grub and self.uki.isChecked()
-        self.uki.setEnabled(not forced and (uefi or self.uki.isChecked()))
-        self.uki.setToolTip(
-            "Secure Boot needs the signed Unified Kernel Image." if forced else "" if uefi else "A Unified Kernel Image needs UEFI firmware.")
-        self.signing_key.setEnabled(secure)
-        self.signing_cert.setEnabled(secure)
-
-    def _refresh_bootloaders(self) -> None:
-        """systemd-boot and EFI stub work on UEFI only: grey them out for a BIOS install."""
-        uefi = self.manifest.storage.firmware == "uefi"
-        model = self.bootloader.model()
-        if isinstance(model, QStandardItemModel):
-            for index in range(self.bootloader.count()):
-                item = model.item(index)
-                if item is not None:
-                    item.setEnabled(uefi or self.bootloader.itemData(index) == "grub")
+        self.desktop_section.apply_family_constraints(family, user_change, bool(self._loading))
 
     # --- manifest -----------------------------------------------------------------------------------------
-
-    @staticmethod
-    def _select(combo: QComboBox, value: str, unavailable: str = "(not available in this installer)") -> None:
-        """Select value; a value the combo does not offer (from a loaded manifest)
-        is shown as an extra, flagged entry instead of being replaced silently."""
-        index = combo.findData(value)
-        if index < 0 and value:
-            combo.addItem(f"{value} {unavailable}", value)
-            index = combo.count() - 1
-        combo.setCurrentIndex(max(0, index))
 
     def load_manifest(self) -> None:
         system = self.manifest.system
@@ -327,22 +192,13 @@ class SystemPage(Page):
         try:
             self.init_group.set_value(system.init)
             self.multilib.setChecked(system.multilib)
-            self.desktop_group.set_value(system.desktop)
+            self.desktop_section.load(system)
             self._refresh_stages()
             self.stage.setCurrentIndex(max(0, self.stage.findData(system.stage_variant)))
             self._loaded_profile = system.profile
             self._refresh_profiles(keep=system.profile)
-            self._select(self.kernel, system.kernel)
-            self._select(self.initramfs, system.initramfs)
-            self.bootloader.setCurrentIndex(max(0, self.bootloader.findData(system.bootloader)))
-            self.dual_boot.setChecked(system.dual_boot)
-            self.uki.setChecked(system.uki)
-            self.secure_boot.setChecked(system.secure_boot)
-            self.signing_key.setText(system.secure_boot_key)
-            self.signing_cert.setText(system.secure_boot_certificate)
             self.world_update.setChecked(system.world_update)
-            self._refresh_bootloaders()
-            self._update_boot_rules()
+            self.boot_section.load(system)
         finally:
             self._loading -= 1
         self._apply_family_constraints(user_change=False)
@@ -356,15 +212,8 @@ class SystemPage(Page):
         # Empty means "derive from init, stage3 and desktop", so the profile follows later desktop
         # changes. A profile the loaded settings named explicitly is kept as it was.
         system.profile = "" if chosen == self._derived_profile and chosen != self._loaded_profile else chosen
-        system.desktop = self.desktop_group.value() or "minimal"
-        system.kernel = self.kernel.currentData()
-        system.initramfs = self.initramfs.currentData()
-        system.bootloader = self.bootloader.currentData()
-        system.dual_boot = self.dual_boot.isChecked()
-        system.uki = self.uki.isChecked()
-        system.secure_boot = self.secure_boot.isChecked()
-        system.secure_boot_key = self.signing_key.text().strip() if system.secure_boot else ""
-        system.secure_boot_certificate = self.signing_cert.text().strip() if system.secure_boot else ""
+        self.desktop_section.collect(system)
+        self.boot_section.collect(system)
         system.world_update = self.world_update.isChecked()
 
     def validate_page(self) -> tuple[bool, str]:
