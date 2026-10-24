@@ -151,7 +151,7 @@ them and even when the harness is killed with SIGKILL (the kernel sends QEMU SIG
 | `text-install` | the console installer: the ISO's text entry, then `gentoo-installer-text` with a device confirmation |
 | `rescue-debian` | Debian 13 cloud image: menu file deleted, repaired from the live ISO, booted with UEFI and BIOS |
 | `rescue-ubuntu` | Ubuntu 24.04 cloud image: the initramfs on the separate `/boot` partition deleted and rebuilt |
-| `rescue-fedora` | Fedora cloud image (btrfs, BLS, SELinux): menu file deleted and repaired; the first boot relabels and restarts |
+| `rescue-fedora` | Fedora cloud image (btrfs with a boot subvolume, BLS, SELinux): `/boot/grub2/grub.cfg` deleted and repaired; the first boot relabels and restarts |
 | `rescue-arch` | Arch cloud image: detected and diagnosed, every repair refused by design, the disk byte for byte unchanged |
 | `rescue-gentoo` | a minimal Gentoo installed first, then broken and repaired three times (menu file, initramfs, fstab) |
 
@@ -385,8 +385,11 @@ test-vm.py --scenario bios --target-image build/vm/<run>/disk.qcow2 \
 `--rescue-break` removes `grub.cfg` (also `boot/grub2/`), every `initramfs*`/`initrd*` image, or
 replaces the root device in `/etc/fstab` (`UUID=`, `LABEL=` or `PARTUUID=`) with
 `UUID=00000000-dead-beef-0000-000000000000`. It works on files of a mounted root only: nothing is
-formatted, repartitioned or wiped; a separate `/boot` partition that the system's own fstab names
-is mounted too, and a system inside a btrfs subvolume is found. LUKS, LVM and RAID roots are
+formatted, repartitioned or wiped; a separate `/boot` that the system's own fstab names is mounted
+too (a partition of the disk, or a btrfs subvolume of the root file system with `-o subvol=NAME`:
+Fedora keeps its kernel, initramfs, `grub2/grub.cfg` and boot entries in the subvolume `boot`, not in
+the `/boot` directory of the subvolume `root`), and a system inside a btrfs subvolume is found.
+LUKS, LVM and RAID roots are
 reported as unsupported. The damage must be *real*: the installed disk has `--broken-timeout`
 seconds (default 120) to come up and a system that still boots is a failed test. The repair may run
 for `--rescue-timeout` seconds (default 1800). For the fstab, whose damage does not always stop the
@@ -418,7 +421,7 @@ serial console is the witness (all four print to `ttyS0`). A scenario does this:
    |---|---|---|---|
    | `rescue-debian` | ext4 root, BIOS boot, ESP | `grub-cfg` | `update-grub` |
    | `rescue-ubuntu` | ext4 root, BIOS boot, ESP, **a separate `/boot` partition** with the kernel, initramfs and `grub.cfg` | `initramfs` | `update-initramfs` |
-   | `rescue-fedora` | BIOS boot, ESP, btrfs root **in a subvolume**, BLS entries, SELinux | `grub-cfg` | `grub2-mkconfig` |
+   | `rescue-fedora` | BIOS boot, ESP (its `grub.cfg` is a stub), one btrfs file system with the subvolumes `root`, **`boot`**, `home` and `var` (`/boot` is the subvolume `boot`), BLS entries, SELinux | `grub-cfg` (`/boot/grub2/grub.cfg` in the subvolume `boot`) | `grub2-mkconfig` |
    | `rescue-arch` | BIOS boot, ESP, btrfs root | none | refused by design |
 
    `--rescue-break` chooses another damage for an image;

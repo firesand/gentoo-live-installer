@@ -281,7 +281,7 @@ SCENARIO_MAP = {
     "rescue-ubuntu": Scenario("rescue-ubuntu", "", "uefi", image="ubuntu", breaks=("initramfs",), repair="cli", in_all=False,
                               note="Ubuntu 24.04 cloud image: initramfs on the separate /boot partition deleted and rebuilt"),
     "rescue-fedora": Scenario("rescue-fedora", "", "uefi", image="fedora", breaks=("grub-cfg",), repair="cli", in_all=False,
-                              note="Fedora cloud image (btrfs, BLS, SELinux): menu file deleted and repaired; the first boot relabels and restarts"),
+                              note="Fedora cloud image (btrfs with a boot subvolume, BLS, SELinux): /boot/grub2/grub.cfg deleted and repaired; the first boot relabels and restarts"),
     "rescue-arch": Scenario("rescue-arch", "", "uefi", image="arch", repair="refuse", in_all=False,
                             note="Arch cloud image: detected and diagnosed, every repair refused by design, the disk byte for byte unchanged"),
     "rescue-gentoo": Scenario("rescue-gentoo", "openrc", "uefi", breaks=("grub-cfg", "initramfs", "fstab-uuid"), repair="cli", in_all=False,

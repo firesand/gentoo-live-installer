@@ -59,8 +59,9 @@ IMAGES: dict[str, RescueImage] = {
         note="the initramfs lives on the separate /boot partition: rescue must mount it from fstab to repair it"),
     "fedora": RescueImage(
         "fedora", "Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2", "Fedora-Cloud-Base-Generic-*.x86_64.qcow2", "Fedora Cloud Base", "fedora", "fedora", "btrfs",
-        "p1 BIOS boot, p2 ESP, p3 root btrfs with subvolumes", "grub-cfg",
-        note="BLS entries and SELinux: the first boot after a repair relabels the files and restarts once"),
+        "p1 BIOS boot, p2 ESP (grub.cfg there is a stub), p3 btrfs with subvolumes root, boot, home, var; /boot is the subvolume boot", "grub-cfg",
+        note="BLS entries and SELinux: the first boot after a repair relabels the files and restarts once; "
+             "grub-cfg removes /boot/grub2/grub.cfg in the subvolume boot, the stub on the ESP stays"),
     "arch": RescueImage(
         "arch", "Arch-Linux-x86_64-cloudimg.qcow2", "Arch-Linux-x86_64-cloudimg*.qcow2", "Arch Linux (cloudimg)", "arch", "arch", "btrfs",
         "p1 BIOS boot, p2 ESP, p3 root btrfs", "", repairable=False, final_boots=(),
