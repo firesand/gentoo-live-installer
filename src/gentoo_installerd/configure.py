@@ -435,6 +435,71 @@ def render_dconf_keyboard(system: System) -> str:
     return "\n".join(lines) + "\n"
 
 
+# --- keeping the EFI system partition current after kernel updates ------------------------------------
+
+# One script, installed for both installkernel flavours: the traditional one runs /etc/kernel/postinst.d
+# hooks as "hook <version> <image>", systemd's kernel-install runs /etc/kernel/install.d/*.install plugins as
+# "plugin add|remove <version> <entry-dir> <image> [initrd...]".
+ESP_SYNC_HOOKS = ("etc/kernel/postinst.d/95-gentoo-installer-esp", "etc/kernel/install.d/95-gentoo-installer-esp.install")
+_ESP_SYNC_TEMPLATE = r"""#!/bin/sh
+# Written by the Gentoo live installer.
+# systemd-boot, the EFI stub and the Unified Kernel Image load their kernel from the EFI system
+# partition, which installkernel does not touch. This hook copies each newly installed kernel there.
+# It never fails the kernel installation: problems are only reported.
+ROOT="${ESP_SYNC_ROOT:-}"
+ESP="@ESP@"
+UKI=@UKI@
+FALLBACK_COPY=@FALLBACK@
+case "$1" in
+    add) shift ;;
+    remove) exit 0 ;;
+esac
+version="$1"
+[ -n "$version" ] || exit 0
+kernel=
+for candidate in "$ROOT/boot/vmlinuz-$version" "$ROOT/boot/kernel-$version"; do
+    if [ -f "$candidate" ]; then kernel="$candidate"; break; fi
+done
+if [ -z "$kernel" ]; then
+    echo "gentoo-installer-esp: no kernel image for $version under /boot; the EFI system partition was not updated" >&2
+    exit 0
+fi
+initrd="$ROOT/boot/initramfs-$version.img"
+[ -f "$initrd" ] || initrd=
+if [ -z "$ROOT" ] && ! grep -q " $ESP " /proc/mounts 2>/dev/null; then
+    echo "gentoo-installer-esp: $ESP is not mounted; the EFI system partition was not updated" >&2
+    exit 0
+fi
+esp="$ROOT$ESP"
+replace() {
+    cp "$1" "$2.new" && mv -f "$2.new" "$2" || { rm -f "$2.new"; return 1; }
+}
+if [ "$UKI" = 1 ]; then
+    mkdir -p "$esp/EFI/Linux"
+    set -- ukify build --linux "$kernel" --cmdline "$(cat "$ROOT/etc/kernel/cmdline" 2>/dev/null)" --output "$esp/EFI/Linux/gentoo.efi.new"
+    [ -n "$initrd" ] && set -- "$@" --initrd "$initrd"
+    if "$@" && mv -f "$esp/EFI/Linux/gentoo.efi.new" "$esp/EFI/Linux/gentoo.efi"; then
+        [ "$FALLBACK_COPY" = 1 ] && replace "$esp/EFI/Linux/gentoo.efi" "$esp/EFI/BOOT/BOOTX64.EFI"
+    else
+        rm -f "$esp/EFI/Linux/gentoo.efi.new"
+        echo "gentoo-installer-esp: could not build the Unified Kernel Image for $version" >&2
+    fi
+else
+    replace "$kernel" "$esp/vmlinuz" || echo "gentoo-installer-esp: could not copy the kernel to $ESP" >&2
+    if [ -n "$initrd" ]; then
+        replace "$initrd" "$esp/initramfs" || echo "gentoo-installer-esp: could not copy the initramfs to $ESP" >&2
+    fi
+fi
+exit 0
+"""
+
+
+def render_esp_sync_hook(esp: str, uki: bool, fallback_copy: bool = False) -> str:
+    if not re.fullmatch(r"/[A-Za-z0-9_./-]+", esp):
+        raise ConfigurationError("Invalid EFI system partition mount point")
+    return _ESP_SYNC_TEMPLATE.replace("@ESP@", esp).replace("@UKI@", "1" if uki else "0").replace("@FALLBACK@", "1" if fallback_copy else "0")
+
+
 # --- checks on the live system, for the daemon's preflight --------------------------------------------
 
 
@@ -1630,8 +1695,21 @@ class Configurer:
                 if not fallback_written:
                     raise
                 self.notify("warning: the firmware refused the boot entry; the system boots from the fallback path")
+        if system.bootloader != "grub" or system.uki:
+            self.install_esp_sync_hook(manifest, fallback_copy=fallback_written)
         if system.secure_boot:
             self._sign_boot_images(manifest, efi_mountpoint)
+
+    def install_esp_sync_hook(self, manifest: InstallManifest, fallback_copy: bool = False) -> None:
+        """Make kernel updates reach the EFI system partition (systemd-boot, EFI stub, UKI)."""
+        system = manifest.system
+        if system.secure_boot:
+            self.notify("Secure Boot: kernel updates are not copied to the EFI system partition automatically, "
+                        "because the new boot image would have to be signed again")
+            return
+        script = render_esp_sync_hook(self.efi_mountpoint(manifest), system.uki, fallback_copy)
+        for hook in ESP_SYNC_HOOKS:
+            self.write(hook, script, 0o755)
 
     def _copy_uki_fallback(self, efi_prefix: str) -> bool:
         if self.dry_run:
@@ -1715,7 +1793,8 @@ class Configurer:
 
     def _boot_images(self, manifest: InstallManifest) -> tuple[Path, Path | None]:
         boot = self.path("boot")
-        kernels = sorted(boot.glob("vmlinuz-*"), key=lambda path: path.stat().st_mtime, reverse=True)
+        # installkernel names the file vmlinuz-<version>; systemd's kernel-install (compat layout) kernel-<version>.
+        kernels = sorted([*boot.glob("vmlinuz-*"), *boot.glob("kernel-*")], key=lambda path: path.stat().st_mtime, reverse=True)
         if not kernels:
             raise ConfigurationError("No installed kernel was found under /boot")
         initramfs = None

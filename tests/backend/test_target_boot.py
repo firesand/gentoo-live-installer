@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import os
 import re
+import stat
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
 
 from gentoo_installer import __version__
-from gentoo_installerd.configure import NVRAM_FAILURE, ConfigurationError
+from gentoo_installerd.configure import ESP_SYNC_HOOKS, NVRAM_FAILURE, ConfigurationError, render_esp_sync_hook
 from gentoo_installerd.runner import InstallCancelled, RunnerError
 from gentoo_installerd.storage import LayoutEntry
 
@@ -333,6 +335,156 @@ class SecureBootTests(unittest.TestCase):
         sign = next(command for command in runner.commands if "sbsign" in command)
         self.assertEqual(sign[sign.index("--key") + 1], "/run/gentoo-installer-sb/signing.key")
         self.assertFalse(self.secrets.exists())
+
+
+class EspSyncHookTests(unittest.TestCase):
+    """Kernel updates must reach the EFI system partition; the hook runs for real, in a temporary root."""
+
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temporary.cleanup)
+        self.root = Path(self.temporary.name)
+        (self.root / "boot").mkdir()
+        (self.root / "efi").mkdir()
+        (self.root / "etc/kernel").mkdir(parents=True)
+        (self.root / "etc/kernel/cmdline").write_text("root=UUID=abc rw\n")
+        (self.root / "efi/vmlinuz").write_bytes(b"old kernel")
+        (self.root / "efi/initramfs").write_bytes(b"old initramfs")
+        self.bin = self.root / "bin"
+        self.bin.mkdir()
+
+    def run_hook(self, *args: str, uki: bool = False, fallback: bool = False) -> subprocess.CompletedProcess:
+        script = self.root / "hook.sh"
+        script.write_text(render_esp_sync_hook("/efi", uki, fallback))
+        environment = {**os.environ, "ESP_SYNC_ROOT": str(self.root), "PATH": f"{self.bin}:{os.environ['PATH']}"}
+        return subprocess.run(["sh", str(script), *args], env=environment, capture_output=True, text=True)
+
+    def new_kernel(self, version: str = "6.13.1", name: str = "vmlinuz") -> None:
+        (self.root / f"boot/{name}-{version}").write_bytes(b"new kernel")
+        (self.root / f"boot/initramfs-{version}.img").write_bytes(b"new initramfs")
+
+    def test_installkernel_hook_copies_kernel_and_initramfs_to_the_esp(self) -> None:
+        self.new_kernel()
+        result = self.run_hook("6.13.1", "/boot/vmlinuz-6.13.1")
+        self.assertEqual((result.returncode, result.stderr), (0, ""))
+        self.assertEqual((self.root / "efi/vmlinuz").read_bytes(), b"new kernel")
+        self.assertEqual((self.root / "efi/initramfs").read_bytes(), b"new initramfs")
+        self.assertEqual(sorted(path.name for path in (self.root / "efi").iterdir()), ["initramfs", "vmlinuz"])  # no stray .new files
+
+    def test_kernel_install_plugin_arguments_and_the_compat_kernel_name(self) -> None:
+        self.new_kernel(name="kernel")
+        result = self.run_hook("add", "6.13.1", "/efi/entry", "/usr/src/linux/arch/x86/boot/bzImage")
+        self.assertEqual(result.returncode, 0)
+        self.assertEqual((self.root / "efi/vmlinuz").read_bytes(), b"new kernel")
+
+    def test_removal_and_unknown_versions_change_nothing_and_never_fail(self) -> None:
+        self.new_kernel()
+        self.assertEqual(self.run_hook("remove", "6.13.1").returncode, 0)
+        self.assertEqual((self.root / "efi/vmlinuz").read_bytes(), b"old kernel")
+        result = self.run_hook("9.9.9", "/boot/vmlinuz-9.9.9")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("no kernel image for 9.9.9", result.stderr)
+        self.assertEqual(self.run_hook().returncode, 0)
+
+    def test_an_unwritable_esp_is_reported_but_does_not_fail_the_kernel_installation(self) -> None:
+        self.new_kernel()
+        (self.root / "efi").chmod(stat.S_IRUSR | stat.S_IXUSR)
+        self.addCleanup((self.root / "efi").chmod, 0o755)
+        if os.geteuid() == 0:
+            self.skipTest("root ignores directory permissions")
+        result = self.run_hook("6.13.1", "/boot/vmlinuz-6.13.1")
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("could not copy the kernel", result.stderr)
+
+    def write_ukify(self, succeed: bool = True) -> None:
+        ukify = self.bin / "ukify"
+        ukify.write_text("#!/bin/sh\nout=\ncmdline=\n"
+                         "while [ $# -gt 0 ]; do case \"$1\" in --output) out=\"$2\"; shift;; --cmdline) cmdline=\"$2\"; shift;; esac; shift; done\n"
+                         + ('echo "uki built" > "$out"; echo "$cmdline" > "$out.cmdline"\n' if succeed else "exit 1\n"))
+        ukify.chmod(0o755)
+
+    def test_uki_installs_rebuild_the_image_and_refresh_the_fallback_copy(self) -> None:
+        self.new_kernel()
+        self.write_ukify()
+        (self.root / "efi/EFI/Linux").mkdir(parents=True)
+        (self.root / "efi/EFI/BOOT").mkdir(parents=True)
+        (self.root / "efi/EFI/Linux/gentoo.efi").write_text("old uki")
+        result = self.run_hook("6.13.1", "/boot/vmlinuz-6.13.1", uki=True, fallback=True)
+        self.assertEqual((result.returncode, result.stderr), (0, ""))
+        self.assertEqual((self.root / "efi/EFI/Linux/gentoo.efi").read_text(), "uki built\n")
+        self.assertEqual((self.root / "efi/EFI/BOOT/BOOTX64.EFI").read_text(), "uki built\n")
+        self.assertEqual((self.root / "efi/EFI/Linux/gentoo.efi.new.cmdline").read_text(), "root=UUID=abc rw\n")
+        self.assertEqual((self.root / "efi/vmlinuz").read_bytes(), b"old kernel")  # UKI installs do not use the loose files
+
+    def test_a_failed_uki_build_keeps_the_working_image(self) -> None:
+        self.new_kernel()
+        self.write_ukify(succeed=False)
+        (self.root / "efi/EFI/Linux").mkdir(parents=True)
+        (self.root / "efi/EFI/Linux/gentoo.efi").write_text("old uki")
+        result = self.run_hook("6.13.1", "/boot/vmlinuz-6.13.1", uki=True)
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("could not build the Unified Kernel Image", result.stderr)
+        self.assertEqual((self.root / "efi/EFI/Linux/gentoo.efi").read_text(), "old uki")
+        self.assertFalse((self.root / "efi/EFI/Linux/gentoo.efi.new").exists())
+
+    def test_the_script_is_valid_sh_and_rejects_hostile_mount_points(self) -> None:
+        script = self.root / "syntax.sh"
+        script.write_text(render_esp_sync_hook("/boot/efi", True, True))
+        self.assertEqual(subprocess.run(["sh", "-n", str(script)], capture_output=True).returncode, 0)
+        for bad in ('/efi"; rm -rf /; "', "efi", "/ef i", ""):
+            with self.assertRaises(ConfigurationError):
+                render_esp_sync_hook(bad, False)
+
+
+class EspSyncInstallTests(unittest.TestCase):
+    def install(self, m, fallback=False):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            configurer(root).install_esp_sync_hook(m, fallback)
+            return {hook: ((root / hook).read_text(), (root / hook).stat().st_mode & 0o777) for hook in ESP_SYNC_HOOKS if (root / hook).exists()}
+
+    def test_hook_is_installed_for_both_installkernel_flavours(self) -> None:
+        installed = self.install(target_manifest(system={"bootloader": "systemd-boot"}))
+        self.assertEqual(set(installed), set(ESP_SYNC_HOOKS))
+        for text, mode in installed.values():
+            self.assertEqual(mode, 0o755)
+            self.assertIn('ESP="/efi"', text)
+            self.assertIn("UKI=0", text)
+
+    def test_manual_esp_mount_and_uki_are_baked_in(self) -> None:
+        from gentoo_installer.manifest import Partition
+
+        m = target_manifest(system={"bootloader": "efi-stub", "uki": True}, storage={"mode": "manual", "partitions": [Partition("/dev/sda3", "/", "ext4"), Partition("/dev/sda1", "/boot/efi", "vfat")]})
+        text, _ = next(iter(self.install(m, fallback=True).values()))
+        self.assertIn('ESP="/boot/efi"', text)
+        self.assertIn("UKI=1", text)
+        self.assertIn("FALLBACK_COPY=1", text)
+
+    def test_secure_boot_installs_get_no_hook_because_updates_would_be_unsigned(self) -> None:
+        m = target_manifest(system={"bootloader": "systemd-boot", "uki": True, "secure_boot": True})
+        self.assertEqual(self.install(m), {})
+
+    def test_the_bootloader_stage_installs_it_for_non_grub_bootloaders_only(self) -> None:
+        for bootloader, uki, expected in (("grub", False, False), ("grub", True, True), ("systemd-boot", False, True), ("efi-stub", False, True)):
+            with self.subTest(bootloader=bootloader, uki=uki), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                populate_boot(root)
+                runner = ScriptedRunner()
+                runner.respond("lsblk --noheadings --output PARTN", "1\n")
+                runner.respond("lsblk --noheadings --output PKNAME", "sda\n")
+                runner.respond("blkid", "1234-ABCD\n")
+                m = target_manifest(system={"bootloader": bootloader, "uki": uki})
+                configurer(root, runner).configure_bootloader(m, "/dev/sda3", "/dev/sda1")
+                self.assertEqual(all((root / hook).exists() for hook in ESP_SYNC_HOOKS), expected)
+
+    def test_kernel_images_named_by_the_systemd_compat_layout_are_found(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "boot").mkdir()
+            (root / "boot/kernel-6.12.0").write_bytes(b"compat kernel")
+            (root / "boot/initramfs-6.12.0.img").write_bytes(b"initramfs")
+            configurer(root).configure_bootloader(target_manifest(system={"bootloader": "systemd-boot"}), "/dev/sda3", "/dev/sda1")
+            self.assertEqual((root / "efi/vmlinuz").read_bytes(), b"compat kernel")
 
 
 class ReceiptTests(unittest.TestCase):

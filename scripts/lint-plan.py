@@ -120,6 +120,7 @@ class Cell:
     desktop: str = "kde"
     overrides: tuple[tuple[str, Any], ...] = ()  # ("section.field", value)
     note: str = ""
+    known_findings: bool = False  # a limitation outside this tool's scope; only run when named explicitly
 
     def manifest(self):
         from gentoo_installer.manifest import InstallManifest
@@ -162,8 +163,28 @@ def extended_cells() -> list[Cell]:
              (("options.flatpak", True), ("options.ssh", True), ("options.file_indexing", True), ("system.console_font", "ter-132b"))),
         Cell("xfce-systemd-networkd", "systemd", "xfce", (("network.manager", "systemd-networkd"),)),
         Cell("kde-openrc-dhcpcd", "openrc", "kde", (("network.manager", "dhcpcd"),)),
+        Cell("kde-openrc-quiet", "openrc", "kde", (("options.bluetooth", False), ("options.printing", False), ("options.pipewire", False))),
+        Cell("minimal-openrc-bluetooth-printing-audio", "openrc", "minimal",
+             (("options.bluetooth", True), ("options.printing", True), ("options.pipewire", True)), "graphical-only packages stay out"),
+        Cell("minimal-systemd-bluetooth-printing-audio", "systemd", "minimal",
+             (("options.bluetooth", True), ("options.printing", True), ("options.pipewire", True))),
+        Cell("kde-systemd-sdboot-uki", "systemd", "kde", (("system.bootloader", "systemd-boot"), ("system.uki", True))),
+        Cell("minimal-openrc-hardened", "openrc", "minimal", (("system.stage_variant", "amd64-hardened-openrc"),)),
+        Cell("minimal-openrc-nomultilib", "openrc", "minimal",
+             (("system.multilib", False), ("system.stage_variant", "amd64-nomultilib-openrc"), ("options.install_hwmonux", False),
+              ("options.install_portagehub", False))),
     ]
     return default_cells() + extra
+
+
+def known_limitation_cells() -> list[Cell]:
+    """Combinations that cannot resolve today because the published profiles have no desktop settings."""
+    note = "profile without desktop settings (no-multilib/hardened have no desktop variant)"
+    return [
+        Cell("kde-openrc-nomultilib", "openrc", "kde", (("system.multilib", False), ("system.stage_variant", "amd64-nomultilib-openrc")), note, True),
+        Cell("xfce-openrc-nomultilib", "openrc", "xfce", (("system.multilib", False), ("system.stage_variant", "amd64-nomultilib-openrc")), note, True),
+        Cell("kde-openrc-hardened", "openrc", "kde", (("system.stage_variant", "amd64-hardened-openrc"),), note, True),
+    ]
 
 
 def select_cells(spec: str) -> list[Cell]:
@@ -171,7 +192,7 @@ def select_cells(spec: str) -> list[Cell]:
         return default_cells()
     if spec == "all":
         return extended_cells()
-    available = {cell.name: cell for cell in extended_cells()}
+    available = {cell.name: cell for cell in [*extended_cells(), *known_limitation_cells()]}
     chosen = []
     for name in (part.strip() for part in spec.split(",") if part.strip()):
         if name not in available:
@@ -533,8 +554,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Iterable[str] | None = None, out: Callable[[str], None] = print) -> int:
     args = build_parser().parse_args(list(argv) if argv is not None else None)
     if args.list:
-        for cell in extended_cells():
-            out(f"{cell.name:38} {cell.init:8} {cell.desktop:8} {cell.note}")
+        for cell in [*extended_cells(), *known_limitation_cells()]:
+            out(f"{cell.name:42} {cell.init:8} {cell.desktop:8} {cell.note}")
         return 0
     if not portage_available():
         out("lint-plan: the Portage Python API (sys-apps/portage) is not importable here")
