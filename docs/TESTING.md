@@ -190,10 +190,12 @@ the graphical check of `--live-only`. `text-install` uses `--boot-entry text`.
 starts `gentoo-installer-text` or `gentoo-rescue` by itself on tty1 (`gentoo.autostart=`): such an
 installer would compete with the one the harness runs over SSH. `text-installer` and `rescue` are
 the names for those autostart entries, matched by title (`ALIASES` in `scripts/vm_iso.py`); the
-menu of `iso/cd_overlay/boot/grub/grub.cfg.in` has neither yet, so they match nothing until it does.
+menu of `iso/cd_overlay/boot/grub/grub.cfg.in` has both ("Install in text mode" and "Repair a system (text console)").
 The text console entry also asks for a keyboard layout; the initramfs waits ten seconds for an
 answer and then goes on, which the boot timeout covers. The ISOs built before Wave 1 (`dist/test*`)
-have only three "Boot LiveCD" entries, so every entry except `default` is missing there.
+have only three "Boot LiveCD" entries, so every entry except `default` is missing there. They are test
+images with a root login and are named like the release: move them out of `dist/` (for example to
+`build/test-dist/`) so that nothing which publishes `dist/` takes them along.
 
 ### What is checked after an install
 

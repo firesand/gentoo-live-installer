@@ -46,7 +46,7 @@ def test_test_key_cannot_use_a_directory_inside_dist_either(stubs, key_file: Pat
 
 
 def test_a_neighbour_of_dist_is_not_inside_dist(stubs, key_file: Path) -> None:
-    """The rule is about the directory tree, not about the spelling: dist-test and a file name that starts with dist are fine."""
+    """The rule is about the directory tree, not about the spelling: dist-test and a directory whose name only starts with dist are fine."""
     for neighbour in ("dist-test", "distribution", "build/test-dist"):
         result = stubs.run("--check", "--test-key-file", str(key_file), extra_env={"ISO_DIST_DIR": str(ROOT / neighbour)})
         assert result.returncode == 0, (neighbour, result.stderr)
