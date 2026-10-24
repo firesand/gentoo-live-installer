@@ -749,9 +749,18 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
         if let Some(why) = &blocked {
             w::callout(ui, ORANGE, icon::LOCK, why);
         }
+        for (f, problem) in &mc.problems {
+            w::callout(ui, ORANGE, icon::WARNING, &format!("{}: {problem}. Portage cannot read the file as it is: fix it in the text editor at the bottom of this page first.", f.display()));
+        }
+        if !mc.sourced.is_empty() {
+            let names = mc.sourced.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ");
+            w::callout(ui, ACCENT, icon::INFO, &format!("make.conf also reads {names} (source): variables may come from there too and override what is shown here."));
+        }
         let mut set = |app: &mut App, name: &str, value: String| {
-            let new = makeconf::set_var(&text, name, &value);
-            app.push(Action::Write { title: format!("Set {name} in make.conf"), changes: vec![FileChange { path: file.clone(), old: text.clone(), new: Some(new) }], reload: vec![Reload::MakeConf, Reload::Env], then: None });
+            match makeconf::set_var(&text, name, &value) {
+                Ok(new) => app.push(Action::Write { title: format!("Set {name} in make.conf"), changes: vec![FileChange { path: file.clone(), old: text.clone(), new: Some(new) }], reload: vec![Reload::MakeConf, Reload::Env], then: None }),
+                Err(why) => app.toast(crate::app::ToastKind::Error, why),
+            }
         };
         let editable = |name: &str| blocked.is_none() && mc.last(name).is_none_or(|a| !a.self_ref && a.file == file);
 

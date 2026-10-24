@@ -27,6 +27,11 @@ pub struct MakeConf {
     pub unreadable: Vec<(PathBuf, String)>,
     /// Files that are symlinks: read as usual, but the helper never writes through one.
     pub symlinks: Vec<PathBuf>,
+    /// Files pulled in with `source` (or `.`): Portage reads their variables too, so a value shown
+    /// here may be overridden there.
+    pub sourced: Vec<PathBuf>,
+    /// Parts of a file that could not be understood (an unterminated quote), with the file.
+    pub problems: Vec<(PathBuf, String)>,
 }
 
 impl MakeConf {
@@ -109,86 +114,156 @@ fn expand(s: &str, vars: &HashMap<String, String>) -> String {
     out
 }
 
-/// Parse assignments in `text`. Returns (name, raw value, span).
-pub fn scan(text: &str) -> Vec<(String, String, (usize, usize))> {
-    let bytes = text.as_bytes();
-    let mut out = Vec::new();
+/// What a make.conf contains: assignments, `source`d files, and what could not be understood.
+#[derive(Debug, Default)]
+pub struct Scan {
+    /// (name, value as written with the quotes removed, byte span from the name to the end of the value).
+    pub assignments: Vec<(String, String, (usize, usize))>,
+    /// Paths named by `source` / `.` lines, as written.
+    pub sources: Vec<String>,
+    /// Set when a quote is never closed: nothing after it can be trusted and no edit should be built.
+    pub problem: Option<String>,
+}
+
+fn is_blank(b: u8) -> bool {
+    b == b' ' || b == b'\t'
+}
+
+fn is_space(b: u8) -> bool {
+    is_blank(b) || b == b'\n' || b == b'\r'
+}
+
+/// Index just past the character that starts at `i` (backslash escapes may escape a multi-byte one).
+fn after_char(text: &str, i: usize) -> usize {
+    text[i..].chars().next().map_or(i + 1, |c| i + c.len_utf8())
+}
+
+fn line_of(text: &str, at: usize) -> usize {
+    text.as_bytes()[..at.min(text.len())].iter().filter(|b| **b == b'\n').count() + 1
+}
+
+/// Read one shell-style word starting at `start`: quoted and unquoted pieces glued together,
+/// backslash escapes (also backslash-newline) kept raw for [`expand`]. Returns the raw value, the
+/// index after the word, and whether every quote was closed.
+fn read_word(text: &str, start: usize) -> (String, usize, bool) {
+    let b = text.as_bytes();
+    let mut i = start;
+    let mut value = String::new();
+    while i < b.len() && !is_space(b[i]) {
+        match b[i] {
+            q @ (b'"' | b'\'') => {
+                i += 1;
+                let from = i;
+                while i < b.len() && b[i] != q {
+                    // Inside double quotes a backslash protects the next character, e.g. `\"`.
+                    i = if q == b'"' && b[i] == b'\\' && i + 1 < b.len() { after_char(text, i + 1) } else { after_char(text, i) };
+                }
+                if i >= b.len() {
+                    return (value, b.len(), false);
+                }
+                value.push_str(&text[from..i]);
+                i += 1;
+            }
+            b'\\' if i + 1 < b.len() => {
+                let end = after_char(text, i + 1);
+                value.push_str(&text[i..end]);
+                i = end;
+            }
+            _ => {
+                let end = after_char(text, i);
+                value.push_str(&text[i..end]);
+                i = end;
+            }
+        }
+    }
+    (value, i, true)
+}
+
+/// Parse `text` the way Portage reads make.conf: words separated by blanks, so `export  A=1`,
+/// `A = 1`, two assignments on a line, values with escaped blanks (`A=a\ b`), backslash-newline
+/// continuations and quotes spanning lines are all one assignment each; `source file` is noted.
+pub fn scan_text(text: &str) -> Scan {
+    let b = text.as_bytes();
+    let n = b.len();
+    let mut out = Scan::default();
     let mut i = 0;
-    while i < bytes.len() {
-        // At line start: skip whitespace
-        let line_start = i;
-        while i < bytes.len() && (bytes[i] == b' ' || bytes[i] == b'\t') {
+    let skip_line = |mut i: usize| {
+        while i < n && b[i] != b'\n' {
             i += 1;
         }
-        if i >= bytes.len() {
-            break;
-        }
-        if bytes[i] == b'#' || bytes[i] == b'\n' {
-            while i < bytes.len() && bytes[i] != b'\n' {
-                i += 1;
-            }
+        i
+    };
+    while i < n {
+        if is_space(b[i]) {
             i += 1;
             continue;
         }
-        if text[i..].starts_with("export ") {
-            i += 7;
-        }
-        let name_start = i;
-        while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
-            i += 1;
-        }
-        if i == name_start || i >= bytes.len() || bytes[i] != b'=' {
-            while i < bytes.len() && bytes[i] != b'\n' {
-                i += 1;
-            }
-            i += 1;
+        if b[i] == b'#' {
+            i = skip_line(i);
             continue;
         }
-        let name = text[name_start..i].to_string();
-        i += 1;
-        let mut value = String::new();
-        // Concatenation of quoted/unquoted segments until whitespace/newline.
-        while i < bytes.len() && bytes[i] != b'\n' && bytes[i] != b' ' && bytes[i] != b'\t' {
-            match bytes[i] {
-                b'"' => {
-                    i += 1;
-                    let s = i;
-                    while i < bytes.len() && bytes[i] != b'"' {
-                        if bytes[i] == b'\\' {
-                            i += 1;
-                        }
-                        i += 1;
-                    }
-                    value.push_str(&text[s..i.min(bytes.len())]);
-                    i += 1;
-                }
-                b'\'' => {
-                    i += 1;
-                    let s = i;
-                    while i < bytes.len() && bytes[i] != b'\'' {
-                        i += 1;
-                    }
-                    value.push_str(&text[s..i.min(bytes.len())]);
-                    i += 1;
-                }
-                _ => {
-                    let s = i;
-                    while i < bytes.len() && !matches!(bytes[i], b'\n' | b' ' | b'\t' | b'"' | b'\'') {
-                        i += 1;
-                    }
-                    value.push_str(&text[s..i]);
-                }
+        let mut j = i;
+        while j < n && (b[j].is_ascii_alphanumeric() || b[j] == b'_') {
+            j += 1;
+        }
+        let key = &text[i..j];
+        // `export NAME=…` and `source file` / `. file`: keywords only when followed by a blank.
+        if (key == "export" || key == "source") && j < n && is_blank(b[j]) || (j == i && b[i] == b'.' && i + 1 < n && is_blank(b[i + 1])) {
+            let after_keyword = if j == i { i + 1 } else { j };
+            let mut k = after_keyword;
+            while k < n && is_blank(b[k]) {
+                k += 1;
             }
+            if key == "export" {
+                i = k;
+                continue;
+            }
+            if k < n && !is_space(b[k]) && b[k] != b'#' {
+                let (path, end, closed) = read_word(text, k);
+                if closed {
+                    out.sources.push(path);
+                }
+                i = end.max(k + 1);
+            } else {
+                i = k;
+            }
+            continue;
         }
-        // rest of the line (trailing comment)
-        while i < bytes.len() && bytes[i] != b'\n' {
-            i += 1;
+        let mut k = j;
+        while k < n && is_blank(b[k]) {
+            k += 1;
         }
-        let end = i.min(bytes.len());
-        out.push((name, value, (line_start, end)));
-        i += 1;
+        if key.is_empty() || key.as_bytes()[0].is_ascii_digit() || k >= n || b[k] != b'=' {
+            // Not an assignment: step over the word.
+            let (_, end, _) = read_word(text, i);
+            i = end.max(i + 1);
+            continue;
+        }
+        k += 1;
+        let mut v = k;
+        while v < n && is_blank(b[v]) {
+            v += 1;
+        }
+        if v >= n || b[v] == b'\n' || b[v] == b'\r' || (v > k && b[v] == b'#') {
+            out.assignments.push((key.to_string(), String::new(), (i, k)));
+            i = v;
+            continue;
+        }
+        let (value, end, closed) = read_word(text, v);
+        if !closed {
+            out.problem.get_or_insert_with(|| format!("a quote opened on line {} is never closed", line_of(text, v)));
+            i = skip_line(v);
+            continue;
+        }
+        out.assignments.push((key.to_string(), value, (i, end)));
+        i = end;
     }
     out
+}
+
+/// Parse assignments in `text`. Returns (name, raw value, span).
+pub fn scan(text: &str) -> Vec<(String, String, (usize, usize))> {
+    scan_text(text).assignments
 }
 
 pub fn load() -> MakeConf {
@@ -219,7 +294,13 @@ pub fn load() -> MakeConf {
                 continue;
             }
         };
-        for (name, value, span) in scan(&text) {
+        let parsed = scan_text(&text);
+        let dir = f.parent().unwrap_or(Path::new("/"));
+        mc.sourced.extend(parsed.sources.iter().map(|p| if Path::new(p).is_absolute() { PathBuf::from(p) } else { dir.join(p) }));
+        if let Some(problem) = parsed.problem {
+            mc.problems.push((f.clone(), problem));
+        }
+        for (name, value, span) in parsed.assignments {
             let expanded = expand(&value, &vars).split_whitespace().collect::<Vec<_>>().join(" ");
             let self_ref = value.contains(&format!("${{{name}}}")) || value.contains(&format!("${name}"));
             vars.insert(name.clone(), expanded.clone());
@@ -230,11 +311,17 @@ pub fn load() -> MakeConf {
     mc
 }
 
-/// Rewrite the last assignment of `name` in `text` (or append one).
-pub fn set_var(text: &str, name: &str, value: &str) -> String {
+/// Rewrite the last assignment of `name` in `text` (or append one). The whole assignment
+/// is replaced, however many lines it spans; what follows it on the line (a comment) stays. A file
+/// with an unclosed quote is refused: nothing after the quote can be told apart from its value.
+pub fn set_var(text: &str, name: &str, value: &str) -> Result<String, String> {
+    let scanned = scan_text(text);
+    if let Some(problem) = scanned.problem {
+        return Err(format!("make.conf cannot be edited here: {problem}. Fix it in the text editor first."));
+    }
     let quoted = format!("{name}=\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""));
-    let found = scan(text).into_iter().filter(|(n, v, _)| n == name && !v.contains(&format!("${{{name}}}"))).last();
-    match found {
+    let found = scanned.assignments.into_iter().filter(|(n, v, _)| n == name && !v.contains(&format!("${{{name}}}")) && !v.contains(&format!("${name}"))).next_back();
+    Ok(match found {
         Some((_, _, (s, e))) => format!("{}{}{}", &text[..s], quoted, &text[e..]),
         None => {
             let mut t = text.to_string();
@@ -245,7 +332,7 @@ pub fn set_var(text: &str, name: &str, value: &str) -> String {
             t.push('\n');
             t
         }
-    }
+    })
 }
 
 /// Description of well-known variables shown as help text.
@@ -322,14 +409,17 @@ mod tests {
         let names: Vec<_> = s.iter().map(|x| x.0.as_str()).collect();
         assert_eq!(names, vec!["COMMON_FLAGS", "CFLAGS", "MAKEOPTS", "USE", "USE"]);
         assert_eq!(s[2].1, "-j4");
-        let t2 = set_var(t, "MAKEOPTS", "-j16 -l30");
+        let t2 = set_var(t, "MAKEOPTS", "-j16 -l30").unwrap();
         assert!(t2.contains("MAKEOPTS=\"-j16 -l30\"\n"));
         assert!(!t2.contains("-j4"));
+        assert!(t2.contains("export MAKEOPTS="), "export stays: {t2}");
         // self-referencing USE line is skipped, the plain one gets replaced
-        let t3 = set_var(t, "USE", "x y");
+        let t3 = set_var(t, "USE", "x y").unwrap();
         assert!(t3.contains("USE=\"x y\"\nUSE=\"${USE} b\""));
-        let t4 = set_var("A=1\n", "B", "2");
+        let t4 = set_var("A=1\n", "B", "2").unwrap();
         assert_eq!(t4, "A=1\nB=\"2\"\n");
+        // A comment after the assignment is not part of it.
+        assert_eq!(set_var("A=1 # keep me\n", "A", "2").unwrap(), "A=\"2\" # keep me\n");
     }
 
     #[test]
@@ -337,5 +427,104 @@ mod tests {
         let mut v = HashMap::new();
         v.insert("A".to_string(), "-O2".to_string());
         assert_eq!(expand("${A} -pipe $A", &v), "-O2 -pipe -O2");
+    }
+
+    /// Edit the variable `name` of `text` and check there is exactly one assignment of it left and
+    /// nothing of the old one (no stray continuation line, no leftover word).
+    fn edit_once(text: &str, name: &str) -> String {
+        let new = set_var(text, name, "NEW VALUE").unwrap();
+        let after = scan(&new);
+        assert_eq!(after.iter().filter(|a| a.0 == name).count(), 1, "{text:?} -> {new:?}");
+        assert_eq!(after.iter().find(|a| a.0 == name).unwrap().1, "NEW VALUE", "{new:?}");
+        assert!(scan_text(&new).problem.is_none(), "{new:?}");
+        new
+    }
+
+    #[test]
+    fn valid_shell_forms_are_one_assignment_each() {
+        // `export` followed by any run of blanks.
+        let s = scan("export  F=f\nexport\tG=g\n");
+        assert_eq!(s.iter().map(|a| (a.0.as_str(), a.1.as_str())).collect::<Vec<_>>(), vec![("F", "f"), ("G", "g")]);
+        assert_eq!(edit_once("export  F=f\n", "F"), "export  F=\"NEW VALUE\"\n");
+        // An escaped blank is part of the value.
+        let s = scan("J=foo\\ bar\nK=after\n");
+        assert_eq!((s[0].0.as_str(), s[0].1.as_str(), s[1].1.as_str()), ("J", "foo\\ bar", "after"));
+        assert_eq!(edit_once("J=foo\\ bar\nK=after\n", "J"), "J=\"NEW VALUE\"\nK=after\n");
+        // Backslash-newline continues an unquoted value.
+        let s = scan("A=a\\\nb\nC=c\n");
+        assert_eq!(s.len(), 2);
+        assert_eq!(edit_once("A=a\\\nb\nC=c\n", "A"), "A=\"NEW VALUE\"\nC=c\n");
+        // A quoted value may span lines, and so may a continuation inside it.
+        assert_eq!(edit_once("A=\"one\ntwo\"\nB=c\n", "A"), "A=\"NEW VALUE\"\nB=c\n");
+        assert_eq!(edit_once("FEATURES=\"parallel-fetch \\\n    candy\"\nB=1\n", "FEATURES"), "FEATURES=\"NEW VALUE\"\nB=1\n");
+        // Blanks around `=`, two assignments on a line, concatenated quoting.
+        let s = scan("A = b\nC= d\nE =f\nX=1 Y=2\nZ=\"a\"b'c'd\n");
+        assert_eq!(s.iter().map(|a| (a.0.as_str(), a.1.as_str())).collect::<Vec<_>>(), vec![("A", "b"), ("C", "d"), ("E", "f"), ("X", "1"), ("Y", "2"), ("Z", "abcd")]);
+        assert_eq!(edit_once("X=1 Y=2\n", "X"), "X=\"NEW VALUE\" Y=2\n");
+        assert_eq!(edit_once("A = b\n", "A"), "A=\"NEW VALUE\"\n");
+        // An empty value, CRLF line ends, indentation, a quoted `#`.
+        assert_eq!(scan("A=\nB=2\n").iter().map(|a| a.1.as_str()).collect::<Vec<_>>(), vec!["", "2"]);
+        assert_eq!(scan("A=1\r\nB=2\r\n").iter().map(|a| a.1.as_str()).collect::<Vec<_>>(), vec!["1", "2"]);
+        assert_eq!(scan("   A=1\n\tB=\"#2\"\n").iter().map(|a| a.1.as_str()).collect::<Vec<_>>(), vec!["1", "#2"]);
+        // Comments are not assignments, a `#` inside a word is part of it.
+        assert_eq!(scan("# A=1\nB=x#y\nC=2 # c\n").iter().map(|a| (a.0.as_str(), a.1.as_str())).collect::<Vec<_>>(), vec![("B", "x#y"), ("C", "2")]);
+        // Multi-byte text before and after an escape does not break the byte arithmetic.
+        let s = scan("A=\"héllo \\é wörld\"\nB=ü\\ü\n");
+        assert_eq!(s.len(), 2);
+        assert_eq!(edit_once("A=\"héllo\"\nB=ü\\ü x\n", "B"), "A=\"héllo\"\nB=\"NEW VALUE\" x\n");
+    }
+
+    #[test]
+    fn source_lines_are_noted_not_mistaken_for_assignments() {
+        let s = scan_text("A=1\nsource /etc/portage/extra.conf\n. rel/path.conf\nB=2\nsourced=3\nsource\n");
+        assert_eq!(s.sources, vec!["/etc/portage/extra.conf", "rel/path.conf"]);
+        assert_eq!(s.assignments.iter().map(|a| a.0.as_str()).collect::<Vec<_>>(), vec!["A", "B", "sourced"]);
+        assert!(s.problem.is_none());
+        let s = scan_text("source \"/with space/x.conf\" # c\nexport\nexport=1\n");
+        assert_eq!(s.sources, vec!["/with space/x.conf"]);
+        assert_eq!(s.assignments.iter().map(|a| a.0.as_str()).collect::<Vec<_>>(), vec!["export"], "`export=1` is a variable named export");
+    }
+
+    #[test]
+    fn an_unclosed_quote_is_reported_and_blocks_edits() {
+        let t = "A=1\nB=\"never closed\nC=3\n";
+        let s = scan_text(t);
+        assert_eq!(s.problem.as_deref(), Some("a quote opened on line 2 is never closed"));
+        assert_eq!(s.assignments[0].0, "A", "what is before the quote still reads: {:?}", s.assignments);
+        assert!(!s.assignments.iter().any(|a| a.0 == "B"), "the broken assignment itself is not one");
+        let e = set_var(t, "A", "9").unwrap_err();
+        assert!(e.contains("never closed") && e.contains("text editor"), "{e}");
+        // Nothing panics on odd input.
+        for odd in ["", "=", "A", "A=\"", "A='", "A=\\", "\\", "\"", "A=\"\\", "export", ". ", "#", "A=b\\", "é=1", "A=é\\"] {
+            let _ = scan_text(odd);
+        }
+    }
+
+    /// Variables as `load()` expands them.
+    fn evaluated(text: &str) -> std::collections::BTreeMap<String, String> {
+        let mut vars: HashMap<String, String> = HashMap::new();
+        for (name, value, _) in scan(text) {
+            let expanded = expand(&value, &vars).split_whitespace().collect::<Vec<_>>().join(" ");
+            vars.insert(name, expanded);
+        }
+        vars.into_iter().collect()
+    }
+
+    /// The same texts through `portage.util.getconfig` (tests/fixtures/makeconf.json).
+    #[test]
+    fn agrees_with_portage_on_the_fixture_cases() {
+        let rows: Vec<serde_json::Value> = serde_json::from_str(include_str!("../../tests/fixtures/makeconf.json")).unwrap();
+        assert!(rows.len() > 20);
+        let squash = |m: &std::collections::BTreeMap<String, String>| -> std::collections::BTreeMap<String, String> { m.iter().map(|(k, v)| (k.clone(), v.split_whitespace().collect::<Vec<_>>().join(" "))).collect() };
+        let mut wrong = Vec::new();
+        for row in &rows {
+            let text = row["text"].as_str().unwrap();
+            let want: std::collections::BTreeMap<String, String> = row["vars"].as_object().unwrap().iter().map(|(k, v)| (k.clone(), v.as_str().unwrap().to_string())).collect();
+            let got = evaluated(text);
+            if squash(&got) != squash(&want) {
+                wrong.push(format!("{text:?}\n   ours:    {got:?}\n   portage: {want:?}"));
+            }
+        }
+        assert!(wrong.is_empty(), "{} of {} differ:\n{}", wrong.len(), rows.len(), wrong.join("\n"));
     }
 }
