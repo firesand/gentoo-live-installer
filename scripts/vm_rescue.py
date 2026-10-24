@@ -360,7 +360,7 @@ class RescueDriver:
     """
 
     def __init__(self, run: Callable[[str, str, int], tuple[int, str]], *, transport: str = "auto", error: type[Exception] = RescueFlowError,
-                 command_timeout: int = 600, run_timeout: int = 1800) -> None:
+                 command_timeout: int = 600, run_timeout: int = 1800, prefix: str = "rescue") -> None:
         if transport not in ("auto", "daemon", "local"):
             raise ValueError(f"unknown transport {transport!r}")
         self.execute = run
@@ -368,7 +368,9 @@ class RescueDriver:
         self.error = error
         self.command_timeout = command_timeout
         self.run_timeout = run_timeout
+        self.prefix = prefix
         self.commands: list[dict[str, Any]] = []
+        self.counts: dict[str, int] = {}
 
     # -- plumbing -----------------------------------------------------------------------------------------------------
 
@@ -382,13 +384,19 @@ class RescueDriver:
 
     def call(self, name: str, *arguments: str, timeout: int | None = None, allow: Sequence[int] = (EXIT_OK,)) -> tuple[int, list[dict[str, Any]], str]:
         command = shlex.join(self.argv(*arguments))
-        code, output = self.execute(command, f"rescue-{name}.log", timeout or self.command_timeout)
+        self.counts[name] = self.counts.get(name, 0) + 1
+        log = f"{self.prefix}-{name}.log" if self.counts[name] == 1 else f"{self.prefix}-{name}-{self.counts[name]}.log"
+        code, output = self.execute(command, log, timeout or self.command_timeout)
         events = parse_cli_output(output)
-        self.commands.append({"step": name, "command": command, "exit": code, "events": len(events)})
+        self.commands.append({"step": name, "command": command, "exit": code, "events": len(events), "log": log})
         if code not in allow:
             reason = error_of(events)["message"] or last_line(output) or "no output"
-            raise self.error(f"gentoo-rescue {name} failed with exit status {code} ({EXIT_NAMES.get(code, 'unknown')}): {reason}; see rescue-{name}.log")
+            raise self.error(f"gentoo-rescue {name} failed with exit status {code} ({EXIT_NAMES.get(code, 'unknown')}): {reason}; see {log}")
         return code, events, output
+
+    def log_of(self, step: str) -> str:
+        """The log file of the latest command of this step."""
+        return next((entry["log"] for entry in reversed(self.commands) if entry["step"] == step), f"{self.prefix}-{step}.log")
 
     # -- the steps ----------------------------------------------------------------------------------------------------
 
@@ -396,7 +404,7 @@ class RescueDriver:
         _code, events, _output = self.call("scan", "scan", timeout=self.command_timeout)
         data = last_result(events, "candidates")
         if data is None:
-            raise self.error("gentoo-rescue scan printed no scan result; see rescue-scan.log")
+            raise self.error(f"gentoo-rescue scan printed no scan result; see {self.log_of('scan')}")
         return data
 
     def choose(self, scan: Mapping[str, Any], *, disk: str, os_id: str) -> dict[str, Any]:
@@ -417,7 +425,7 @@ class RescueDriver:
         _code, events, _output = self.call("mount", "mount", str(candidate["id"]), "--yes")
         data = last_result(events, "session_id")
         if data is None or not data.get("session_id"):
-            raise self.error("gentoo-rescue mount printed no session; see rescue-mount.log")
+            raise self.error(f"gentoo-rescue mount printed no session; see {self.log_of('mount')}")
         return data
 
     def diagnose(self, session: str, *, deep: bool = False) -> dict[str, Any]:
@@ -425,14 +433,14 @@ class RescueDriver:
         data = last_result(events, "query")
         findings = (data or {}).get("data") if isinstance((data or {}).get("data"), dict) else None
         if findings is None:
-            raise self.error("gentoo-rescue diagnose printed no findings; see rescue-diagnose.log")
+            raise self.error(f"gentoo-rescue diagnose printed no findings; see {self.log_of('diagnose')}")
         return findings
 
     def plan(self, session: str, action: str) -> dict[str, Any]:
         _code, events, _output = self.call("plan", "plan", session, action)
         data = last_result(events, "digest")
         if data is None:
-            raise self.error("gentoo-rescue plan printed no plan; see rescue-plan.log")
+            raise self.error(f"gentoo-rescue plan printed no plan; see {self.log_of('plan')}")
         failed = [item.get("text", "") for item in data.get("preconditions", []) if not item.get("ok", True)]
         if failed:
             raise self.error("the plan cannot run here: " + "; ".join(str(text) for text in failed))
@@ -448,17 +456,36 @@ class RescueDriver:
             raise self.error(f"gentoo-rescue plan {action} ended with exit status {code} ({EXIT_NAMES.get(code, 'unknown')}), not 7 (unsupported): {failure['message']}")
         return {"action": action, "exit": code, "code": failure["code"], "message": failure["message"] or clean_serial(output).strip()[-300:]}
 
+    def refused_run(self, session: str, action: str) -> dict[str, Any]:
+        """``run`` for a system the tool only diagnoses: it must be refused (exit 7) before anything is planned for real or executed."""
+        code, events, output = self.call(f"run-{action}", "run", session, action, "--confirm-plan", "0" * 64, allow=tuple(range(0, 256)))
+        failure = error_of(events)
+        if code != EXIT_UNSUPPORTED:
+            raise self.error(f"gentoo-rescue run {action} ended with exit status {code} ({EXIT_NAMES.get(code, 'unknown')}), not 7 (unsupported); a system that is only diagnosed must refuse")
+        if last_result(events, "outcome") is not None:
+            raise self.error(f"gentoo-rescue run {action} printed a result although it was refused")
+        return {"action": action, "exit": code, "code": failure["code"], "message": failure["message"] or clean_serial(output).strip()[-300:]}
+
+    def actions(self, session: str) -> list[dict[str, Any]]:
+        """What the tool offers for a session: id, availability and the reason when it is not available."""
+        _code, events, _output = self.call("actions", "actions", session)
+        data = last_result(events, "query")
+        listing = (data or {}).get("data") if isinstance((data or {}).get("data"), dict) else None
+        if listing is None or "actions" not in listing:
+            raise self.error(f"gentoo-rescue actions printed no list; see {self.log_of('actions')}")
+        return [dict(item) for item in listing["actions"]]
+
     def execute_plan(self, session: str, action: str, plan: Mapping[str, Any]) -> dict[str, Any]:
         """Run exactly the plan that was shown (its digest), with the confirmation its risk asks for."""
         _code, events, _output = self.call("run", "run", session, action, *confirmation_flags(plan), timeout=self.run_timeout, allow=(EXIT_OK, EXIT_FAILED))
         result = last_result(events, "outcome")
         if result is None:
-            raise self.error("gentoo-rescue run printed no result; see rescue-run.log")
+            raise self.error(f"gentoo-rescue run printed no result; see {self.log_of('run')}")
         failed = [f"{step.get('id')} (exit {step.get('rc')})" for step in result.get("steps", []) if step.get("status") == "failed"]
         bad_checks = [str(check.get("text")) for check in result.get("post_checks", []) if not check.get("ok")]
         if result.get("outcome") != "success":
             detail = "; ".join([*(f"step {item} failed" for item in failed), *(f"check failed: {text}" for text in bad_checks)]) or str(result.get("outcome"))
-            raise self.error(f"the repair ended with outcome {result.get('outcome')!r}: {detail}; see rescue-run.log")
+            raise self.error(f"the repair ended with outcome {result.get('outcome')!r}: {detail}; see {self.log_of('run')}")
         return result
 
     def audit(self, session: str) -> str:

@@ -70,13 +70,20 @@ def guest_tool_answer(remote: str, run_dir: Path) -> str:
     import shlex
     words = shlex.split(remote)
     command, payload = words[-2], json.loads(words[-1])
-    index = int(payload["role"].rsplit("-", 1)[1]) if payload.get("role", "").startswith("decoy-") else 1
+    role = payload.get("role", "")
+    index = int(role.rsplit("-", 1)[1]) if role.startswith(("decoy-", "data-")) else 1
     image = run_dir / f"extra-{index}.img"
     digest = hashlib.sha256(image.read_bytes()).hexdigest() if image.exists() else ""
     if command == "decoy-prepare":
         report = {"path": payload["path"], "partition": payload["path"] + "1", "size": payload["size"], "sha256": digest}
+    elif command == "partition-manual" and role.startswith("data-"):
+        report = {"path": payload["path"], "swap": payload["path"] + "1", "home": payload["path"] + "2"}
     elif command == "partition-manual":
         report = {"path": payload["path"], "boot": payload["path"] + "1", "root": payload["path"] + "2"}
+    elif command == "disk-hash":  # the disk's content is modelled by one file the rules may rewrite
+        state = run_dir / "fake-disk-state.txt"
+        report = {"path": payload["path"], "size": payload["size"],
+                  "sha256": hashlib.sha256(state.read_bytes() if state.exists() else b"pristine").hexdigest()}
     elif command == "decoy-check":
         report = {"path": payload["path"], "size": payload["size"], "sha256": digest, "unchanged": digest == payload["sha256"]}
     else:

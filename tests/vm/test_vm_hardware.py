@@ -294,7 +294,7 @@ def test_all_still_runs_exactly_the_four_validated_scenarios():
     assert set(vm.SCENARIOS) == set(vm.SCENARIO_MAP) and len(vm.SCENARIOS) > 8
 
 
-@pytest.mark.parametrize("name", sorted(vm.SCENARIO_MAP))
+@pytest.mark.parametrize("name", sorted(name for name, scenario in vm.SCENARIO_MAP.items() if not scenario.image))
 def test_every_scenario_is_a_valid_machine_and_a_valid_manifest(name):
     scenario = vm.SCENARIO_MAP[name]
     assert scenario.hardware.problems() == [] and vm.hardware_problems(scenario, "cli") == []
@@ -306,6 +306,16 @@ def test_every_scenario_is_a_valid_machine_and_a_valid_manifest(name):
         assert manifest.storage.firmware == scenario.firmware and manifest.storage.table == scenario.resolved_table
         assert manifest.storage.filesystem == scenario.filesystem and manifest.system.bootloader == scenario.bootloader
         assert manifest.hardware.target == scenario.hw_target and manifest.hardware.guest_tools == scenario.guest_tools
+
+
+@pytest.mark.parametrize("name", sorted(name for name, scenario in vm.SCENARIO_MAP.items() if scenario.image))
+def test_image_scenarios_are_valid_machines_that_boot_a_known_image_and_install_nothing(name):
+    scenario = vm.SCENARIO_MAP[name]
+    assert scenario.hardware.problems() == [] and vm.hardware_problems(scenario, "cli") == []
+    assert scenario.image in vm.vm_rescue.IMAGES and not scenario.in_all and scenario.repair in {"cli", "refuse"}
+    assert all(mode in vm.vm_rescue.BREAK_MODES for mode in scenario.breaks)
+    assert (scenario.repair == "refuse") == (not vm.vm_rescue.IMAGES[scenario.image].repairable)
+    assert scenario.firmware == "uefi" and not scenario.luks and not scenario.manual
 
 
 def test_the_validated_scenarios_stay_free_of_hypervisor_tooling_and_fixed_by_hand():

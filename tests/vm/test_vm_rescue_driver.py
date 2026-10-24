@@ -394,6 +394,26 @@ def test_a_plan_that_must_be_refused_is_refused_with_exit_seven_and_nothing_else
         vm_rescue.RescueDriver(Script((3, refused))).refusal("r1", "repair.recommended")
 
 
+def test_every_command_gets_its_own_log_so_a_second_plan_never_mixes_with_the_first():
+    script = Script((0, result({"candidates": []})), (0, result({"candidates": []})))
+    driver = vm_rescue.RescueDriver(script, prefix="rescue-initramfs")
+    driver.scan()
+    driver.scan()
+    assert [asked[1] for asked in script.asked] == ["rescue-initramfs-scan.log", "rescue-initramfs-scan-2.log"]
+    assert driver.log_of("scan") == "rescue-initramfs-scan-2.log" and driver.log_of("run") == "rescue-initramfs-run.log"
+
+
+def test_a_run_that_was_not_refused_is_an_error():
+    ran = result({"outcome": "success", "steps": []})
+    with pytest.raises(vm_rescue.RescueFlowError, match="not 7"):
+        vm_rescue.RescueDriver(Script((0, ran))).refused_run("r1", "boot.config")
+
+
+def test_an_action_list_without_actions_is_an_error():
+    with pytest.raises(vm_rescue.RescueFlowError, match="printed no list"):
+        vm_rescue.RescueDriver(Script((0, result({"query": "actions.list", "data": {}})))).actions("r1")
+
+
 # --- the driver against the real command line ---------------------------------------------------------------------------------
 
 def lab_runner(lab: Lab):
@@ -492,6 +512,10 @@ def test_a_system_the_tool_only_diagnoses_refuses_every_repair(make_lab):
         assert evidence["exit"] == 7 and evidence["code"] == "rescue.unsupported_action" and "Arch" in evidence["message"], evidence
     with pytest.raises(vm_rescue.RescueFlowError, match="exit status 7 .unsupported."):
         driver.execute_plan(session["session_id"], "repair.recommended", {"digest": "0" * 64, "confirm": {}})
+    assert driver.refused_run(session["session_id"], "boot.bootloader")["code"] == "rescue.unsupported_action"
+    offered = {item["id"]: item for item in driver.actions(session["session_id"])}
+    for action in ("repair.recommended", "boot.config", "boot.bootloader", "boot.initramfs", "boot.kernel", "fstab.fix", "pkg.finish"):
+        assert offered[action]["available"] is False and "Arch" in offered[action]["reason"], action
     driver.unmount(session["session_id"])
     assert not lab.system.chroot_calls, "a refusal runs nothing of the system"
 

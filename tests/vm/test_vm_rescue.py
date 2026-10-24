@@ -85,7 +85,8 @@ def test_the_fstab_defect_is_proven_by_findmnt_not_by_a_failed_boot(lab):
     assert lab.run("--scenario", "bios", "--rescue-break", "fstab-uuid") == 0
     rescue = lab.result()["rescue"]
     assert rescue["broken"]["proof"] == "findmnt --verify" and rescue["broken"]["exit"] == 1
-    assert len(list(lab.run_dir().glob("fake-qemu-argv-*.json"))) == 2  # no third boot was needed
+    boots = sorted(path.name for path in lab.run_dir().glob("fake-qemu-argv-target-[0-9]*.json"))
+    assert boots == ["fake-qemu-argv-target-1.json"]  # the installed disk booted once (before the break): the fstab damage needed no boot to prove it
 
 
 def test_a_fstab_break_that_findmnt_accepts_is_rejected(lab):

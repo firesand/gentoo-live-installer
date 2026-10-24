@@ -11,6 +11,7 @@ import os
 import socket
 import stat
 import sys
+import types
 from pathlib import Path
 
 from tests.vm.helpers import PUBLIC_KEY
@@ -61,11 +62,63 @@ def free_port() -> int:
         return probe.getsockname()[1]
 
 
+WORLD_CLEAN = "\nCalculating dependencies... done!\n\nNothing to merge; quitting.\n"
+
+
+def scenario_manifest(vm, scenario_name: str, firmware: str | None = None):
+    """The manifest the harness builds for the scenario (on the other firmware when ``firmware`` says so)."""
+    import dataclasses
+
+    scenario = vm.SCENARIO_MAP[scenario_name]
+    if firmware and firmware != scenario.firmware:
+        scenario = dataclasses.replace(scenario, firmware=firmware)
+    return vm.build_manifest(scenario, PUBLIC_KEY)
+
+
+def receipt_for(vm, scenario_name: str, firmware: str | None = None) -> str:
+    """The install receipt the product itself writes (Configurer.build_receipt) for the scenario's manifest."""
+    from gentoo_installerd.configure import Configurer
+
+    manifest = scenario_manifest(vm, scenario_name, firmware)
+    configurer = Configurer(types.SimpleNamespace(run=lambda *args, **options: None), "/nonexistent", dry_run=True)
+    receipt = configurer.build_receipt(
+        manifest, root_uuid="0a1b2c3d-1111-2222-3333-444455556666", luks_uuid="feedface-0000-1111-2222-333344445555" if manifest.storage.luks else "",
+        root_filesystem=manifest.storage.filesystem if manifest.storage.mode == "erase" else "ext4", boot_separate=bool(manifest.storage.luks))
+    return json.dumps(receipt, indent=2) + "\n"
+
+
+GUEST_TOOLS = ("app-emulation/qemu-guest-agent", "app-emulation/spice-vdagent", "app-emulation/open-vm-tools", "app-emulation/virtualbox-guest-additions")
+
+
+def hardware_plan_for(vm, scenario_name: str, firmware: str | None = None) -> dict:
+    """The hardware plan of the scenario's manifest on a QEMU guest (the product's own planner)."""
+    from gentoo_installerd import hwplan
+    from tests.hardware.helpers import fixture_dict
+
+    return hwplan.plan(scenario_manifest(vm, scenario_name, firmware), fixture_dict("qemu-q35-virtio")).to_dict()
+
+
+def package_database(plan: dict) -> str:
+    """What the package check prints on a machine where every package of the plan was installed (and nothing else)."""
+    wanted = {atom for field in ("early_atoms", "driver_atoms", "required_atoms", "optional_atoms") for atom in plan.get(field, [])}
+    return "".join(f"{'installed' if atom in wanted else 'absent'} {atom}\n" for atom in ("sys-firmware/intel-microcode", *GUEST_TOOLS))
+
+
+def layout_output(vm, scenario_name: str) -> str:
+    """What findmnt and swapon print on a machine laid out exactly as the scenario's manual manifest says."""
+    manifest = vm.build_manifest(vm.SCENARIO_MAP[scenario_name], PUBLIC_KEY, data_disks=[("/dev/vdb", "GENTOO-VM-EXTRA-1")])
+    rows = manifest.storage.partitions
+    mounts = "".join(f"{row.mountpoint} {row.device}\n" for row in rows if row.mountpoint)
+    swaps = "".join(f"{row.device}\n" for row in rows if row.filesystem == "swap")
+    return mounts + "---\n" + swaps
+
+
 def guest_rules(vm, scenario_name: str, *, guard: str = "vm_disk_guard", install: list | None = None,
                 companions: bool = True, extra: list | None = None, guard_options: dict | bool = True,
-                swap_mib: int = 512) -> list[dict]:
+                swap_mib: int = 512, firmware: str | None = None) -> list[dict]:
     """Rules for a guest that installs and boots successfully, in the order the harness needs them."""
     scenario = vm.SCENARIO_MAP[scenario_name]
+    plan = hardware_plan_for(vm, scenario_name, firmware)
     init = "systemd" if scenario.init == "systemd" else "init"
     target_ready = {"user": "^vmtest$", "match": "^true$"}
     if scenario.luks:
@@ -76,7 +129,9 @@ def guest_rules(vm, scenario_name: str, *, guard: str = "vm_disk_guard", install
         target_ready,
         {"user": "^vmtest$", "match": "^true$", "rc": 255},
         {"user": "^root$", "match": guard, "guard": guard_options},
-        {"user": "^root$", "match": r"(?:decoy-prepare|decoy-check|partition-manual) '\{", "guest_tool": True},
+        {"user": "^root$", "match": r"(?:decoy-prepare|decoy-check|partition-manual|disk-hash) '\{", "guest_tool": True},
+        {"user": "^root$", "match": r"^cat /var/log/gentoo-installerd\.log$", "stdout": "daemon stderr\n"},
+        {"user": "^root$", "match": r"^cat /var/lib/gentoo-installer/hardware-plan\.json$", "stdout": json.dumps(plan) + "\n"},
         {"user": "^root$", "match": r"^cat > /run/gentoo-installer-vm-manifest\.json$", "stdin_to": "manifest.json"},
         {"user": "^root$", "match": r"^gentoo-installerd --manifest \S+ --yes$", "events": install or EVENT_STREAM},
         {"user": "^root$", "match": r"^gentoo-installerd --manifest \S+ --yes --resume$", "events": RESUME_STREAM},
@@ -98,7 +153,13 @@ def guest_rules(vm, scenario_name: str, *, guard: str = "vm_disk_guard", install
         {"user": "^vmtest$", "match": r"^cat /proc/cmdline$", "stdout": cmdline + "\n"},
         {"user": "^vmtest$", "match": r"^findmnt -no SOURCE /$",
          "stdout": ("/dev/mapper/gentoo-root" if scenario.luks else "/dev/vda2") + "\n"},
-        {"user": "^vmtest$", "match": r"^swapon ", "stdout": f"/dev/vda3 partition {swap_mib * 2**20 - 4096}\n"},
+        {"user": "^vmtest$", "match": r"^swapon --noheadings --bytes", "stdout": (f"/swapfile file {swap_mib * 2**20}\n" if scenario.luks
+                                                                          else f"/dev/vda3 partition {swap_mib * 2**20 - 4096}\n")},
+        {"user": "^vmtest$", "match": r"^cat /etc/gentoo-live-installer/install\.json$", "stdout": receipt_for(vm, scenario_name, firmware)},
+        {"user": "^vmtest$", "match": r"BOOTX64\.EFI$", "stdout": json.dumps({"path": "/efi/EFI/BOOT/BOOTX64.EFI", "size": 120832, "magic": "MZ"}) + "\n"},
+        {"user": "^vmtest$", "match": r"emerge --color=n -pvuDN @world$", "stdout": WORLD_CLEAN},
+        {"user": "^vmtest$", "match": r"^findmnt -rno TARGET,SOURCE", "stdout": layout_output(vm, scenario_name) if scenario.manual else ""},
+        {"user": "^vmtest$", "match": r"^sh -c .* sh sys-firmware/intel-microcode", "stdout": package_database(plan)},
     ]
     rules.append({"user": "^vmtest$", "match": r"/var/db/pkg/", "stdout": "plasma-meta\n"})
     if companions:

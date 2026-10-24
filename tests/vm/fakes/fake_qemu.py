@@ -8,10 +8,16 @@ what it saw next to itself, and exits on SIGTERM, on QMP ``quit`` or after a scr
 
 Behaviour comes from the JSON file named by FAKE_QEMU_CONFIG (all keys optional):
   serial_text_target / serial_text_live   text written to every serial client after it connects
+  serial_rules                            a list of rules, the first that matches this start decides the serial text and when the
+                                          fake powers off. A rule may have: phase ("live" | "target"), firmware ("uefi" | "bios"),
+                                          boot (1-based number of this start within its phase), requires / absent (files in the run
+                                          directory, which is the working directory), text, touch (files to create), exit_after, exit_code
   unlock_line                             a serial line that creates ./fake-unlocked
   exit_after                              seconds until the fake "powers off" by itself
   exit_code                               exit status used when it powers off (default 0)
   fail_to_start                           print this to stderr and exit 1 before any socket exists
+
+Every start is recorded as fake-qemu-argv-<phase>.json (the latest) and fake-qemu-argv-<phase>-<n>.json.
 """
 from __future__ import annotations
 
@@ -52,8 +58,22 @@ def append(name: str, text: str) -> None:
         stream.write(text)
 
 
-def serve_serial(server: socket.socket, live: bool) -> None:
-    banner = CONFIG.get("serial_text_live" if live else "serial_text_target", "")
+def matching_rule(phase: str, firmware: str, boot: int) -> dict:
+    """The first serial rule of the configuration that applies to this start ({} when none does)."""
+    for rule in CONFIG.get("serial_rules", []):
+        if rule.get("phase") not in (None, phase) or rule.get("firmware") not in (None, firmware) or rule.get("boot") not in (None, boot):
+            continue
+        if rule.get("requires") and not Path(rule["requires"]).exists():
+            continue
+        if rule.get("absent") and Path(rule["absent"]).exists():
+            continue
+        return rule
+    return {}
+
+
+def serve_serial(server: socket.socket, live: bool, banner: str | None = None) -> None:
+    if banner is None:
+        banner = CONFIG.get("serial_text_live" if live else "serial_text_target", "")
     while not STOP.is_set():
         try:
             client, _ = server.accept()
@@ -123,17 +143,26 @@ def main() -> int:
         return 1
     live = any("media=cdrom" in value for value in option_values(argv, "-drive"))
     phase = "live" if live else "target"
+    counter = Path(f"fake-qemu-boots-{phase}.txt")
+    boot = (int(counter.read_text()) if counter.exists() else 0) + 1
+    counter.write_text(str(boot))
     Path(f"fake-qemu-argv-{phase}.json").write_text(json.dumps(argv, indent=2))
+    Path(f"fake-qemu-argv-{phase}-{boot}.json").write_text(json.dumps(argv, indent=2))
     Path(f"fake-qemu-pid-{phase}.txt").write_text(str(os.getpid()))
+    firmware = "uefi" if any("if=pflash" in value for value in option_values(argv, "-drive")) else "bios"
+    rule = matching_rule(phase, firmware, boot)
+    for name in rule.get("touch", []):
+        Path(name).write_text("1")
     serial_path, qmp_path = parse_sockets(argv)
     servers = [listen(serial_path), listen(qmp_path)]
-    threading.Thread(target=serve_serial, args=(servers[0], live), daemon=True).start()
+    threading.Thread(target=serve_serial, args=(servers[0], live, rule.get("text") if rule else None), daemon=True).start()
     threading.Thread(target=serve_qmp, args=(servers[1],), daemon=True).start()
     signal.signal(signal.SIGTERM, lambda *_: STOP.set())
-    deadline = time.monotonic() + float(CONFIG["exit_after"]) if CONFIG.get("exit_after") is not None else None
+    exit_after = rule.get("exit_after", CONFIG.get("exit_after")) if rule else CONFIG.get("exit_after")
+    deadline = time.monotonic() + float(exit_after) if exit_after is not None else None
     while not STOP.is_set():
         if deadline is not None and time.monotonic() >= deadline:
-            EXIT_CODE[0] = int(CONFIG.get("exit_code", 0))
+            EXIT_CODE[0] = int((rule or {}).get("exit_code", CONFIG.get("exit_code", 0)))
             break
         time.sleep(0.05)
     for server, path in zip(servers, (serial_path, qmp_path)):

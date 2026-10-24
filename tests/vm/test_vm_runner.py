@@ -24,8 +24,9 @@ vm = load_vm_module()
 pytestmark = pytest.mark.slow  # real processes and sockets: about a second per scenario
 ROOT = Path(__file__).resolve().parents[2]
 PROBES = {"init", "hostname", "user", "network", "dns", "portage", "hwmonux", "portagehub",
-          "firmware", "cmdline", "root-source", "swap", "receipt", "sudo", "root-lock"}
-ADVISORY = {"receipt", "sudo", "root-lock"}
+          "firmware", "cmdline", "root-source", "swap", "receipt", "sudo", "root-lock",
+          "install-degraded", "hardware-plan-file", "hardware-plan", "world-resolve", "world-drift"}
+ADVISORY = {"sudo", "root-lock"}
 
 
 @pytest.fixture
@@ -45,7 +46,7 @@ def test_cli_run_of_the_bios_scenario_passes_and_cleans_up(lab, capsys):
     assert result["success"] is True
     assert PROBES | {"network-static"} == {probe["name"] for probe in result["probes"]}
     assert all(probe["success"] for probe in result["probes"] if not probe["advisory"])
-    # The fake guest has no sudo and no install receipt: advisory findings are recorded, not fatal.
+    # The fake guest has no sudo: advisory findings are recorded, not fatal.
     assert {probe["name"] for probe in result["advisory_findings"]} == ADVISORY
     assert {probe["name"] for probe in result["companion_probes"]} == {"hwmonux", "portagehub"}
     assert f"PASS bios: result {run / 'result.json'}" in capsys.readouterr().out
@@ -66,7 +67,7 @@ def test_cli_run_of_the_bios_scenario_passes_and_cleans_up(lab, capsys):
     remote = [call["remote"] for call in lab.ssh_calls()]
     assert "gentoo-installerd --manifest /run/gentoo-installer-vm-manifest.json --yes" in remote
     unmatched = [call["remote"] for call in lab.ssh_calls() if call["matched"] is None]
-    assert len(unmatched) == 3 and all("install.json" in remote or "sudo" in remote for remote in unmatched), unmatched
+    assert len(unmatched) == 2 and all("sudo" in remote for remote in unmatched), unmatched  # sudo true and passwd -S root
 
 
 def test_uefi_run_shares_one_firmware_variable_store_between_both_boots(lab):

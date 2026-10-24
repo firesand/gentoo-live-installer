@@ -181,7 +181,7 @@ def test_the_shared_nvram_is_the_default(lab):
 
 
 def test_firmware_can_be_overridden_per_run(lab):
-    lab.rules = guest_rules(vm, "openrc")
+    lab.rules = guest_rules(vm, "openrc", firmware="bios")
     lab.rules.insert(0, {"user": "^vmtest$", "match": r"^test -d /sys/firmware/efi", "stdout": "bios\n"})
     assert lab.run("--scenario", "openrc", "--firmware", "bios", "--keep") == 0
     run = lab.run_dir()
