@@ -82,7 +82,7 @@ class NetworkTabMixin:
         line.addWidget(self.network_summary, 1)
         line.addWidget(Badge("Recommended"))
         self.network_change = QPushButton("Change…")
-        self.network_change.clicked.connect(lambda: self.network_more.set_open(True))
+        self.network_change.clicked.connect(self._open_network_options)
         line.addWidget(self.network_change)
         card.content.addLayout(line)
         self.network_more = AdvancedSection("customize-network", "More network options")
@@ -157,6 +157,9 @@ class NetworkTabMixin:
         self.network_more.add_widget(self.import_warning)
         layout.addStretch(1)
         return page
+
+    def _open_network_options(self) -> None:
+        self.network_more.set_open(True)
 
     def set_network_advanced(self, advanced: bool) -> None:
         self.network_more.set_advanced(advanced)

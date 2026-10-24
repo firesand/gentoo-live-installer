@@ -68,11 +68,11 @@ class NetworkCard(Card):
         self.why_button.setCheckable(True)
         self.why_button.setAutoRaise(True)
         self.why_button.hide()
-        self.why_button.toggled.connect(lambda shown: self.why_box.setVisible(shown))
         self.content.addWidget(self.why_button, 0, Qt.AlignmentFlag.AlignLeft)
         self.why_box = wrapped_label("", muted=True, selectable=True)
         self.why_box.hide()
         self.content.addWidget(self.why_box)
+        self.why_button.toggled.connect(self.why_box.setVisible)
 
         # --- Wi-Fi ---
         self.wifi_box = QWidget()

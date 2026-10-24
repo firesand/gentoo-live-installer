@@ -253,11 +253,11 @@ def collect_adapters(runner: Runner) -> list[netdiag.Adapter]:
         if name not in known:  # a Wi-Fi card that is switched off has no ip entry in some drivers
             adapters.append(netdiag.Adapter(name, netdiag.guess_kind(name)))
     for adapter in adapters:
-        row = status.get(adapter.name)
-        if row:
-            adapter.kind = device_kind(row["type"], adapter.name)
-            adapter.state = device_state(row["state"])
-            adapter.connection = row["connection"]
+        found = status.get(adapter.name)
+        if found:
+            adapter.kind = device_kind(found["type"], adapter.name)
+            adapter.state = device_state(found["state"])
+            adapter.connection = found["connection"]
         adapter.driver = read_driver(adapter.name)
     return adapters
 

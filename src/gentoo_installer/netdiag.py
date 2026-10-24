@@ -97,7 +97,7 @@ class Diagnosis:
 
     def summary_lines(self) -> list[str]:
         """'Wired: enp5s0 (connected, 192.168.1.20)' lines for the readiness row."""
-        lines = []
+        lines: list[str] = []
         for title, kind in (("Wired", "ethernet"), ("Wi-Fi", "wifi"), ("Mobile", "wwan")):
             lines.extend(f"{title}: {adapter.describe()}" for adapter in self.adapters if adapter.kind == kind)
         lines.extend(f"Other: {adapter.describe()}" for adapter in self.adapters if adapter.kind == "other")
@@ -126,7 +126,7 @@ def parse_ip_addr(text: str) -> list[Adapter]:
         if not isinstance(row, dict) or not isinstance(row.get("ifname"), str):
             continue
         name = row["ifname"]
-        flags = row.get("flags") if isinstance(row.get("flags"), list) else []
+        flags: list[Any] = row["flags"] if isinstance(row.get("flags"), list) else []
         if name == "lo" or "LOOPBACK" in flags:
             continue
         adapter = Adapter(name, guess_kind(name), carrier="LOWER_UP" in flags)

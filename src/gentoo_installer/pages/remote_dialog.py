@@ -64,9 +64,14 @@ class RemoteAccessDialog(QDialog):
             done(self.caller(action, payload))
         else:
             worker = netclient.CallWorker(self.caller, action, payload, self)
-            worker.answered.connect(lambda _a, answer, w=worker: (self._workers.remove(w) if w in self._workers else None, done(answer)))
+            worker.answered.connect(lambda _a, answer, w=worker: self._answered(w, done, answer))
             self._workers.append(worker)
             worker.start()
+
+    def _answered(self, worker: netclient.CallWorker, done: Any, answer: Any) -> None:
+        if worker in self._workers:
+            self._workers.remove(worker)
+        done(answer)
 
     def refresh(self) -> None:
         self.call("remote_status", {}, lambda answer: self.show_answer(answer))
