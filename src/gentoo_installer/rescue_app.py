@@ -9,7 +9,6 @@ facts they share: the system that is open, what was repaired, and what must be r
 from __future__ import annotations
 
 import argparse
-import logging
 import os
 import sys
 from typing import Any
@@ -28,8 +27,6 @@ from .rescue_ui.logs_page import LogsPage
 from .rescue_ui.mount_page import MountPage
 from .rescue_ui.plan_page import PlanPage
 from .rescue_ui.service_page import ServicePage
-
-LOG = logging.getLogger("gentoo_installer.rescue")
 
 DEFAULT_SOCKET = "/run/gentoo-installer/server.sock"
 STEPS = ("Find the system", "Open it", "See what is wrong", "Repair", "Finish")
@@ -56,7 +53,8 @@ class RescueWindow(QMainWindow):
         self.system: model.OpenSystem | None = None
         self.history: list[tuple[str, str]] = []
         self.storage_opened = False  # an encrypted disk was unlocked or a volume activated: it must be released
-        self._closing = False
+        self._close_after_run = False  # the window was closed during a run: it closes when the run has stopped
+        self._close_after_release = False  # the window was closed with a system open: it closes when everything is released
         self._force = False
         self.setWindowTitle("Repair an existing system")
         self.setAccessibleName("Repair an existing system")
@@ -196,7 +194,7 @@ class RescueWindow(QMainWindow):
         self.plan_page.leaveRequested.connect(self._plan_left)
         self.plan_page.runningChanged.connect(self._running_changed)
         self.logs_page.backRequested.connect(lambda: self.show_page(DIAGNOSE))
-        self.finish_page.backRequested.connect(lambda: self.show_page(DIAGNOSE))
+        self.finish_page.backRequested.connect(self._back_from_finish)
         self.finish_page.anotherRequested.connect(self._another)
         self.finish_page.quitRequested.connect(self._quit_released)
         self.finish_page.released.connect(self._released)
@@ -294,6 +292,10 @@ class RescueWindow(QMainWindow):
         self.system, self.history, self.storage_opened = None, [], False
         self.show_page(FIND)
         self.find_page.start_scan()
+
+    def _back_from_finish(self) -> None:
+        self._close_after_release = False  # the person changed their mind about leaving
+        self.show_page(DIAGNOSE)
 
     def _released(self) -> None:
         self.system, self.storage_opened = None, False
@@ -406,7 +408,7 @@ class RescueWindow(QMainWindow):
             return
         if self.plan_page.is_running():
             if self.ask_stop_and_close():
-                self._closing = True
+                self._close_after_run = True
                 self.plan_page.request_cancel()
             event.ignore()
             return
@@ -421,7 +423,7 @@ class RescueWindow(QMainWindow):
                 event.ignore()
                 return
             if choice == "close":
-                self._closing = True
+                self._close_after_release = True
                 self.finish_page.begin(self.system, self.history)
                 self.show_page(FINISH)
                 self.finish_page.unmount()
@@ -431,7 +433,7 @@ class RescueWindow(QMainWindow):
         super().closeEvent(event)
 
     def _maybe_finish_closing(self) -> None:
-        if self._closing and self.finish_page.state == "done":
+        if self._close_after_release and self.finish_page.state == "done":
             self._force = True
             QTimer.singleShot(0, self.close)
 
@@ -447,8 +449,8 @@ class RescueWindow(QMainWindow):
 
     def _running_changed(self, running: bool) -> None:
         """A run ended while the window was waiting to close: close it now (it still asks about a system that is open)."""
-        if not running and self._closing and self.finish_page.state != "working":
-            self._closing = False
+        if not running and self._close_after_run and self.finish_page.state != "working":
+            self._close_after_run = False
             QTimer.singleShot(0, self.close)
 
 

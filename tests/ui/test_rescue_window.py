@@ -9,7 +9,7 @@ from PySide6.QtGui import QKeySequence
 from PySide6.QtWidgets import QAbstractButton, QApplication
 
 from gentoo_installer import app as app_module
-from gentoo_installer.rescue_app import DIAGNOSE, RescueWindow, bounded_size
+from gentoo_installer.rescue_app import DIAGNOSE, FINISH, RescueWindow, bounded_size
 from tests.rescue.test_flow_encrypted import PASSPHRASE, encrypted_lab
 from tests.ui.rescue_fakes import (  # noqa: F401  (fixtures)
     daemon_factory,
@@ -246,3 +246,24 @@ def test_a_session_left_open_by_an_earlier_window_can_be_taken_over_when_the_mou
     assert second.system.session_id == system.session_id  # it continued with the open session instead of failing
     assert second.system.actions and second.diagnose_page.system_label.text().startswith("Gentoo Linux")
 
+
+
+def test_a_system_that_cannot_be_released_keeps_the_window_open_until_it_is_forced_or_the_person_goes_back(qtbot, gentoo_machine, repair_kit, monkeypatch) -> None:
+    daemon, lab, _tree = gentoo_machine
+    window = repair_kit.open(daemon.path)
+    system = open_system(qtbot, window)
+    efi = daemon.manager.session(system.session_id).root + "/efi"
+    lab.system.fail_umount[efi] = (32, "umount: target is busy.")
+    lab.system.holders[efi] = "                     USER        PID ACCESS COMMAND\n" + f"{efi}:      gentoo     4321 ..c.. thunar\n"
+    monkeypatch.setattr(window, "ask_close_choice", lambda what: "close")
+    window.close()
+    qtbot.waitUntil(lambda: window.finish_page.state == "busy", timeout=20000)
+    assert shiboken6.isValid(window) and window.isVisible() and window.stack.currentIndex() == FINISH and "thunar" in window.finish_page.holders.text()
+    window.finish_page.back_button.click()  # the person decides to stay: the window must not close by itself later
+    assert window.stack.currentIndex() == DIAGNOSE and not window._close_after_release
+    window.diagnose_page.finish_button.click()
+    window._close_after_release = True  # ... and closing again, this time forcing the release
+    window.finish_page.force_button.click()
+    window.finish_page.confirm.confirm_button.click()
+    qtbot.waitUntil(lambda: gone(window), timeout=20000)
+    assert lab.system.mounted_targets() == []
