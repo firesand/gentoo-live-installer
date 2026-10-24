@@ -42,6 +42,16 @@ def test_gentoo_uefi_plan(tmp_path: Path) -> None:
     assert plan.root.device == "/dev/nvme0n1p5"
 
 
+def test_quoted_and_by_id_entries_are_mounted_like_any_other(tmp_path: Path, monkeypatch) -> None:
+    """An fstab written from blkid output (UUID="...") or with /dev/disk/by-id names used to leave /boot/efi and /usr unmounted."""
+    from gentoo_installerd.rescue import fstab as fstab_module
+
+    monkeypatch.setattr(fstab_module, "default_dev_link_resolver", lambda path: "/dev/nvme0n1p1" if path == "/dev/disk/by-id/nvme-Samsung_SSD_990_PRO_1TB_S7NZ0000000001-part1" else None)
+    fstab = f'UUID="{fr.ROOT_UUID}" / ext4 defaults 0 1\n/dev/disk/by-id/nvme-Samsung_SSD_990_PRO_1TB_S7NZ0000000001-part1 /efi vfat umask=0077 0 2\n'
+    plan, _ = make_plan(tmp_path, "gentoo", lf.nvme_dualboot(), "/dev/nvme0n1p5", fstab=fstab, mounts=["/efi"])
+    assert [(item.mountpoint, item.device) for item in plan.selected] == [("/efi", "/dev/nvme0n1p1")] and plan.unresolved == []
+
+
 def test_ubuntu_lvm_plan_orders_parents_first(tmp_path: Path) -> None:
     fstab = (f"UUID={fr.ROOT_UUID} / ext4 defaults 0 1\nUUID={fr.ESP_UUID} /boot/efi vfat umask=0077 0 1\nUUID={fr.BOOT_UUID} /boot ext4 defaults 0 2\n"
              "/dev/mapper/ubuntu--vg-ubuntu--lv /home ext4 defaults 0 2\n")

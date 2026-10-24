@@ -146,6 +146,59 @@ def test_by_id_links_use_the_injected_resolver() -> None:
     assert found.status == "resolved" and found.device.name == "sda6"
 
 
+def test_quoted_values_resolve_like_unquoted_ones() -> None:
+    """fstab(5) allows UUID="..." and blkid prints it that way; the quotes are not part of the value."""
+    graph = build_graph(lf.nvme_dualboot())
+    partuuid = graph.find("/dev/nvme0n1p5").partuuid
+    text = (
+        f'UUID="{fr.ROOT_UUID}" / ext4 defaults 0 1\nUUID=\'{fr.ESP_UUID}\' /efi vfat defaults 0 2\nLABEL="Windows" /win ntfs3 ro 0 0\n'
+        f'PARTUUID="{partuuid}" /alt ext4 defaults 0 0\nUUID="{fr.ROOT_UUID} /broken ext4 defaults 0 0\n'
+    )
+    results = {entry.entry.file: entry for entry in resolve_all(Fstab.parse(text), graph)}
+    assert results["/"].status == "resolved" and results["/"].device.name == "nvme0n1p5" and results["/"].kind == "uuid"
+    assert results["/efi"].status == "resolved" and results["/efi"].device.name == "nvme0n1p1"
+    assert results["/win"].status == "resolved" and results["/win"].device.name == "nvme0n1p3" and results["/win"].kind == "label"
+    assert results["/alt"].status == "resolved" and results["/alt"].kind == "partuuid"
+    assert results["/broken"].status == "unresolved"  # a lone quote is not a pair: nothing is guessed from it
+
+
+def test_a_quoted_crypttab_source_finds_its_container() -> None:
+    crypttab = parse_crypttab(f'cryptroot UUID="{fr.LUKS_UUID}" none luks\n')
+    entry = Fstab.parse("/dev/mapper/cryptroot / ext4 defaults 0 1\n").entries[0]
+    locked = resolve_entry(entry, build_graph(lf.luks_lvm_ext4()), crypttab=crypttab)
+    assert locked.status == "needs_unlock" and locked.container == "/dev/nvme0n1p3"
+
+
+def test_by_id_and_by_path_names_resolve_through_the_live_systems_links_by_default(monkeypatch) -> None:
+    """Nobody passes a link resolver, so the default one must be the real one: the live system's own /dev/disk links."""
+    from gentoo_installerd.rescue import fstab as fstab_module
+
+    asked: list[str] = []
+
+    def live_links(path: str) -> str | None:
+        asked.append(path)
+        return {"/dev/disk/by-id/ata-Samsung_SSD-part6": "/dev/sda6", "/dev/disk/by-path/pci-0000:00:17.0-ata-1-part1": "/dev/sda1"}.get(path)
+
+    monkeypatch.setattr(fstab_module, "default_dev_link_resolver", live_links)
+    graph = build_graph(lf.plain_sata_mbr())
+    text = "/dev/disk/by-id/ata-Samsung_SSD-part6 /home ext4 defaults 0 2\n/dev/disk/by-path/pci-0000:00:17.0-ata-1-part1 /boot ext4 defaults 0 2\n/dev/disk/by-id/gone /x ext4 defaults 0 2\n"
+    results = {item.entry.file: item for item in resolve_all(Fstab.parse(text), graph)}
+    assert results["/home"].status == "resolved" and results["/home"].device.name == "sda6" and results["/home"].kind == "by_id"
+    assert results["/boot"].status == "resolved" and results["/boot"].device.name == "sda1" and results["/boot"].kind == "by_path"
+    assert results["/x"].status == "unresolved" and "/dev/disk/by-id/gone" in results["/x"].reason
+    assert "/dev/disk/by-id/ata-Samsung_SSD-part6" in asked
+
+
+def test_the_default_link_resolver_follows_a_link_and_knows_a_missing_one(tmp_path) -> None:
+    from gentoo_installerd.rescue.fstab import default_dev_link_resolver
+
+    disk = tmp_path / "sda6"
+    disk.write_text("")
+    (tmp_path / "by-id-link").symlink_to(disk)
+    assert default_dev_link_resolver(str(tmp_path / "by-id-link")) == str(disk)
+    assert default_dev_link_resolver(str(tmp_path / "no-such-link")) is None
+
+
 # ---- proposals ---------------------------------------------------------------------------------------------------
 def fedora_like_graph():
     return build_graph(lf.fedora_cloud_btrfs())
