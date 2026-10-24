@@ -38,7 +38,10 @@ small ISO 9660 reader of the harness (`scripts/vm_iso.py`); `xorriso` is not nee
    `tests/vm/test_vm_rescue_driver.py` runs the harness's rescue driver against the real
    `gentoo-rescue` command line on the rescue tests' laboratory (a fake kernel and fake tools), and
    `tests/vm/test_vm_probes.py` checks the probes against the receipt and the hardware plan that the
-   product itself produces.
+   product itself produces. `tests/vm/data/` holds what the first real VM runs printed (the hardware
+   plan record, the output of `emerge -pvuDN @world`, the installer's final event) and first sectors
+   that `parted` and `sgdisk` wrote with the commands of the storage stage, so that the parsers are
+   tested against what the tools really say.
 3. **Real VMs** (`scripts/test-vm.py`): the real ISO, real QEMU, real installs. Hours for a
    desktop, minutes for a minimal system. Only this layer proves that something boots.
 
