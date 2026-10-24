@@ -108,6 +108,21 @@ def _find_initramfs(fs: RootFS, version: str, pkgbase: str, boot_names: set[str]
     return ""
 
 
+def natural_key(version: str) -> tuple[tuple[int, int, str], ...]:
+    """Orders versions by number, not by text: 6.1.0-9 comes before 6.1.0-10, and Ubuntu's 6.8.0-99 before 6.8.0-100."""
+    return tuple((0, int(chunk), "") if chunk[0] in "0123456789" else (1, 0, chunk) for chunk in re.findall(r"[0-9]+|[^0-9]+", version))
+
+
+def lacks_module_tree(kernel: KernelInfo, kernels: list[KernelInfo]) -> bool:
+    """A kernel without its module tree while another one has one (finding D04); the generic rescue kernel of Fedora and RHEL never has one."""
+    return not kernel.modules and any(other.modules for other in kernels) and kernel.version != "linux" and not kernel.is_rescue
+
+
+def damaged_kernels(kernels: list[KernelInfo]) -> list[str]:
+    """The versions that findings D01 and D04 report: an incomplete kernel image, or no module tree."""
+    return [kernel.version for kernel in kernels if kernel.image and (kernel.image_truncated or lacks_module_tree(kernel, kernels))]
+
+
 def collect_kernels(fs: RootFS) -> list[KernelInfo]:
     boot_names = set(fs.listdir_or("/boot"))
     versions = _module_versions(fs)
@@ -138,7 +153,7 @@ def collect_kernels(fs: RootFS) -> list[KernelInfo]:
     for info in found.values():
         info.initramfs = _find_initramfs(fs, info.version, info.pkgbase, boot_names, aliases.get(info.version, ()))
         info.initramfs_size = _size(fs, info.initramfs) if info.initramfs else 0
-    return sorted(found.values(), key=lambda item: item.version)
+    return sorted(found.values(), key=lambda item: natural_key(item.version))
 
 
 def collect_boot(fs: RootFS, esp: RootFS | None = None) -> BootInfo:

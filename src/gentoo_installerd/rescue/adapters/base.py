@@ -27,6 +27,7 @@ class Adapter:
     tools: ClassVar[frozenset[str]] = frozenset()
     default_bootloader_id: ClassVar[str] = "linux"
     esp_default: ClassVar[str] = "/boot/efi"
+    selects_kernels: ClassVar[bool] = False  # 'Reinstall the kernel' takes a list of kernel versions
 
     # ---- capabilities --------------------------------------------------------------------------------------------------
     def write_refusal(self, view: SessionView) -> str:

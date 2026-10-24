@@ -128,6 +128,57 @@ def test_network_dependent_plans_refuse_to_start_offline(lab_factory) -> None:
     assert manager.session(sid).mode == "ro"
 
 
+def two_debian_kernels(lab_factory, *, broken: str | None = "6.1.0-10-amd64"):
+    """Debian keeps two kernels; the version strings cross a digit width (6.1.0-9, 6.1.0-10). One of them lost its module tree in an interrupted upgrade."""
+    import shutil
+
+    lab, tree = debian_lab(lab_factory, kernels=["6.1.0-9-amd64", "6.1.0-10-amd64"])
+    if broken:
+        shutil.rmtree(tree / f"usr/lib/modules/{broken}")
+    return lab, tree
+
+
+def apt_and_initramfs_targets(plan) -> tuple[list[str], list[str]]:
+    commands = [step.get("argv") or [] for step in plan["steps"]]
+    apt = [package for argv in commands if argv[:1] == ["apt-get"] for package in argv if package.startswith("linux-image-")]
+    initramfs = [argv[-1] for argv in commands if argv[:2] == ["update-initramfs", "-u"]]
+    return apt, initramfs
+
+
+@pytest.mark.parametrize("broken", ["6.1.0-10-amd64", "6.1.0-9-amd64"])
+def test_fix_everything_reinstalls_the_kernel_the_diagnosis_names(lab_factory, broken: str) -> None:
+    """The finding names the broken kernel, and the recommended plan used to reinstall the last one in text order (6.1.0-9 over 6.1.0-10)."""
+    lab, _tree = two_debian_kernels(lab_factory, broken=broken)
+    manager, sid, info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    assert [(f["id"], f["kernel"]) for f in info["findings"] if f["id"] == "D04"] == [("D04", broken)]
+    plan = manager.plan({"session_id": sid, "action_id": "repair.recommended"})
+    assert plan["params"]["kernels"] == [broken]
+    assert apt_and_initramfs_targets(plan) == ([f"linux-image-{broken}"], [broken])
+    unmount(manager, sid)
+
+
+def test_reinstalling_the_kernel_directly_goes_for_the_damaged_one_else_the_newest(lab_factory) -> None:
+    lab, _tree = two_debian_kernels(lab_factory, broken="6.1.0-9-amd64")
+    manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    assert apt_and_initramfs_targets(manager.plan({"session_id": sid, "action_id": "boot.kernel"})) == (["linux-image-6.1.0-9-amd64"], ["6.1.0-9-amd64"])
+    chosen = manager.plan({"session_id": sid, "action_id": "boot.kernel", "params": {"kernels": ["6.1.0-10-amd64"]}})  # the person's own choice wins
+    assert apt_and_initramfs_targets(chosen) == (["linux-image-6.1.0-10-amd64"], ["6.1.0-10-amd64"])
+    unmount(manager, sid)
+    healthy_lab, _ = two_debian_kernels(lab_factory, broken=None)
+    manager, sid, _ = mount_through_the_manager(healthy_lab, candidate_device="/dev/nvme0n1p5")
+    assert apt_and_initramfs_targets(manager.plan({"session_id": sid, "action_id": "boot.kernel"})) == (["linux-image-6.1.0-10-amd64"], ["6.1.0-10-amd64"])  # the newest, by number
+    unmount(manager, sid)
+
+
+def test_only_systems_that_take_a_kernel_list_are_offered_one(lab_factory) -> None:
+    lab, _tree = two_debian_kernels(lab_factory)
+    _manager, _sid, info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    assert [param["name"] for param in {a["id"]: a for a in info["actions"]}["boot.kernel"]["params"]] == ["package", "mode", "kernels"]
+    gentoo, _ = uefi_gentoo_lab(lab_factory)
+    _manager, _sid, info = mount_through_the_manager(gentoo, candidate_device="/dev/nvme0n1p5")
+    assert [param["name"] for param in {a["id"]: a for a in info["actions"]}["boot.kernel"]["params"]] == ["package", "mode"]
+
+
 def test_debian_kernel_reinstall_wraps_apt_with_policy_rc_and_rebuilds(lab_factory) -> None:
     lab, tree = debian_lab(lab_factory)
     manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")

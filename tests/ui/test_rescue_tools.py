@@ -53,6 +53,30 @@ def test_a_disk_list_that_names_a_missing_disk_is_shown_as_a_difference_and_fixe
     assert len([path for path in (tree / "etc").iterdir() if path.name.startswith("fstab")]) >= 2  # and a copy of the old file is kept beside it
 
 
+# ---- the kernel ---------------------------------------------------------------------------------------------------------------------------
+def test_the_kernel_to_reinstall_is_the_damaged_one_and_can_be_changed(qtbot, rescue_lab_factory, daemon_factory, repair_kit) -> None:
+    """Debian keeps two kernels (6.1.0-9, 6.1.0-10). The plan targets the one that lost its modules; the options let the person choose the other."""
+    import shutil
+
+    lab, tree = uefi_gentoo_lab(rescue_lab_factory, family="debian", kernels=["6.1.0-9-amd64", "6.1.0-10-amd64"], esp_mount="/boot/efi")
+    shutil.rmtree(tree / "usr/lib/modules/6.1.0-10-amd64")
+    window = repair_kit.open(daemon_factory(lab).path)
+    open_system(qtbot, window)
+    request_action(qtbot, window, "boot.kernel")
+    page = window.plan_page
+    assert "linux-image-6.1.0-10-amd64" in page.commands_text.toPlainText() and "linux-image-6.1.0-9-amd64" not in page.commands_text.toPlainText()
+    assert page.options_button.isVisibleTo(page)
+    page.options_button.click()
+    form = page._form
+    assert list(form.kernel_boxes) == ["6.1.0-9-amd64", "6.1.0-10-amd64"]  # oldest first, by number
+    assert any("damaged kernel, or the newest" in label.text() for label in form.findChildren(type(page.summary)))
+    form.kernel_boxes["6.1.0-9-amd64"].setChecked(True)
+    page.continue_button.click()
+    qtbot.waitUntil(lambda: page.state == "review", timeout=20000)
+    assert page.plan["params"]["kernels"] == ["6.1.0-9-amd64"]
+    assert "linux-image-6.1.0-9-amd64" in page.commands_text.toPlainText() and "linux-image-6.1.0-10-amd64" not in page.commands_text.toPlainText()
+
+
 # ---- a moved disk ---------------------------------------------------------------------------------------------------------------------
 def test_a_disk_that_was_moved_to_another_computer_gets_the_matching_advice(qtbot, gentoo_machine, repair_kit) -> None:
     daemon, _lab, _tree = gentoo_machine

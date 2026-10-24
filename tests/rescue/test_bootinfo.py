@@ -78,3 +78,16 @@ def test_arch_images_are_named_after_the_package_base_not_the_release(tmp_path: 
     fr.put(root, "usr/lib/modules/6.8.5-arch1-1/pkgbase", "linux\n")
     fr.put(root, "usr/lib/modules/6.6.30-1-lts/pkgbase", "linux-lts\n")
     assert kernels_of(root) == {"6.8.5-arch1-1": ("/boot/vmlinuz-linux", "/boot/initramfs-linux.img", True), "6.6.30-1-lts": ("/boot/vmlinuz-linux-lts", "/boot/initramfs-linux-lts.img", True)}
+
+
+@pytest.mark.parametrize("versions,expected", [
+    (["6.1.0-9-amd64", "6.1.0-10-amd64", "6.1.0-2-amd64"], ["6.1.0-2-amd64", "6.1.0-9-amd64", "6.1.0-10-amd64"]),  # Debian crosses a digit width
+    (["6.8.0-100-generic", "6.8.0-99-generic", "6.8.0-101-generic"], ["6.8.0-99-generic", "6.8.0-100-generic", "6.8.0-101-generic"]),  # so does Ubuntu's ABI number
+    (["6.11.4-300.fc41.x86_64", "6.9.12-200.fc40.x86_64"], ["6.9.12-200.fc40.x86_64", "6.11.4-300.fc41.x86_64"]),
+    (["7.3.0-cachyos-dist", "7.2.11-cachyos-dist", "7.10.0-cachyos-dist"], ["7.2.11-cachyos-dist", "7.3.0-cachyos-dist", "7.10.0-cachyos-dist"]),
+    (["6.1.0-9-amd64", "0-rescue-0123456789abcdef0123456789abcdef", "6.1.0-9-rt-amd64"], ["0-rescue-0123456789abcdef0123456789abcdef", "6.1.0-9-amd64", "6.1.0-9-rt-amd64"]),
+])
+def test_kernels_are_listed_oldest_first_by_number_not_by_text(tmp_path: Path, versions: list[str], expected: list[str]) -> None:
+    root = layout(tmp_path, {f"boot/vmlinuz-{version}": 14 * MiB for version in versions})
+    with RootFS(root) as fs:
+        assert [kernel.version for kernel in collect_kernels(fs)] == expected
