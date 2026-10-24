@@ -160,9 +160,10 @@ fn main() -> eframe::Result {
         renderer: choice.first(),
         ..Default::default()
     };
+    let started = std::time::Instant::now();
     if let Err(e) = eframe::run_native("PortageHub", options, Box::new(|cc| Ok(Box::new(app::App::new(cc))))) {
         let has_display = std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some();
-        if choice.falls_back(has_display) {
+        if choice.falls_back(has_display, started.elapsed()) {
             eprintln!("PortageHub: the GPU renderer could not open a window ({e}); trying plain OpenGL.");
             // Does not return unless the restart itself fails.
             let why = restart_with_glow();

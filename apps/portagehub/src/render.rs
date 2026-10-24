@@ -6,8 +6,14 @@
 //! with glow (a second event loop cannot be created inside the same process, so it is a restart).
 //! `PORTAGEHUB_RENDERER=wgpu` or `=glow` pins one renderer and never falls back.
 
+use std::time::Duration;
+
 /// The environment variable that picks the renderer.
 pub const VAR: &str = "PORTAGEHUB_RENDERER";
+
+/// A window that could not be opened fails within this time. An error after a longer run is a
+/// problem of a running session (which a restart would throw away), not of the renderer.
+pub const STARTUP: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Choice {
@@ -37,10 +43,11 @@ impl Choice {
         }
     }
 
-    /// Whether a window that could not be opened is followed by an attempt with glow. Without a
-    /// display neither renderer can work, so there is nothing to retry.
-    pub fn falls_back(self, has_display: bool) -> bool {
-        self == Choice::Auto && has_display
+    /// Whether a window that could not be opened (the first attempt ended with an error after
+    /// `ran_for`) is followed by an attempt with glow. Without a display neither renderer can
+    /// work, so there is nothing to retry.
+    pub fn falls_back(self, has_display: bool, ran_for: Duration) -> bool {
+        self == Choice::Auto && has_display && ran_for < STARTUP
     }
 }
 
@@ -64,8 +71,10 @@ mod tests {
         assert!(matches!(Choice::Auto.first(), eframe::Renderer::Wgpu));
         assert!(matches!(Choice::Wgpu.first(), eframe::Renderer::Wgpu));
         assert!(matches!(Choice::Glow.first(), eframe::Renderer::Glow));
-        assert!(Choice::Auto.falls_back(true));
-        assert!(!Choice::Auto.falls_back(false), "no display: neither renderer can open a window");
-        assert!(!Choice::Wgpu.falls_back(true) && !Choice::Glow.falls_back(true), "a pinned renderer never falls back");
+        let soon = Duration::from_secs(1);
+        assert!(Choice::Auto.falls_back(true, soon));
+        assert!(!Choice::Auto.falls_back(false, soon), "no display: neither renderer can open a window");
+        assert!(!Choice::Wgpu.falls_back(true, soon) && !Choice::Glow.falls_back(true, soon), "a pinned renderer never falls back");
+        assert!(!Choice::Auto.falls_back(true, STARTUP), "an error late in a session is not a renderer that failed to start");
     }
 }
