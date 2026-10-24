@@ -3,7 +3,8 @@
 
    Install Gentoo ............  gentoo-installer  (starts with the desktop)
    Install in text mode ......  sudo gentoo-installer-text
-   Repair a broken system ....  sudo gentoo-rescue  (finds, mounts and repairs)
+   Repair a Gentoo system that does not start
+                                sudo gentoo-rescue  (finds, mounts and repairs)
    Network ...................  nmtui             (text menu) or nmcli
    Hardware report ...........  sudo lshw -short ; sudo dmidecode -t system
    Disk health ...............  sudo smartctl -a /dev/sda

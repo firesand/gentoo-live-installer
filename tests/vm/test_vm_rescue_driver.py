@@ -1,4 +1,4 @@
-"""scripts/vm_rescue.py: the images, the serial console of a booted machine, and the non-interactive repair with gentoo-rescue.
+"""scripts/vm_rescue.py: the non-interactive repair of a Gentoo with gentoo-rescue, and what is checked around it.
 
 The driver is also run against the real ``gentoo-rescue`` command line, on the rescue tests' laboratory (a fake kernel and fake
 tools, tests/rescue), so the harness reads the output the tool really prints.
@@ -23,37 +23,7 @@ from tests.rescue.flow import uefi_gentoo_lab
 from tests.rescue.lab import Lab
 
 
-# --- the images ----------------------------------------------------------------------------------------------------
-
-def test_every_image_names_what_the_tool_must_detect_and_what_to_break():
-    assert set(vm_rescue.IMAGES) == {"debian", "ubuntu", "fedora", "arch"}
-    for key, image in vm_rescue.IMAGES.items():
-        assert image.key == key and image.os_id and image.filename.endswith((".qcow2", ".img"))
-        if image.repairable:
-            assert image.break_mode in vm_rescue.BREAK_MODES and image.final_boots == ("uefi", "bios")
-        else:
-            assert image.break_mode == "" and image.final_boots == ()
-    assert [image.key for image in vm_rescue.IMAGES.values() if not image.repairable] == ["arch"]
-    assert vm_rescue.IMAGES["ubuntu"].os_id == "ubuntu" and vm_rescue.IMAGES["ubuntu"].family == "debian"
-
-
-def test_an_image_is_found_by_its_name_or_by_its_pattern(tmp_path):
-    image = vm_rescue.IMAGES["fedora"]
-    with pytest.raises(vm_rescue.RescueFlowError, match="was not found"):
-        vm_rescue.resolve_image(tmp_path, image)
-    newer = tmp_path / "Fedora-Cloud-Base-Generic-45-1.2.x86_64.qcow2"
-    newer.write_bytes(b"x")
-    assert vm_rescue.resolve_image(tmp_path, image) == newer
-    exact = tmp_path / image.filename
-    exact.write_bytes(b"x")
-    assert vm_rescue.resolve_image(tmp_path, image) == exact
-    exact.unlink()
-    (tmp_path / "Fedora-Cloud-Base-Generic-46-1.1.x86_64.qcow2").write_bytes(b"x")
-    with pytest.raises(vm_rescue.RescueFlowError, match="several files"):
-        vm_rescue.resolve_image(tmp_path, image)
-    with pytest.raises(vm_rescue.RescueFlowError, match="was not found"):
-        vm_rescue.resolve_image(tmp_path / "nowhere", image)
-
+# --- the base image of --target-image ------------------------------------------------------------------------------------
 
 def test_a_base_image_is_fingerprinted_by_size_time_and_its_first_mebibyte(tmp_path):
     base = tmp_path / "base.qcow2"
@@ -76,61 +46,7 @@ def test_a_base_image_is_fingerprinted_by_size_time_and_its_first_mebibyte(tmp_p
     assert vm_rescue.fingerprint_problems(after, vm_rescue.fingerprint(base))
 
 
-# --- the serial console ----------------------------------------------------------------------------------------------
-
-@pytest.mark.parametrize("text", [
-    "Debian GNU/Linux 13 debian ttyS0\n\ndebian login: ",
-    "Ubuntu 24.04 LTS ubuntu ttyS0\r\n\r\nubuntu login: [   62.1] cloud-init[801]: Cloud-init v. 24.1 finished\r\n",
-    "Fedora Linux 44 (Cloud Edition)\nKernel 6.14 on x86_64 (ttyS0)\n\nlocalhost login: ",
-    "\x1b[0;32m  OK  \x1b[0m Started serial-getty\n\x1b[1mgentoo-vm-bios login: \x1b[0m",
-])
-def test_a_login_prompt_is_recognised_wherever_it_appears_on_a_line(text):
-    assert vm_rescue.login_prompt(text).endswith(" login:")
-    assert vm_rescue.classify_boot(text) == "login"
-
-
-@pytest.mark.parametrize("text", [
-    "[  OK  ] Started systemd-logind.service - User Login Management.\n",
-    "Starting login service...\n",
-    "the last login: Tue Oct 24 from 10.0.2.2\n",
-    "",
-])
-def test_log_lines_that_only_mention_login_are_not_a_prompt(text):
-    assert vm_rescue.login_prompt(text) == "" and vm_rescue.classify_boot(text) == "waiting"
-
-
-@pytest.mark.parametrize(("text", "marker"), [
-    ("Kernel panic - not syncing: VFS: Unable to mount root fs on unknown-block(0,0)", "Kernel panic - not syncing"),
-    ("You are in emergency mode. After logging in, type", "You are in emergency mode"),
-    ("\nGive root password for maintenance\n", "Give root password for maintenance"),
-    ("error: file '/boot/grub/grub.cfg' not found.\ngrub> ", "grub>"),
-    ("Entering rescue mode...\ngrub rescue> ", "grub rescue>"),
-    ("ALERT! /dev/disk/by-uuid/x does not exist. Dropping to a shell!\n(initramfs) ", "Dropping to a shell"),
-    ("SeaBIOS\nBooting from Hard Disk...\nBoot failed: could not read the boot disk\n\nNo bootable device.\n", "No bootable device"),
-])
-def test_a_machine_that_cannot_come_up_is_recognised_early(text, marker):
-    assert vm_rescue.classify_boot(text) == f"fatal:{marker}"
-
-
-def test_a_prompt_wins_over_old_noise_and_evidence_lists_what_was_seen():
-    text = "error: file '/x' not found\nKernel panic - not syncing\n"
-    assert vm_rescue.evidence_markers(text) == ["Kernel panic - not syncing", "error: file"]
-    assert vm_rescue.classify_boot(text + "debian login: ") == "login"
-
-
-def test_a_machine_that_restarted_itself_is_not_one_that_died():
-    text = "relabeling...\nreboot: Restarting system\n"
-    assert vm_rescue.classify_boot(text, exited=True, exit_code=0) == "rebooted"
-    assert vm_rescue.classify_boot(text, exited=True, exit_code=1) == "exited"
-    assert vm_rescue.classify_boot("nothing special\n", exited=True, exit_code=0) == "exited"
-    assert vm_rescue.classify_boot("booting\n") == "waiting"
-
-
-def test_the_kernel_command_line_is_read_from_its_own_log_line():
-    log = "[    0.000000] Linux version 6.8\n[    0.040000] Kernel command line: BOOT_IMAGE=/boot/vmlinuz root=UUID=1-2 ro console=ttyS0\n"
-    assert vm_rescue.kernel_command_line(log) == "BOOT_IMAGE=/boot/vmlinuz root=UUID=1-2 ro console=ttyS0"
-    assert vm_rescue.kernel_command_line("Command line: a b\n") == "a b" and vm_rescue.kernel_command_line("quiet boot") == ""
-
+# --- the arguments of the live medium ----------------------------------------------------------------------------------------
 
 def test_arguments_of_the_live_medium_are_found():
     line = "BOOT_IMAGE=/boot/gentoo root=live:CDLABEL=GENTOO rd.live.dir=/ rd.live.squashimg=image.squashfs cdroot nox"
@@ -145,7 +61,7 @@ def run_snippet(snippet: str, *arguments: str, env: dict | None = None) -> tuple
     return result.returncode, result.stdout
 
 
-def system_tree(root: Path, *, menu: str = "menuentry 'Debian' { linux /vmlinuz root=UUID=1 ro }\n" * 12, entries: dict | None = None) -> Path:
+def system_tree(root: Path, *, menu: str = "menuentry 'Gentoo' { linux /vmlinuz root=UUID=1 ro }\n" * 12, entries: dict | None = None) -> Path:
     (root / "boot" / "grub").mkdir(parents=True)
     (root / "boot" / "grub" / "grub.cfg").write_text(menu)
     (root / "etc" / "default").mkdir(parents=True)
@@ -273,13 +189,13 @@ def test_a_plan_touches_the_firmware_when_it_says_so_or_runs_a_tool_that_does():
     assert vm_rescue.plan_touches_nvram({"needs": {"uefi_nvram": True}, "steps": []})
     assert vm_rescue.plan_touches_nvram({"needs": {}, "steps": [{"argv": ["efibootmgr", "--create"]}]})
     assert vm_rescue.plan_touches_nvram({"needs": {}, "steps": [{"argv": ["grub-install", "--target=x86_64-efi", "--efi-directory=/efi"]}]})
-    assert not vm_rescue.plan_touches_nvram({"needs": {}, "steps": [{"argv": ["grub-install", "--target=x86_64-efi", "--no-nvram"]}, {"argv": ["update-grub"]}, {}]})
+    assert not vm_rescue.plan_touches_nvram({"needs": {}, "steps": [{"argv": ["grub-install", "--target=x86_64-efi", "--no-nvram"]}, {"argv": ["grub-mkconfig", "-o", "/boot/grub/grub.cfg"]}, {}]})
     assert not vm_rescue.plan_touches_nvram({"needs": {}, "steps": [{"argv": ["grub-install", "--target=i386-pc", "/dev/vda"]}]})
     assert vm_rescue.plan_touches_nvram({"needs": {}, "steps": [{"argv": ["bootctl", "install"]}]})
     assert not vm_rescue.plan_touches_nvram({"needs": {}, "steps": [{"argv": ["bootctl", "--variables=no", "install"]}]})
 
 
-@pytest.mark.parametrize(("mode", "finding", "command"), [("grub-cfg", "D05", "update-grub"), ("initramfs", "D02", "dracut --force"), ("fstab-uuid", "D07", "write /etc/fstab (a backup)")])
+@pytest.mark.parametrize(("mode", "finding", "command"), [("grub-cfg", "D05", "grub-mkconfig -o /boot/grub/grub.cfg"), ("initramfs", "D02", "dracut --force"), ("fstab-uuid", "D07", "write /etc/fstab (a backup)")])
 def test_the_diagnosis_and_the_plan_must_show_the_damage_that_was_done(mode, finding, command):
     plan = {"steps": [{"display": command, "argv": command.split()}]}
     assert vm_rescue.plan_expectation_problems(mode, [{"id": finding}], plan) == []
@@ -329,27 +245,27 @@ def test_a_scan_without_a_result_is_an_error():
 
 
 SCAN = {"candidates": [
-    {"id": "c1", "device": "/dev/vda1", "kind": "root", "os": {"id": "debian"}},
-    {"id": "c2", "device": "/dev/vda3", "kind": "snapshot", "os": {"id": "debian"}},
-    {"id": "c3", "device": "/dev/vdb1", "kind": "root", "os": {"id": "debian"}}], "live_medium": ["/dev/sr0"]}
+    {"id": "c1", "device": "/dev/vda1", "kind": "root", "os": {"id": "gentoo"}},
+    {"id": "c2", "device": "/dev/vda3", "kind": "snapshot", "os": {"id": "gentoo"}},
+    {"id": "c3", "device": "/dev/vdb1", "kind": "root", "os": {"id": "gentoo"}}], "live_medium": ["/dev/sr0"]}
 
 
 def test_the_system_under_test_is_the_one_on_the_guarded_disk_with_the_expected_os():
     driver = vm_rescue.RescueDriver(Script())
-    assert driver.choose(SCAN, disk="/dev/vda", os_id="debian")["id"] == "c1"
-    with pytest.raises(vm_rescue.RescueFlowError, match="no ubuntu system on /dev/vda; it found: /dev/vda1 \\(debian, root\\)"):
-        driver.choose(SCAN, disk="/dev/vda", os_id="ubuntu")
-    with pytest.raises(vm_rescue.RescueFlowError, match="no debian system on /dev/vdc"):
-        driver.choose(SCAN, disk="/dev/vdc", os_id="debian")
-    twin = {**SCAN, "candidates": [*SCAN["candidates"], {"id": "c4", "device": "/dev/vda2", "kind": "root", "os": {"id": "debian"}}]}
-    with pytest.raises(vm_rescue.RescueFlowError, match="several debian systems"):
-        driver.choose(twin, disk="/dev/vda", os_id="debian")
+    assert driver.choose(SCAN, disk="/dev/vda", os_id="gentoo")["id"] == "c1"
+    with pytest.raises(vm_rescue.RescueFlowError, match="no debian system on /dev/vda; it found: /dev/vda1 \\(gentoo, root\\)"):
+        driver.choose(SCAN, disk="/dev/vda", os_id="debian")
+    with pytest.raises(vm_rescue.RescueFlowError, match="no gentoo system on /dev/vdc"):
+        driver.choose(SCAN, disk="/dev/vdc", os_id="gentoo")
+    twin = {**SCAN, "candidates": [*SCAN["candidates"], {"id": "c4", "device": "/dev/vda2", "kind": "root", "os": {"id": "gentoo"}}]}
+    with pytest.raises(vm_rescue.RescueFlowError, match="several gentoo systems"):
+        driver.choose(twin, disk="/dev/vda", os_id="gentoo")
 
 
 def test_the_live_medium_must_never_be_offered_as_a_system():
     leaking = {**SCAN, "candidates": [*SCAN["candidates"], {"id": "c9", "device": "/dev/sr0", "kind": "root", "os": {"id": "gentoo"}}]}
     with pytest.raises(vm_rescue.RescueFlowError, match="lists the live medium"):
-        vm_rescue.RescueDriver(Script()).choose(leaking, disk="/dev/vda", os_id="debian")
+        vm_rescue.RescueDriver(Script()).choose(leaking, disk="/dev/vda", os_id="gentoo")
 
 
 def test_a_system_that_was_mounted_writable_before_any_plan_ran_is_an_error():
@@ -390,17 +306,6 @@ def test_leftovers_after_the_unmount_fail_the_repair():
         vm_rescue.RescueDriver(Script((0, leftover))).unmount("r1")
 
 
-def test_a_plan_that_must_be_refused_is_refused_with_exit_seven_and_nothing_else_will_do():
-    refused = json.dumps({"type": "error", "error": "rescue.unsupported_action", "message": "Automatic repairs are not available for Arch Linux in this version.",
-                          "data": {"code": "rescue.unsupported_action"}})
-    evidence = vm_rescue.RescueDriver(Script((7, refused))).refusal("r1", "repair.recommended")
-    assert evidence == {"action": "repair.recommended", "exit": 7, "code": "rescue.unsupported_action", "message": "Automatic repairs are not available for Arch Linux in this version."}
-    with pytest.raises(vm_rescue.RescueFlowError, match="offered a plan"):
-        vm_rescue.RescueDriver(Script((0, result({"digest": "d"})))).refusal("r1", "repair.recommended")
-    with pytest.raises(vm_rescue.RescueFlowError, match=r"exit status 3 \(refused by the safety policy\), not 7"):
-        vm_rescue.RescueDriver(Script((3, refused))).refusal("r1", "repair.recommended")
-
-
 def test_every_command_gets_its_own_log_so_a_second_plan_never_mixes_with_the_first():
     script = Script((0, result({"candidates": []})), (0, result({"candidates": []})))
     driver = vm_rescue.RescueDriver(script, prefix="rescue-initramfs")
@@ -408,17 +313,6 @@ def test_every_command_gets_its_own_log_so_a_second_plan_never_mixes_with_the_fi
     driver.scan()
     assert [asked[1] for asked in script.asked] == ["rescue-initramfs-scan.log", "rescue-initramfs-scan-2.log"]
     assert driver.log_of("scan") == "rescue-initramfs-scan-2.log" and driver.log_of("run") == "rescue-initramfs-run.log"
-
-
-def test_a_run_that_was_not_refused_is_an_error():
-    ran = result({"outcome": "success", "steps": []})
-    with pytest.raises(vm_rescue.RescueFlowError, match="not 7"):
-        vm_rescue.RescueDriver(Script((0, ran))).refused_run("r1", "boot.config")
-
-
-def test_an_action_list_without_actions_is_an_error():
-    with pytest.raises(vm_rescue.RescueFlowError, match="printed no list"):
-        vm_rescue.RescueDriver(Script((0, result({"query": "actions.list", "data": {}})))).actions("r1")
 
 
 # --- the driver against the real command line ---------------------------------------------------------------------------------
@@ -439,13 +333,13 @@ def lab_runner(lab: Lab):
 def make_lab(tmp_path):
     counter = {"n": 0}
 
-    def make(family: str, breakage=None, **options):
+    def make(breakage=None, **options):
         counter["n"] += 1
 
         def factory(lsblk, **kwargs):
             return Lab(tmp_path, lsblk, name=f"lab{counter['n']}", **kwargs)
 
-        lab, tree = uefi_gentoo_lab(factory, family=family, **options)
+        lab, tree = uefi_gentoo_lab(factory, **options)
         if breakage:
             breakage(tree)
         return lab, tree
@@ -454,28 +348,24 @@ def make_lab(tmp_path):
 
 
 def remove_menu(tree: Path) -> None:
-    for name in ("boot/grub/grub.cfg", "boot/grub2/grub.cfg"):
-        (tree / name).unlink(missing_ok=True)
+    (tree / "boot/grub/grub.cfg").unlink(missing_ok=True)
 
 
 def remove_initramfs(tree: Path) -> None:
-    for pattern in ("initrd*", "initramfs*"):
-        for path in (tree / "boot").glob(pattern):
-            path.unlink()
+    for path in (tree / "boot").glob("initramfs*"):
+        path.unlink()
 
 
-@pytest.mark.parametrize(("family", "os_id", "mode", "breakage", "command"), [
-    ("debian", "debian", "grub-cfg", remove_menu, "update-grub"),
-    ("ubuntu", "ubuntu", "initramfs", remove_initramfs, "update-initramfs"),
-    ("fedora", "fedora", "grub-cfg", remove_menu, "grub2-mkconfig"),
-    ("gentoo", "gentoo", "initramfs", remove_initramfs, "dracut"),
+@pytest.mark.parametrize(("mode", "breakage", "command"), [
+    ("grub-cfg", remove_menu, "grub-mkconfig"),
+    ("initramfs", remove_initramfs, "dracut"),
 ])
-def test_a_system_with_a_missing_boot_file_is_repaired_the_way_the_harness_drives_it(make_lab, family, os_id, mode, breakage, command):
-    lab, tree = make_lab(family, breakage)
+def test_a_gentoo_with_a_missing_boot_file_is_repaired_the_way_the_harness_drives_it(make_lab, mode, breakage, command):
+    lab, tree = make_lab(breakage)
     driver = vm_rescue.RescueDriver(lab_runner(lab))
     scan = driver.scan()
-    system = driver.choose(scan, disk="/dev/nvme0n1", os_id=os_id)
-    assert system["device"] == "/dev/nvme0n1p5" and system["os"]["id"] == os_id
+    system = driver.choose(scan, disk="/dev/nvme0n1", os_id="gentoo")
+    assert system["device"] == "/dev/nvme0n1p5" and system["os"]["id"] == "gentoo"
     session = driver.mount(system)
     assert session["session_id"].startswith("r") and Path(session["path"]).name == session["session_id"]
     findings = driver.diagnose(session["session_id"])
@@ -493,9 +383,9 @@ def test_a_system_with_a_missing_boot_file_is_repaired_the_way_the_harness_drive
 
 
 def test_a_menu_file_that_is_repaired_gets_the_live_arguments_out_of_the_boot_files_check(make_lab):
-    lab, tree = make_lab("debian", remove_menu)
+    lab, tree = make_lab(remove_menu)
     driver = vm_rescue.RescueDriver(lab_runner(lab))
-    session = driver.mount(driver.choose(driver.scan(), disk="/dev/nvme0n1", os_id="debian"))
+    session = driver.mount(driver.choose(driver.scan(), disk="/dev/nvme0n1", os_id="gentoo"))
     plan = driver.plan(session["session_id"], "repair.recommended")
     driver.execute_plan(session["session_id"], "repair.recommended", plan)
     mounted = Path(session["path"])
@@ -507,31 +397,23 @@ def test_a_menu_file_that_is_repaired_gets_the_live_arguments_out_of_the_boot_fi
     assert tree.exists()
 
 
-def test_a_system_the_tool_only_diagnoses_refuses_every_repair(make_lab):
-    lab, tree = make_lab("arch")
+def test_a_system_that_is_not_gentoo_is_found_by_the_scan_and_refused_by_the_mount(make_lab):
+    """What the harness sees when the disk holds another distribution: the scan names it, and the tool will not open it (exit status 7)."""
+    lab, tree = make_lab(None)
     driver = vm_rescue.RescueDriver(lab_runner(lab))
     scan = driver.scan()
-    system = driver.choose(scan, disk="/dev/nvme0n1", os_id="arch")
-    session = driver.mount(system)
-    assert session["os"]["id"] == "arch" and driver.diagnose(session["session_id"])["findings"] is not None
-    for action in ("repair.recommended", "boot.config", "boot.bootloader"):
-        evidence = driver.refusal(session["session_id"], action)
-        assert evidence["exit"] == 7 and evidence["code"] == "rescue.unsupported_action" and "Arch" in evidence["message"], evidence
-    with pytest.raises(vm_rescue.RescueFlowError, match="exit status 7 .unsupported."):
-        driver.execute_plan(session["session_id"], "repair.recommended", {"digest": "0" * 64, "confirm": {}})
-    assert driver.refused_run(session["session_id"], "boot.bootloader")["code"] == "rescue.unsupported_action"
-    offered = {item["id"]: item for item in driver.actions(session["session_id"])}
-    for action in ("repair.recommended", "boot.config", "boot.bootloader", "boot.initramfs", "boot.kernel", "fstab.fix", "pkg.finish"):
-        assert offered[action]["available"] is False and "Arch" in offered[action]["reason"], action
-    driver.unmount(session["session_id"])
-    assert not lab.system.chroot_calls, "a refusal runs nothing of the system"
+    other = driver.choose(scan, disk="/dev/sdb", os_id="debian")
+    assert other["supported"] is False and other["os"]["pretty_name"].startswith("Debian")
+    with pytest.raises(vm_rescue.RescueFlowError, match=r"gentoo-rescue mount failed with exit status 7 \(unsupported\): Not a Gentoo system - this repair tool only supports Gentoo"):
+        driver.mount(other)
+    assert not lab.system.mounted_targets() and not lab.system.chroot_calls
 
 
 def test_a_failing_repair_command_is_a_failed_repair(make_lab):
-    lab, _tree = make_lab("debian", remove_menu)
-    lab.system.chroot_failures["update-grub"] = (1, "update-grub: error: cannot find a GRUB drive")
+    lab, _tree = make_lab(remove_menu)
+    lab.system.chroot_failures["grub-mkconfig"] = (1, "grub-mkconfig: error: cannot find a GRUB drive")
     driver = vm_rescue.RescueDriver(lab_runner(lab))
-    session = driver.mount(driver.choose(driver.scan(), disk="/dev/nvme0n1", os_id="debian"))
+    session = driver.mount(driver.choose(driver.scan(), disk="/dev/nvme0n1", os_id="gentoo"))
     plan = driver.plan(session["session_id"], "repair.recommended")
     with pytest.raises(vm_rescue.RescueFlowError, match="outcome 'failed': step boot-config-c1 .exit 1. failed"):
         driver.execute_plan(session["session_id"], "repair.recommended", plan)

@@ -134,7 +134,6 @@ def test_companion_selection_option_defaults_to_existing_both(tmp_path, selectio
     ("openrc", {"companions": "both", "memory": 12288}, False),     # the memory of a desktop install
     ("openrc", {"companions": "portagehub", "memory": 4096}, False),
     ("openrc", {"companions": "none", "memory": 2048}, False),
-    ("rescue-debian", {"companions": "both", "memory": 4096}, False),  # a cloud image installs nothing
 ])
 def test_installing_hwmonux_on_a_small_machine_is_called_out_before_an_hour_of_compiling(scenario, options, warned):
     note = vm.companion_memory_note(vm.SCENARIO_MAP[scenario], argparse.Namespace(**options))

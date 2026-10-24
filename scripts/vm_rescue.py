@@ -1,13 +1,14 @@
-"""Rescue scenarios: the distribution images they run on, and everything pure about repairing with gentoo-rescue.
+"""Rescue scenarios: everything pure about repairing a Gentoo with gentoo-rescue.
 
 ``scripts/test-vm.py`` owns the virtual machines; this module owns what is judged:
 
-* ``IMAGES``: the official cloud images (Debian, Ubuntu, Fedora, Arch) and what the rescue tool is
-  expected to do with each (repair it, or only detect and diagnose it);
-* the serial console of a booted image: is there a login prompt, did it panic, did the kernel get the
-  live medium's arguments;
-* ``RescueDriver``: the non-interactive repair, one ``gentoo-rescue`` command at a time (scan, mount,
-  diagnose, plan, run, unmount), with the exit codes and the JSON events the command line really prints.
+* ``BREAK_MODES`` and ``EXPECTATIONS``: the damage a scenario does to an installed Gentoo, and what the diagnosis and the plan must show for it;
+* the files a repaired system boots from, read from the live side: nothing of the live medium may be left in them;
+* ``RescueDriver``: the non-interactive repair, one ``gentoo-rescue`` command at a time (scan, mount, diagnose,
+  plan, run, unmount), with the exit codes and the JSON events the command line really prints;
+* the fingerprint of a base image (``--target-image``), to prove that nothing wrote to it.
+
+Only Gentoo is repaired, so there is no list of other distributions' images here: the tool refuses to open any other system.
 
 Nothing here starts a process: the driver gets a ``run(remote_command, log_name, timeout)`` function
 (``ScenarioRunner.ssh`` in a real run, a fake in tests) and returns what the commands said.
@@ -18,74 +19,19 @@ import hashlib
 import json
 import re
 import shlex
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
 from vm_probes import ANSI_RE
 
-# --- the images ------------------------------------------------------------------------------------------------------
+# --- the damage ----------------------------------------------------------------------------------------------------------
 
 BREAK_MODES = ("grub-cfg", "initramfs", "fstab-uuid")
 HEAD_BYTES = 1 << 20
 
 
-@dataclass(frozen=True)
-class RescueImage:
-    """An official cloud image used as the machine that does not boot."""
-
-    key: str
-    filename: str                  # the file name in the images directory
-    pattern: str                   # a glob that finds it when the exact name is not there (a newer release)
-    title: str
-    os_id: str                     # ID= of its /etc/os-release: what scan must report
-    family: str                    # the family the rescue tool must put it in
-    root_fs: str
-    layout: str                    # one line: what the partition table looks like
-    break_mode: str                # the damage the rescue plans can repair on it
-    repairable: bool = True        # False: detection and diagnosis only, writes are refused by design
-    final_boots: tuple[str, ...] = ("uefi", "bios")
-    note: str = ""
-
-
-IMAGES: dict[str, RescueImage] = {
-    "debian": RescueImage(
-        "debian", "debian-13-genericcloud-amd64.qcow2", "debian-*-genericcloud-amd64.qcow2", "Debian 13 (genericcloud)", "debian", "debian", "ext4",
-        "p1 root ext4, p14 BIOS boot, p15 ESP; /boot is part of the root", "grub-cfg",
-        note="fstab uses labels, so the damage is the menu file: update-grub makes it again"),
-    "ubuntu": RescueImage(
-        "ubuntu", "noble-server-cloudimg-amd64.img", "*-server-cloudimg-amd64.img", "Ubuntu 24.04 (cloudimg)", "ubuntu", "debian", "ext4",
-        "p1 root ext4, p14 BIOS boot, p15 ESP, p16 /boot (ext4, a partition of its own)", "initramfs",
-        note="the initramfs lives on the separate /boot partition: rescue must mount it from fstab to repair it"),
-    "fedora": RescueImage(
-        "fedora", "Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2", "Fedora-Cloud-Base-Generic-*.x86_64.qcow2", "Fedora Cloud Base", "fedora", "fedora", "btrfs",
-        "p1 BIOS boot, p2 ESP (grub.cfg there is a stub), p3 btrfs with subvolumes root, boot, home, var; /boot is the subvolume boot", "grub-cfg",
-        note="BLS entries and SELinux: the first boot after a repair relabels the files and restarts once; "
-             "grub-cfg removes /boot/grub2/grub.cfg in the subvolume boot, the stub on the ESP stays"),
-    "arch": RescueImage(
-        "arch", "Arch-Linux-x86_64-cloudimg.qcow2", "Arch-Linux-x86_64-cloudimg*.qcow2", "Arch Linux (cloudimg)", "arch", "arch", "btrfs",
-        "p1 BIOS boot, p2 ESP, p3 root btrfs", "", repairable=False, final_boots=(),
-        note="detected and diagnosed, never written to: the tool refuses repairs for Arch by design"),
-}
-
-
 class RescueFlowError(RuntimeError):
     """The default error of the driver; test-vm.py passes HarnessError instead."""
-
-
-def resolve_image(directory: Path, image: RescueImage, error: type[Exception] = RescueFlowError) -> Path:
-    """The file of ``image`` below ``directory``: the exact name, else the only file the pattern finds."""
-    exact = directory / image.filename
-    if exact.is_file():
-        return exact
-    found = sorted(path for path in directory.glob(image.pattern) if path.is_file()) if directory.is_dir() else []
-    if len(found) == 1:
-        return found[0]
-    if found:
-        raise error(f"several files in {directory} look like the {image.title} image ({', '.join(path.name for path in found)}): "
-                    f"remove the ones you do not want or pass --rescue-images with a directory that has one")
-    raise error(f"the {image.title} image {image.filename} was not found in {directory}: download it there (it is only ever used as a read-only backing file) "
-                "or pass --rescue-images DIR")
 
 
 def fingerprint(path: Path) -> dict[str, Any]:
@@ -101,21 +47,8 @@ def fingerprint_problems(before: Mapping[str, Any], after: Mapping[str, Any]) ->
     return [f"the {label} of the base image changed" for key, label in names.items() if before.get(key) != after.get(key)]
 
 
-# --- the serial console of a booted machine -----------------------------------------------------------------------------
+# --- the arguments of the live medium ---------------------------------------------------------------------------------------
 
-# "debian login:" at the start of a line; Ubuntu goes on writing cloud-init messages after the prompt on the same line.
-LOGIN_RE = re.compile(r"(?m)^[ \t]*[\w.-]+ login:")
-# Text that means the machine will not come up on its own: waiting longer cannot help.
-FATAL_MARKERS = (
-    "Kernel panic - not syncing", "VFS: Unable to mount root fs", "Entering emergency mode", "You are in emergency mode",
-    "Give root password for maintenance", "Cannot open access to console, the root account is locked", "grub rescue>",
-    "UEFI Interactive Shell", "No bootable device", "Dropping to a shell", "Starting Dracut Emergency Shell", "dracut-emergency",
-)
-FATAL_PATTERNS = (re.compile(r"(?m)^grub> ?"), re.compile(r"(?m)^\(initramfs\) "))
-# Evidence worth keeping when a system is broken (a superset of the fatal markers).
-EVIDENCE_MARKERS = FATAL_MARKERS + ("grub>", "error: file", "error: unknown filesystem", "error: no such device", "Boot failed", "Failed to mount", "Dependency failed for")
-REBOOT_MARKERS = ("reboot: Restarting system", "systemd-shutdown[1]: Rebooting")
-COMMAND_LINE_RE = re.compile(r"(?m)^(?:\[[^\]]*\]\s*)?(?:Kernel command line|Command line):\s*(.+?)\s*$")
 LIVE_ARGUMENT_RE = re.compile(r"root=live:\S*|rd\.live\.\S*|CDLABEL=\S*|\bcdroot\b")
 
 
@@ -123,55 +56,9 @@ def clean_serial(text: str) -> str:
     return ANSI_RE.sub("", text).replace("\r", "")
 
 
-def login_prompt(text: str) -> str:
-    """The login prompt in a serial log ('debian login:'), or ''."""
-    match = LOGIN_RE.search(clean_serial(text))
-    return match.group(0).strip() if match else ""
-
-
-def fatal_marker(text: str) -> str:
-    cleaned = clean_serial(text)
-    for marker in FATAL_MARKERS:
-        if marker in cleaned:
-            return marker
-    for pattern in FATAL_PATTERNS:
-        found = pattern.search(cleaned)
-        if found:
-            return found.group(0).strip()
-    return ""
-
-
-def evidence_markers(text: str) -> list[str]:
-    cleaned = clean_serial(text)
-    return [marker for marker in EVIDENCE_MARKERS if marker in cleaned]
-
-
-def rebooted(text: str) -> bool:
-    cleaned = clean_serial(text)
-    return any(marker in cleaned for marker in REBOOT_MARKERS)
-
-
-def kernel_command_line(text: str) -> str:
-    """The command line the kernel printed at boot ('' when its log level hid it)."""
-    found = COMMAND_LINE_RE.findall(clean_serial(text))
-    return found[-1] if found else ""
-
-
 def live_arguments(text: str) -> list[str]:
     """Arguments that belong to the live medium (root=live:..., rd.live..., CDLABEL=...) in a kernel or boot-loader line."""
     return sorted(set(LIVE_ARGUMENT_RE.findall(text)))
-
-
-def classify_boot(text: str, *, exited: bool = False, exit_code: int | None = None) -> str:
-    """'login', 'fatal:<marker>', 'rebooted' (the machine restarted itself), 'exited' or 'waiting'."""
-    if login_prompt(text):
-        return "login"
-    marker = fatal_marker(text)
-    if marker:
-        return f"fatal:{marker}"
-    if exited:
-        return "rebooted" if exit_code == 0 and rebooted(text) else "exited"
-    return "waiting"
 
 
 # --- the files a repaired system boots from, read from the live side --------------------------------------------------------
@@ -244,8 +131,8 @@ EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_REFUSED, EXIT_CONFIRM, EXIT_NOT_FOUND, EX
 EXIT_NAMES = {0: "ok", 1: "failed", 2: "usage", 3: "refused by the safety policy", 4: "needs confirmation", 5: "not found", 6: "busy", 7: "unsupported", 130: "interrupted"}
 # Per break mode: the findings a diagnosis must contain and a pattern the plan's commands must match.
 EXPECTATIONS: dict[str, dict[str, Any]] = {
-    "grub-cfg": {"findings": ("D05",), "plan": r"update-grub|grub-?mkconfig|grub2-mkconfig|grub-?install|reinstall"},
-    "initramfs": {"findings": ("D02", "D03", "D15"), "plan": r"update-initramfs|dracut|mkinitcpio|genkernel"},
+    "grub-cfg": {"findings": ("D05",), "plan": r"grub-?mkconfig|grub-?install"},
+    "initramfs": {"findings": ("D02", "D03", "D15"), "plan": r"dracut|genkernel"},
     "fstab-uuid": {"findings": ("D07",), "plan": r"/etc/fstab"},
 }
 
@@ -315,7 +202,7 @@ def plan_touches_nvram(plan: Mapping[str, Any]) -> bool:
         name = argv[0].rsplit("/", 1)[-1]
         if name == "efibootmgr":
             return True
-        if name in ("grub-install", "grub2-install") and "--no-nvram" not in argv and not any(a.startswith("--target=i386-pc") for a in argv):
+        if name == "grub-install" and "--no-nvram" not in argv and not any(a.startswith("--target=i386-pc") for a in argv):
             return True
         if name == "bootctl" and "--variables=no" not in argv:
             return True
@@ -448,35 +335,6 @@ class RescueDriver:
         if failed:
             raise self.error("the plan cannot run here: " + "; ".join(str(text) for text in failed))
         return data
-
-    def refusal(self, session: str, action: str) -> dict[str, Any]:
-        """``plan`` for a system the tool only diagnoses: the answer must be 'unsupported' (exit 7) and nothing may have been run."""
-        code, events, output = self.call(f"plan-{action}", "plan", session, action, allow=tuple(range(0, 256)))
-        failure = error_of(events)
-        if code == EXIT_OK:
-            raise self.error(f"gentoo-rescue offered a plan for {action} on a system it must only diagnose")
-        if code != EXIT_UNSUPPORTED:
-            raise self.error(f"gentoo-rescue plan {action} ended with exit status {code} ({EXIT_NAMES.get(code, 'unknown')}), not 7 (unsupported): {failure['message']}")
-        return {"action": action, "exit": code, "code": failure["code"], "message": failure["message"] or clean_serial(output).strip()[-300:]}
-
-    def refused_run(self, session: str, action: str) -> dict[str, Any]:
-        """``run`` for a system the tool only diagnoses: it must be refused (exit 7) before anything is planned for real or executed."""
-        code, events, output = self.call(f"run-{action}", "run", session, action, "--confirm-plan", "0" * 64, allow=tuple(range(0, 256)))
-        failure = error_of(events)
-        if code != EXIT_UNSUPPORTED:
-            raise self.error(f"gentoo-rescue run {action} ended with exit status {code} ({EXIT_NAMES.get(code, 'unknown')}), not 7 (unsupported); a system that is only diagnosed must refuse")
-        if last_result(events, "outcome") is not None:
-            raise self.error(f"gentoo-rescue run {action} printed a result although it was refused")
-        return {"action": action, "exit": code, "code": failure["code"], "message": failure["message"] or clean_serial(output).strip()[-300:]}
-
-    def actions(self, session: str) -> list[dict[str, Any]]:
-        """What the tool offers for a session: id, availability and the reason when it is not available."""
-        _code, events, _output = self.call("actions", "actions", session)
-        data = last_result(events, "query")
-        listing = (data or {}).get("data") if isinstance((data or {}).get("data"), dict) else None
-        if listing is None or "actions" not in listing:
-            raise self.error(f"gentoo-rescue actions printed no list; see {self.log_of('actions')}")
-        return [dict(item) for item in listing["actions"]]
 
     def execute_plan(self, session: str, action: str, plan: Mapping[str, Any]) -> dict[str, Any]:
         """Run exactly the plan that was shown (its digest), with the confirmation its risk asks for."""

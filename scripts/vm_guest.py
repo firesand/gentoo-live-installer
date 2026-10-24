@@ -9,7 +9,7 @@ Each sub-command takes one JSON argument and prints one JSON line:
   rescue-break    damage the installed system on the target disk, from the live system, so a
                   repair tool has something to repair (grub.cfg, initramfs or the fstab UUID); finds the
                   system inside a btrfs subvolume and mounts the system's /boot as its own fstab does:
-                  a partition of its own, or a btrfs subvolume of the root file system (Fedora)
+                  a partition of its own, or a btrfs subvolume of the root file system
   disk-hash       the sha256 of a whole disk, to show later that nothing wrote to it
 
 They are sent as ``python3 -c "$(cat vm_guest.py)" <sub-command> '<json>'`` and use only the
@@ -230,8 +230,8 @@ def find_system_root(mounted: Path) -> Path:
 def boot_mount(system: Path, root_device: str, partitions: list[dict]) -> tuple[str, str]:
     """What the system's own fstab mounts at /boot, if it is more than a directory of the root: (device, mount option).
 
-    That is a partition of the disk of its own (Ubuntu: ``("/dev/vda16", "")``), or a subvolume of the root's Btrfs file system
-    (Fedora: ``("/dev/vda3", "subvol=boot")``, the kernel and grub.cfg are in that subvolume and the root subvolume has an empty
+    That is a partition of the disk of its own (for example ``("/dev/vda16", "")``), or a subvolume of the root's Btrfs file system
+    (for example ``("/dev/vda3", "subvol=boot")``: the kernel and grub.cfg are in that subvolume and the root subvolume has an empty
     /boot). A device that is not a partition of this disk is never named.
     """
     entries = read_fstab_entries(system)
@@ -269,7 +269,7 @@ def initramfs_images(boot: Path) -> list[Path]:
 def break_root_tree(mode: str, root: Path) -> dict:
     """Damage a mounted installation. Returns what was changed; raises if there was nothing to break."""
     if mode == "grub-cfg":
-        # Gentoo and Debian keep it in boot/grub, Fedora and SUSE in boot/grub2.
+        # Gentoo keeps it in boot/grub; boot/grub2 is looked at too.
         configs = [root / name for name in ("boot/grub/grub.cfg", "boot/grub2/grub.cfg") if (root / name).is_file()]
         if not configs:
             raise GuestError("boot/grub/grub.cfg is missing: this installation has nothing to break")

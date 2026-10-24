@@ -3,7 +3,7 @@ GENTOO INSTALLER AND RESCUE DISC
 
 This disc starts a complete Gentoo Linux desktop from a USB stick or DVD.
 From there you can install Gentoo on a PC or laptop with a guided program,
-or repair a Linux system that no longer starts. Nothing on your disks
+or repair a Gentoo system that does not start. Nothing on your disks
 changes until you ask for it, and the installer shows what it will erase
 before it does anything.
 
@@ -33,7 +33,7 @@ seconds.
                                   GiB of RAM); afterwards you can remove the
                                   stick
   Repair a system (text console)  no desktop. Starts the repair tool for
-                                  a Linux system that does not start. It
+                                  a Gentoo system that does not start. It
                                   works with any graphics chip. It asks for
                                   a keyboard layout first.
   Install in text mode            no desktop. Starts the text installer,
@@ -68,7 +68,7 @@ section 8.
 --------------------------------------------------------
 Wait a minute: starting from a USB stick is slow. If nothing appears,
 restart and choose "Install in text mode" (to install Gentoo) or "Repair a
-system (text console)" (to fix a system that does not start). Both work
+system (text console)" (to fix a Gentoo system that does not start). Both work
 without a graphics driver, so they work on every PC. The tool starts by
 itself after you have chosen the keyboard layout. Choose "Text console only"
 if you want a plain shell. Newer graphics chips sometimes need a newer
@@ -109,22 +109,25 @@ suspend when the lid is closed or the PC is idle, but nothing can prevent a
 flat battery. A Gentoo installation downloads or compiles many packages and
 takes from half an hour to several hours.
 
-7. REPAIRING A SYSTEM THAT DOES NOT START
------------------------------------------
+7. REPAIRING A GENTOO SYSTEM THAT DOES NOT START
+------------------------------------------------
 Start this disc. Choose "Repair a system (text console)" in the boot menu,
-or open "Repair an existing system" in the applications menu of the
-desktop, or run "sudo gentoo-rescue" in a terminal. It finds installed Linux
-systems (Gentoo, Debian, Ubuntu, Fedora and others), asks for the disk
-password if the disk is encrypted, mounts everything under /mnt/rescue and
-offers repairs such as the boot loader, fstab, the initramfs and the kernel,
-or a shell inside the system. Disks are mounted read-only first. Nothing is
-formatted or partitioned. Repairs are offered for Gentoo, Debian, Ubuntu,
-Fedora and the systems related to them; other systems (Arch, openSUSE and
-more) can be looked at and opened in a shell, but are not repaired by the
-tool. "gentoo-chroot SESSION" opens a shell inside a mounted system. Tools
-for hard cases are on the disc: smartctl, nvme, ddrescue, testdisk, fsck for
-ext4, xfs, btrfs, f2fs, exfat, vfat, jfs and ntfs, cryptsetup, lvm and mdadm.
-This disc leaves volume groups and RAID arrays alone until you select them.
+or open "Repair a Gentoo System" in the applications menu of the desktop,
+or run "sudo gentoo-rescue" in a terminal. It finds the Gentoo systems on
+your disks, asks for the disk password if the disk is encrypted, mounts
+everything under /mnt/rescue and offers repairs such as the boot loader,
+fstab, the initramfs and the kernel, or a shell inside the system. Disks
+are mounted read-only first. Nothing is formatted or partitioned.
+
+Only Gentoo is repaired. Any other Linux on the computer (Debian, Ubuntu,
+Fedora, Arch and so on) is listed as "Not a Gentoo system - this repair
+tool only supports Gentoo". It is not opened and not changed.
+
+"gentoo-chroot SESSION" opens a shell inside a mounted Gentoo system.
+Tools for hard cases are on the disc: smartctl, nvme, ddrescue, testdisk,
+fsck for ext4, xfs, btrfs, f2fs, exfat, vfat, jfs and ntfs, cryptsetup,
+lvm and mdadm. This disc leaves volume groups and RAID arrays alone until
+you select them.
 
 8. BOOT OPTIONS (type them at the end of the "linux" line)
 ----------------------------------------------------------

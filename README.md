@@ -3,7 +3,7 @@
 A live USB/DVD image that does three jobs on almost any 64-bit PC or laptop:
 
 * **Install Gentoo** with a guided desktop wizard (`gentoo-installer`), or **in text mode** when the desktop does not start (`gentoo-installer-text`).
-* **Repair a system that no longer starts** (`gentoo-rescue`). The disc finds installed systems, asks for disk passwords, mounts everything read-only first and offers repairs for the boot loader, fstab, initramfs and kernel. It repairs Gentoo, Debian and Ubuntu, and Fedora. It finds and diagnoses other systems (Arch, openSUSE, ...) and opens a shell in them.
+* **Repair a Gentoo system that does not start** (`gentoo-rescue`). The disc finds the Gentoo systems on your disks, asks for disk passwords, mounts everything read-only first and offers repairs for the boot loader, fstab, initramfs and kernel. It repairs Gentoo only: any other Linux it finds is listed as "Not a Gentoo system - this repair tool only supports Gentoo" and is neither opened nor changed.
 * **Look at the hardware** and set the installation up for it: graphics, firmware, power, disks.
 
 The repository holds the wizard and the root daemon (`src/`), the ISO build (`iso/`, `scripts/build-iso.sh`), the Portage overlay (`packaging/`), two companion apps (`apps/portagehub`, `apps/hwmonux`) and the disposable-VM test harness (`scripts/test-vm.py`). Nothing here claims a tested install on real hardware: [docs/TESTING.md](docs/TESTING.md) lists what has run and what has not.
@@ -23,7 +23,7 @@ On a PC that runs **Windows with BitLocker or "Device encryption"**, look up you
 | Entry | Use it to |
 |---|---|
 | Gentoo installer and rescue desktop | Install with the wizard, or open the repair window. The default. |
-| **Repair a system (text console)** | Fix a system that does not start. No desktop, works with any graphics chip. |
+| **Repair a system (text console)** | Fix a Gentoo system that does not start. No desktop, works with any graphics chip. |
 | **Install in text mode** | Install without a desktop. |
 | Desktop in RAM | Run from memory (needs 6 GiB), then remove the stick. |
 | Text console only | A shell, for experts and headless machines. |

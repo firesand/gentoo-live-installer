@@ -203,6 +203,7 @@ def test_rescue_desktop_entry_is_valid() -> None:
     entry = parser["Desktop Entry"]
     assert entry["Type"] == "Application" and entry["Exec"] == "gentoo-installer --mode repair" and entry["Terminal"] == "false"
     assert entry["Categories"].endswith(";")
+    assert entry["Name"] == "Repair a Gentoo System" and entry["Comment"] == "Repair a Gentoo system that does not start"
 
 
 def test_the_source_archive_contains_the_data_directory() -> None:

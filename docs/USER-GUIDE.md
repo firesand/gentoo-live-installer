@@ -1,8 +1,8 @@
-# User guide: install Gentoo on your PC or laptop, and repair a system that does not start
+# User guide: install Gentoo on your PC or laptop, and repair a Gentoo system that does not start
 
 This guide is for people who have the installer disc and want to use it on their own PC or laptop. You do not need to know Gentoo. The build side (how the disc is made) is in [ISO.md](ISO.md).
 
-Contents: [what you need](#1-what-you-need) · [write the disc](#2-write-the-disc-to-a-usb-stick) · [start it: Secure Boot, UEFI and BIOS](#3-start-the-disc) · [if it does not start](#4-if-the-disc-does-not-start-or-the-screen-stays-black) · [network, keyboard, clock](#5-network-keyboard-and-clock) · [install Gentoo](#6-install-gentoo-with-the-desktop-wizard) · [install in text mode](#7-install-in-text-mode) · [laptops, graphics and special hardware](#8-laptops-graphics-and-special-hardware) · [repair a system](#9-repair-a-system-that-does-not-start) · [repair by hand](#10-repair-by-hand-cheat-sheet) · [logs for a bug report](#11-logs-and-diagnostics-for-a-bug-report) · [troubleshooting](#12-troubleshooting-table) · [limits](#13-what-the-disc-cannot-do)
+Contents: [what you need](#1-what-you-need) · [write the disc](#2-write-the-disc-to-a-usb-stick) · [start it: Secure Boot, UEFI and BIOS](#3-start-the-disc) · [if it does not start](#4-if-the-disc-does-not-start-or-the-screen-stays-black) · [network, keyboard, clock](#5-network-keyboard-and-clock) · [install Gentoo](#6-install-gentoo-with-the-desktop-wizard) · [install in text mode](#7-install-in-text-mode) · [laptops, graphics and special hardware](#8-laptops-graphics-and-special-hardware) · [repair a Gentoo system](#9-repair-a-gentoo-system-that-does-not-start) · [repair by hand](#10-repair-by-hand-cheat-sheet) · [logs for a bug report](#11-logs-and-diagnostics-for-a-bug-report) · [troubleshooting](#12-troubleshooting-table) · [limits](#13-what-the-disc-cannot-do)
 
 ## 1. What you need
 
@@ -122,7 +122,7 @@ There is no entry for speech output or braille: the disc has no screen reader (s
 
 The installer starts with the desktop. Or run `gentoo-installer`. It has eight steps. **In guided mode the disk you choose is erased.** You confirm by typing its name on the Review page. The disc you booted from is never offered.
 
-1. **Welcome**: choose *Install Gentoo*. The button *Repair an existing system* opens the repair window instead (section 9).
+1. **Welcome**: choose *Install Gentoo*. The button *Repair a Gentoo system* opens the repair window instead (section 9).
 2. **Readiness**: the installer checks the live system, the network, the tools and your hardware. Warnings can be ignored. Errors cannot. A hardware summary and advice appear here. You can save a diagnostics file (section 11).
 3. **Storage**:
    * *Guided* makes a complete layout on one disk (boot partition, optional swap, root) and **erases that disk**.
@@ -131,7 +131,7 @@ The installer starts with the desktop. Or run `gentoo-installer`. It has eight s
    * Pick the right disk by size and model. If you have two SSDs, write them down before you start.
    * **A disk without a serial number must be approved.** Virtual disks and some USB adapters report no serial number, and two disks can report the same one. The installer then has no serial number to check that it is still the same disk later. The page shows *This disk has no serial number*. Check the model and the size. Then tick *I confirm that /dev/... is the disk to use*. From then on the installer knows the disk by its hardware path, its size and its model, and it refuses to go on if one of them changes. Without the tick you cannot continue. If the disk has no stable hardware path either, it cannot be used. (For a virtual machine, give the disk a serial number.)
    * **A disk that is in use asks for your consent.** The page shows *This disk is in use* when the disk, or a partition you format, holds active swap, an LVM volume group, a RAID array, or one half of a Btrfs or ZFS pool whose other half is on another disk. Erasing it destroys that data, and the data on the other disks of the same volume group, array or pool. Tick *Switch these volumes off and erase them together with the disk* to go on, or choose another disk. A disk with mounted partitions must be unmounted first.
-   * In *Manual* mode, if you keep (do not format) the root partition, the installer asks **Install over the existing system?** before it starts. Say Yes only if the new system may go into that partition. If it already holds a Linux system, that system's `/etc`, its accounts and its boot files are replaced. A copy of `/etc` and of the SSH keys is saved in `/root` first. To repair that system instead, say No and use *Repair an existing system* (section 9).
+   * In *Manual* mode, if you keep (do not format) the root partition, the installer asks **Install over the existing system?** before it starts. Say Yes only if the new system may go into that partition. If it already holds a Linux system, that system's `/etc`, its accounts and its boot files are replaced. A copy of `/etc` and of the SSH keys is saved in `/root` first. To repair a Gentoo system that is on it instead, say No and use *Repair a Gentoo system* (section 9).
 4. **Base system**: stage3 (OpenRC or systemd), Portage profile, desktop (KDE Plasma, GNOME, Xfce or none), kernel, initramfs and boot loader. The preselected choices (a binary kernel, GRUB, a desktop profile) are the quickest and the most tested. Change them only when you know why.
 5. **Customization** has four tabs. The installer fills in what it detected. Change it if you want something else.
    * **Hardware** comes first. It shows what the installer found on this computer (processor, memory, graphics, disks, firmware), advice for it, and the list *What the installer will set up*. Here you choose *This computer* (tuned for this hardware) or *A portable disk* (for a disk that will move to other computers: generic settings, all firmware, both microcode families and a fallback boot entry). You also choose the graphics driver, power management, compressed RAM swap, TRIM, hibernation and more. Most choices are on *Automatic*, and the page says what Automatic means on this computer. Set *Experience* (top right) to *Advanced* to see all of them.
@@ -204,15 +204,17 @@ In Windows, shrink the Windows partition with Disk Management first. Switch off 
 
 Try *More options > Old firmware* (turns off ACPI and APIC) only if the normal entry hangs. For a machine that freezes, try *Compatibility mode*.
 
-## 9. Repair a system that does not start
+## 9. Repair a Gentoo system that does not start
 
-Start the disc. The best entry is **Repair a system (text console)**: it works on every PC. On the desktop, open **Repair an Existing System** in the applications menu (or the button *Repair an existing system* on the installer's Welcome page). In a terminal, run `sudo gentoo-rescue`.
+This tool repairs **Gentoo only**. If the computer also has Debian, Ubuntu, Fedora, Arch or another Linux, the tool lists it as *Not a Gentoo system - this repair tool only supports Gentoo* and does not open it or change it.
+
+Start the disc. The best entry is **Repair a system (text console)**: it works on every PC. On the desktop, open **Repair a Gentoo System** in the applications menu (or the button *Repair a Gentoo system* on the installer's Welcome page). In a terminal, run `sudo gentoo-rescue`.
 
 Need the USB port for an external disk? Choose *More options > Text console in RAM* (needs 4 GiB of memory). The disc is copied to memory, you can remove the stick, and you start the tool yourself with `sudo gentoo-rescue`.
 
 ### What the tool does
 
-1. It looks at all disks and finds installed Linux systems. To look, it mounts read-only. It never writes at this stage.
+1. It looks at all disks and finds the Gentoo systems. To look, it mounts read-only. It never writes at this stage. Another Linux that it finds is named in the list (so you know it was seen) and marked as not Gentoo.
 2. It asks for the passphrase of encrypted (LUKS) disks. Set the keyboard layout first. The live system does not start volume groups or RAID arrays by itself. The tool does it for the ones you select.
 3. It mounts the system **read-only** under `/mnt/rescue`, reads it (fstab, boot loader, kernels, logs) and tells you what looks wrong.
 4. It offers repairs as a plan. You see the exact commands before anything is written. For risky repairs you type the name of the root device and confirm that you have a backup.
@@ -220,17 +222,17 @@ Need the USB port for an external disk? Choose *More options > Text console in R
 
 It never formats or repartitions a disk. The tool shows a guided menu on a text console. The first choice is *Fix everything recommended*: one plan that does what the diagnosis suggests, in the right order.
 
-### What each repair does (Gentoo, Debian and Ubuntu, Fedora)
+### What each repair does
 
-| Repair | Gentoo | Debian, Ubuntu, Mint | Fedora, RHEL, Alma, Rocky |
-|---|---|---|---|
-| Rebuild the initramfs | `dracut --force` (or `genkernel`) for the chosen kernels | `update-initramfs -u` (or `-c`) | `dracut --force` |
-| Regenerate the boot menu | `grub-mkconfig` | `update-grub` | missing boot entries are added with `kernel-install`, then `grub2-mkconfig` |
-| Reinstall the boot loader | `grub-install` for UEFI or BIOS, or `bootctl` for systemd-boot, then a new menu | `grub-install` with the Secure Boot chain when the system uses it, or reinstall the GRUB and shim packages; `bootctl` for systemd-boot | UEFI: reinstall the signed `shim` and GRUB packages with `dnf` (never `grub2-install` on UEFI), then a new menu and a firmware entry. BIOS: `grub2-install` |
-| Reinstall the kernel | `emerge --config`, or a new `emerge` of the kernel package, then initramfs and menu | reinstall the kernel packages, then initramfs and menu | reinstall `kernel-core` and modules, then initramfs and menu |
-| Finish an interrupted package job | `emerge --resume` | `dpkg --configure -a` and `apt -f install` | `rpm --rebuilddb` |
+| Repair | What it does |
+|---|---|
+| Rebuild the initramfs | `dracut --force` (or `genkernel`) for the chosen kernels |
+| Regenerate the boot menu | `grub-mkconfig` |
+| Reinstall the boot loader | `grub-install` for UEFI or BIOS, or `bootctl` for systemd-boot, then a new menu |
+| Reinstall the kernel | `emerge --config`, or a new `emerge` of the kernel package, then initramfs and menu |
+| Finish an interrupted package job | `emerge --resume` |
 
-Repairs that work the same on every system:
+Repairs that do not depend on the boot loader:
 
 * **Fix the disk list (fstab)**: finds the lines that point at disks that are not there, and proposes a fix for each one. If the tool is sure which disk is meant (the root you opened, the only swap area, the only EFI partition on the system's disk), it points the line at that disk by UUID. If not, it adds `nofail`, so the start does not wait for the disk. A line that already has `nofail` or `noauto`, or whose file system type is wrong (you correct that by hand), is left alone. Before anything is written you see the changes (a diff) and the lines the tool leaves alone, each with its reason. A backup copy of the old file is kept. The repair window shows this proposal, and you accept it or not as a whole. To choose line by line, use the terminal tool: `gentoo-rescue fstab show SESSION` lists the lines with their numbers, then `gentoo-rescue fstab fix SESSION --choose 3=replace:UUID=<uuid> --choose 5=comment`. The actions are `replace:UUID=<uuid>`, `nofail`, `comment` and `keep`.
 * **Add, remove or reorder firmware boot entries** (UEFI): `efibootmgr`. Also: boot an entry once, and create the fallback file `EFI/BOOT/BOOTX64.EFI` so that firmware which forgot its entries can still find the system.
@@ -254,16 +256,12 @@ A moved disk (a system now in another computer): choose *Rebuild the initramfs* 
 * **A disk that is already open.** The file manager of the desktop may have opened the disk of the system. The window then says where, and the tool does not touch it. Close it there (the eject button next to the disk, or `sudo umount DIRECTORY` in a terminal), then press **Check again**. The tool never unmounts something it did not open itself. The old option `gentoo-rescue mount --unmount-existing` was removed: it only hid this message, and the mount failed anyway.
 * **Left open by an earlier repair.** If a repair was cut short (the window was closed, the service restarted, the power went), the system can stay open. The first page lists these under *Still open* (you can continue with them) and *Left open by an earlier repair* (no window can continue with them: disks still locked against writing, an unlocked disk, an active volume group). Press **Release them** to give them back. Only what the repair tool itself opened is released. If something else is mounted there, the page names it, and you unmount it yourself. In a terminal: `sudo gentoo-rescue cleanup`. The installer does not start while something is left open.
 * **Disk names that can change.** A line of the system's disk list (fstab) can name a disk as `/dev/sda2`, or by the port it is plugged into (`by-path`), instead of by UUID. Such names change between starts and between computers: a USB stick can be `/dev/sda` in the live session. If the name now points at a partition on another disk than the system's own, the tool does not open it by itself. The mount plan lists the line under *Not found* and offers the partition under *Suggestions*. Press **Add** only if it is the right disk. In a terminal add `--mount MOUNTPOINT=DEVICE`. The diagnosis notes such names too: write UUIDs in their place (`blkid` shows them).
-* **Change options.** On the page with the plan, **Change options** opens the options of the repair. *Rebuild the initramfs* lists the installed kernels: tick the ones to rebuild, or none for all of them. *Reinstall the kernel* lists them on Debian and Ubuntu (none ticked: the damaged kernel, or else the newest one). On Gentoo it asks for the kernel package and the method instead. In a terminal: `--param kernels=VERSION,VERSION`.
+* **Change options.** On the page with the plan, **Change options** opens the options of the repair. *Rebuild the initramfs* lists the installed kernels: tick the ones to rebuild, or none for all of them. *Reinstall the kernel* asks for the kernel package (empty: the newest installed one) and the method instead: `--param package=sys-kernel/gentoo-kernel-6.10.1 --param mode=remerge`. To rebuild only some initramfs images in a terminal: `--param kernels=VERSION,VERSION`.
 * **Read the journal.** The logs page shows the last lines of the text log files the system kept. Many systems keep their messages in a binary journal instead. For those, **Read the journal of the last boot…** runs the system's own `journalctl` as root, so the window asks first: tick *I trust this system and want to read its journal*. You can limit it to errors, or to kernel messages. The system must be open with repairs allowed (not *Look only*). In a terminal: `gentoo-rescue logs SESSION --journal --allow-run-system-program`.
 
-### What is only detected: Arch, openSUSE and others
+### Another Linux on the same computer
 
-Arch Linux, Manjaro, openSUSE, Void, Alpine, NixOS, image-based systems (such as Fedora Silverblue) and any other system are **found and diagnosed, but not repaired by the tool**. The tool refuses to write and says why. You can still:
-
-* look at the diagnosis, read the system's logs, and copy your files out;
-* open a terminal in the system (next part) and use the commands in section 10;
-* for NixOS and image-based systems use their own rollback tools, which the tool names.
+Arch Linux, Debian, Ubuntu, Fedora, openSUSE, Void, Alpine, NixOS and every other system that is not Gentoo are **listed but not opened**. The first page of the repair window shows them under *Other systems*, the text tool prints them without a number, and `gentoo-rescue mount` answers *Not a Gentoo system - this repair tool only supports Gentoo* (exit status 7). Nothing on them is changed, and the tool has no terminal for them. If you want to look at one anyway, mount it yourself, read-only first (section 10, *Mount it*), and use that distribution's own documentation to repair it.
 
 ### The repair terminal
 
@@ -297,7 +295,7 @@ sudo umount /mnt/external
 
 ## 10. Repair by hand: cheat sheet
 
-Use this when you prefer the shell, or for a system the tool does not repair (Arch, openSUSE and others). Replace the device names with yours (`lsblk -f` shows file systems, labels and UUIDs). Run the commands as the live user with `sudo`.
+Use this when you prefer the shell, or for a system the tool does not repair (any Linux that is not Gentoo). Replace the device names with yours (`lsblk -f` shows file systems, labels and UUIDs). Run the commands as the live user with `sudo`.
 
 **Unlock and assemble the storage**
 
@@ -314,7 +312,7 @@ sudo mdadm --assemble --scan --config=none      # RAID: or name the members: mda
 sudo mkdir -p /mnt/system
 sudo mount /dev/mapper/cryptroot /mnt/system
 sudo mount /dev/nvme0n1p2 /mnt/system/boot       # only if /boot is separate
-sudo mount /dev/nvme0n1p1 /mnt/system/boot/efi   # the EFI system partition; on some systems it is /efi
+sudo mount /dev/nvme0n1p1 /mnt/system/efi        # the EFI system partition; older installs use /boot/efi
 for d in dev proc sys run; do
   sudo mount --rbind /$d /mnt/system/$d && sudo mount --make-rslave /mnt/system/$d
 done
@@ -327,17 +325,14 @@ sudo chroot /mnt/system /bin/bash                # use /bin/sh if there is no ba
 
 | System | Commands inside the chroot |
 |---|---|
-| Debian, Ubuntu, Mint | `update-initramfs -u -k all` · `update-grub` · BIOS: `grub-install /dev/sda` · UEFI: `grub-install --target=x86_64-efi --efi-directory=/boot/efi` · unfinished updates: `dpkg --configure -a && apt -f install` |
-| Fedora, RHEL, Alma, Rocky | `dracut --force --regenerate-all` · `grub2-mkconfig -o /boot/grub2/grub.cfg` · UEFI: `dnf reinstall shim-x64 grub2-efi-x64` (do not run `grub2-install` on UEFI) · after editing files on an SELinux system: `touch /.autorelabel` |
-| Arch, Manjaro | `mkinitcpio -P` · `grub-install --target=x86_64-efi --efi-directory=/boot --bootloader-id=GRUB` · `grub-mkconfig -o /boot/grub/grub.cfg` |
 | Gentoo | `ls /boot /lib/modules` · initramfs: `dracut --force --kver <version>` (or `genkernel initramfs`) · `grub-install --target=x86_64-efi --efi-directory=/efi --bootloader-id=Gentoo` (BIOS: `grub-install /dev/sda`) · `grub-mkconfig -o /boot/grub/grub.cfg` |
 | Any | A forgotten password: `passwd root` (or `passwd youruser`). A wrong disk in `/etc/fstab`: compare with `blkid`, edit the UUIDs, check with `findmnt --verify`. |
 
-**UEFI boot entry missing** (the firmware forgot the entry, or the disk was moved): `efibootmgr -v` lists them. Some firmware only looks at the fallback path, so copying the loader there makes the disk bootable anywhere: `mkdir -p /boot/efi/EFI/BOOT && cp /boot/efi/EFI/<name>/grubx64.efi /boot/efi/EFI/BOOT/BOOTX64.EFI` (on Fedora and Ubuntu the loader to copy is `shimx64.efi`). A new entry: `efibootmgr --create --disk /dev/nvme0n1 --part 1 --loader '\EFI\<name>\grubx64.efi' --label "Linux"`.
+**UEFI boot entry missing** (the firmware forgot the entry, or the disk was moved): `efibootmgr -v` lists them. Some firmware only looks at the fallback path, so copying the loader there makes the disk bootable anywhere: `mkdir -p /efi/EFI/BOOT && cp /efi/EFI/Gentoo/grubx64.efi /efi/EFI/BOOT/BOOTX64.EFI`. A new entry: `efibootmgr --create --disk /dev/nvme0n1 --part 1 --loader '\EFI\Gentoo\grubx64.efi' --label "Gentoo"`.
 
 **File system problems** (the file system must **not** be mounted; for encrypted disks unlock first): look before repairing: `sudo e2fsck -n /dev/sdXN` (ext4), `sudo btrfs check --readonly /dev/sdXN`, `sudo xfs_repair -n /dev/sdXN`. Repair only after a backup (`ddrescue` for a failing disk): `sudo e2fsck -f /dev/sdXN`, `sudo xfs_repair /dev/sdXN`. NTFS volumes that Windows left "dirty" (Fast Startup) are not repaired here: boot Windows and shut it down properly.
 
-For openSUSE, Void, Alpine, NixOS and other systems, the idea is the same: mount the system, bind `dev`, `proc`, `sys` and `run`, `chroot`, rebuild the initramfs, reinstall the boot loader. Use that distribution's own documentation for the exact commands. This project has not tested them.
+A system that is not Gentoo (Debian, Ubuntu, Fedora, Arch, openSUSE, ...) follows the same idea: mount the system, bind `dev`, `proc`, `sys` and `run`, `chroot`, rebuild the initramfs, reinstall the boot loader. Use that distribution's own documentation for the exact commands. This project has not tested them.
 
 **Other tools on the disc**: `gparted` (partitions, graphical), `testdisk` and `photorec` (lost partitions and deleted files), `ddrescue`, `smartctl`, `nvme`, `hdparm`, `lshw`, `lspci`, `lsusb`, `dmidecode`, `mokutil --sb-state` (Secure Boot state), `efibootmgr`, `os-prober`, `cryptsetup`, `lvm`, `mdadm`, `btrfs`, `xfs_repair`, `fsck.f2fs`, `fsck.exfat`, `ntfsfix`, `lsinitrd`.
 
@@ -395,6 +390,6 @@ The disc is read-only and its files are gone at power off. Save reports to a sec
 * Show a desktop on a GPU whose kernel driver the live kernel (6.18) lacks. A generic fallback (`simpledrm`) is not in the kernel. Use the text mode entries.
 * Run on hardware released after the image was made if the kernel has no driver for it. Wi-Fi, graphics and sound chips of the newest generation are the usual cases.
 * Repair or install ZFS roots, or read BitLocker volumes (Windows).
-* Repair Arch, openSUSE and other systems automatically (section 9). It can look at them and open a shell.
+* Repair a Linux that is not Gentoo (section 9). It lists such a system but does not open it.
 * Read the screen aloud or show it in braille: the disc has no screen reader, no speech output and no braille software.
 * Replace a backup. Repairs and installations can destroy data. Read what the tool shows before you confirm.

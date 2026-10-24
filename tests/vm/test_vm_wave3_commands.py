@@ -97,12 +97,6 @@ def test_a_success_the_disk_cannot_boot_from_is_not_one_and_the_final_event_is_f
     assert vm.completed_data([]) == {}
 
 
-def test_integer_options_fall_back_for_runners_built_without_them():
-    assert vm.int_option(argparse.Namespace(login_timeout=900), "login_timeout", 600) == 900
-    assert vm.int_option(argparse.Namespace(), "login_timeout", 600) == 600
-    assert vm.int_option(argparse.Namespace(login_timeout=None), "login_timeout", 600) == 600
-
-
 def test_a_serial_snapshot_is_everything_written_so_far(tmp_path):
     channel = vm.SerialChannel(tmp_path / "s.sock", tmp_path / "s.log")
     channel.buffer = "boot\n"
