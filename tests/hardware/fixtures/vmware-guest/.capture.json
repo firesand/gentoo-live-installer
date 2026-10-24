@@ -1,0 +1,9 @@
+{
+ "now": 1792800000,
+ "redacted": true,
+ "schema": 1,
+ "summary": "Intel Core i7-7700HQ CPU @ 2.80GHz - 4 threads - 8 GiB - SVGA II Adapter - disk - UEFI 64-bit - virtual machine (vmware)",
+ "synthetic": true,
+ "tool": "synthetic",
+ "tool_version": 1
+}

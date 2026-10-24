@@ -1,0 +1,4 @@
+Boot0001* Gentoo
+Boot0004* UEFI OS
+Boot0005* UEFI: PXE IPv4 Intel(R) Ethernet Controller I226-V
+Boot0006* UEFI: PXE IPv6 Intel(R) Ethernet Controller I226-V

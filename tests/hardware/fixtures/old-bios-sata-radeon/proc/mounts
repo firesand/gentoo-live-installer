@@ -1,0 +1,1 @@
+/dev/sdb1 /run/initramfs/live iso9660 ro,relatime 0 0

@@ -1,0 +1,2 @@
+Architecture:                            x86_64
+Model name:                              11th Gen Intel(R) Core(TM) i7-11800H @ 2.30GHz

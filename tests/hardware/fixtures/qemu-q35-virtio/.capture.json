@@ -1,0 +1,9 @@
+{
+ "now": 1792800000,
+ "redacted": true,
+ "schema": 1,
+ "summary": "Intel Core Processor (Skylake, IBRS) - 4 threads - 4 GiB - Virtio 1.0 GPU - virtual disk - UEFI 64-bit - virtual machine (qemu)",
+ "synthetic": true,
+ "tool": "synthetic",
+ "tool_version": 1
+}

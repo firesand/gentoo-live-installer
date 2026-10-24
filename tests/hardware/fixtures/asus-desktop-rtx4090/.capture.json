@@ -1,0 +1,8 @@
+{
+ "now": 1792817794,
+ "redacted": true,
+ "schema": 1,
+ "summary": "Intel Core i9-14900K - 32 threads - 47 GiB - NVIDIA GeForce RTX 4090 - NVMe SSD + SATA SSD - UEFI 64-bit",
+ "tool": "capture-hardware-fixture",
+ "tool_version": 1
+}

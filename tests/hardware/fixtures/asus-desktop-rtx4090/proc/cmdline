@@ -1,0 +1,1 @@
+BOOT_IMAGE=/root/boot/vmlinuz-7.3.0-cachyos-dist ro pcie_aspm=off mitigations=off acpi=force
