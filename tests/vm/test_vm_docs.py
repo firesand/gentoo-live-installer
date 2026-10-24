@@ -12,7 +12,7 @@ vm = load_vm_module()
 DOC = (Path(__file__).resolve().parents[2] / "docs" / "TESTING.md").read_text()
 ALWAYS_DOCUMENTED = ("--luks-unlock", "--gui-detect", "--no-gui-detect", "--strict-probes", "--cleanup-stale", "--list-scenarios",
                      "--keep", "--check-resume", "--cancel-then-resume", "--gui-timeout", "--install-mode", "--memory",
-                     "--boot-timeout", "--build-jobs", "--swap-mib", "--companions")
+                     "--boot-timeout", "--build-jobs", "--swap-mib", "--companions", "--live-only", "--live-expect")
 
 
 def documented_options() -> list[str]:

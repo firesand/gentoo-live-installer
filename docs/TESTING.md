@@ -168,6 +168,26 @@ test-vm.py --scenario uefi-4kn ...
 test-vm.py --all --disk-bus sata ...
 ```
 
+### Does the live ISO work on this machine? (`--live-only`)
+
+A full install takes minutes to hours; booting the live ISO on a machine shape takes a minute or
+two and already answers most hardware questions. `--live-only` boots the ISO, runs the disk
+guard, asks the installer's daemon what it sees of the machine (the same `inspect` request the
+GUI sends) and checks that it is what the VM is: the firmware mode, the memory, a working network
+on this NIC model, the VM's disk offered unmounted, the required tools, and, unless `--vga none`,
+that the graphical session came up on this display adapter. Nothing is installed.
+
+```sh
+test-vm.py --scenario openrc --live-only --disk-bus nvme --nic rtl8139 --vga std ...
+test-vm.py --scenario bios   --live-only --machine pc --memory 2048 ...      # a low-memory old PC
+test-vm.py --scenario openrc --live-only --live-expect expected.json ...     # assertions on the report
+```
+
+`expected.json` maps dotted paths of the inspection to values (`{"uefi": true, "disks.0.size":
+43007344640, "hardware.machine.form_factor": "re:^(notebook|laptop)$"}`; a string starting with
+`re:` is a regular expression), which is how the hardware report that newer daemons add is checked
+without the harness knowing its schema. The report is kept as `live-inspection.json`.
+
 What the harness cannot show, by construction: real GPU, Wi-Fi, Bluetooth, audio and sensor
 behaviour, suspend and resume, battery and lid handling, vendor firmware quirks, Secure Boot with
 enforcement, 32-bit UEFI. The DMI presets let the *detection code* see a laptop; they do not make

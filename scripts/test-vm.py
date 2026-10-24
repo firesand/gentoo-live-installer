@@ -1023,6 +1023,93 @@ print(json.dumps({
     return command, lambda code, output: parse_static_network_probe(code, output, expected)
 
 
+# --- the live system on this hardware (--live-only) ---------------------------------------------------
+
+# Ask the installer daemon, as the GUI would, what it sees of this machine.
+INSPECT_SNIPPET = r"""
+import json, socket
+client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+client.settimeout(60)
+client.connect('/run/gentoo-installer/server.sock')
+client.sendall(json.dumps({'version': 1, 'action': 'inspect'}).encode() + b'\n')
+for line in client.makefile('r'):
+    event = json.loads(line)
+    if event.get('type') == 'status' and event.get('data'):
+        print(json.dumps({'type': 'live_inspection', 'data': event['data']}))
+    if event.get('type') in ('completed', 'error'):
+        if event.get('type') == 'error':
+            print(json.dumps({'type': 'live_inspection_error', 'error': event.get('error') or event.get('message')}))
+        break
+"""
+
+
+def parse_live_inspection(returncode: int, output: str) -> dict:
+    """The daemon's inspection payload from the INSPECT_SNIPPET output."""
+    for line in reversed(ANSI_RE.sub("", output).splitlines()):
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(event, dict) and event.get("type") == "live_inspection" and isinstance(event.get("data"), dict):
+            return event["data"]
+        if isinstance(event, dict) and event.get("type") == "live_inspection_error":
+            raise HarnessError(f"The installer daemon could not inspect the live system: {event.get('error')}")
+    raise HarnessError("The installer daemon returned no inspection" + (f" (exit {returncode})" if returncode else ""))
+
+
+def live_inspection_problems(data: dict, *, firmware: str, memory_mib: int, target_size: int) -> list[str]:
+    """What the installer sees of the machine must be what the VM is: firmware, memory, network, the target disk."""
+    problems = []
+    if data.get("architecture") not in {"x86_64", "amd64"}:
+        problems.append(f"the installer sees architecture {data.get('architecture')!r}")
+    if bool(data.get("uefi")) != (firmware == "uefi"):
+        problems.append(f"the installer detects {'UEFI' if data.get('uefi') else 'BIOS'} firmware but the VM runs {firmware.upper()}")
+    seen = int(data.get("memory_bytes") or 0)
+    if seen < memory_mib * (1 << 20) * 0.6:
+        problems.append(f"the installer sees {seen >> 20} MiB of memory in a {memory_mib} MiB VM")
+    if not data.get("network"):
+        problems.append("the live system has no working network on this machine's NIC (the installer cannot download anything)")
+    disks = data.get("disks") if isinstance(data.get("disks"), list) else []
+    if not any(isinstance(disk, dict) and int(disk.get("size") or 0) == target_size and not disk.get("mountpoints") for disk in disks):
+        problems.append(f"no unmounted disk of {target_size} bytes is offered: the installer does not see the VM's disk")
+    missing = [tool for tool, present in (data.get("tools") or {}).items() if not present and tool in REQUIRED_LIVE_TOOLS]
+    if missing:
+        problems.append("required tools are missing from the live system: " + ", ".join(sorted(missing)))
+    return problems
+
+
+REQUIRED_LIVE_TOOLS = ("lsblk", "findmnt", "blkid", "sgdisk", "parted", "partprobe", "udevadm", "mkfs.ext4", "mkswap", "mount", "umount")
+
+
+def lookup_path(data: Any, path: str) -> Any:
+    """A dotted path into JSON: keys, and numbers for list items ('disks.0.size')."""
+    for part in path.split("."):
+        if isinstance(data, list) and part.isdigit() and int(part) < len(data):
+            data = data[int(part)]
+        elif isinstance(data, dict) and part in data:
+            data = data[part]
+        else:
+            raise KeyError(path)
+    return data
+
+
+def check_expectations(data: dict, expected: dict) -> list[str]:
+    """Compare dotted paths of the inspection with expected values; a string 're:...' is a regular expression."""
+    problems = []
+    for path, wanted in sorted(expected.items()):
+        try:
+            found = lookup_path(data, path)
+        except KeyError:
+            problems.append(f"{path}: not reported by the installer")
+            continue
+        if isinstance(wanted, str) and wanted.startswith("re:"):
+            if not re.search(wanted[3:], str(found)):
+                problems.append(f"{path}: {found!r} does not match {wanted[3:]!r}")
+        elif found != wanted:
+            problems.append(f"{path}: expected {wanted!r}, the installer reports {found!r}")
+    return problems
+
+
 # --- probes of the installed system (all pure parsers, tested without a VM) ------------------------
 
 LIVE_ARGUMENT_RE = re.compile(r"root=live:\S*|rd\.live\.\S+|\S*CDLABEL=\S*|\S*rd\.live\S*")
@@ -2169,7 +2256,7 @@ class ScenarioRunner:
         result = {"scenario": self.scenario.name, "success": False, "run_dir": str(self.run_dir),
                   "companions": None, "companion_probes": [], "disabled_companion_probes": [],
                   "probes": [], "resume": None, "cancel": None, "luks_unlock": None,
-                  "decoys": None, "refusal": None, "rescue": None, "hardware": asdict(self.scenario.hardware),
+                  "decoys": None, "refusal": None, "rescue": None, "live": None, "hardware": asdict(self.scenario.hardware),
                   "firmware": self.scenario.firmware}
         mode = getattr(self.args, "rescue_break", "none")
         command = getattr(self.args, "rescue_command", None) or ""
@@ -2179,6 +2266,8 @@ class ScenarioRunner:
                 raise HarnessError("Refusing to overwrite an existing virtual disk")
             if getattr(self.args, "target_image", None):
                 return self.run_on_existing_image(result, mode, command)
+            if getattr(self.args, "live_only", False):
+                return self.run_live_smoke(result)
             self.create_disks()
             live = self.boot_live()
             decoys = self.prepare_decoys() if self.scenario.decoy else None
@@ -2223,6 +2312,35 @@ class ScenarioRunner:
             raise
         finally:
             self.finish_run(result)
+
+    def run_live_smoke(self, result: dict) -> dict:
+        """Boot the live ISO on this machine shape and check what the installer sees; install nothing."""
+        self.create_disks()
+        live = self.boot_live()
+        guard = self.run_guard("guest-disk-guard.log", blank=True)
+        live_result: dict = {"guard": {"device": guard["target"]["path"], "size": guard["target"]["size"]}}
+        result["live"] = live_result
+        code, log = self.ssh(self.args.ssh_user, shlex.join(("python3", "-c", INSPECT_SNIPPET)), "live-inspect.log",
+                             self.args.command_timeout)
+        inspection = parse_live_inspection(code, log.read_text(errors="replace"))
+        (self.run_dir / "live-inspection.json").write_text(json.dumps(inspection, indent=2, sort_keys=True) + "\n")
+        live_result["inspection"] = {key: inspection.get(key) for key in ("architecture", "memory_bytes", "uefi", "network", "errors")}
+        problems = live_inspection_problems(inspection, firmware=self.scenario.firmware, memory_mib=self.args.memory,
+                                            target_size=self.disk_sizes()[0])
+        expectations = getattr(self.args, "live_expect", None)
+        if expectations is not None:
+            problems += check_expectations(inspection, json.loads(Path(expectations).read_text()))
+        if self.scenario.hardware.vga != "none":
+            try:
+                live_result["gui"] = {"environment": sorted(self.gui_environment())}
+            except HarnessError as exc:
+                problems.append(f"the graphical live session did not start on this display adapter: {exc}")
+        live_result["problems"] = problems
+        self.power_off_live(live)
+        if problems:
+            raise HarnessError("The live system does not work on this machine: " + "; ".join(problems))
+        result["success"] = True
+        return result
 
     def run_on_existing_image(self, result: dict, mode: str, command: str) -> dict:
         """Boot, damage, repair and verify a disk that was installed earlier (or by another distribution's installer)."""
@@ -2482,6 +2600,12 @@ def build_parser() -> argparse.ArgumentParser:
                              "it chose (default: on for the defaults scenario only)")
     parser.add_argument("--strict-probes", action="store_true",
                         help="Count advisory probe findings (sudo, root lock, install receipt) as failures")
+    parser.add_argument("--live-only", action="store_true",
+                        help="Only boot the live ISO on this machine shape and check what the installer sees of it "
+                             "(firmware, memory, network, disk, the graphical session); nothing is installed")
+    parser.add_argument("--live-expect", type=Path, metavar="FILE",
+                        help="With --live-only: a JSON object of dotted paths into the installer's inspection and the values "
+                             "they must have ('disks.0.model': 're:QEMU')")
     rescue = parser.add_argument_group(
         "rescue", "Test repairing a system that does not boot (docs/TESTING.md). These runs keep the disk.")
     rescue.add_argument("--rescue-break", choices=RESCUE_BREAKS, default="none",
@@ -2556,6 +2680,11 @@ def _main(argv: Sequence[str] | None = None) -> int:
         parser.error("--cancel-then-resume requires --install-mode gui")
     if args.cancel_then_resume and args.ssh_user != "root":
         parser.error("--cancel-then-resume requires --ssh-user root")
+    if args.live_only and (args.cancel_then_resume or args.check_resume or args.rescue_break != "none" or args.rescue_command
+                           or args.target_image):
+        parser.error("--live-only installs nothing, so it cannot be combined with install or rescue options")
+    if args.live_expect is not None and not args.live_only:
+        parser.error("--live-expect only applies to --live-only")
     rescuing = args.rescue_break != "none" or args.rescue_command or args.target_image
     if rescuing:
         if args.all:

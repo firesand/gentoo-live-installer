@@ -17,6 +17,8 @@ by FAKE_SSH_RULES (first match wins) and answers like the guest would. Rule keys
   shutdown_vm  "live" or "target": SIGTERM the fake QEMU of that phase (the guest powers off)
   write      {"path": ..., "text": ...}: write a file below the run directory (the guest changes a disk or NVRAM)
   guest_tool answer like scripts/vm_guest.py for decoy-prepare / decoy-check (checksums of the host's image file)
+  inspection answer like the daemon's inspect action for the VM the guard just found (options: uefi, memory_mib,
+             network, tools, drop_disk)
   guard      answer like the guest's disk guard for the GuardSpec found in the command; an object
              {"bus": ..., "mutate": ...} describes the fabricated guest (see tests/vm/guard_fixtures.py)
 
@@ -78,6 +80,17 @@ def guest_tool_answer(remote: str, run_dir: Path) -> str:
     else:
         report = {"mode": payload.get("mode"), "root": payload.get("path", "") + "3", "removed": ["boot/grub/grub.cfg"]}
     return json.dumps({"type": "vm_guest", "ok": True, **report}) + "\n"
+
+
+def inspection_answer(options: dict, run_dir: Path) -> str:
+    """The daemon's inspection of the VM: the disk is the one the harness's guard reported."""
+    report = json.loads((run_dir / "guest-disk-guard.json").read_text())
+    disks = [] if options.get("drop_disk") else [{"name": "vda", "path": "/dev/vda", "type": "disk", "size": report["target"]["size"],
+                                                   "model": "", "serial": "GENTOO-VM-DISPOSABLE", "mountpoints": [], "children": []}]
+    data = {"architecture": "x86_64", "memory_bytes": int(options.get("memory_mib", 4096)) * 2**20 - 200 * 2**20,
+            "uefi": options.get("uefi", True), "network": options.get("network", True), "disks": disks, "errors": [],
+            "tools": options.get("tools", {"lsblk": True, "sgdisk": True, "mkfs.ext4": True})}
+    return json.dumps({"type": "live_inspection", "data": data}) + "\n"
 
 
 def read_stdin() -> bytes:
@@ -143,6 +156,8 @@ def main() -> int:
             from tests.vm import guard_fixtures
             options = chosen["guard"] if isinstance(chosen["guard"], dict) else {}
             output += guard_fixtures.answer_guard(remote, **options)
+        if chosen.get("inspection") is not None:
+            output += inspection_answer(chosen["inspection"], run_dir)
         if chosen.get("guest_tool"):
             output += guest_tool_answer(remote, run_dir)
         if "events" in chosen:
