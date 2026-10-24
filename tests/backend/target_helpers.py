@@ -17,7 +17,8 @@ class ScriptedRunner:
     """A runner that records everything and replays scripted outcomes per command prefix.
 
     ``script("chroot /t emerge", ("fail", "output"), "ok")`` makes the first matching command fail
-    with that output and the following ones succeed. It accepts ``root_identity`` like the daemon's runner.
+    with that output and the following ones succeed ("*word" matches commands containing word).
+    It accepts ``root_identity`` like the daemon's runner.
     """
 
     def __init__(self) -> None:
@@ -43,7 +44,9 @@ class ScriptedRunner:
         self.root_identity.append(root_identity)
         line = " ".join(args)
         for prefix, outcomes in self._scripts:
-            if line.startswith(prefix) and outcomes:
+            # a leading "*" means "contains" instead of "starts with"
+            matches = prefix[1:] in line if prefix.startswith("*") else line.startswith(prefix)
+            if matches and outcomes:
                 outcome = outcomes.pop(0)
                 if isinstance(outcome, tuple) and outcome[0] == "fail":
                     raise RunnerError(args, outcome[2] if len(outcome) > 2 else 1, outcome[1])

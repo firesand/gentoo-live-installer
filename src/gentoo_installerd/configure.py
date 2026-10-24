@@ -54,7 +54,9 @@ DESKTOP_USE: Mapping[str, Mapping[str, tuple[str, ...]]] = {
 }
 NVRAM_FAILURE = re.compile(r"efibootmgr|EFI variables|efivars|NVRAM", re.IGNORECASE)
 RECEIPT_PATH = "etc/gentoo-live-installer/install.json"
-CERTIFICATE_ROOTS = ("/home/", "/etc/", "/root/", "/usr/share/ca-certificates/", "/usr/local/share/ca-certificates/")
+# Where a live profile's certificates may be read from (never arbitrary files such as /etc/shadow).
+CERTIFICATE_ROOTS = ("/home/", "/root/", "/etc/NetworkManager/", "/etc/ssl/", "/etc/pki/", "/etc/ca-certificates/",
+                     "/usr/share/ca-certificates/", "/usr/local/share/ca-certificates/")
 
 
 def shell_value(value: str) -> str:
@@ -941,11 +943,17 @@ class Configurer:
             missing = False
             for index, (placeholder, live_path) in enumerate(profile.certificates):
                 certificate = Path(live_path)
-                if not live_path.startswith(CERTIFICATE_ROOTS) or not certificate.is_file() or certificate.stat().st_size > 1024 * 1024:
+                try:
+                    if not live_path.startswith(CERTIFICATE_ROOTS) or ".." in certificate.parts or not certificate.is_file() \
+                            or certificate.stat().st_size > 1024 * 1024:
+                        missing = True
+                        break
+                    data = certificate.read_bytes()
+                except OSError:
                     missing = True
                     break
                 target_name = f"etc/NetworkManager/certs/{hashlib.sha256(source.name.encode()).hexdigest()[:8]}-{index}-{certificate.name}"
-                self.write_bytes(target_name, certificate.read_bytes(), 0o600)
+                self.write_bytes(target_name, data, 0o600)
                 text = text.replace(placeholder, "/" + target_name)
             if missing:
                 self.notify(f"warning: network profile {source.name} refers to a certificate that is missing; skipped")
