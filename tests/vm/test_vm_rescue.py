@@ -85,7 +85,8 @@ def test_the_fstab_defect_is_proven_by_findmnt_not_by_a_failed_boot(lab):
     assert lab.run("--scenario", "bios", "--rescue-break", "fstab-uuid") == 0
     rescue = lab.result()["rescue"]
     assert rescue["broken"]["proof"] == "findmnt --verify" and rescue["broken"]["exit"] == 1
-    assert len(list(lab.run_dir().glob("fake-qemu-argv-*.json"))) == 2  # no third boot was needed
+    boots = sorted(path.name for path in lab.run_dir().glob("fake-qemu-argv-target-[0-9]*.json"))
+    assert boots == ["fake-qemu-argv-target-1.json"]  # the installed disk booted once (before the break): the fstab damage needed no boot to prove it
 
 
 def test_a_fstab_break_that_findmnt_accepts_is_rejected(lab):
@@ -152,6 +153,14 @@ def test_an_existing_image_is_attached_through_an_overlay_and_never_written(lab,
     assert not [c for c in lab.ssh_calls() if c["remote"].startswith("gentoo-installerd")]  # nothing was installed
     guard = json.loads([c["remote"] for c in lab.ssh_calls() if "vm_disk_guard" in c["remote"]][0].rsplit("'", 2)[-2])
     assert guard["disks"][0]["size"] == 21 * 2**30 + 5 * 2**20 and guard["disks"][0]["blank"] is False
+
+
+def test_an_image_that_was_installed_earlier_is_not_judged_by_what_this_run_could_not_see(lab, image):
+    lab.rules = guest_rules(vm, "bios")
+    assert lab.run("--scenario", "bios", "--target-image", str(image)) == 0
+    names = {probe["name"] for probe in lab.result()["probes"]}
+    assert names.isdisjoint({"install-degraded", "hardware-plan-file", "hardware-plan"}), "no install, no installer events, no plan file in this run"
+    assert "receipt" in names and "world-resolve" in names, "but the system itself is still probed"
 
 
 def test_booting_an_existing_image_without_break_or_repair_is_a_smoke_test(lab, image):
