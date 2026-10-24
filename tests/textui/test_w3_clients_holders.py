@@ -94,7 +94,7 @@ def test_a_disk_with_swap_or_volumes_asks_for_the_consent_and_stores_it(start) -
     wizard.step_disk()
     storage = wizard.manifest.storage
     assert storage.device == "/dev/vdb" and storage.release_holders is True
-    assert "their data is lost" in script.flat and "other disks of the same volume group or RAID array" in script.flat
+    assert "their data is lost" in script.flat and "other disks of the same volume group, RAID array, Btrfs or ZFS pool" in script.flat
 
 
 def test_refusing_the_consent_returns_to_the_disk_menu_and_stores_nothing(start) -> None:

@@ -66,7 +66,8 @@ def disk_choice(disk: DiskInfo) -> tuple[str, str, str, bool]:
 
 
 def holder_reasons(info: SystemInfo, devices: list[str]) -> list[str]:
-    """What is alive on these devices and would be switched off: volumes, swap, volume-group and RAID membership."""
+    """What is alive on these devices and would be switched off: volumes, swap, volume-group and RAID membership,
+    and Btrfs or ZFS pools that go on beyond them (erasing the member destroys data on the other disks too)."""
     roots = info.block_devices()
     reasons: list[str] = []
     for device in devices:
@@ -75,6 +76,7 @@ def holder_reasons(info: SystemInfo, devices: list[str]) -> list[str]:
         except (LookupError, ValueError):
             continue
         reasons += holder_reasons_of(node)
+        reasons += [pool.reason() for pool in blockdev.filesystem_pools(roots, [node])]
     return list(dict.fromkeys(reasons))
 
 
@@ -130,7 +132,7 @@ class StoragePage(Page):
         self.holders_card.content.addWidget(self.holders_text)
         self.release_holders = QCheckBox("Switch these volumes off and erase them together with the disk")
         self.release_holders.setAccessibleName("Switch off and erase the volumes in use")
-        self.release_holders.setToolTip("The volumes are deactivated first. Data stored on them, and on other disks of the same volume group or RAID array, is lost.")
+        self.release_holders.setToolTip("The volumes are deactivated first. Data stored on them, and on other disks of the same volume group, RAID array, Btrfs or ZFS pool, is lost.")
         self.holders_card.content.addWidget(self.release_holders)
         self.holders_card.hide()
         self.content.addWidget(self.holders_card)

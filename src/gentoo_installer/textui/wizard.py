@@ -542,7 +542,7 @@ class Wizard:
         if not holders:
             return False
         c.para(f"In use on {entry.disk.path}: {'; '.join(holders)}.")
-        c.para("The installer can switch these off, but their data is lost, and so is data stored on other disks of the same volume group or RAID array.")
+        c.para("The installer can switch these off, but their data is lost, and so is data stored on other disks of the same volume group, RAID array, Btrfs or ZFS pool.")
         storage.release_holders = c.confirm("Switch them off and erase them together with the disk?", default=storage.release_holders)
         if not storage.release_holders:
             raise GoBack

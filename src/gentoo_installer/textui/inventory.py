@@ -77,6 +77,7 @@ class DiskEntry:
     problem: str = ""
     by_path: str = ""
     shared_identity: bool = False  # another disk reports the same serial number or WWN (cheap USB adapters do)
+    pool_reasons: tuple[str, ...] = ()  # Btrfs or ZFS pools with a member on this disk and on another one (that takes every disk of the reply to find out)
 
     @property
     def usable(self) -> bool:
@@ -89,8 +90,8 @@ class DiskEntry:
 
     @property
     def holders(self) -> list[str]:
-        """What is alive on the disk: volumes, swap, a volume group or RAID set it belongs to (the list of the graphical installer)."""
-        return system_info.holder_reasons_of(self.disk)
+        """What is alive on the disk: volumes, swap, a volume group, RAID set or Btrfs/ZFS pool it belongs to (the list of the graphical installer)."""
+        return list(dict.fromkeys([*system_info.holder_reasons_of(self.disk), *self.pool_reasons]))
 
     @property
     def mounts(self) -> list[str]:
@@ -192,7 +193,8 @@ class MachineView:
             problem = blockdev.TARGET_PROBLEMS[key] if key else (
                 f"is smaller than {system_info.format_size(system_info.MIN_DISK_BYTES)}, the least a Gentoo installation needs"
                 if node.size < system_info.MIN_DISK_BYTES else "")
-            entry = DiskEntry(node, problem, self.by_path_for(node), bool({node.serial, node.wwn} & self._shared))
+            pools = tuple(pool.reason() for pool in blockdev.filesystem_pools(self.roots, [node]))
+            entry = DiskEntry(node, problem, self.by_path_for(node), bool({node.serial, node.wwn} & self._shared), pools)
             (refused if problem else usable).append(entry)
         return usable + refused
 
