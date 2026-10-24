@@ -7,13 +7,14 @@ iso9660, udf; review R16) are listed, never mounted. A device that fails to moun
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import shutil
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from .bootinfo import collect_boot
 from .btrfs import BtrfsRoot, find_roots, list_subvolumes
@@ -91,6 +92,47 @@ def parse_blkid_export(text: str) -> dict[str, str]:
     return fields
 
 
+def load_graph(runner: RescueRunner, ctx: PolicyContext, host: Host) -> DeviceGraph:
+    """One lsblk call merged into a device graph; the live medium is marked in the policy so it can never be touched."""
+    runner.execute(("udevadm", "settle", "--timeout=10"), timeout=20)
+    output = runner.run(rescue_lsblk_argv(), timeout=30).stdout
+    graph = build_graph(output, live_sources=live_sources(runner), cmdline=host.cmdline())
+    for node in graph:
+        if node.live_medium:
+            ctx.devices.mark_live(node.path)
+    return graph
+
+
+@contextlib.contextmanager
+def probe_mounted(runner: RescueRunner, host: Host, probe_root: Path, node: DeviceNode, *, subvolid: int | None = None, sleep: Callable[[float], None] = time.sleep) -> Iterator[tuple[str, int]]:
+    """Mount a device read-only (nodev, nosuid, noexec, no journal replay) in a private directory and always undo it.
+
+    The kernel read-only flag is set around the mount and restored afterwards; yields (directory, ladder rung).
+    """
+    was_ro = runner.execute(("blockdev", "--getro", node.path), timeout=10).stdout.strip() == "1"
+    if not was_ro:
+        runner.execute(("blockdev", "--setro", node.path), timeout=10)
+    target = probe_root / (node.kname or node.name).replace("/", "_")
+    target.mkdir(parents=True, exist_ok=True, mode=0o700)
+    mounted = False
+    try:
+        rung = mount_readonly(runner, node.path, node.fstype, str(target), subvolid=subvolid if subvolid is not None else (5 if node.fstype == "btrfs" else None),
+                              available=host.filesystems() or None)
+        mounted = True
+        yield str(target), rung
+    finally:
+        if mounted:
+            for attempt in range(3):
+                if runner.execute(("umount", str(target)), timeout=15).returncode == 0:
+                    break
+                sleep(0.2 * (attempt + 1))
+            else:
+                runner.execute(("umount", "-l", str(target)), timeout=15)  # a stuck probe must not outlive the operation
+        shutil.rmtree(target, ignore_errors=True)
+        if not was_ro:
+            runner.execute(("blockdev", "--setrw", node.path), timeout=10)
+
+
 class Scanner:
     def __init__(self, runner: RescueRunner, ctx: PolicyContext, host: Host, probe_root: str | os.PathLike[str], *, emit: Emit | None = None,
                  clock: Callable[[], float] = time.time, sleep: Callable[[float], None] = time.sleep) -> None:
@@ -106,14 +148,8 @@ class Scanner:
 
     # ---- graph ---------------------------------------------------------------------------------
     def load_graph(self) -> DeviceGraph:
-        self.runner.execute(("udevadm", "settle", "--timeout=10"), timeout=20)
-        output = self.runner.run(rescue_lsblk_argv(), timeout=30).stdout
-        graph = build_graph(output, live_sources=live_sources(self.runner), cmdline=self.host.cmdline())
-        for node in graph:
-            if node.live_medium:
-                self.ctx.devices.mark_live(node.path)
-        self.graph = graph
-        return graph
+        self.graph = load_graph(self.runner, self.ctx, self.host)
+        return self.graph
 
     def _fill_signatures(self, graph: DeviceGraph) -> None:
         """blkid -p for nodes udev left without a signature (stale udev data is the usual cause)."""
@@ -184,33 +220,13 @@ class Scanner:
         busy = [mp for mp in node.mountpoints if not mp.startswith(("/run/initramfs", "[SWAP]")) and "/mnt/rescue" not in mp]
         if busy:
             return self._probe_mounted_elsewhere(node, graph, busy[0])
-        was_ro = self.runner.execute(("blockdev", "--getro", node.path), timeout=10).stdout.strip() == "1"
-        if not was_ro:
-            self.runner.execute(("blockdev", "--setro", node.path), timeout=10)
-        target = self.probe_root / (node.kname or node.name).replace("/", "_")
-        target.mkdir(parents=True, exist_ok=True, mode=0o700)
-        mounted = False
         try:
-            rung = mount_readonly(self.runner, node.path, node.fstype, str(target), subvolid=5 if node.fstype == "btrfs" else None, available=self.host.filesystems() or None)
-            mounted = True
-            return self._identify_mounted(node, graph, str(target), rung)
+            with probe_mounted(self.runner, self.host, self.probe_root, node, sleep=self.sleep) as (target, rung):
+                return self._identify_mounted(node, graph, target, rung)
         except RescueError as exc:
             node.probe_error = exc.short
             self.warnings.append(f"{node.path}: {exc.message}")
             return []
-        finally:
-            if mounted:
-                self._unmount_probe(str(target))
-            shutil.rmtree(target, ignore_errors=True)
-            if not was_ro:
-                self.runner.execute(("blockdev", "--setrw", node.path), timeout=10)
-
-    def _unmount_probe(self, target: str) -> None:
-        for attempt in range(3):
-            if self.runner.execute(("umount", target), timeout=15).returncode == 0:
-                return
-            self.sleep(0.2 * (attempt + 1))
-        self.runner.execute(("umount", "-l", target), timeout=15)  # a stuck probe must not outlive the scan
 
     def _probe_mounted_elsewhere(self, node: DeviceNode, graph: DeviceGraph, mountpoint: str) -> list[dict[str, Any]]:
         try:

@@ -174,6 +174,9 @@ class RescueSession:
         except OSError:
             pass  # the state file is for crash recovery; a full /run must not stop a repair
 
+    def state_dir_path(self, suffix: str) -> Path:
+        return self.env.state_dir / "sessions" / f"{self.sid}.{suffix}"
+
     def forget(self) -> None:
         for path in (self.state_path, self.cmdline_path, self.resolv_path, self.state_path.with_suffix(".mdadm.conf")):
             try:
@@ -322,6 +325,18 @@ class RescueSession:
             steps.extend(self.virtual_steps(group))
         return steps
 
+    def leave_write_steps(self) -> list[Step]:
+        """Return to a read-only mount (the reverse of the write transition)."""
+        group = "leave-write"
+        steps: list[Step] = [Step("l-idle", "internal", "Check that no terminal is open and no other step is running", handler="check-idle", group=group)]
+        for index, entry in enumerate(reversed(self._mount_entries())):
+            steps.append(self._umount_step(entry, f"l-umount-{index}", group))
+        devices = [self.plan.root.device] + [device for item in self.plan.selected for device in [item.device, *item.extra_devices]]
+        for index, device in enumerate(dict.fromkeys(devices)):
+            steps.append(Step(f"l-setro-{index}", "host", f"blockdev --setro {device}", ("blockdev", "--setro", device), timeout=20, group=group, effect={"kind": "blockro", "device": device, "ro_now": True}))
+        steps.extend(self.mount_steps(rw=False, group=group))
+        return steps
+
     def mount_steps(self, *, rw: bool, group: str, spec: RootSpec | None = None, items: Iterable[MountItem] | None = None, root: bool = True) -> list[Step]:
         """Mount the root and the selected items; tiers 1-3 follow ``rw``, data mounts (tier 4) always stay read-only."""
         spec = spec or self.plan.root
@@ -387,7 +402,10 @@ class RescueSession:
         if kind == "secret":
             if value not in secrets:
                 raise RescueError("needs_confirmation", f"The {value} is needed to run this plan", missing=value)
-            return secrets[value], True
+            secret = secrets[value]
+            if any(ch in secret for ch in "\n\r\x00"):
+                raise RescueError("bad_request", "A password cannot contain line breaks or NUL characters")
+            return step.stdin_template.replace("{secret}", secret), True
         return value, False
 
     def _revalidate(self, step: Step) -> None:
@@ -457,6 +475,11 @@ class RescueSession:
                 path = fs.mkdir(op["path"], op.get("mode", 0o755), parents=bool(op.get("parents")))
                 self.audit.record("file", op="mkdir", path=path, plan=runner.scope.plan, step=step.id)
                 return f"created {path}"
+            if kind == "copy":
+                suffix = ".gentoo-rescue-" + time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(self.env.clock())) if op.get("backup") else ""
+                result = fs.copy_in_root(op["src"], op["path"], mode=op.get("mode"), backup_suffix=suffix)
+                self.audit.record("file", op="copy", src=op["src"], path=result.path, before=result.before_sha256, after=result.after_sha256, backup=result.backup, plan=runner.scope.plan, step=step.id, sync=True)
+                return f"copied {op['src']} to {result.path}"
             if kind == "remove":
                 removed = fs.remove(op["path"])
                 self.audit.record("file", op="remove", path=op["path"], removed=removed, plan=runner.scope.plan, step=step.id)
@@ -472,6 +495,10 @@ class RescueSession:
             return self._bind_resolv(runner)
         if step.handler == "cmdline-bind":
             return self._bind_cmdline(runner)
+        if step.handler == "backup-esp":
+            from .executor import backup_esp
+
+            return f"saved {backup_esp(self, step.args['mountpoint'])}"
         raise RescueError("internal", f"Unknown internal step {step.handler}")
 
     def _resolv_source(self) -> tuple[str, str]:

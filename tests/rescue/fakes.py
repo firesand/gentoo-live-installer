@@ -44,6 +44,7 @@ class MountRec:
     stash: Path | None = None
     bind: bool = False
     subtree: str = ""
+    shadowed: bytes | None = None  # content of a file a bind mount covers
 
     @property
     def rw(self) -> bool:
@@ -106,7 +107,7 @@ class FakeSystem:
         self.holders: dict[str, str] = {}
         self.blkid: dict[str, str] = {}
         self.scripted: list[tuple[Callable[[tuple[str, ...]], bool], tuple[int, str]]] = []
-        self.chroot_effects: dict[str, Callable[[FakeSystem, Path, tuple[str, ...], dict[str, str]], tuple[int, str]]] = {}
+        self.chroot_effects: dict[str, Callable[[FakeSystem, Path, tuple[str, ...], dict[str, str]], tuple[int, str]]] = dict(getattr(type(self), "__init_effects__", {}))
         self.chroot_failures: dict[str, tuple[int, str]] = {}
         self.chroot_calls: list[tuple[Path, dict[str, str], tuple[str, ...]]] = []
         self.chroot_snapshots: list[dict[str, Any]] = []
@@ -224,7 +225,11 @@ class FakeSystem:
             source, target = args[1], args[2]
             if not os.path.exists(target):
                 return 32, f"mount: {target}: mount point does not exist"
-            self.mounts[target] = MountRec(source, "none", args[0][2:], target, bind=True)
+            record = MountRec(source, "none", args[0][2:], target, bind=True)
+            if os.path.isfile(source) and os.path.isfile(target):  # a file bound over a file hides the original content
+                record.shadowed = Path(target).read_bytes()
+                Path(target).write_bytes(Path(source).read_bytes())
+            self.mounts[target] = record
             return 0, ""
         fstype = args[1]
         rest = args[2:]
@@ -292,6 +297,9 @@ class FakeSystem:
     def _unmount_one(self, target: str) -> None:
         rec = self.mounts.pop(target)
         directory = Path(target)
+        if rec.shadowed is not None:
+            directory.write_bytes(rec.shadowed)
+            return
         if not rec.bind and rec.fstype not in ("proc", "tmpfs", "efivarfs", "pstore"):
             if rec.rw and rec.device in self.device_trees:
                 destination = self.device_trees[rec.device] / rec.subtree if rec.subtree else self.device_trees[rec.device]
@@ -573,3 +581,85 @@ def assert_nothing_destructive(system: FakeSystem) -> None:
             assert argv[1] in {"isLuks", "luksDump", "open", "close", "status"}, argv
         if argv[0] == "mount":
             assert "-a" not in argv, argv
+
+
+# ---- what the programs of a fake target do to its tree --------------------------------------------------------------------------------------------
+def _sparse(path: Path, size: int) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "wb") as handle:
+        handle.truncate(size)
+
+
+def _modules(root: Path) -> list[str]:
+    base = root / "usr/lib/modules"
+    return sorted(p.name for p in base.iterdir()) if base.is_dir() else []
+
+
+def fx_grub_mkconfig(system: FakeSystem, root: Path, command: tuple[str, ...], extra: dict[str, str]) -> tuple[int, str]:
+    target = command[command.index("-o") + 1]
+    kernels = sorted(p.name for p in (root / "boot").glob("vmlinuz-*"))
+    text = "set default=0\n" + "".join(f"menuentry 'Linux {k}' {{\n\tlinux /boot/{k} root=UUID=998f7697-b591-4cb9-a8e7-d1c52c798ac7 ro\n}}\n" for k in kernels)
+    path = root / target.lstrip("/")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text + "# generated\n" * 100)
+    return 0, f"Generating grub configuration file ...\nFound linux image: {kernels[-1] if kernels else 'none'}\ndone\n"
+
+
+def fx_update_grub(system: FakeSystem, root: Path, command: tuple[str, ...], extra: dict[str, str]) -> tuple[int, str]:
+    return fx_grub_mkconfig(system, root, ("update-grub", "-o", "/boot/grub/grub.cfg"), extra)
+
+
+def fx_grub_install(system: FakeSystem, root: Path, command: tuple[str, ...], extra: dict[str, str]) -> tuple[int, str]:
+    efi = next((a.split("=", 1)[1] for a in command if a.startswith("--efi-directory=")), "")
+    if efi:
+        ident = next((a.split("=", 1)[1] for a in command if a.startswith("--bootloader-id=")), "")
+        if ident:
+            _sparse(root / efi.lstrip("/") / "EFI" / ident / "grubx64.efi", 2 << 20)
+            if "--no-nvram" not in command and system.nvram["usable"]:
+                number = f"{max([int(k, 16) for k in system.nvram['entries']] + [-1]) + 1:04X}"
+                system.nvram["entries"][number] = {"label": ident, "loader": f"\\EFI\\{ident}\\grubx64.efi", "active": True, "disk": "/dev/nvme0n1", "part": "1"}
+                system.nvram["order"].insert(0, number)
+        if "--removable" in command:
+            _sparse(root / efi.lstrip("/") / "EFI/BOOT/BOOTX64.EFI", 2 << 20)
+    else:
+        (root / "boot/grub/i386-pc").mkdir(parents=True, exist_ok=True)
+    return 0, "Installing for target platform ... Installation finished. No error reported.\n"
+
+
+def fx_dracut(system: FakeSystem, root: Path, command: tuple[str, ...], extra: dict[str, str]) -> tuple[int, str]:
+    if "--regenerate-all" in command:
+        for version in _modules(root):
+            _sparse(root / f"boot/initramfs-{version}.img", 30 << 20)
+    else:
+        _sparse(root / command[-2].lstrip("/"), 30 << 20)
+    return 0, ""
+
+
+def fx_update_initramfs(system: FakeSystem, root: Path, command: tuple[str, ...], extra: dict[str, str]) -> tuple[int, str]:
+    versions = _modules(root) if command[-1] == "all" else [command[-1]]
+    for version in versions:
+        _sparse(root / f"boot/initrd.img-{version}", 30 << 20)
+    return 0, "update-initramfs: Generating ...\n"
+
+
+def fx_chpasswd(system: FakeSystem, root: Path, command: tuple[str, ...], extra: dict[str, str]) -> tuple[int, str]:
+    user, _, password = extra["stdin"].rstrip("\n").partition(":")
+    shadow = root / "etc/shadow"
+    lines = shadow.read_text().splitlines()
+    shadow.write_text("\n".join(f"{user}:$6$rescued{len(password)}:19000:0:99999:7:::" if line.split(":")[0] == user else line for line in lines) + "\n")
+    return 0, ""
+
+
+def fx_kernel_install(system: FakeSystem, root: Path, command: tuple[str, ...], extra: dict[str, str]) -> tuple[int, str]:
+    version = command[2]
+    entries = root / "boot/loader/entries"
+    entries.mkdir(parents=True, exist_ok=True)
+    (entries / f"0123456789abcdef0123456789abcdef-{version}.conf").write_text(f"title Fedora ({version})\nlinux /vmlinuz-{version}\ninitrd /initramfs-{version}.img\noptions root=UUID=998f7697-b591-4cb9-a8e7-d1c52c798ac7 ro\n")
+    return 0, ""
+
+
+DEFAULT_EFFECTS = {
+    "grub-mkconfig": fx_grub_mkconfig, "grub2-mkconfig": fx_grub_mkconfig, "update-grub": fx_update_grub, "grub-install": fx_grub_install, "grub2-install": fx_grub_install,
+    "dracut": fx_dracut, "update-initramfs": fx_update_initramfs, "chpasswd": fx_chpasswd, "kernel-install": fx_kernel_install,
+}
+FakeSystem.__init_effects__ = DEFAULT_EFFECTS  # type: ignore[attr-defined]

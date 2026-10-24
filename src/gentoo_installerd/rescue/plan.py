@@ -40,6 +40,9 @@ class Step:
     mountpoint: str = ""  # for mount steps: the in-root mount point, re-validated right before the mount (review R2)
     group: str = ""  # steps that belong to a visible sub-sequence (for example "enter-write")
     handler: str = ""  # internal steps: the named routine the session runs
+    when: str = ""  # "" always | "chroot_ok" | "chroot_broken": decided by the chroot smoke test (review R15)
+    stdin_template: str = "{secret}"  # how a secret stdin is formed, for example "root:{secret}\n" for chpasswd
+    args: dict[str, Any] = field(default_factory=dict)  # arguments of an internal step
 
     def public(self) -> dict[str, Any]:
         result: dict[str, Any] = {"id": self.id, "scope": self.scope, "display": self.display, "writes": list(self.writes), "timeout": self.timeout, "atomic": self.atomic}
@@ -57,11 +60,14 @@ class Step:
             result["group"] = self.group
         if self.handler:
             result["handler"] = self.handler
+        if self.when:
+            result["when"] = self.when
         return result
 
     def digest_view(self) -> dict[str, Any]:
         view: dict[str, Any] = {"id": self.id, "scope": self.scope, "argv": list(self.argv), "env": self.env, "stdin": self.stdin if not (self.stdin or "").startswith("text:") else "text:" + hashlib.sha256(self.stdin.encode()).hexdigest(),
-                                "ok_rc": list(self.ok_rc), "on_fail": self.on_fail, "mountpoint": self.mountpoint, "handler": self.handler}
+                                "ok_rc": list(self.ok_rc), "on_fail": self.on_fail, "mountpoint": self.mountpoint, "handler": self.handler, "when": self.when,
+                                "stdin_template": self.stdin_template, "args": self.args}
         if self.file_op:
             op = dict(self.file_op)
             if "content" in op:

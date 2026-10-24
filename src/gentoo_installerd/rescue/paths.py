@@ -321,6 +321,28 @@ class RootFS:
         finally:
             os.close(fd)
 
+    def tail_bytes(self, path: str, count: int) -> tuple[bytes, int]:
+        """(the last ``count`` bytes of a regular file, its size) without reading the rest."""
+        fd = self.open_fd(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY)
+        try:
+            st = os.fstat(fd)
+            if stat.S_ISDIR(st.st_mode):
+                raise IsADirectoryError(errno.EISDIR, "is a directory", path)
+            if not stat.S_ISREG(st.st_mode):
+                raise RescueError("not_regular", f"{path} is not a regular file", path=path)
+            start = max(0, st.st_size - count)
+            chunks = []
+            offset = start
+            while offset < st.st_size:
+                chunk = os.pread(fd, min(1 << 16, st.st_size - offset), offset)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                offset += len(chunk)
+            return b"".join(chunks), st.st_size
+        finally:
+            os.close(fd)
+
     def read_text(self, path: str, limit: int = DEFAULT_READ_LIMIT) -> str:
         return self.read_bytes(path, limit).decode("utf-8", errors="replace")
 

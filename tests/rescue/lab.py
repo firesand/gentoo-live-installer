@@ -89,3 +89,21 @@ class Lab:
         self.plan = plan
         self.graph_obj = graph
         return RescueSession(self.session_env(), sid, plan, candidate or {"id": "cTEST", "os": {"id": "gentoo", "family": "gentoo"}}, graph, allow_write=allow_write, **kwargs)
+
+    def view(self, session, *, uefi: bool | None = None, efi_text: str = ""):
+        from gentoo_installerd.rescue.hostenv import collect_environment
+        from gentoo_installerd.rescue.view import SessionView
+
+        env = collect_environment(self.host, self.runner)
+        return SessionView(session, self.graph, env, efi_text)
+
+    def mounted_view(self, root_device: str, **kwargs):
+        session = self.session(root_device, **kwargs)
+        session.mount_ro(self.graph_obj)
+        return session, self.view(session)
+
+
+    def manager(self, **kwargs):
+        from gentoo_installerd.rescue.manager import RescueManager
+
+        return RescueManager(self.session_env(), **kwargs)

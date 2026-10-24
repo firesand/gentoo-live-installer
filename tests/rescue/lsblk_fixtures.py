@@ -58,7 +58,7 @@ def sata_disk(letter: str, index: int, size: int, children: list[dict[str, Any]]
 
 def part(parent: str, partn: int, size: int, major: int, index: int, *, sep: str = "", **kwargs: Any) -> dict[str, Any]:
     name = f"{parent}{sep}{partn}"
-    kwargs.setdefault("partuuid", f"{index:08x}-{partn:02d}")
+    kwargs.setdefault("partuuid", f"{index:08x}-0000-4000-8000-{partn:012x}")
     return node(name, "part", size, maj_min=_minor(major, index, partn), pkname=parent, partn=partn, **kwargs)
 
 
