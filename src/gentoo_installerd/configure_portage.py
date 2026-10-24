@@ -252,7 +252,7 @@ class PortageMixin(ConfigurerBase):
         if system.desktop != "minimal":
             # Current binary libwebp[tiff] and tiff[webp] depend on each other.
             _forbid_use(package_use, "media-libs/libwebp", "tiff")
-            for atom, flags in DESKTOP_USE.get(system.desktop, {}).items():
+            for atom, flags in desktops.package_use(system.desktop, flatpak=desktops.flatpak_wanted(options)).items():
                 _require_use(package_use, atom, *flags)
         return package_use
 

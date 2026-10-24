@@ -137,10 +137,11 @@ class SystemMixin(ConfigurerBase):
         if system.desktop == "minimal" or _keyboard_is_default(system):
             return []
         files = [("etc/X11/xorg.conf.d/00-keyboard.conf", render_xorg_keyboard(system), 0o644)]
-        if system.desktop == "kde":
+        kind = desktops.REGISTRY[system.desktop].keyboard if system.desktop in desktops.REGISTRY else ""
+        if kind == "kxkb":
             # Plasma (X11 and Wayland) and the SDDM greeter read kxkbrc, not xorg.conf.d.
             files.append(("etc/xdg/kxkbrc", render_kxkbrc(system), 0o644))
-        elif system.desktop == "gnome":
+        elif kind == "dconf":
             files.append(("etc/dconf/profile/user", "user-db:user\nsystem-db:local\n", 0o644))
             files.append(("etc/dconf/db/local.d/00-gentoo-installer-keyboard", render_dconf_keyboard(system), 0o644))
         return files

@@ -22,6 +22,8 @@ SDDM, GDM, LIGHTDM = "gui-apps/sddm", "gnome-base/gdm", "x11-misc/lightdm"
 LIGHTDM_GREETER = "x11-misc/lightdm-gtk-greeter"
 NM_APPLET = "gnome-extra/nm-applet"
 DISPLAY_MANAGER_INIT = "gui-libs/display-manager-init"
+MATE_POLKIT = "mate-extra/mate-polkit"
+PAVUCONTROL, PORTAL_GTK, PORTAL_XAPP = "media-sound/pavucontrol", "sys-apps/xdg-desktop-portal-gtk", "sys-apps/xdg-desktop-portal-xapp"
 FIREFOX, FIREFOX_BIN = "www-client/firefox", "www-client/firefox-bin"
 FLATPAK = "sys-apps/flatpak"
 KDE_APPS_CORE, KDE_APPS_FULL = "kde-apps/kdecore-meta", "kde-apps/kde-apps-meta"
@@ -71,6 +73,7 @@ class Desktop:
     build_extra_gib: int = 10  # extra room when packages are compiled
     families: frozenset[str] = frozenset(FAMILIES)  # stage3 families the desktop can be built on
     experienced: bool = False  # for people who know what a tiling window manager is
+    keyboard: str = ""  # where the session reads the layout besides xorg.conf.d: kxkb | dconf | sway
     note: str = ""  # one more line on the card
     measured: bool = True  # False: the sizes are estimates from simulations
 
@@ -96,7 +99,7 @@ DESKTOP_LIST: tuple[Desktop, ...] = (
         required=_tuple_of("kde-plasma/plasma-meta", KDE_APPS_CORE, SDDM, XORG),
         package_use={"dev-qt/qtpositioning": ("geoclue",)},  # kde-apps-meta -> kdeutils-meta -> kweather
         flatpak_use={"kde-plasma/plasma-meta": ("discover", "flatpak")},
-        session="both", ppd_ui=True, wayland_use=True, brings_noto=True, heavy=True,
+        session="both", ppd_ui=True, wayland_use=True, brings_noto=True, heavy=True, keyboard="kxkb",
         root_gib=(24, 40), build_extra_gib=16, families=_WITH_DESKTOP_FLAGS,
     ),
     Desktop(
@@ -105,7 +108,7 @@ DESKTOP_LIST: tuple[Desktop, ...] = (
         profile_suffix="/desktop/gnome", dm="gdm",
         required=_tuple_of("gnome-base/gnome", GDM, XORG),
         package_use={"net-libs/ngtcp2": ("gnutls",)},  # samba -> libngtcp2 needs the GnuTLS backend
-        session="both", ppd_ui=True, wayland_use=True, heavy=True,
+        session="both", ppd_ui=True, wayland_use=True, heavy=True, keyboard="dconf",
         root_gib=(18, 28), build_extra_gib=14,
     ),
     Desktop(
@@ -113,8 +116,12 @@ DESKTOP_LIST: tuple[Desktop, ...] = (
         "A lightweight, traditional desktop. Works well on older or resource-limited hardware.",
         profile_suffix="/desktop", dm="lightdm",
         # The panel's polkit agent is not pulled in on every profile.
-        required=_tuple_of("xfce-base/xfce4-meta", XORG, LIGHTDM, LIGHTDM_GREETER, "gnome-extra/polkit-gnome"),
-        package_use={"dev-libs/libdbusmenu": ("gtk3",)},  # xfce4-panel needs libdbusmenu[gtk3]
+        required=_tuple_of("xfce-base/xfce4-meta", XORG, LIGHTDM, LIGHTDM_GREETER, "gnome-extra/polkit-gnome", NM_APPLET, PAVUCONTROL),
+        package_use={
+            "dev-libs/libdbusmenu": ("gtk3",),  # xfce4-panel needs libdbusmenu[gtk3]
+            "xfce-base/xfce4-meta": ("archive", "editor", "image", "screenshooter"),  # archive manager, text editor, image viewer, screenshots
+        },
+        portals=_tuple_of(PORTAL_GTK),
         root_gib=(14, 22), build_extra_gib=12,
     ),
     Desktop(
@@ -131,7 +138,7 @@ DESKTOP_LIST: tuple[Desktop, ...] = (
         init_atoms={"openrc": ("app-admin/openrc-settingsd",)},
         init_services={"openrc": (("openrc-settingsd", "default"),)},
         package_use={"net-libs/ngtcp2": ("gnutls",)},
-        portals=_tuple_of("sys-apps/xdg-desktop-portal-gtk", "sys-apps/xdg-desktop-portal-xapp"),
+        portals=_tuple_of(PORTAL_GTK, PORTAL_XAPP),
         root_gib=(16, 24), build_extra_gib=12, families=_WITH_DESKTOP_FLAGS, measured=False,
         note="It needs the desktop/gnome Portage profile (the installer selects it): without it the web engine would be compiled for hours.",
     ),
@@ -143,7 +150,7 @@ DESKTOP_LIST: tuple[Desktop, ...] = (
         init_atoms={"openrc": ("app-admin/openrc-settingsd",)},
         init_services={"openrc": (("openrc-settingsd", "default"),)},
         package_use={"mate-base/mate": ("extras", "themes", "notification")},
-        portals=_tuple_of("sys-apps/xdg-desktop-portal-gtk", "sys-apps/xdg-desktop-portal-xapp"),
+        portals=_tuple_of(PORTAL_GTK, PORTAL_XAPP),
         root_gib=(14, 22), build_extra_gib=12, measured=False,
     ),
     Desktop(
@@ -160,17 +167,17 @@ DESKTOP_LIST: tuple[Desktop, ...] = (
         profile_suffix="/desktop/gnome", dm="gdm",
         required=_tuple_of("gnome-base/gnome-light", GDM, XORG),
         package_use={"net-libs/ngtcp2": ("gnutls",)},
-        session="both", ppd_ui=True, wayland_use=True, heavy=True,
+        session="both", ppd_ui=True, wayland_use=True, heavy=True, keyboard="dconf",
         root_gib=(16, 24), build_extra_gib=12, measured=False,
     ),
     Desktop(
         "sway", "Sway", "more",
         "A tiling Wayland window manager driven by the keyboard, with a bar, launcher, terminal and network applet. For experienced users.",
         profile_suffix="/desktop", dm="sddm",
-        required=_tuple_of("gui-wm/sway", SDDM, "gui-apps/foot", "gui-apps/waybar", "gui-apps/mako", "gui-apps/wofi", "gui-apps/swaylock",
-                           "gui-apps/swayidle", "gui-apps/swaybg", "gui-apps/grim", "gui-apps/slurp", "gui-apps/wl-clipboard", "media-sound/pavucontrol",
-                           "gui-libs/xdg-desktop-portal-wlr", "sys-apps/xdg-desktop-portal-gtk", NM_APPLET, "mate-extra/mate-polkit"),
-        session="wayland", wayland_use=True, experienced=True,
+        required=_tuple_of("gui-wm/sway", SDDM, XORG, "gui-apps/foot", "gui-apps/waybar", "gui-apps/mako", "gui-apps/wofi", "gui-apps/swaylock",
+                           "gui-apps/swayidle", "gui-apps/swaybg", "gui-apps/grim", "gui-apps/slurp", "gui-apps/wl-clipboard", PAVUCONTROL,
+                           "gui-libs/xdg-desktop-portal-wlr", PORTAL_GTK, NM_APPLET, MATE_POLKIT),
+        session="wayland", wayland_use=True, experienced=True, keyboard="sway",
         root_gib=(12, 20), build_extra_gib=10, measured=False,
         note="NVIDIA graphics are not supported by upstream Sway. There is no settings program: you edit a text file.",
     ),
@@ -179,9 +186,9 @@ DESKTOP_LIST: tuple[Desktop, ...] = (
         "A tiling window manager on X11 driven by the keyboard, with a status bar, launcher and network applet. For experienced users.",
         profile_suffix="/desktop", dm="lightdm",
         required=_tuple_of("x11-wm/i3", XORG, LIGHTDM, LIGHTDM_GREETER, "x11-misc/i3status", "x11-misc/i3lock", "x11-misc/dmenu", "x11-terms/xfce4-terminal",
-                           "media-gfx/feh", "x11-misc/picom", "x11-misc/dunst", "media-gfx/maim", "x11-misc/xss-lock", "media-sound/pavucontrol",
-                           NM_APPLET, "mate-extra/mate-polkit"),
-        portals=_tuple_of("sys-apps/xdg-desktop-portal-gtk"),
+                           "media-gfx/feh", "x11-misc/picom", "x11-misc/dunst", "media-gfx/maim", "x11-misc/xss-lock", PAVUCONTROL,
+                           NM_APPLET, MATE_POLKIT),
+        portals=_tuple_of(PORTAL_GTK),
         experienced=True, root_gib=(12, 18), build_extra_gib=10, measured=False,
         note="There is no settings program: you edit a text file.",
     ),
@@ -261,10 +268,14 @@ def profile_suffix(desktop: str) -> str:
     return entry.profile_suffix if entry else ""
 
 
-def required_atoms(desktop: str, init: str, kde_apps: str = "core") -> list[str]:
-    """The desktop environment, its display manager and X server, in install order, for one init system."""
+def required_atoms(desktop: str, init: str, kde_apps: str = "core", network_manager: str = "networkmanager") -> list[str]:
+    """The desktop environment, its display manager and X server, in install order, for one init system.
+
+    The network tray icon (nm-applet) is only part of it with NetworkManager: with another network tool it would
+    pull NetworkManager in without ever being used."""
     entry = REGISTRY[desktop]
-    atoms = [KDE_APPS_FULL if (atom == KDE_APPS_CORE and kde_apps == "full") else atom for atom in entry.required]
+    atoms = [KDE_APPS_FULL if (atom == KDE_APPS_CORE and kde_apps == "full") else atom for atom in entry.required
+             if atom != NM_APPLET or network_manager == "networkmanager"]
     atoms.extend(entry.init_atoms.get(init, ()))
     return list(dict.fromkeys(atoms))
 
@@ -277,6 +288,17 @@ def package_use(desktop: str, flatpak: bool = False) -> dict[str, tuple[str, ...
     if flatpak:
         use.update(entry.flatpak_use)
     return use
+
+
+def flatpak_wanted(options) -> bool:
+    """Flatpak is installed when it was asked for or when the Flathub remote is (the remote needs the program)."""
+    return bool(options.flatpak or options.flathub)
+
+
+def portal_atoms(desktop: str) -> tuple[str, ...]:
+    """The xdg-desktop-portal backends the desktop does not bring itself; Flatpak applications need them."""
+    entry = REGISTRY.get(desktop)
+    return entry.portals if entry else ()
 
 
 def display_manager(desktop: str) -> tuple[str, str]:
