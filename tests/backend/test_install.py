@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from gentoo_installer.manifest import Partition
 from gentoo_installerd.install import CheckpointStore, InstallError, Installer
 from gentoo_installerd.runner import DryRunRunner, InstallCancelled
 from gentoo_installerd.storage import StorageManager
@@ -140,6 +141,10 @@ class InstallerFlowTests(unittest.TestCase):
             with self.subTest(option=option), tempfile.TemporaryDirectory() as temporary:
                 m = manifest()
                 setattr(m.storage, option, "1" if option == "raid_level" else True)
+                if option == "raid_level":
+                    # The installer does not create arrays: it installs onto an assembled /dev/md device in manual mode.
+                    m.storage.mode, m.storage.device, m.storage.firmware = "manual", "/dev/md0", "bios"
+                    m.storage.partitions = [Partition("/dev/md0", "/", "ext4")]
                 if option == "luks":
                     m.storage.luks_passphrase = "test-only-passphrase"
                 runner = DryRunRunner()

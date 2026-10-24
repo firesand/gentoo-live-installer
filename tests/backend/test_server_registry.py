@@ -155,6 +155,9 @@ class PluginTests(unittest.TestCase):
 
     def test_rescue_is_not_loaded_with_no_rescue(self) -> None:
         registry = ActionRegistry()
+        patcher = patch.dict(sys.modules, {"gentoo_installerd.hwactions": None})  # the real hardware actions exist now; this test is about rescue
+        patcher.start()
+        self.addCleanup(patcher.stop)
         self.install_module("gentoo_installerd.rescue.api", register=lambda reg: reg.register_action("rescue.scan", lambda request, channel: None, feature="rescue.v1"))
         self.install_module("gentoo_installerd.rescue")
         self.assertEqual(load_plugins(registry, rescue=False), [])
