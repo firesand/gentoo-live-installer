@@ -560,3 +560,18 @@ def test_test_speed_is_offered_only_while_online_and_shows_the_answers(make_wind
     assert page.mirror_list.item(0).text().endswith("[123 ms]") and page.mirror_list.item(1).text().endswith("[no answer]")
     page._show_speeds({urls[0]: 0.2})
     assert page.mirror_list.item(0).text().count("[") == 1 and page.checked_mirrors() == []
+
+
+def test_the_detected_processor_features_can_be_filled_in_and_edited(make_window):
+    window = make_window(info=machine("asus-desktop-rtx4090"))
+    page = page_of(window)
+    window.mode.setCurrentIndex(1)
+    assert page.cpu_flags_detect.isVisibleTo(page) and page.cpu_flags.text() == ""
+    page.cpu_flags_detect.click()
+    detected = page.detected_cpu_flags()
+    assert detected and page.cpu_flags.text().split() == detected
+    page.cpu_flags.setText(page.cpu_flags.text() + " sse4_2")
+    page.save_manifest()
+    assert window.manifest.portage.cpu_flags.split()[-1] == "sse4_2"
+    nothing = make_window()
+    assert not page_of(nothing).cpu_flags_detect.isVisibleTo(nothing.customize)

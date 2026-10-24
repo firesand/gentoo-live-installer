@@ -103,6 +103,16 @@ def _with_help(widget: QWidget, text: str, anchor: str | None = None) -> QWidget
     return row
 
 
+def _with_button(field: QWidget, button: QPushButton) -> QWidget:
+    """A field with a button under it (a button beside it would make the tab wider than a small window)."""
+    holder = QWidget()
+    layout = QVBoxLayout(holder)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.addWidget(field)
+    layout.addWidget(button, 0, Qt.AlignmentFlag.AlignLeft)
+    return holder
+
+
 def _group(title: str) -> tuple[QGroupBox, QFormLayout]:
     box = QGroupBox(title)
     form = QFormLayout(box)
@@ -206,8 +216,8 @@ class PortageTabMixin:
         self.license_group = QButtonGroup(self.license_free)
         self.license_group.addButton(self.license_free)
         self.license_group.addButton(self.license_redistributable)
-        self.license_free.toggled.connect(lambda checked: checked and self._license_radio("free"))
-        self.license_redistributable.toggled.connect(lambda checked: checked and self._license_radio("redistributable"))
+        self.license_free.toggled.connect(lambda checked: self._license_radio("free") if checked else None)
+        self.license_redistributable.toggled.connect(lambda checked: self._license_radio("redistributable") if checked else None)
         radios = QVBoxLayout()
         radios.addLayout(_radio_row(self.license_free, "Free software only"))
         radios.addLayout(_radio_row(self.license_redistributable, "Free software and redistributable binaries (firmware, drivers)", Badge("Recommended")))
@@ -258,7 +268,11 @@ class PortageTabMixin:
         self.cpu_flags = QLineEdit()
         self.cpu_flags.setPlaceholderText(AUTO_PLACEHOLDER)
         self.cpu_flags.setToolTip("CPU_FLAGS_X86: the processor features programs may use. 'Tuned for this CPU' writes the detected ones to package.use.")
-        form.addRow("Processor features (CPU_FLAGS_X86)", self.cpu_flags)
+        self.cpu_flags_detect = QPushButton("Fill in the detected features")
+        self.cpu_flags_detect.setToolTip("Writes the processor features found on this computer into the field, so you can edit them.")
+        self.cpu_flags_detect.clicked.connect(self._fill_detected_cpu_flags)
+        self.cpu_flags_detect.hide()
+        form.addRow("Processor features (CPU_FLAGS_X86)", _with_button(self.cpu_flags, self.cpu_flags_detect))
         section.add_widget(box)
         self.speed_box = box
 
@@ -487,6 +501,13 @@ class PortageTabMixin:
         self.optimize_note.setText(note)
         self.optimize_note.setVisible(bool(note))
 
+    def detected_cpu_flags(self) -> list[str]:
+        info = self.hardware.info
+        return optimize.cpu_flags_of(info.hardware) if info is not None and info.hardware else []
+
+    def _fill_detected_cpu_flags(self) -> None:
+        self.cpu_flags.setText(" ".join(self.detected_cpu_flags()))
+
     def _flags_changed(self) -> None:
         warnings = optimize.flag_warnings(self.cflags.text())
         self.flags_warning.setText("\n".join(warnings))
@@ -684,6 +705,7 @@ class PortageTabMixin:
             variant, _note = binhost_rules.choose_variant("auto", cpu_level, self._portable())
             self.binhost_variant.setItemText(0, f"Automatic (now: {'x86-64-v3' if variant == 'v3' else 'generic'} for this processor)")
         self.mirror_test.setVisible(bool(info is not None and info.network))  # only while online
+        self.cpu_flags_detect.setVisible(bool(self.detected_cpu_flags()))
         self._update_optimize_note()
         self._update_jobs_summary()
         self._sync_video_boxes()
