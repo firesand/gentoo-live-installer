@@ -1,0 +1,95 @@
+[62/107] /usr/bin/x86_64-pc-linux-gnu-g++ -DQT_CORE_LIB -DQT_GUI_LIB -DQT_LEAN_HEADERS=1 -DQT_NO_DEBUG -DQT_WIDGETS_LIB -DQtWidgets_EXPORTS -I/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2/sources/pyside6/PySide6/QtWidgets/QtWidgets -I/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2/sources/pyside6/PySide6/QtWidgets -I/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2-python3_14/build2/qfp-py3.14-qt6.11.2-64bit-relwithdebinfo/build/pyside6/PySide6/QtWidgets -I/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2/sources/pyside6/PySide6 -I/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2/sources/pyside6/libpyside -I/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2-python3_14/build2/qfp-py3.14-qt6.11.2-64bit-relwithdebinfo/build/pyside6/PySide6/QtCore/PySide6/QtCore -I/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2-python3_14/build2/qfp-py3.14-qt6.11.2-64bit-relwithdebinfo/build/pyside6/PySide6/QtGui/PySide6/QtGui -isystem /usr/include/qt6/QtCore -isystem /usr/include/qt6 -isystem /usr/include/qt6/QtGui -isystem /usr/include/qt6/QtWidgets -isystem /usr/lib64/qt6/mkspecs/linux-g++ -isystem /var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2-python3_14/build1/qfp-py3.14-qt6.11.2-64bit-relwithdebinfo/package/shiboken6/include -isystem /usr/include/python3.14 -O2 -pipe -Wall -Wextra -Wno-strict-aliasing -Wno-cast-function-type -fvisibility=hidden -O2 -g -DNDEBUG -std=gnu++17 -fPIC   -fPIC -mno-direct-extern-access -MD -MT PySide6/QtWidgets/CMakeFiles/QtWidgets.dir/Unity/unity_0_cxx.cxx.o -MF PySide6/QtWidgets/CMakeFiles/QtWidgets.dir/Unity/unity_0_cxx.cxx.o.d -o PySide6/QtWidgets/CMakeFiles/QtWidgets.dir/Unity/unity_0_cxx.cxx.o -c /var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2-python3_14/build2/qfp-py3.14-qt6.11.2-64bit-relwithdebinfo/build/pyside6/PySide6/QtWidgets/CMakeFiles/QtWidgets.dir/Unity/unity_0_cxx.cxx
+[63/107] cd /var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2/sources/pyside6/PySide6/QtPrintSupport && /var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2-python3_14/build2/qfp-py3.14-qt6.11.2-64bit-relwithdebinfo/build/pyside6/.qfp/bin/shiboken_wrapper.sh /var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2-python3_14/build1/qfp-py3.14-qt6.11.2-64bit-relwithdebinfo/package/shiboken6_generator/shiboken6 --generator-set=shiboken --enable-parent-ctor-heuristic --enable-pyside-extensions --enable-return-value-heuristic --use-isnull-as-nb-bool --include-paths=/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2/sources/pyside6/PySide6:/usr/lib64/qt6/mkspecs/linux-g++:/usr/include/qt6:/usr/include/qt6/QtCore --typesystem-paths=/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2-python3_14/build2/qfp-py3.14-qt6.11.2-64bit-relwithdebinfo/build/pyside6/PySide6:/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2/sources/pyside6/PySide6:/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2/sources/pyside6/PySide6/QtPrintSupport --output-directory=/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2-python3_14/build2/qfp-py3.14-qt6.11.2-64bit-relwithdebinfo/build/pyside6/PySide6/QtPrintSupport --license-file=/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2/sources/pyside6/PySide6/QtPrintSupport/../licensecomment.txt --lean-headers --api-version=6.11.2 /var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2-python3_14/build2/qfp-py3.14-qt6.11.2-64bit-relwithdebinfo/build/pyside6/PySide6/QtPrintSupport_global.h /var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2/sources/pyside6/PySide6/QtPrintSupport/typesystem_printsupport.xml
+qt.shiboken: (printsupport) CLANG v22/0.64 targeting "x86_64-pc-linux-gnu"/gnu, 64bit.
+(printsupport) [2541ms] Generated class model (1143).                               [OK]
+(printsupport) [2541ms] Generated enum model (6).                                   [OK]
+(printsupport) [2543ms] Generated namespace model (226).                            [OK]
+(printsupport) [2785ms] Resolved typedefs (2819).                                   [OK]
+(printsupport) [2789ms] Fixed class inheritance.                                    [OK]
+(printsupport) [2859ms] Checked for inconsistencies in class model.                 [OK]
+(printsupport) [2959ms] Checked for inconsistencies in typesystem (8142).           [OK]
+(printsupport) [2960ms] Checked for inconsistencies in function modifications.      [OK]
+(printsupport) [2970ms] Wrote log files.                                            [OK]
+(printsupport) [2988ms] Ran Source generator.                                       [OK]
+(printsupport) [2990ms] Ran Header generator.                                       [OK]
+Done, (printsupport) 2990ms (173 known issues)
+[64/107] /usr/bin/x86_64-pc-linux-gnu-g++ -DQT_CORE_LIB -DQT_GUI_LIB -DQT_LEAN_HEADERS=1 -DQT_NO_DEBUG -DQT_OPENGL_LIB -DQtOpenGL_EXPORTS -I/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2/sources/pyside6/PySide6/QtOpenGL/QtOpenGL -I/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2/sources/pyside6/PySide6/QtOpenGL -I/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2/sources/pyside6/libpyside -I/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2-python3_14/build2/qfp-py3.14-qt6.11.2-64bit-relwithdebinfo/build/pyside6/PySide6/QtCore/PySide6/QtCore -I/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2-python3_14/build2/qfp-py3.14-qt6.11.2-64bit-relwithdebinfo/build/pyside6/PySide6/QtGui/PySide6/QtGui -I/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2-python3_14/build2/qfp-py3.14-qt6.11.2-64bit-relwithdebinfo/build/pyside6/PySide6/QtOpenGL/PySide6/QtOpenGL -I/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2/sources/pyside6/PySide6 -isystem /usr/include/qt6/QtCore -isystem /usr/include/qt6 -isystem /usr/include/qt6/QtGui -isystem /usr/include/qt6/QtOpenGL -isystem /usr/lib64/qt6/mkspecs/linux-g++ -isystem /var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2-python3_14/build1/qfp-py3.14-qt6.11.2-64bit-relwithdebinfo/package/shiboken6/include -isystem /usr/include/python3.14 -O2 -pipe -Wall -Wextra -Wno-strict-aliasing -Wno-cast-function-type -fvisibility=hidden -O2 -g -DNDEBUG -std=gnu++17 -fPIC   -fPIC -mno-direct-extern-access -MD -MT PySide6/QtOpenGL/CMakeFiles/QtOpenGL.dir/Unity/unity_2_cxx.cxx.o -MF PySide6/QtOpenGL/CMakeFiles/QtOpenGL.dir/Unity/unity_2_cxx.cxx.o.d -o PySide6/QtOpenGL/CMakeFiles/QtOpenGL.dir/Unity/unity_2_cxx.cxx.o -c /var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2-python3_14/build2/qfp-py3.14-qt6.11.2-64bit-relwithdebinfo/build/pyside6/PySide6/QtOpenGL/CMakeFiles/QtOpenGL.dir/Unity/unity_2_cxx.cxx
+FAILED: [code=1] PySide6/QtOpenGL/CMakeFiles/QtOpenGL.dir/Unity/unity_2_cxx.cxx.o 
+/usr/bin/x86_64-pc-linux-gnu-g++ -DQT_CORE_LIB -DQT_GUI_LIB -DQT_LEAN_HEADERS=1 -DQT_NO_DEBUG -DQT_OPENGL_LIB -DQtOpenGL_EXPORTS -I/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2/sources/pyside6/PySide6/QtOpenGL/QtOpenGL -I/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2/sources/pyside6/PySide6/QtOpenGL -I/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2/sources/pyside6/libpyside -I/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2-python3_14/build2/qfp-py3.14-qt6.11.2-64bit-relwithdebinfo/build/pyside6/PySide6/QtCore/PySide6/QtCore -I/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2-python3_14/build2/qfp-py3.14-qt6.11.2-64bit-relwithdebinfo/build/pyside6/PySide6/QtGui/PySide6/QtGui -I/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2-python3_14/build2/qfp-py3.14-qt6.11.2-64bit-relwithdebinfo/build/pyside6/PySide6/QtOpenGL/PySide6/QtOpenGL -I/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2/sources/pyside6/PySide6 -isystem /usr/include/qt6/QtCore -isystem /usr/include/qt6 -isystem /usr/include/qt6/QtGui -isystem /usr/include/qt6/QtOpenGL -isystem /usr/lib64/qt6/mkspecs/linux-g++ -isystem /var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2-python3_14/build1/qfp-py3.14-qt6.11.2-64bit-relwithdebinfo/package/shiboken6/include -isystem /usr/include/python3.14 -O2 -pipe -Wall -Wextra -Wno-strict-aliasing -Wno-cast-function-type -fvisibility=hidden -O2 -g -DNDEBUG -std=gnu++17 -fPIC   -fPIC -mno-direct-extern-access -MD -MT PySide6/QtOpenGL/CMakeFiles/QtOpenGL.dir/Unity/unity_2_cxx.cxx.o -MF PySide6/QtOpenGL/CMakeFiles/QtOpenGL.dir/Unity/unity_2_cxx.cxx.o.d -o PySide6/QtOpenGL/CMakeFiles/QtOpenGL.dir/Unity/unity_2_cxx.cxx.o -c /var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2-python3_14/build2/qfp-py3.14-qt6.11.2-64bit-relwithdebinfo/build/pyside6/PySide6/QtOpenGL/CMakeFiles/QtOpenGL.dir/Unity/unity_2_cxx.cxx
+Assembler messages:
+{standard input}:393983: Warning: end of file not at end of a line; newline inserted
+{standard input}:394746: Error: number of operands mismatch for `movq'
+{standard input}: Error: open CFI at the end of file; missing .cfi_endproc directive
+x86_64-pc-linux-gnu-g++: fatal error: Killed signal terminated program cc1plus
+compilation terminated.
+[65/107] /usr/bin/x86_64-pc-linux-gnu-g++ -DQT_CORE_LIB -DQT_GUI_LIB -DQT_LEAN_HEADERS=1 -DQT_NO_DEBUG -DQT_OPENGL_LIB -DQtOpenGL_EXPORTS -I/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2/sources/pyside6/PySide6/QtOpenGL/QtOpenGL -I/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2/sources/pyside6/PySide6/QtOpenGL -I/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2/sources/pyside6/libpyside -I/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2-python3_14/build2/qfp-py3.14-qt6.11.2-64bit-relwithdebinfo/build/pyside6/PySide6/QtCore/PySide6/QtCore -I/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2-python3_14/build2/qfp-py3.14-qt6.11.2-64bit-relwithdebinfo/build/pyside6/PySide6/QtGui/PySide6/QtGui -I/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2-python3_14/build2/qfp-py3.14-qt6.11.2-64bit-relwithdebinfo/build/pyside6/PySide6/QtOpenGL/PySide6/QtOpenGL -I/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2/sources/pyside6/PySide6 -isystem /usr/include/qt6/QtCore -isystem /usr/include/qt6 -isystem /usr/include/qt6/QtGui -isystem /usr/include/qt6/QtOpenGL -isystem /usr/lib64/qt6/mkspecs/linux-g++ -isystem /var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2-python3_14/build1/qfp-py3.14-qt6.11.2-64bit-relwithdebinfo/package/shiboken6/include -isystem /usr/include/python3.14 -O2 -pipe -Wall -Wextra -Wno-strict-aliasing -Wno-cast-function-type -fvisibility=hidden -O2 -g -DNDEBUG -std=gnu++17 -fPIC   -fPIC -mno-direct-extern-access -MD -MT PySide6/QtOpenGL/CMakeFiles/QtOpenGL.dir/Unity/unity_1_cxx.cxx.o -MF PySide6/QtOpenGL/CMakeFiles/QtOpenGL.dir/Unity/unity_1_cxx.cxx.o.d -o PySide6/QtOpenGL/CMakeFiles/QtOpenGL.dir/Unity/unity_1_cxx.cxx.o -c /var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2-python3_14/build2/qfp-py3.14-qt6.11.2-64bit-relwithdebinfo/build/pyside6/PySide6/QtOpenGL/CMakeFiles/QtOpenGL.dir/Unity/unity_1_cxx.cxx
+ninja: build stopped: subcommand failed.
+error: Error compiling pyside6
+Traceback (most recent call last):
+  File "<frozen runpy>", line 203, in _run_module_as_main
+  File "<frozen runpy>", line 88, in _run_code
+  File "/usr/lib/python3.14/site-packages/gpep517/__main__.py", line 245, in <module>
+    sys.exit(main())
+             ~~~~^^
+  File "/usr/lib/python3.14/site-packages/gpep517/__main__.py", line 241, in main
+    return func(args)
+  File "/usr/lib/python3.14/site-packages/gpep517/__main__.py", line 45, in build_wheel
+    print(build_wheel_impl(args, args.wheel_dir), file=out)
+          ~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/gpep517/build.py", line 180, in build_wheel_impl
+    wheel_name = backend.build_wheel(str(wheel_dir), args.config_json)
+  File "/usr/lib/python3.14/site-packages/setuptools/build_meta.py", line 438, in build_wheel
+    return _build(['bdist_wheel'])
+  File "/usr/lib/python3.14/site-packages/setuptools/build_meta.py", line 429, in _build
+    return self._build_with_temp_dir(
+           ~~~~~~~~~~~~~~~~~~~~~~~~~^
+        cmd,
+        ^^^^
+    ...<3 lines>...
+        self._arbitrary_args(config_settings),
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/usr/lib/python3.14/site-packages/setuptools/build_meta.py", line 410, in _build_with_temp_dir
+    self.run_setup()
+    ~~~~~~~~~~~~~~^^
+  File "/usr/lib/python3.14/site-packages/setuptools/build_meta.py", line 520, in run_setup
+    super().run_setup(setup_script=setup_script)
+    ~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/usr/lib/python3.14/site-packages/setuptools/build_meta.py", line 317, in run_setup
+    exec(code, locals())  # noqa: S102 # exec is intentional here
+    ~~~~^^^^^^^^^^^^^^^^
+  File "<string>", line 43, in <module>
+  File "/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2/build_scripts/setup_runner.py", line 259, in run_setup
+    raise RuntimeError(msg)
+RuntimeError: 
+setup.py invocation failed with exit code: 1.
+
+
+setup.py invocation was: /usr/bin/python3.14 setup.py bdist_wheel --dist-dir /var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2-python3_14/wheel/.tmp-hngn_exz --cmake=/usr/bin/cmake --ignore-git --limited-api=no --module-subset=Core,Xml,Gui,Widgets,PrintSupport,OpenGL,Network,Test,DBus,Concurrent,Sql,OpenGLWidgets, --no-strip --no-size-optimization --openssl=/usr/bin/openssl --qt=6.11.2 --qtpaths=/usr/lib64/qt6/bin/qtpaths --log-level=verbose --parallel=2 --relwithdebinfo --skip-docs --disable-numpy-support --no-qt-tools --reuse-build --shiboken-target-path=/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2-python3_14/build1/qfp-py3.14-qt6.11.2-64bit-relwithdebinfo/package/shiboken6 --build-type=pyside6 --internal-build-type=pyside6
+
+ [31;01m*[0m ERROR: dev-python/pyside-6.11.2::gentoo failed (compile phase):
+ [31;01m*[0m   Wheel build failed
+ [31;01m*[0m 
+ [31;01m*[0m Call stack:
+ [31;01m*[0m     ebuild.sh, line  143:  Called src_compile
+ [31;01m*[0m   environment, line 4461:  Called distutils-r1_src_compile
+ [31;01m*[0m   environment, line 1792:  Called _distutils-r1_run_foreach_impl 'python_compile'
+ [31;01m*[0m   environment, line  570:  Called python_foreach_impl 'distutils-r1_run_phase' 'python_compile'
+ [31;01m*[0m   environment, line 3895:  Called multibuild_foreach_variant '_python_multibuild_wrapper' 'distutils-r1_run_phase' 'python_compile'
+ [31;01m*[0m   environment, line 3237:  Called _multibuild_run '_python_multibuild_wrapper' 'distutils-r1_run_phase' 'python_compile'
+ [31;01m*[0m   environment, line 3235:  Called _python_multibuild_wrapper 'distutils-r1_run_phase' 'python_compile'
+ [31;01m*[0m   environment, line 1046:  Called distutils-r1_run_phase 'python_compile'
+ [31;01m*[0m   environment, line 1776:  Called python_compile
+ [31;01m*[0m   environment, line 3573:  Called distutils-r1_python_compile
+ [31;01m*[0m   environment, line 1670:  Called distutils_pep517_install '/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2-python3_14/install'
+ [31;01m*[0m   environment, line 2137:  Called die
+ [31;01m*[0m The specific snippet of code:
+ [31;01m*[0m       local wheel=$("${cmd[@]}" 3>&1 1>&2 || die "Wheel build failed");
+ [31;01m*[0m 
+ [31;01m*[0m If you need support, post the output of `emerge --info '=dev-python/pyside-6.11.2::gentoo'`,
+ [31;01m*[0m the complete build log and the output of `emerge -pqv '=dev-python/pyside-6.11.2::gentoo'`.
+ [31;01m*[0m The complete build log is located at '/var/tmp/portage/dev-python/pyside-6.11.2/temp/build.log'.
+ [31;01m*[0m The ebuild environment file is located at '/var/tmp/portage/dev-python/pyside-6.11.2/temp/environment'.
+ [31;01m*[0m Working directory: '/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2'
+ [31;01m*[0m S: '/var/tmp/portage/dev-python/pyside-6.11.2/work/pyside-setup-everywhere-src-6.11.2'

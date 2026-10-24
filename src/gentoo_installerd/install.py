@@ -931,7 +931,7 @@ class Installer:
             try:
                 self.configurer.emerge(self.manifest, ("--noreplace", *driver_atoms))
             except RunnerError as exc:
-                self.degraded.append(f"Hardware drivers ({', '.join(driver_atoms)}) could not be installed: {str(exc)[-200:]}")
+                self.degraded.append(f"Hardware drivers ({', '.join(driver_atoms)}) could not be installed: {self.configurer.explain(exc).summary[:200]}")
                 self.log("WARNING: " + self.degraded[-1])
         if self.manifest.system.initramfs == "dracut":
             self.configurer.emerge(self.manifest, ("--noreplace", "sys-kernel/dracut"))

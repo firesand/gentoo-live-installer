@@ -37,6 +37,37 @@ def recommend_jobs(threads: int, available_kib: int, swap_mib: int = 0) -> int:
     return max(1, min(max(threads, 1), 32, int(budget_gib // 2)))
 
 
+# Qt WebEngine, LLVM and PySide's bindings need about this much memory per compile job, twice what MAKEOPTS assumes.
+GIB_PER_HEAVY_JOB = 4
+
+
+def memory_heavy_jobs(total_kib: int, swap_mib: int = 0) -> int:
+    """Compile jobs for the memory-heavy packages: all the memory and half the swap, about 4 GiB per job, at least one."""
+    budget_gib = total_kib / KIB_PER_GIB + 0.5 * swap_mib / 1024
+    return max(1, int(budget_gib // GIB_PER_HEAVY_JOB))
+
+
+def make_opts_jobs(make_opts: str) -> int | None:
+    """The number of jobs a MAKEOPTS-style text allows: the last ``-jN`` or ``--jobs=N`` wins, as in make.
+
+    None when it names no job count or leaves the jobs unlimited (``-j`` alone, ``-j0``).
+    """
+    tokens = make_opts.split()
+    jobs: int | None = None
+    for index, token in enumerate(tokens):
+        if token in ("-j", "--jobs"):
+            following = tokens[index + 1] if index + 1 < len(tokens) else ""
+            value = following if following.isdecimal() else ""
+        elif token.startswith("--jobs="):
+            value = token[len("--jobs="):]
+        elif token.startswith("-j"):
+            value = token[2:]
+        else:
+            continue
+        jobs = int(value) if value.isdecimal() and int(value) > 0 else None
+    return jobs
+
+
 def recommend_emerge_jobs(total_kib: int, threads: int) -> int:
     """Packages built at the same time by emerge."""
     total_gib = total_kib / KIB_PER_GIB
