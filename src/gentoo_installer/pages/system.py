@@ -37,7 +37,7 @@ class SystemPage(Page):
             ("openrc", "OpenRC", "Gentoo’s lightweight, traditional init system. A simple default with extensive Handbook support.", True),
             ("systemd", "systemd", "Integrated service management, journaling, networking, and boot tooling used by many desktop systems.", False),
         ])
-        self.layout.addWidget(self.init_group)
+        self.content.addWidget(self.init_group)
 
         base = Card("Stage3 and profile")
         form = QFormLayout()
@@ -51,8 +51,8 @@ class SystemPage(Page):
         form.addRow("Portage profile", self.profile)
         self.world_update = QCheckBox("Update @world during installation (can take much longer)")
         form.addRow(self.world_update)
-        base.layout.addLayout(form)
-        self.layout.addWidget(base)
+        base.content.addLayout(form)
+        self.content.addWidget(base)
         self.init_group.selectionChanged.connect(self._init_changed)
         self.stage.currentIndexChanged.connect(self._stage_changed)
 
@@ -62,8 +62,8 @@ class SystemPage(Page):
             ("xfce", "Xfce", "A lightweight desktop that works well on older or resource-limited hardware.", False),
             ("minimal", "Minimal system", "No graphical desktop. Install only the base system and selected tools.", False),
         ])
-        self.layout.addWidget(QLabel("Desktop environment"))
-        self.layout.addWidget(self.desktop_group)
+        self.content.addWidget(QLabel("Desktop environment"))
+        self.content.addWidget(self.desktop_group)
         self.desktop_group.selectionChanged.connect(self._refresh_profiles)
 
         boot = Card("Kernel and boot")
@@ -102,8 +102,8 @@ class SystemPage(Page):
         self.signing_cert = QLineEdit()
         self.signing_cert.setPlaceholderText("Absolute path to the signing certificate")
         boot_form.addRow("Certificate", self.signing_cert)
-        boot.layout.addLayout(boot_form)
-        self.layout.addWidget(boot)
+        boot.content.addLayout(boot_form)
+        self.content.addWidget(boot)
         self._refresh_stages()
         self.load_manifest()
 

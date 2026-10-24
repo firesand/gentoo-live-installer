@@ -25,7 +25,7 @@ class CustomizePage(Page):
         tabs.addTab(self._portage_tab(), "Portage")
         tabs.addTab(self._network_tab(), "Network")
         tabs.addTab(self._extras_tab(), "Applications && tools")
-        self.layout.addWidget(tabs)
+        self.content.addWidget(tabs)
         self.load_manifest()
 
     def _portage_tab(self) -> QWidget:
@@ -72,7 +72,7 @@ class CustomizePage(Page):
         self.video_cards = QLineEdit()
         self.video_cards.setPlaceholderText("Detected automatically when empty")
         form.addRow("VIDEO_CARDS", self.video_cards)
-        card.layout.addLayout(form)
+        card.content.addLayout(form)
         return page
 
     def _network_tab(self) -> QWidget:
@@ -110,7 +110,7 @@ class CustomizePage(Page):
         self.wifi_password = QLineEdit()
         self.wifi_password.setEchoMode(QLineEdit.EchoMode.Password)
         form.addRow("Wi-Fi password", self.wifi_password)
-        card.layout.addLayout(form)
+        card.content.addLayout(form)
         return page
 
     def _extras_tab(self) -> QWidget:
@@ -141,10 +141,10 @@ class CustomizePage(Page):
             check = QCheckBox(label)
             self.checks[key] = check
             grid.addWidget(check, index // 2, index % 2)
-        card.layout.addLayout(grid)
+        card.content.addLayout(grid)
         self.extra_packages = QLineEdit()
         self.extra_packages.setPlaceholderText("category/package category/other-package")
-        card.layout.addWidget(self.extra_packages)
+        card.content.addWidget(self.extra_packages)
         return page
 
     def _network_changed(self) -> None:

@@ -44,15 +44,15 @@ class AccountsPage(Page):
         self.ssh_keys.setPlaceholderText("Optional SSH public keys, one per line")
         self.ssh_keys.setMaximumHeight(80)
         form.addRow("SSH authorized keys", self.ssh_keys)
-        account.layout.addLayout(form)
-        self.layout.addWidget(account)
+        account.content.addLayout(form)
+        self.content.addWidget(account)
 
         regional = Card("Region and input")
         regional_form = QFormLayout()
-        self.locale = QComboBox()
-        self.locale.setEditable(True)
-        self.locale.addItems(["en_US.UTF-8", "en_GB.UTF-8", "de_DE.UTF-8", "es_ES.UTF-8", "fr_FR.UTF-8", "it_IT.UTF-8", "ja_JP.UTF-8", "nl_NL.UTF-8", "pl_PL.UTF-8", "pt_BR.UTF-8", "tr_TR.UTF-8"])
-        regional_form.addRow("System locale", self.locale)
+        self.locale_box = QComboBox()
+        self.locale_box.setEditable(True)
+        self.locale_box.addItems(["en_US.UTF-8", "en_GB.UTF-8", "de_DE.UTF-8", "es_ES.UTF-8", "fr_FR.UTF-8", "it_IT.UTF-8", "ja_JP.UTF-8", "nl_NL.UTF-8", "pl_PL.UTF-8", "pt_BR.UTF-8", "tr_TR.UTF-8"])
+        regional_form.addRow("System locale", self.locale_box)
         self.timezone = QComboBox()
         self.timezone.setEditable(True)
         zones = sorted(zoneinfo.available_timezones())
@@ -63,8 +63,8 @@ class AccountsPage(Page):
         self.keymap.setEditable(True)
         self.keymap.addItems(["us", "gb", "de", "es", "fr", "it", "jp106", "nl", "pl", "pt", "trq"])
         regional_form.addRow("Console keymap", self.keymap)
-        regional.layout.addLayout(regional_form)
-        self.layout.addWidget(regional)
+        regional.content.addLayout(regional_form)
+        self.content.addWidget(regional)
         self.load_manifest()
 
     def load_manifest(self) -> None:
@@ -79,7 +79,7 @@ class AccountsPage(Page):
         self.privilege.setCurrentIndex(max(0, self.privilege.findData(accounts.privilege)))
         self.disable_root.setChecked(accounts.disable_root_login)
         self.ssh_keys.setPlainText("\n".join(accounts.ssh_authorized_keys))
-        self.locale.setCurrentText(self.manifest.system.locale)
+        self.locale_box.setCurrentText(self.manifest.system.locale)
         self.timezone.setCurrentText(self.manifest.system.timezone)
         self.keymap.setCurrentText(self.manifest.system.keymap)
 
@@ -93,7 +93,7 @@ class AccountsPage(Page):
         accounts.privilege = self.privilege.currentData()
         accounts.disable_root_login = self.disable_root.isChecked()
         accounts.ssh_authorized_keys = [line.strip() for line in self.ssh_keys.toPlainText().splitlines() if line.strip()]
-        self.manifest.system.locale = self.locale.currentText().strip()
+        self.manifest.system.locale = self.locale_box.currentText().strip()
         self.manifest.system.timezone = self.timezone.currentText().strip()
         self.manifest.system.keymap = self.keymap.currentText().strip()
 

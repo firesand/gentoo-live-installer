@@ -23,8 +23,8 @@ class WelcomePage(Page):
         text.setWordWrap(True)
         text.setMaximumWidth(760)
         hero.addWidget(text)
-        self.layout.addLayout(hero)
-        self.layout.addSpacing(12)
+        self.content.addLayout(hero)
+        self.content.addSpacing(12)
 
         grid = QGridLayout()
         grid.setSpacing(14)
@@ -36,8 +36,8 @@ class WelcomePage(Page):
         ]
         for index, (heading, description) in enumerate(cards):
             grid.addWidget(Card(heading, description), index // 2, index % 2)
-        self.layout.addLayout(grid)
-        self.layout.addSpacing(8)
+        self.content.addLayout(grid)
+        self.content.addSpacing(8)
 
         actions = QHBoxLayout()
         live = QPushButton("Continue trying the live desktop")
@@ -47,7 +47,7 @@ class WelcomePage(Page):
         handbook.clicked.connect(self.handbookRequested)
         actions.addWidget(handbook)
         actions.addStretch()
-        self.layout.addLayout(actions)
+        self.content.addLayout(actions)
 
         companions = QHBoxLayout()
         label = QLabel("Explore the included tools:")
@@ -59,4 +59,4 @@ class WelcomePage(Page):
             button.clicked.connect(lambda _=False, name=app: self.applicationRequested.emit(name))
             companions.addWidget(button)
         companions.addStretch()
-        self.layout.addLayout(companions)
+        self.content.addLayout(companions)

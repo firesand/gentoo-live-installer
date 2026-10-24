@@ -28,8 +28,8 @@ class ReadinessPage(Page):
         ):
             row = StatusRow(title, "Checking…")
             self.rows[key] = row
-            self.card.layout.addWidget(row)
-        self.layout.addWidget(self.card)
+            self.card.content.addWidget(row)
+        self.content.addWidget(self.card)
         actions = QHBoxLayout()
         refresh = QPushButton("Check again")
         refresh.clicked.connect(self.refreshRequested)
@@ -38,11 +38,11 @@ class ReadinessPage(Page):
         network.clicked.connect(self.networkSettingsRequested)
         actions.addWidget(network)
         actions.addStretch()
-        self.layout.addLayout(actions)
+        self.content.addLayout(actions)
         note = QLabel("An internet connection is required to download and verify the Gentoo stage3 archive and synchronize Portage.")
         note.setWordWrap(True)
         note.setProperty("muted", True)
-        self.layout.addWidget(note)
+        self.content.addWidget(note)
 
     def update_info(self, info: SystemInfo) -> None:
         arch_ok = info.architecture in {"x86_64", "amd64"}
