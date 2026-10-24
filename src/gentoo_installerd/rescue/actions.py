@@ -44,7 +44,8 @@ ACTIONS: dict[str, dict[str, Any]] = {
     "boot.initramfs": {"title": "Rebuild the initramfs", "group": "boot", "risk": "medium", "writes": True, "description": "Creates new initramfs images for the installed kernels.",
                        "params": [{"name": "kernels", "type": "list", "label": "Kernels (empty for all)"}, {"name": "generic", "type": "bool", "label": "Include drivers for many kinds of hardware (for a disk moved to another computer)", "default": False}]},
     "boot.kernel": {"title": "Reinstall the kernel", "group": "boot", "risk": "high", "writes": True, "description": "Reinstalls the kernel package, then rebuilds the initramfs and the boot menu.",
-                    "params": [{"name": "package", "type": "text", "label": "Kernel package (Gentoo)", "required": False}, {"name": "mode", "type": "enum", "label": "Method (Gentoo)", "choices": ["config", "remerge"], "default": ""}]},
+                    "params": [{"name": "package", "type": "text", "label": "Kernel package (Gentoo)", "required": False}, {"name": "mode", "type": "enum", "label": "Method (Gentoo)", "choices": ["config", "remerge"], "default": ""},
+                               {"name": "kernels", "type": "list", "label": "Kernels (empty for the damaged or the newest one)"}]},
     "boot.esp_fallback": {"title": "Create the fallback boot file", "group": "boot", "risk": "medium", "writes": True, "description": "Copies the boot loader to EFI/BOOT/BOOTX64.EFI so the firmware can find the system."},
     "efi.add": {"title": "Add a firmware boot entry", "group": "efi", "risk": "medium", "writes": False, "needs_nvram": True, "description": "Registers an existing boot loader file with the firmware.",
                 "params": [{"name": "loader", "type": "text", "label": "Loader file (for example \\EFI\\debian\\shimx64.efi)", "required": False}, {"name": "label", "type": "text", "label": "Name", "required": False},
@@ -163,8 +164,13 @@ def _plan_recommended(manager: RescueManager, session: RescueSession, view: Sess
     included: list[str] = []
     skipped: list[str] = []
     broken_initramfs = sorted({f.kernel for f in findings if f.severity == "error" and f.id in {"D02", "D03"} and f.kernel})
+    broken_kernels = sorted({f.kernel for f in findings if f.severity == "error" and f.id in {"D01", "D04"} and f.kernel}) if adapter.selects_kernels else []
     for action in wanted:
-        params: dict[str, Any] = {"kernels": broken_initramfs} if action == "boot.initramfs" and broken_initramfs else {}  # only the initramfs images that are missing or incomplete
+        params: dict[str, Any] = {}
+        if action == "boot.initramfs" and broken_initramfs:  # only the initramfs images that are missing or incomplete
+            params = {"kernels": broken_initramfs}
+        elif action == "boot.kernel" and broken_kernels:  # only the kernels the findings name, not whichever sorts last
+            params = {"kernels": broken_kernels}
         sub = _new_builder(view, session, action, params)
         sub.title, sub.risk = ACTIONS[action]["title"], ACTIONS[action]["risk"]
         try:
@@ -176,7 +182,8 @@ def _plan_recommended(manager: RescueManager, session: RescueSession, view: Sess
         included.append(action)
     if not included:
         raise Unsupported("None of the recommended repairs can be done here. " + " ".join(skipped))
-    b.title, b.params = "Fix everything recommended", {"actions": included, **({"kernels": broken_initramfs} if broken_initramfs and "boot.initramfs" in included else {})}
+    kernels = broken_initramfs if "boot.initramfs" in included else broken_kernels if "boot.kernel" in included else []
+    b.title, b.params = "Fix everything recommended", {"actions": included, **({"kernels": kernels} if kernels else {})}
     b.summary = "Runs, in this order: " + "; ".join(ACTIONS[a]["title"].lower() for a in included) + "."
     b.risk = max((ACTIONS[a]["risk"] for a in included), key=lambda r: RISK_RANK[r])
     for note in skipped:
@@ -395,6 +402,9 @@ def _plan_fstab_fix(b: PlanBuilder, manager: RescueManager) -> None:
     except ValueError as exc:
         raise RescueError("bad_request", str(exc), param="choices") from exc
     new_text = updated.render()
+    if new_text == text:
+        raise Unsupported("No line of /etc/fstab needs to change. The entries that point at disks which are not here already have 'nofail' or 'noauto', so booting does not wait for them, "
+                          "or they have a file system type that you have to correct by hand.")
     b.title, b.risk = "Fix the disk list (fstab)", "high"
     b.summary = "Replaces or relaxes the entries of /etc/fstab that point at disks that are not there. A copy of the old file is kept."
     b.diff = unified_diff(text, new_text)
@@ -403,8 +413,14 @@ def _plan_fstab_fix(b: PlanBuilder, manager: RescueManager) -> None:
     b.needs["write"] = True
     b.check("fstab_resolves", ignore=[int(k) for k, v in chosen.items() if v.get("action") in {"nofail", "comment", "keep"}])
     for proposal in proposals:
-        if not proposal.selected and not given.get(str(proposal.lineno)) and proposal.default_action != "keep":
+        if proposal.selected or given.get(str(proposal.lineno)):
+            continue
+        action = chosen[proposal.lineno]["action"]
+        if action == "nofail":
             b.warn(f"{proposal.mountpoint}: no safe replacement was chosen automatically; the entry is marked 'nofail' so booting does not wait for it.")
+        elif action == "keep":
+            b.notes.append(f"{proposal.mountpoint}: left as it is. " + ("The file system type is wrong; correct it by hand." if proposal.status == "type_mismatch"
+                                                                     else "It already has 'nofail' or 'noauto', so a disk that is not plugged in does not stop the boot."))
     verify = _verify_fstab(b, new_text)
     if verify:
         b.warn("findmnt --verify on the result: " + verify)
@@ -552,7 +568,8 @@ def available_actions(manager: RescueManager, session: RescueSession, view: Sess
     refusal = adapter.write_refusal(view)
     specs: list[ActionSpec] = []
     for action, meta in ACTIONS.items():
-        spec = ActionSpec(action, meta["title"], meta["group"], meta["risk"], meta["description"], params=list(meta.get("params", [])),
+        params = [param for param in meta.get("params", []) if not (action == "boot.kernel" and param["name"] == "kernels" and not adapter.selects_kernels)]  # only Debian and Ubuntu take a list
+        spec = ActionSpec(action, meta["title"], meta["group"], meta["risk"], meta["description"], params=params,
                           needs={"write": bool(meta.get("writes")), "uefi_nvram": bool(meta.get("needs_nvram")), "secrets": list(meta.get("secrets", []))},
                           recommended=action in recommended or (action == "repair.recommended" and bool(recommended)))
         if action == "session.enter_write":

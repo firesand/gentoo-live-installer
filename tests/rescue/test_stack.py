@@ -129,6 +129,32 @@ def test_lvm_inventory_ignores_warnings_on_stderr(lab_factory) -> None:
     assert [lv["name"] for lv in groups[0].lvs] == ["root", "swap"]
 
 
+def test_lvm_sizes_are_asked_for_in_bytes_and_read_the_way_lvm_prints_them(lab_factory) -> None:
+    """lvm2 prints '<19.00g' unless told otherwise (units "r" with a suffix is its default): the inventory asks for bytes and must never trip over a size."""
+    lab = luks_lab(lab_factory)
+    lab.system.vgs["vg0"].lvs[0]["size"] = 19 * (1 << 30) - 4096  # the human style rounds this up to <19.00g
+    stack = lab.stack()
+    stack.unlock(lab.graph().find("/dev/nvme0n1p3"), PASSPHRASE)
+    groups = stack.lvm_inventory()
+    assert groups[0].lvs[0]["size"] == 19 * (1 << 30) - 4096
+    for name in ("pvs", "lvs"):
+        argv = lab.system.commands_named(name)[-1]
+        assert argv[argv.index("--units") + 1:argv.index("--units") + 3] == ("b", "--nosuffix"), argv
+
+
+@pytest.mark.parametrize("printed,expected", [
+    ("21474836480", 21474836480), ("<19.00g", 19 << 30), (">2.00t", 2 << 40), ("512.00m", 512 << 20), ("100.00k", 100 << 10), ("4096B", 4096), ("1000.00b", 1000),
+    ("", 0), ("unknown", 0), ("<g", 0), (None, 0),
+])
+def test_an_lv_size_in_any_format_lvm_uses_never_breaks_the_inventory(lab_factory, printed, expected) -> None:
+    lab = luks_lab(lab_factory)
+    lab.system.mapped[MAPPER] = "/dev/nvme0n1p3"  # the VG is visible
+    row = {"lv_name": "root", "vg_name": "vg0", "lv_path": "/dev/vg0/root", "lv_attr": "-wi-a-----", "lv_size": printed, "segtype": "linear", "pool_lv": "", "origin": "", "lv_uuid": "x"}
+    lab.system.script("lvs", json.dumps({"report": [{"lv": [row]}]}))
+    groups = lab.stack().lvm_inventory()
+    assert [lv["size"] for lv in groups[0].lvs] == [expected]
+
+
 def test_activating_a_volume_group_by_name_only(lab_factory) -> None:
     lab = luks_lab(lab_factory)
     stack = lab.stack()

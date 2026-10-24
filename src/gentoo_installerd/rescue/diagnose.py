@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from . import efi
+from .bootinfo import lacks_module_tree
 from .cmdline import contains_live_arguments, effective_text
 from .devices import GPT_BIOS_BOOT
 from .view import SessionView
@@ -74,7 +75,7 @@ def diagnose(view: SessionView, *, hardware_changed: bool = False, efi_state: ef
         if kernel.image_truncated:
             findings.append(Finding("D01", "error", f"The kernel {kernel.version} is incomplete", f"{kernel.image} is only {kernel.image_size} bytes, which means a write was interrupted.",
                                     [f"kernel: {kernel.image}"], ["boot.kernel"], kernel.version))
-        if not kernel.modules and any(k.modules for k in boot.kernels) and kernel.version not in {"linux"} and not kernel.is_rescue:
+        if lacks_module_tree(kernel, boot.kernels):
             findings.append(Finding("D04", "error", f"Kernel {kernel.version} has no module tree", f"/usr/lib/modules/{kernel.version} is missing, so the kernel cannot load drivers.",
                                     [f"kernel: {kernel.image}"], ["boot.kernel"], kernel.version))
     findings.extend(_loader_findings(view, boot, esp))

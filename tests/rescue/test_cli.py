@@ -331,6 +331,15 @@ def test_old_daemons_are_reported_clearly() -> None:
     assert code == 1 and "does not support repair mode" in err.getvalue()
 
 
+def test_mount_has_no_option_that_pretends_to_unmount_another_mount(lab_factory, capsys) -> None:
+    """--unmount-existing only silenced the check and unmounted nothing; the probe mount then failed anyway."""
+    lab, _tree, run = prepared(lab_factory)
+    code, _out, _err = run("mount", "--unmount-existing", "/run/media/gentoo/root", "--dry-run", "--auto")
+    assert code == 2 and "unrecognized arguments: --unmount-existing" in capsys.readouterr().err and not lab.system.commands_named("mount")
+    run("mount", "--help")
+    assert "--unmount-existing" not in capsys.readouterr().out
+
+
 def test_mount_auto_picks_the_only_system_and_refuses_when_there_are_several(lab_factory) -> None:
     lab, _, run = prepared(lab_factory)  # Gentoo on the NVMe disk and a Debian on the second disk
     code, out, err = run("mount", "--auto", "--yes")

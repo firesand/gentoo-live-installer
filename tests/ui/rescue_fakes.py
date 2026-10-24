@@ -26,7 +26,7 @@ from gentoo_installer.rescue_app import RescueWindow
 from gentoo_installer.rescue_ui import find_page, launcher
 from gentoo_installerd.rescue import api as rescue_api
 from gentoo_installerd.server import ActionRegistry, InstallManager, UnixServer
-from tests.rescue.flow import uefi_gentoo_lab
+from tests.rescue.flow import uefi_gentoo_lab, with_live_mounts  # noqa: F401  (with_live_mounts is used by the window tests)
 from tests.rescue.lab import Lab
 
 PASSPHRASE = "correct horse battery staple"
@@ -313,27 +313,3 @@ def request_action(qtbot: Any, window: RescueWindow, action_id: str, state: str 
     assert button is not None and button.isEnabled(), action_id
     button.click()
     qtbot.waitUntil(lambda: window.plan_page.state == state, timeout=20000)
-
-
-def with_live_mounts(lab: Lab) -> Lab:
-    """Make the fake lsblk show what the fake kernel has mounted, as the real one does (the fixtures print a fixed list)."""
-    static = lab.system._lsblk
-    assert isinstance(static, str)
-
-    def current(system: Any) -> str:
-        document = json.loads(static)
-        mounts: dict[str, list[str]] = {}
-        for target, record in system.mounts.items():
-            if not record.bind:
-                mounts.setdefault(record.device, []).append(target)
-
-        def walk(nodes: list[dict[str, Any]]) -> None:
-            for node in nodes:
-                node["mountpoints"] = [*node.get("mountpoints", []), *mounts.get(node["path"], [])]
-                walk(node.get("children", []))
-
-        walk(document["blockdevices"])
-        return json.dumps(document)
-
-    lab.system._lsblk = current
-    return lab

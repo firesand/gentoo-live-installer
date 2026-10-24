@@ -12,10 +12,12 @@ import json
 from dataclasses import dataclass, field, replace
 from typing import Any, Iterable
 
+from gentoo_installer.layout import human_size
+
 from .devices import GPT_ESP, MBR_ESP, GPT_XBOOTLDR, DeviceGraph, DeviceNode
 from .errors import RescueError
 from .fsprobe import MOUNT_TYPE, RECOVERY_SKIP
-from .fstab import CryptEntry, Fstab, Resolved, resolve_all
+from .fstab import CryptEntry, Entry, Fstab, Resolved, resolve_all
 from .paths import RootFS
 from .safety import SAFE_SUBVOL_RE, VALUE_MOUNT_OPTS
 
@@ -28,7 +30,6 @@ CARRIED_VALUE_OPTIONS = ("subvol", "subvolid", "device", "uid", "gid", "umask", 
 CARRIED_FLAGS = frozenset({"utf8"})
 DEVICE_OPTIONS = ("device", "logdev", "rtdev", "journal_path")
 PROTECTED_MOUNT_AREAS = ("/proc", "/sys", "/dev", "/run")
-MOVABLE_ROOTS = ("/media", "/run/media", "/mnt")
 
 
 def tier_of(mountpoint: str) -> int:
@@ -167,6 +168,42 @@ def _node_unusable_reason(node: DeviceNode) -> str:
     return ""
 
 
+# Names that do not identify one disk: kernel names (/dev/sda1, /dev/nvme0n1p2, /dev/dm-0, /dev/md0) are numbered in the order the kernel finds the devices,
+# /dev/disk/by-path names the port a disk is plugged into. UUIDs, labels, by-id (model and serial) and mapper names do identify a disk.
+POSITIONAL_KINDS = frozenset({"kernel", "md", "by_path"})
+
+
+def _trusted_disks(root_node: DeviceNode, resolved: list[Resolved], graph: DeviceGraph) -> set[str]:
+    """The disks that are certainly part of this system: the root's, and those of every fstab entry that names its device by an ID (UUID, label, by-id, mapper name)."""
+    nodes = [root_node] + [node for item in resolved if item.status == "resolved" and item.kind not in POSITIONAL_KINDS for node in item.devices]
+    return {disk.key for node in nodes for disk in graph.parent_disks(node)}
+
+
+def _describe_device(node: DeviceNode, graph: DeviceGraph) -> str:
+    """Enough for a person to tell which device it is: size, file system, label and the disk model."""
+    kind = "array" if node.type.startswith("raid") else "volume" if node.type in {"lvm", "crypt"} else "partition"
+    label = f' "{node.label}"' if node.label else ""
+    disks = graph.parent_disks(node)
+    where = " and ".join(f"{disk.model or 'a disk'} ({disk.path}{', USB' if disk.tran == 'usb' else ''})" for disk in disks)
+    return f"{human_size(node.size)} {node.fstype or 'unformatted'} {kind}{label}" + (f" on {where}" if where else "")
+
+
+def _positional_name_doubt(entry: Entry, item: Resolved, node: DeviceNode, graph: DeviceGraph, trusted: set[str]) -> str:
+    """Why a device that fstab names by a kernel name (/dev/sda1) or a port (by-path) cannot be taken for the one the system meant, or ''.
+
+    The names belong to the live session: a USB drive, another installation or a data disk can be /dev/sda here while the system was installed when its own disk was.
+    The device is believed when it shares a disk with the system and holds the file system type fstab expects.
+    """
+    what = (f"{entry.spec} only names the port a disk is plugged into, not the disk" if item.kind == "by_path"
+            else f"{entry.spec} is only a kernel name, and kernel names change between computers and between starts")
+    start = f"{what}. Here it is a {_describe_device(node, graph)}"
+    if item.type_mismatch:
+        return f"{start}, but {item.type_mismatch}. It is not opened automatically; choose the right partition yourself."
+    if not {disk.key for disk in graph.parent_disks(node)} & trusted:
+        return f"{start}, which is on another disk than this system. It is not opened automatically; choose the right partition yourself."
+    return ""
+
+
 def _external_logs(node: DeviceNode, graph: DeviceGraph) -> list[DeviceNode]:
     return graph.external_logs(node)
 
@@ -236,7 +273,6 @@ def plan_mounts(
     overrides: Iterable[dict[str, str]] = (),
     allow_write: bool = True,
     esp_default_mountpoint: str = "/boot/efi",
-    unmount_existing: Iterable[str] = (),
     own_root: str = "",
 ) -> MountPlan:
     """Plan the file systems below the root; ``fs`` reads the already mounted (read-only) root."""
@@ -246,9 +282,9 @@ def plan_mounts(
     plan.root = _complete_root(root, fstab, root_node, graph, plan.warnings)
     plan.root_node_keys = [node.key for node in graph.stack_of(root_node)]
     resolved = resolve_all(fstab, graph, crypttab=crypttab)
+    trusted = _trusted_disks(root_node, resolved, graph)
     claimed = {root_node.key}
     used_mountpoints = {"/"}
-    movable = tuple(unmount_existing)
     for position, item in enumerate(resolved):
         entry = item.entry
         mountpoint = _normalise_mountpoint(entry.file)
@@ -276,6 +312,10 @@ def plan_mounts(
         if reason:
             plan.unresolved.append({"mountpoint": mountpoint, "spec": entry.spec, "status": "unusable", "reason": reason, "tier": tier})
             continue
+        doubt = _positional_name_doubt(entry, item, node, graph, trusted) if item.kind in POSITIONAL_KINDS and tier in {TIER_BOOT, TIER_SYSTEM} else ""  # these are mounted without asking
+        if doubt:
+            plan.unresolved.append({"mountpoint": mountpoint, "spec": entry.spec, "status": "unstable", "reason": doubt, "tier": tier, "device": node.path})
+            continue
         try:
             carried, dropped = filter_options(entry.options, node.fstype)
         except ValueError as exc:
@@ -287,12 +327,17 @@ def plan_mounts(
         plan.items.append(MountItem(mountpoint, node.path, node.fstype, carried, tier, "fstab", node.id, selected, False, _extra_devices(carried, graph, node), position))
         claimed.add(node.key)
     _apply_overrides(plan, overrides, graph, used_mountpoints, chosen_tier4)
-    _check_busy(plan, graph, root_node, movable, own_root)
+    _check_busy(plan, graph, root_node, own_root)
+    mounted_below = [item.mountpoint.rstrip("/") + "/" for item in plan.selected]
     for mount in plan.items:
-        mount.needs_mkdir = not _directory_exists(fs, mount.mountpoint)
+        # Below another mount the directory lives on that file system (/boot/efi on a separate /boot): only the session can tell, once it is mounted.
+        mount.needs_mkdir = not any(mount.mountpoint.startswith(prefix) for prefix in mounted_below) and not _directory_exists(fs, mount.mountpoint)
     plan.items.sort(key=lambda it: (depth_of(it.mountpoint), it.order))
-    if not fstab.entries or (plan.unresolved and not plan.selected):
-        plan.suggestions.extend(suggest_boot_mounts(graph, root_node, esp_default_mountpoint, {item.mountpoint for item in plan.items}))
+    doubtful = [entry for entry in plan.unresolved if entry["status"] == "unstable"]
+    plan.suggestions.extend({"mountpoint": entry["mountpoint"], "device": entry["device"],
+                             "reason": f"fstab calls it {entry['spec']}, which here is not on this system's disk; add it only if it is the right one"} for entry in doubtful)
+    if not fstab.entries or (plan.unresolved and not plan.selected) or doubtful:
+        plan.suggestions.extend(suggest_boot_mounts(graph, root_node, esp_default_mountpoint, {item.mountpoint for item in plan.items}, {item.device for item in plan.items}))
     if fs.is_dir("/boot") and not any(item.tier == TIER_BOOT for item in plan.selected) and not fs.listdir_or("/boot"):
         plan.warnings.append("/boot is empty on the root file system and no separate /boot was mounted; the kernel may be on a partition that is not listed in fstab")
     return plan
@@ -332,25 +377,25 @@ def _apply_overrides(plan: MountPlan, overrides: Iterable[dict[str, str]], graph
         used.add(mountpoint)
 
 
-def _check_busy(plan: MountPlan, graph: DeviceGraph, root_node: DeviceNode, movable: tuple[str, ...], own_root: str) -> None:
-    """Refuse devices that are mounted elsewhere unless the caller listed those mounts and they are safe to move."""
+def _check_busy(plan: MountPlan, graph: DeviceGraph, root_node: DeviceNode, own_root: str) -> None:
+    """Refuse devices that are mounted elsewhere: nothing here unmounts them, the person frees the disk first."""
     nodes = [root_node] + [graph.find(item.device) for item in plan.selected]
     for node in nodes:
         for mountpoint in node.mountpoints:
             if mountpoint == "[SWAP]" or (own_root and (mountpoint == own_root or mountpoint.startswith(own_root + "/"))):
                 continue
-            if mountpoint in movable and mountpoint.startswith(MOVABLE_ROOTS) and not mountpoint.startswith(("/mnt/gentoo", "/mnt/rescue", "/run/initramfs")):
-                continue
             hint = f" ({', '.join(node.fsroots)})" if node.fsroots else ""
-            raise RescueError("mounted_elsewhere", f"{node.path}{hint} is mounted at {mountpoint}. Unmount it first (or confirm that rescue may unmount it).", device=node.path, mountpoint=mountpoint)
+            raise RescueError("mounted_elsewhere", f"{node.path}{hint} is mounted at {mountpoint}. Unmount it first (the eject button of the file manager, or 'umount {mountpoint}'), then try again.",
+                              device=node.path, mountpoint=mountpoint)
 
 
-def suggest_boot_mounts(graph: DeviceGraph, root_node: DeviceNode, esp_mountpoint: str, taken: set[str]) -> list[dict[str, Any]]:
-    """When fstab says nothing useful: offer (never auto-mount) EFI/boot partitions on the root's own disks."""
+def suggest_boot_mounts(graph: DeviceGraph, root_node: DeviceNode, esp_mountpoint: str, taken: set[str], mounted: Iterable[str] = ()) -> list[dict[str, Any]]:
+    """When fstab says nothing useful: offer (never auto-mount) EFI/boot partitions on the root's own disks, except those that are already part of the plan."""
     disks = {disk.key for disk in graph.parent_disks(root_node)}
+    used = set(mounted)
     found: list[dict[str, Any]] = []
     for node in graph:
-        if node.key == root_node.key or node.live_medium or not ({disk.key for disk in graph.parent_disks(node)} & disks):
+        if node.key == root_node.key or node.live_medium or node.path in used or not ({disk.key for disk in graph.parent_disks(node)} & disks):
             continue
         if node.parttype in {GPT_ESP, MBR_ESP} and node.fstype == "vfat" and esp_mountpoint not in taken:
             found.append({"mountpoint": esp_mountpoint, "device": node.path, "reason": "EFI system partition on the same disk"})

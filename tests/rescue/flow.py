@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from gentoo_installerd.rescue.scan import ScanOptions
 
 from . import fakeroot as fr
 from . import lsblk_fixtures as lf
+
+if TYPE_CHECKING:
+    from .lab import Lab
 
 
 def uefi_gentoo_lab(lab_factory, family: str = "gentoo", root_device: str = "/dev/nvme0n1p5", **options: Any):
@@ -22,6 +25,23 @@ def uefi_gentoo_lab(lab_factory, family: str = "gentoo", root_device: str = "/de
     lab.system.attach("/dev/nvme0n1p1", fr.esp_tree(lab.tmp / "trees" / "esp", family, shim=family in {"debian", "ubuntu", "fedora"}))
     lab.add_tree("/dev/sdb1", "debian")
     return lab, tree
+
+
+def boot_efi_lab(lab_factory, *, efi_dir: bool = True, loaders: bool = True):
+    """Every LUKS/LVM Ubuntu or Debian and Fedora's default layout: the ESP is mounted at /boot/efi, a directory that lives on the separate /boot partition."""
+    lab = lab_factory(lf.ubuntu_lvm())
+    fstab = f"/dev/mapper/ubuntu--vg-ubuntu--lv / ext4 defaults 0 1\nUUID={fr.BOOT_UUID} /boot ext4 defaults 0 2\nUUID={fr.ESP_UUID} /boot/efi vfat umask=0077 0 1\n"
+    tree = lab.add_tree("/dev/mapper/ubuntu--vg-ubuntu--lv", "ubuntu", firmware="uefi", separate_boot=True, fstab=fstab)
+    (tree / "boot").mkdir(exist_ok=True)  # empty: the real /boot is the partition
+    fr.put(tree, f"usr/lib/modules/{fr.UBUNTU_KVER}/modules.dep", "kernel/fs/ext4/ext4.ko:\n")
+    boot = lab.tmp / "trees" / "boot"
+    fr.kernel_files(boot, fr.UBUNTU_KVER, prefix="vmlinuz-", initrd_prefix="initrd.img-", initrd_suffix="", modules=False)
+    fr.put(boot, "grub/grub.cfg", fr.grub_cfg(fr.UBUNTU_KVER, kernel="vmlinuz", initrd="initrd.img").replace("/boot/", "/"))
+    if efi_dir:
+        (boot / "efi").mkdir(parents=True, exist_ok=True)
+    lab.system.attach("/dev/sda2", boot)
+    lab.system.attach("/dev/sda1", fr.esp_tree(lab.tmp / "trees" / "esp", "ubuntu", loaders=loaders, fallback=loaders, shim=True))
+    return lab, tree, boot
 
 
 def mount_through_the_manager(lab, *, allow_write: bool = True, candidate_device: str | None = None, **extra: Any):
@@ -54,3 +74,27 @@ def chroot_commands(lab) -> list[tuple[str, ...]]:
 
 def unmount(manager, sid: str, **extra: Any) -> dict[str, Any]:
     return manager.unmount(None, {"session_id": sid, **extra})
+
+
+def with_live_mounts(lab: Lab) -> Lab:
+    """Make the fake lsblk show what the fake kernel has mounted, as the real one does (the fixtures print a fixed list)."""
+    static = lab.system._lsblk
+    assert isinstance(static, str)
+
+    def current(system: Any) -> str:
+        document = json.loads(static)
+        mounts: dict[str, list[str]] = {}
+        for target, record in system.mounts.items():
+            if not record.bind:
+                mounts.setdefault(record.device, []).append(target)
+
+        def walk(nodes: list[dict[str, Any]]) -> None:
+            for node in nodes:
+                node["mountpoints"] = [*node.get("mountpoints", []), *mounts.get(node["path"], [])]
+                walk(node.get("children", []))
+
+        walk(document["blockdevices"])
+        return json.dumps(document)
+
+    lab.system._lsblk = current
+    return lab

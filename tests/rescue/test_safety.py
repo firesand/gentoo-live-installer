@@ -198,6 +198,21 @@ def test_probe_mounts_are_read_only_noexec_and_in_the_probe_directory() -> None:
     refused(session, "mount", "-t", "ext4", "-o", opts, "/dev/nvme0n1p9", probe)
 
 
+def test_a_key_file_of_an_open_session_is_accepted_when_unlocking_before_a_session_of_its_own_exists() -> None:
+    """Unlocking a data disk with a key file of a mounted system runs on the pool, which has no session root (rescue.unlock --keyfile)."""
+    ctx = make_ctx(session_root="", session_id="", session_base="/mnt/rescue")
+    ctx.devices.add("/dev/vda5")
+    host = HostPolicy(ctx)
+    name = "rescue-1f2e3d4c5b6a"
+    key = "--key-file=/mnt/rescue/r1a2b3c/etc/keys/home.key"
+    assert ok(host, "cryptsetup", "open", "--type", "luks", key, "/dev/vda5", name) == "device"
+    assert ok(host, "cryptsetup", "open", "--type", "luks", "--readonly", key, "/dev/vda5", name) == "device"
+    for bad in ("/etc/shadow", "/mnt/rescue/etc/keys/home.key", "/mnt/rescue/not-a-session/etc/home.key", "/mnt/rescue/r1a2b3c", "/mnt/rescue/r1a2b3c/", "/mnt/rescue/r1a2b3c/../../etc/shadow",
+                "/mnt/rescue2/r1a2b3c/etc/keys/home.key", "/mnt/rescue/r1a2b3c/etc/../../r4d5e6f/x", "relative/key"):
+        refused(host, "cryptsetup", "open", "--type", "luks", f"--key-file={bad}", "/dev/vda5", name)
+    refused(host, "cryptsetup", "open", "--type", "luks", key, "/dev/vda9", name)  # the device checks still apply
+
+
 def test_cryptsetup_open_reads_the_passphrase_from_stdin_only() -> None:
     ctx = make_ctx()
     ctx.devices.add("/dev/vda5")

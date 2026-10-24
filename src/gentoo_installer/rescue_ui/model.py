@@ -223,12 +223,11 @@ class MountChoice:
     allow_write: bool = True
     include_tier4: list[str] = field(default_factory=list)
     overrides: list[dict[str, str]] = field(default_factory=list)
-    unmount_existing: list[str] = field(default_factory=list)
 
     def request(self) -> dict[str, Any]:
         return {
             "candidate": self.candidate, "scan_id": self.scan_id, "allow_write": self.allow_write, "include_tier4": list(self.include_tier4),
-            "overrides": [dict(item) for item in self.overrides], "unmount_existing": list(self.unmount_existing),
+            "overrides": [dict(item) for item in self.overrides],
         }
 
 

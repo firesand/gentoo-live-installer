@@ -179,6 +179,7 @@ class RescueWindow(QMainWindow):
         self.service_page.quitRequested.connect(self.close)
         self.find_page.systemChosen.connect(self._system_chosen)
         self.find_page.resumeRequested.connect(self._resume)
+        self.find_page.refreshRequested.connect(self._look_for_open_sessions)
         self.find_page.serviceProblem.connect(lambda text: self._show_service(UNREACHABLE_TITLE, messages.describe_daemon_problem("", text)))
         self.find_page.storageChanged.connect(self._storage_changed)
         self.find_page.quitRequested.connect(self.close)
@@ -225,6 +226,7 @@ class RescueWindow(QMainWindow):
         """Systems an earlier window left open are offered first; the scan starts either way."""
         def listed(result: dict[str, Any]) -> None:
             self.find_page.show_open_sessions([item for item in result.get("sessions", []) if str(item.get("state", "")).startswith("mounted")])
+            self.find_page.show_leftovers(result.get("orphans", []), result.get("pool", []))
             self.find_page.start_scan()
 
         def failed(*_args: Any) -> None:

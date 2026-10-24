@@ -115,6 +115,7 @@ class FakeSystem:
         self.nvram: dict[str, Any] = {"entries": {}, "order": [], "current": "", "next": "", "usable": True}
         self.settled = 0
         self.fail_at: dict[int, tuple[int, str]] = {}  # call index -> (rc, output)
+        self.dnf_makes_stub = True  # grub2-common's scriptlet puts the grub.cfg stub into the staging directory (not so on every image)
 
     # ---- helpers for tests --------------------------------------------------------------------
     @property
@@ -353,7 +354,11 @@ class FakeSystem:
             spec = self.luks.get(device)
             if spec is None:
                 return 4, "Device is not a valid LUKS device."
-            if (call.stdin or "") != spec.passphrase:
+            keyfile = next((a.split("=", 1)[1] for a in argv if a.startswith("--key-file=")), "-")
+            supplied = (call.stdin or "") if keyfile == "-" else Path(keyfile).read_text() if os.path.isfile(keyfile) else None  # a key file's whole content is the key
+            if supplied is None:
+                return 1, f"Cannot read keyfile {keyfile}."
+            if supplied != spec.passphrase:
                 return 2, "No key available with this passphrase."
             if "--test-passphrase" in argv:
                 return 0, ""
@@ -375,10 +380,29 @@ class FakeSystem:
                 found.append((vg, pv))
         return found
 
+    @staticmethod
+    def _lvm_size(size: int, argv: tuple[str, ...]) -> str:
+        """A size the way lvm2 prints it: ``--units b --nosuffix`` gives bare bytes, otherwise the default style (units "r"): rounded, human readable, with a suffix.
+
+        A size that is not exact in two decimals gets ``<`` (shown value above the real one) or ``>``: a 19 GiB volume of 19.99 GiB prints as ``<20.00g``.
+        """
+        units = argv[argv.index("--units") + 1] if "--units" in argv else "r"
+        if units.lower() == "b":
+            return str(size) if "--nosuffix" in argv else f"{size}B"
+        for exponent, letter in ((6, "e"), (5, "p"), (4, "t"), (3, "g"), (2, "m"), (1, "k")):
+            if size >= 1024 ** exponent:
+                break
+        else:
+            exponent, letter = 0, "b"
+        value = size / 1024 ** exponent
+        shown = round(value, 2)
+        mark = "<" if shown > value else ">" if shown < value else ""
+        return f"{mark}{shown:.2f}" + ("" if "--nosuffix" in argv else letter)
+
     def _do_pvs(self, argv: tuple[str, ...], call: Call) -> tuple[int, str]:
         rows = [
             {"pv_name": pv, "pv_uuid": "pvuuid-" + pv.rsplit("/", 1)[-1], "vg_name": vg.name, "vg_uuid": vg.uuid, "vg_pv_count": str(len(vg.pvs)), "vg_missing_pv_count": str(vg.missing),
-             "pv_size": "1000"}
+             "pv_size": self._lvm_size(1000, argv)}
             for vg, pv in self._visible_pvs()
         ]
         return 0, "  WARNING: stray warning on stderr\n" + json.dumps({"report": [{"pv": rows}]})
@@ -394,7 +418,7 @@ class FakeSystem:
                 continue
             for lv in vg.lvs:
                 rows.append({"lv_name": lv["name"], "vg_name": vg.name, "lv_path": f"/dev/{vg.name}/{lv['name']}", "lv_attr": "-wi-a-----" if vg.active else "-wi-------",
-                             "lv_size": str(lv.get("size", 1000)), "segtype": lv.get("segtype", "linear"), "pool_lv": "", "origin": "", "lv_uuid": "lvuuid"})
+                             "lv_size": self._lvm_size(int(lv.get("size", 1000)), argv), "segtype": lv.get("segtype", "linear"), "pool_lv": "", "origin": "", "lv_uuid": "lvuuid"})
         return 0, json.dumps({"report": [{"lv": rows}]})
 
     def _do_vgchange(self, argv: tuple[str, ...], call: Call) -> tuple[int, str]:
@@ -680,9 +704,33 @@ def fx_kernel_install(system: FakeSystem, root: Path, command: tuple[str, ...], 
     return 0, ""
 
 
+GRUB_CFG_STUB = "search --no-floppy --fs-uuid --set=dev 4c1d9c1e-2b0e-4d69-9f5b-6a1c3f5e7a10\nset prefix=($dev)/grub2\nexport $prefix\nconfigfile $prefix/grub.cfg\n"
+
+
+def fx_dnf(system: FakeSystem, root: Path, command: tuple[str, ...], extra: dict[str, str]) -> tuple[int, str]:
+    """dnf reinstall of the boot loader packages the way Fedora's scriptlets do it: the signed files are copied to the ESP with 'cp -a ... || :' (nothing happens when
+    EFI/ is gone) and the grub.cfg stub is only made by grub2-common's %posttrans."""
+    esp = root / "boot/efi/EFI"
+    if command[1:2] == ("reinstall",) and "grub2-efi-x64" in command and esp.is_dir():
+        ident = "redhat" if (root / "etc/redhat-release").exists() else "fedora"
+        _sparse(esp / ident / "shimx64.efi", 1 << 20)
+        _sparse(esp / ident / "grubx64.efi", 2 << 20)
+        if "grub2-common" in command and system.dnf_makes_stub:
+            (esp / ident / "grub.cfg").write_text(GRUB_CFG_STUB)
+    return 0, ""
+
+
+def fx_gen_grub_cfgstub(system: FakeSystem, root: Path, command: tuple[str, ...], extra: dict[str, str]) -> tuple[int, str]:
+    """gen_grub_cfgstub GRUB_HOME EFI_HOME writes the stub that makes GRUB read GRUB_HOME/grub.cfg."""
+    target = root / command[2].lstrip("/")
+    target.mkdir(parents=True, exist_ok=True)
+    (target / "grub.cfg").write_text(GRUB_CFG_STUB)
+    return 0, ""
+
+
 DEFAULT_EFFECTS = {
     "grub-mkconfig": fx_grub_mkconfig, "grub2-mkconfig": fx_grub_mkconfig, "update-grub": fx_update_grub, "grub-install": fx_grub_install, "grub2-install": fx_grub_install,
-    "dracut": fx_dracut, "update-initramfs": fx_update_initramfs, "chpasswd": fx_chpasswd, "kernel-install": fx_kernel_install,
+    "dracut": fx_dracut, "update-initramfs": fx_update_initramfs, "chpasswd": fx_chpasswd, "kernel-install": fx_kernel_install, "dnf": fx_dnf, "gen_grub_cfgstub": fx_gen_grub_cfgstub,
 }
 FakeSystem.__init_effects__ = DEFAULT_EFFECTS  # type: ignore[attr-defined]
 

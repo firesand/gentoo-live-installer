@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import ClassVar
 
+from ..bootinfo import damaged_kernels
 from ..builder import PlanBuilder
 from ..errors import RescueError, Unsupported
 from ..view import SessionView
@@ -20,6 +21,7 @@ class DebianAdapter(Adapter):
     family: ClassVar[str] = "debian"
     label: ClassVar[str] = "Debian"
     esp_default: ClassVar[str] = "/boot/efi"
+    selects_kernels: ClassVar[bool] = True
     tools: ClassVar[frozenset[str]] = frozenset({"grub-install", "update-grub", "grub-mkconfig", "update-initramfs", "apt-get", "dpkg", "bootctl", "kernelstub", "chpasswd", "usermod", "passwd",
                                                   "chage", "faillock", "true", "journalctl", "dpkg-query"})
 
@@ -146,8 +148,8 @@ class DebianAdapter(Adapter):
         b.title, b.risk = "Reinstall the kernel", "high"
         b.summary = "Reinstalls the kernel package, then rebuilds its initramfs and the boot menu."
         packages = view.installed_packages()
-        known = [k.version for k in view.kernels() if k.image]
-        selected = b.versions("kernels", known) or known[-1:]
+        known = [k.version for k in view.kernels() if k.image]  # oldest first, by number
+        selected = b.versions("kernels", known) or damaged_kernels(view.kernels()) or known[-1:]  # the kernel a finding names, else the newest
         if not selected:
             raise Unsupported("No installed kernel was found. Install one from the terminal (apt-get install linux-image-amd64).")
         names: list[str] = []

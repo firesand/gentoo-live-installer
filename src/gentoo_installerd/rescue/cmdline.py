@@ -15,6 +15,11 @@ from .bootinfo import first_text_cmdline, grub_default_cmdline
 from .errors import RescueError
 from .paths import RootFS
 
+# What only a live medium has. Finding a leak (D21, the post-check) and choosing the lines of a boot file to clean act on these alone.
+LIVE_LEAK_RE = re.compile(r"^(?:root=live:|rd\.live\.|rd\.live$|cdroot$|CDLABEL=)")
+# Everything on the live medium's own command line. It is dropped from the synthesized /proc/cmdline and from a line that is a copy of the live
+# command line. nox, nogui, dokeymap, nodhcp, dospeakup, secureconsole, overlayfs and rd.debug are ordinary settings of an installed system
+# too, so they are never a reason to change a boot file by themselves.
 LIVE_TOKEN_RE = re.compile(r"^(?:root=live:|rd\.live\.|rd\.live$|BOOT_IMAGE=|initrd=|cdroot$|dokeymap$|nodhcp$|secureconsole$|nox$|nogui$|dospeakup$|CDLABEL=|overlayfs$|rd\.debug$)")
 MAX_LENGTH = 2000
 
@@ -37,7 +42,7 @@ def effective_text(text: str) -> str:
 
 
 def contains_live_arguments(cmdline: str) -> bool:
-    return any(LIVE_TOKEN_RE.match(token) and not token.startswith(("BOOT_IMAGE=", "initrd=")) for token in cmdline.split())
+    return any(LIVE_LEAK_RE.match(token) for token in cmdline.split())
 
 
 def _bls_options(fs: RootFS) -> str:

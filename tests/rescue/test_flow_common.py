@@ -39,6 +39,51 @@ def test_fstab_fix_preselects_only_what_is_safe_and_shows_a_diff(lab_factory) ->
     assert len(backups) == 1 and backups[0].read_text() == DEAD_FSTAB and oct(backups[0].stat().st_mode & 0o777) == "0o600"
 
 
+AUTHOR_FSTAB = (f"UUID={fr.ROOT_UUID}\t/\text4\tnoatime\t0 1\nUUID={fr.DEAD_UUID}\t/efi\tvfat\tumask=0077\t0 2\n"
+                "UUID=97af3e70-654c-4d96-8f88-32b2e9753e75\t/mnt/Extern2\text4\trw,noatime,nofail\t0 2\nUUID=0d8acaaf-9bd7-4bac-8dd1-cad07ff15f48\t/mnt/Extern3\text4\trw,noatime,nofail\t0 2\n"
+                "UUID=11111111-aaaa-4bbb-8ccc-222222222222\t/mnt/Old\text4\tnoatime\t0 2\n")
+
+
+def test_fstab_fix_leaves_unplugged_nofail_drives_alone(lab_factory) -> None:
+    """A wrong ESP UUID puts fstab.fix into 'Fix everything', which processes every dead line: the external drives that are only not plugged in must keep their lines."""
+    lab, tree = uefi_gentoo_lab(lab_factory, fstab=AUTHOR_FSTAB)
+    (tree / "efi").mkdir(exist_ok=True)
+    manager, sid, info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    assert "fstab.fix" in info["recommended"]
+    plan = manager.plan({"session_id": sid, "action_id": "fstab.fix"})
+    changed = [line for line in plan["diff"].splitlines() if line[:1] in "+-" and not line.startswith(("+++", "---"))]
+    assert f"+UUID={fr.ESP_UUID}\t/efi\tvfat\tumask=0077\t0 2" in changed
+    assert not any("Extern" in line for line in changed)  # not touched (they only show as context around the lines that are)
+    assert "+UUID=11111111-aaaa-4bbb-8ccc-222222222222\t/mnt/Old\text4\tnoatime,nofail\t0 2" in changed  # a drive without nofail is relaxed, as before
+    assert any("/mnt/Old" in warning and "'nofail'" in warning for warning in plan["warnings"])
+    assert not any("Extern" in warning for warning in plan["warnings"])
+    kept = [note for note in plan["notes"] if "left as it is" in note]
+    assert len(kept) == 2 and "/mnt/Extern2" in kept[0] and "/mnt/Extern3" in kept[1] and all("nofail" in note for note in kept)  # the person is told what was not touched
+    assert {line: choice["action"] for line, choice in plan["params"]["choices"].items()} == {"2": "replace", "3": "keep", "4": "keep", "5": "nofail"}
+    plan, result, _ = plan_and_run(manager, sid, "fstab.fix")
+    assert result["outcome"] == "success" and all(check["ok"] for check in result["post_checks"])
+    unmount(manager, sid)
+    text = (tree / "etc/fstab").read_text()
+    assert "/mnt/Extern2\text4\trw,noatime,nofail\t0 2" in text and "/mnt/Extern3\text4\trw,noatime,nofail\t0 2" in text and "# disabled" not in text
+
+
+def test_fstab_fix_says_so_when_every_dead_entry_is_already_harmless(lab_factory) -> None:
+    fstab = (f"UUID={fr.ROOT_UUID}\t/\text4\tnoatime\t0 1\nUUID=97af3e70-654c-4d96-8f88-32b2e9753e75\t/mnt/Extern2\text4\trw,noatime,nofail\t0 2\n"
+             f"UUID=0d8acaaf-9bd7-4bac-8dd1-cad07ff15f48\t/mnt/Extern3\text4\tnoauto\t0 2\n")
+    lab, _tree = uefi_gentoo_lab(lab_factory, fstab=fstab)
+    manager, sid, info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    spec = {a["id"]: a for a in info["actions"]}["fstab.fix"]
+    assert spec["available"] is False and "nofail" in spec["reason"]
+    with pytest.raises(RescueError) as failed:
+        manager.plan({"session_id": sid, "action_id": "fstab.fix"})
+    assert failed.value.short == "unsupported_action"
+    # the person may still choose a line on purpose
+    plan = manager.plan({"session_id": sid, "action_id": "fstab.fix", "params": {"choices": {"2": {"action": "comment"}}}})
+    changed = [line for line in plan["diff"].splitlines() if line[:1] in "+-" and not line.startswith(("+++", "---"))]
+    assert "+# disabled by gentoo-rescue: device not found" in changed and not any("Extern3" in line for line in changed if not line.startswith("-"))
+    unmount(manager, sid)
+
+
 def test_fstab_fix_refuses_when_the_file_was_edited_after_the_plan(lab_factory) -> None:
     lab, tree = uefi_gentoo_lab(lab_factory, fstab=DEAD_FSTAB)
     manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
@@ -124,6 +169,65 @@ def test_the_cleanup_remounts_even_when_the_check_fails(lab_factory) -> None:
     assert result["outcome"] == "failed"
     session = manager.session(sid)
     assert session.root in lab.system.mounts and session.mode == "ro" and lab.system.ro["/dev/nvme0n1p5"] is True
+    unmount(manager, sid)
+
+
+KERNEL_NAMED_FSTAB = f"UUID={fr.ROOT_UUID}\t/\text4\tnoatime\t0 1\n/dev/sdb1\t/boot\text4\tnoatime\t0 2\n"
+
+
+def test_a_kernel_named_entry_on_another_disk_is_neither_mounted_nor_made_writable(lab_factory) -> None:
+    """The reviewed case end to end: fstab says /dev/sdb1 for /boot, and /dev/sdb is an unrelated disk of this live session. Nothing on it may change."""
+    from gentoo_installerd.rescue.scan import ScanOptions
+
+    from .fakes import tree_digest
+
+    lab, tree = uefi_gentoo_lab(lab_factory, fstab=KERNEL_NAMED_FSTAB)
+    other = lab.system.device_trees["/dev/sdb1"]
+    before = tree_digest(other)
+    manager = lab.manager()
+    scan = manager.scan(None, ScanOptions())
+    request = {"candidate": next(c["id"] for c in scan["candidates"] if c["device"] == "/dev/nvme0n1p5"), "scan_id": scan["scan_id"], "allow_write": True}
+    dry = manager.mount(None, {**request, "dry_run": True})["mount_plan"]
+    assert dry["items"] == [] and [(entry["mountpoint"], entry["status"], entry["device"]) for entry in dry["unresolved"]] == [("/boot", "unstable", "/dev/sdb1")]
+    assert not any("/dev/sdb1" in line for line in dry["commands"]) and (dry["suggestions"][0]["mountpoint"], dry["suggestions"][0]["device"]) == ("/boot", "/dev/sdb1")
+    sid = manager.mount(None, {**request, "plan_digest": dry["digest"]})["session_id"]
+    session = manager.session(sid)
+    assert session.plan.devices() == ["/dev/nvme0n1p5"] and "/dev/sdb1" not in session.ctx.devices.devices
+    assert lab.system.ro["/dev/sdb"] is True  # the unrelated disk is protected like any other
+    assert not any("/dev/sdb" in step.display for step in session.enter_write_steps())
+    plan_and_run(manager, sid, "boot.config")
+    unmount(manager, sid)
+    assert tree_digest(other) == before and not any(lab.system.ro.values())
+    assert not [argv for argv in lab.system.commands_named("mount") if argv[-2] == "/dev/sdb1" and argv[-1].startswith(session.root)]  # only the scan's read-only look at it
+    assert (tree / "boot/grub/grub.cfg").read_text().count("menuentry") >= 1  # the repair went to the /boot directory of the system's own root
+
+
+def test_choosing_the_kernel_named_device_anyway_mounts_it(lab_factory) -> None:
+    from gentoo_installerd.rescue.scan import ScanOptions
+
+    lab, _tree = uefi_gentoo_lab(lab_factory, fstab=KERNEL_NAMED_FSTAB)
+    manager = lab.manager()
+    scan = manager.scan(None, ScanOptions())
+    request = {"candidate": next(c["id"] for c in scan["candidates"] if c["device"] == "/dev/nvme0n1p5"), "scan_id": scan["scan_id"], "allow_write": True,
+               "overrides": [{"mountpoint": "/boot", "device": "/dev/sdb1"}]}
+    dry = manager.mount(None, {**request, "dry_run": True})["mount_plan"]
+    assert [(item["mountpoint"], item["device"], item["source"]) for item in dry["items"]] == [("/boot", "/dev/sdb1", "user")] and dry["unresolved"] == []
+    sid = manager.mount(None, {**request, "plan_digest": dry["digest"]})["session_id"]
+    assert manager.session(sid).plan.devices() == ["/dev/nvme0n1p5", "/dev/sdb1"]
+    unmount(manager, sid)
+
+
+def test_a_file_system_check_after_a_repair_leaves_no_empty_resolv_conf_behind(lab_factory) -> None:
+    """The check unmounts the bind and the system and mounts it read-only again; the placeholder made for the bind has to go before the read-write root does."""
+    lab, tree = uefi_gentoo_lab(lab_factory)
+    manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    plan_and_run(manager, sid, "boot.initramfs")
+    session = manager.session(sid)
+    assert [entry.data["path"] for entry in session.ledger.of_kind("placeholder")] == ["/etc/resolv.conf"]
+    plan, result, _ = plan_and_run(manager, sid, "fs.check")
+    assert result["outcome"] == "success"
+    assert session.ledger.of_kind("placeholder") == [] and session.mode == "ro"
+    assert not (tree / "etc/resolv.conf").exists()
     unmount(manager, sid)
 
 

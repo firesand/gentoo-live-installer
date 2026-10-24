@@ -104,8 +104,24 @@ def _report_rows(text: str, key: str) -> list[dict[str, Any]]:
         return []
     rows: list[dict[str, Any]] = []
     for report in document.get("report", []) if isinstance(document, dict) else []:
-        rows.extend(report.get(key, []))
+        found = report.get(key) if isinstance(report, dict) else None
+        if isinstance(found, list):
+            rows.extend(row for row in found if isinstance(row, dict))
     return rows
+
+
+LVM_SIZE_UNITS = {"b": 0, "k": 1, "m": 2, "g": 3, "t": 4, "p": 5, "e": 6}
+LVM_SIZE_RE = re.compile(r"^[<>]?(\d+(?:\.\d+)?)([bkmgtpe]?)$", re.IGNORECASE)
+
+
+def lvm_bytes(value: object) -> int:
+    """A size printed by ``lvs``: bare bytes (``--units b --nosuffix``) or lvm2's default style, rounded with a suffix ('<19.00g'); 0 for anything else."""
+    match = LVM_SIZE_RE.match(str(value or "").strip())
+    if match is None:
+        return 0
+    number, unit = match.groups()
+    scale = 1024 ** LVM_SIZE_UNITS.get(unit.lower(), 0)
+    return int(number) * scale if number.isdigit() else int(float(number) * scale)
 
 
 class StackManager:
@@ -200,7 +216,7 @@ class StackManager:
     # ---- LVM ------------------------------------------------------------------------------------
     def lvm_inventory(self) -> list[VolumeGroup]:
         pvs = self.runner.execute(("pvs", "--reportformat", "json", "--units", "b", "--nosuffix", "-o", "pv_name,pv_uuid,vg_name,vg_uuid,vg_pv_count,vg_missing_pv_count,pv_size"), timeout=60)
-        lvs = self.runner.execute(("lvs", "--reportformat", "json", "-o", "lv_name,vg_name,lv_path,lv_attr,lv_size,segtype,pool_lv,origin,lv_uuid"), timeout=60)
+        lvs = self.runner.execute(("lvs", "--reportformat", "json", "--units", "b", "--nosuffix", "-o", "lv_name,vg_name,lv_path,lv_attr,lv_size,segtype,pool_lv,origin,lv_uuid"), timeout=60)
         groups: dict[str, VolumeGroup] = {}
         names_seen: dict[str, set[str]] = {}
         for row in _report_rows(pvs.stdout, "pv") if pvs.returncode == 0 else []:
@@ -220,7 +236,7 @@ class StackManager:
                     group.active = group.active or active
                     segtype = str(row.get("segtype") or "")
                     group.thin = group.thin or "thin-pool" in segtype
-                    group.lvs.append({"name": row.get("lv_name"), "path": row.get("lv_path"), "size": int(float(str(row.get("lv_size") or 0) or 0)), "segtype": segtype, "active": active})
+                    group.lvs.append({"name": row.get("lv_name"), "path": row.get("lv_path"), "size": lvm_bytes(row.get("lv_size")), "segtype": segtype, "active": active})
         for group in groups.values():
             group.duplicate = len(names_seen.get(group.name, ())) > 1
         return list(groups.values())

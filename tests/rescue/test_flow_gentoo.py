@@ -182,6 +182,71 @@ def test_reinstalling_grub_for_uefi_keeps_the_existing_id_and_backs_up_the_esp(l
         assert "EFI/Gentoo/grubx64.efi" in archive.getnames() and "EFI/BOOT/BOOTX64.EFI" in archive.getnames()
 
 
+def test_a_big_esp_is_backed_up_as_far_as_it_goes_and_the_plan_goes_on(lab_factory) -> None:
+    """Windows plus an OEM payload: a 66 MiB firmware capsule used to stop every boot loader plan with 'not backed up automatically' before anything was written."""
+    import tarfile
+
+    lab, tree = uefi_gentoo_lab(lab_factory)
+    esp = lab.system.device_trees["/dev/nvme0n1p1"]
+    fr.put(esp, "EFI/Microsoft/Boot/bootmgfw.efi", size=1_700_000)
+    fr.put(esp, "EFI/HP/BIOSUpdate/capsule.cap", size=66 << 20)
+    manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    plan, result, _ = plan_and_run(manager, sid, "boot.bootloader")
+    assert result["outcome"] == "success", result
+    assert ("grub-install", "--target=x86_64-efi", "--efi-directory=/efi", "--bootloader-id=Gentoo", "--recheck") in chroot_commands(lab)
+    assert [step["status"] for step in result["steps"] if step["id"].startswith("i")] == ["completed"]
+    assert any("EFI/HP/BIOSUpdate/capsule.cap" in warning and "not copied into the backup" in warning for warning in result["warnings"])
+    assert "16 MiB" in next(step["display"] for step in plan["steps"] if step["display"].startswith("Back up"))  # the plan says what the backup leaves out
+    unmount(manager, sid)
+    [backup] = list((tree / "var/lib/gentoo-rescue/backups").glob("esp-*.tar.gz"))
+    with tarfile.open(backup) as archive:
+        names = archive.getnames()
+    assert "EFI/Microsoft/Boot/bootmgfw.efi" in names and "EFI/Gentoo/grubx64.efi" in names and "EFI/HP/BIOSUpdate/capsule.cap" not in names
+
+
+def test_the_backup_takes_the_small_files_first_and_never_more_than_its_total(lab_factory, monkeypatch) -> None:
+    import tarfile
+
+    from gentoo_installerd.rescue import executor
+
+    monkeypatch.setattr(executor, "MAX_BACKUP_BYTES", 5000)
+    monkeypatch.setattr(executor, "MAX_BACKUP_FILE", 3000)
+    lab, _tree = uefi_gentoo_lab(lab_factory)
+    esp = lab.system.device_trees["/dev/nvme0n1p1"]
+    for path in list((esp / "EFI").rglob("*")):
+        if path.is_file():
+            path.unlink()
+    fr.put(esp, "EFI/a/small.efi", size=1000)
+    fr.put(esp, "EFI/a/middle.efi", size=2500)
+    fr.put(esp, "EFI/b/other.efi", size=2500)
+    fr.put(esp, "EFI/b/huge.cap", size=4000)  # over the limit for one file
+    fr.put(esp, "EFI/z/last.efi", size=1500)
+    manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    plan_and_run(manager, sid, "session.enter_write")
+    session = manager.session(sid)
+    backup = executor.backup_esp(session, "/efi")
+    assert sorted(item.split(" ")[0] for item in backup.skipped) == ["EFI/b/huge.cap", "EFI/b/other.efi"]  # the biggest go first when the total is full, and a single big file always
+    with tarfile.open(Path(session.root) / backup.path.lstrip("/")) as archive:
+        sizes = {member.name: member.size for member in archive.getmembers()}
+    assert sizes == {"EFI/a/small.efi": 1000, "EFI/z/last.efi": 1500, "EFI/a/middle.efi": 2500} and sum(sizes.values()) <= 5000
+    unmount(manager, sid)
+
+
+def test_a_backup_that_cannot_be_written_is_a_warning_and_the_repair_goes_on(lab_factory, monkeypatch) -> None:
+    from gentoo_installerd.rescue import executor
+
+    def no_room(session, mountpoint):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(executor, "backup_esp", no_room)
+    lab, _tree = uefi_gentoo_lab(lab_factory)
+    manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    plan, result, _ = plan_and_run(manager, sid, "boot.bootloader")
+    assert result["outcome"] == "success" and ("grub-install", "--target=x86_64-efi", "--efi-directory=/efi", "--bootloader-id=Gentoo", "--recheck") in chroot_commands(lab)
+    assert any("Back up /efi/EFI" in warning and "No space left on device" in warning and "the plan continued" in warning for warning in result["warnings"])
+    unmount(manager, sid)
+
+
 def test_grub_removable_fallback_when_asked(lab_factory) -> None:
     lab, tree = uefi_gentoo_lab(lab_factory)
     manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
@@ -297,6 +362,38 @@ def test_live_arguments_in_the_sources_are_removed_before_the_menu_is_regenerate
     assert "root=live" not in cfg.read_text() and "rd.live" not in cfg.read_text()  # the regenerated menu does not carry them either
     backups = list((tree / "etc/default").glob("grub.gentoo-rescue-*"))
     assert len(backups) == 1 and LIVE_ARGS in backups[0].read_text()
+
+
+def test_ordinary_arguments_are_kept_and_do_not_fail_the_menu_check(lab_factory) -> None:
+    """nox, rd.debug and dokeymap are the user's own settings on an installed system: nothing is rewritten, and the regenerated menu still passes its checks."""
+    lab, tree = uefi_gentoo_lab(lab_factory)
+    defaults = fr.put(tree, "etc/default/grub", 'GRUB_DEFAULT=0\nGRUB_CMDLINE_LINUX="nox rd.debug"\n')
+    cmdline = tree / "etc/kernel/cmdline"
+    cmdline.parent.mkdir(parents=True, exist_ok=True)
+    cmdline.write_text(f"root=UUID={fr.ROOT_UUID} ro quiet dokeymap\n")
+    before = (defaults.read_text(), cmdline.read_text())
+    manager, sid, info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    assert "D21" not in {f["id"] for f in info["findings"]} and "boot.config" not in info["recommended"]
+    plan = manager.plan({"session_id": sid, "action_id": "boot.config"})
+    assert plan["diff"] == "" and not any("without the live system" in step["display"] for step in plan["steps"]) and not any("live system" in w for w in plan["warnings"])
+    plan, result, _ = plan_and_run(manager, sid, "boot.config")
+    assert result["outcome"] == "success" and all(check["ok"] for check in result["post_checks"]), result["post_checks"]
+    unmount(manager, sid)
+    assert (defaults.read_text(), cmdline.read_text()) == before
+    assert "nox rd.debug" in (tree / "boot/grub/grub.cfg").read_text()  # the menu was regenerated with the user's arguments
+    assert not list((tree / "etc").rglob("*.gentoo-rescue-*"))
+
+
+def test_only_the_line_with_a_live_argument_is_cleaned(lab_factory) -> None:
+    """A file that has a leak on one line and the user's own arguments on another keeps the second line exactly as it was."""
+    lab, tree = uefi_gentoo_lab(lab_factory)
+    cmdline = tree / "etc/cmdline.d/10-live.conf"
+    cmdline.parent.mkdir(parents=True, exist_ok=True)
+    cmdline.write_text(f"root=UUID={fr.ROOT_UUID} nox rd.debug\nquiet {LIVE_ARGS}\n")
+    manager, sid, _info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    plan_and_run(manager, sid, "boot.config")
+    unmount(manager, sid)
+    assert cmdline.read_text() == f"root=UUID={fr.ROOT_UUID} nox rd.debug\nquiet\n"
 
 
 def test_a_kernel_command_line_file_with_only_live_arguments_gets_the_root_back(lab_factory) -> None:

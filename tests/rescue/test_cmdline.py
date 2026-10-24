@@ -21,6 +21,18 @@ def test_sanitize_removes_every_live_argument() -> None:
     assert cmdline.contains_live_arguments("root=live:LABEL=x") and cmdline.contains_live_arguments("cdroot") and not cmdline.contains_live_arguments("root=UUID=x ro quiet")
 
 
+@pytest.mark.parametrize("arguments", ["nox", "nogui", "rd.debug", "dokeymap", "nodhcp", "dospeakup", "secureconsole", "overlayfs", "quiet nox rd.debug dokeymap"])
+def test_ordinary_arguments_of_an_installed_system_are_not_live_arguments(arguments: str) -> None:
+    """nox and nogui are honoured by display-manager-init on any system, rd.debug is a dracut switch, dokeymap asks for a keymap before a LUKS passphrase."""
+    assert not cmdline.contains_live_arguments(f"root=UUID=x ro {arguments}")
+
+
+@pytest.mark.parametrize("argument", ["root=live:CDLABEL=GENTOO", "root=live:LABEL=x", "rd.live.image", "rd.live.dir=/", "rd.live.ram=1", "cdroot", "CDLABEL=GENTOO"])
+def test_arguments_that_only_a_live_medium_has_are_found(argument: str) -> None:
+    assert cmdline.contains_live_arguments(f"root=UUID=x ro {argument}")
+    assert cmdline.contains_live_arguments(f"BOOT_IMAGE=/boot/gentoo nox {argument}")
+
+
 def test_target_kernel_cmdline_file_wins(tmp_path: Path) -> None:
     root = fr.make_root(tmp_path / "g", "gentoo")
     with RootFS(root) as fs:

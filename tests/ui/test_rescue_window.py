@@ -248,6 +248,83 @@ def test_a_session_left_open_by_an_earlier_window_can_be_taken_over_when_the_mou
 
 
 
+def test_after_the_service_restarted_the_open_system_is_listed_and_can_be_continued_and_released(qtbot, rescue_lab_factory, daemon_factory, repair_kit) -> None:
+    """The service died or was restarted while a system was open. Its mounts and flags survive; the new service takes the session over and the window offers it."""
+    from tests.rescue.flow import mount_through_the_manager, uefi_gentoo_lab
+
+    lab, _tree = uefi_gentoo_lab(rescue_lab_factory)
+    _old_manager, sid, _info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")  # the old service; it is gone and only its state files are left
+    window = repair_kit.open(daemon_factory(lab).path)
+    page = window.find_page
+    qtbot.waitUntil(lambda: page.findChild(object, f"rescueResume:{sid}") is not None, timeout=20000)
+    assert page.open_card.isVisibleTo(page) and not page.left_card.isVisibleTo(page)
+    page.findChild(object, f"rescueResume:{sid}").click()
+    qtbot.waitUntil(lambda: window.stack.currentIndex() == DIAGNOSE and window.system is not None and not window.diagnose_page.busy.isVisibleTo(window.diagnose_page), timeout=20000)
+    assert window.system.session_id == sid and window.system.actions
+    window.diagnose_page.finish_button.click()
+    window.finish_page.unmount_button.click()
+    qtbot.waitUntil(lambda: window.finish_page.state == "done", timeout=20000)
+    assert lab.system.mounted_targets() == [] and not any(lab.system.ro.values())
+
+
+def test_what_a_cut_short_repair_left_behind_is_shown_on_the_first_page_and_released_there(qtbot, rescue_lab_factory, daemon_factory, repair_kit) -> None:
+    """Disks flagged read-only by a session that no longer has any mount: nothing to continue, but the disks must be freed."""
+    from tests.rescue.flow import mount_through_the_manager, uefi_gentoo_lab
+
+    lab, _tree = uefi_gentoo_lab(rescue_lab_factory)
+    _old_manager, sid, _info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    for target in sorted(lab.system.mounted_targets(), reverse=True):  # somebody unmounted everything by hand
+        lab.system.mounts.pop(target)
+    assert lab.system.ro["/dev/nvme0n1p5"] is True
+    window = repair_kit.open(daemon_factory(lab).path)
+    page = window.find_page
+    qtbot.waitUntil(lambda: page.left_card.isVisibleTo(page), timeout=20000)
+    shown = " ".join(label.text() for label in page.left_card.findChildren(type(page.hints)))
+    assert sid in shown and "cut short" in shown and page.release_button.isVisibleTo(page) and not page.open_card.isVisibleTo(page)
+    qtbot.waitUntil(lambda: not page._busy, timeout=20000)
+    page.release_button.click()
+    qtbot.waitUntil(lambda: not page.left_card.isVisibleTo(page) and not page._busy and page.notice.isVisibleTo(page), timeout=20000)
+    assert not any(lab.system.ro.values()) and not list((lab.state_dir / "sessions").glob("*.json"))
+    assert "released" in page.notice.text.text()  # and it is still said after the page has looked at the disks again
+
+
+def test_an_unlocked_disk_from_an_earlier_window_is_offered_for_release(qtbot, rescue_lab_factory, daemon_factory, repair_kit) -> None:
+    from gentoo_installerd.rescue.scan import ScanOptions
+    from tests.rescue.test_flow_encrypted import MAPPER, encrypted_lab
+
+    lab, _tree, _boot = encrypted_lab(rescue_lab_factory)
+    old = lab.manager()
+    old.scan(None, ScanOptions())
+    old.unlock(None, {"device": "/dev/nvme0n1p3", "passphrase": PASSPHRASE})
+    old.activate(None, {"kind": "lvm", "vg": "vg0"})
+    window = repair_kit.open(daemon_factory(lab).path)
+    page = window.find_page
+    qtbot.waitUntil(lambda: page.left_card.isVisibleTo(page), timeout=20000)
+    assert "vg0" in " ".join(label.text() for label in page.left_card.findChildren(type(page.hints))) or MAPPER in " ".join(label.text() for label in page.left_card.findChildren(type(page.hints)))
+    qtbot.waitUntil(lambda: not page._busy, timeout=20000)
+    page.release_button.click()
+    qtbot.waitUntil(lambda: not page.left_card.isVisibleTo(page) and not page._busy, timeout=20000)
+    assert lab.system.mapped == {} and lab.system.vgs["vg0"].active is False
+
+
+def test_a_mount_that_the_tool_itself_left_is_not_blamed_on_the_file_manager(qtbot, rescue_lab_factory, daemon_factory, repair_kit) -> None:
+    """The state file of the old session is lost, so nothing can be taken over; the mount page must still say whose mount it is."""
+    from tests.rescue.flow import mount_through_the_manager, uefi_gentoo_lab, with_live_mounts
+
+    lab, _tree = uefi_gentoo_lab(rescue_lab_factory)
+    with_live_mounts(lab)
+    old_manager, sid, _info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    old_manager.session(sid).state_path.unlink()
+    window = repair_kit.open(daemon_factory(lab).path)
+    qtbot.waitUntil(lambda: len(window.find_page.candidates) >= 1 and not window.find_page._busy, timeout=20000)
+    window.find_page.group.set_value(system_card(window, "/dev/nvme0n1p5"))
+    window.find_page.continue_button.click()
+    mount = window.mount_page
+    qtbot.waitUntil(lambda: mount.again_button.isVisibleTo(mount), timeout=20000)
+    said = mount.notice.text.text()
+    assert "earlier repair" in said and "Release them" in said and "file manager" not in said
+
+
 def test_a_system_that_cannot_be_released_keeps_the_window_open_until_it_is_forced_or_the_person_goes_back(qtbot, gentoo_machine, repair_kit, monkeypatch) -> None:
     daemon, lab, _tree = gentoo_machine
     window = repair_kit.open(daemon.path)

@@ -213,6 +213,11 @@ def _unescape_label(text: str) -> str:
     return re.sub(r"\\x([0-9a-fA-F]{2})", lambda m: chr(int(m.group(1), 16)), text)
 
 
+def _unquote(value: str) -> str:
+    """fstab(5) allows TAG="value" (blkid prints it that way): one pair of matching quotes is not part of the value."""
+    return value[1:-1] if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'" else value
+
+
 def _fs_compatible(entry_type: str, node: DeviceNode) -> bool:
     if entry_type in {"auto", "", "none"} or not node.fstype:
         return True
@@ -237,21 +242,22 @@ def resolve_entry(entry: Entry, graph: DeviceGraph, *, crypttab: Iterable[CryptE
         return Resolved(entry, "skipped", "network", reason="network filesystem")
     if entry.has_option("bind") or entry.has_option("rbind"):
         return Resolved(entry, "skipped", "bind", reason="bind mount")
-    links = dev_links or (lambda _path: None)
+    links = dev_links or default_dev_link_resolver
     kind, devices, reason = "other", [], ""
     unstable = False
     lowered = spec.lower()
+    value = _unquote(spec.split("=", 1)[1]) if "=" in spec else ""
     if lowered.startswith("uuid="):
-        kind, devices = "uuid", graph.by_uuid(spec.split("=", 1)[1])
+        kind, devices = "uuid", graph.by_uuid(value)
         reason = "no device has this UUID"
     elif lowered.startswith("label="):
-        kind, devices = "label", graph.by_label(spec.split("=", 1)[1])
+        kind, devices = "label", graph.by_label(value)
         reason = "no device has this label"
     elif lowered.startswith("partuuid="):
-        kind, devices = "partuuid", graph.by_partuuid(spec.split("=", 1)[1])
+        kind, devices = "partuuid", graph.by_partuuid(value)
         reason = "no partition has this PARTUUID"
     elif lowered.startswith("partlabel="):
-        kind, devices = "partlabel", graph.by_partlabel(spec.split("=", 1)[1])
+        kind, devices = "partlabel", graph.by_partlabel(value)
         reason = "no partition has this PARTLABEL"
     elif spec.startswith("/dev/disk/by-"):
         kind, devices, reason = _resolve_by_link(spec, graph, links)
@@ -322,13 +328,14 @@ def _resolve_mapper(spec: str, graph: DeviceGraph, crypttab: Iterable[CryptEntry
 
 def _resolve_crypt_source(source: str, graph: DeviceGraph, links: DevLinkResolver) -> DeviceNode | None:
     lowered = source.lower()
+    value = _unquote(source.split("=", 1)[1]) if "=" in source else ""
     candidates: list[DeviceNode] = []
     if lowered.startswith("uuid="):
-        candidates = graph.by_uuid(source.split("=", 1)[1])
+        candidates = graph.by_uuid(value)
     elif lowered.startswith("partuuid="):
-        candidates = graph.by_partuuid(source.split("=", 1)[1])
+        candidates = graph.by_partuuid(value)
     elif lowered.startswith("label="):
-        candidates = graph.by_label(source.split("=", 1)[1])
+        candidates = graph.by_label(value)
     elif source.startswith("/dev/disk/by-"):
         _kind, candidates, _reason = _resolve_by_link(source, graph, links)
     elif source.startswith("/dev/"):
@@ -454,8 +461,8 @@ def propose_fixes(
         candidates.sort(key=lambda c: (-c.score, c.device))
         proposal.candidates = candidates[:8]
         _maybe_select(proposal, entry, pool, graph, root_disks, probe)
-        if not proposal.selected:
-            proposal.default_action = "nofail" if not entry.has_option("nofail") else "comment"
+        if not proposal.selected:  # a drive marked nofail or noauto is just not plugged in: nothing needs to change, and its automount is not ours to switch off
+            proposal.default_action = "keep" if entry.has_option("nofail") or entry.has_option("noauto") else "nofail"
         proposals.append(proposal)
     return proposals
 

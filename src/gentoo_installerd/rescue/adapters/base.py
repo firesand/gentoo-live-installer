@@ -27,6 +27,7 @@ class Adapter:
     tools: ClassVar[frozenset[str]] = frozenset()
     default_bootloader_id: ClassVar[str] = "linux"
     esp_default: ClassVar[str] = "/boot/efi"
+    selects_kernels: ClassVar[bool] = False  # 'Reinstall the kernel' takes a list of kernel versions
 
     # ---- capabilities --------------------------------------------------------------------------------------------------
     def write_refusal(self, view: SessionView) -> str:
@@ -207,7 +208,7 @@ def _without_live_arguments(b: PlanBuilder, path: str, text: str) -> str:
                 if not any(token.startswith("root=") for token in options.split()) and b.view.root_uuid:
                     options = f"root=UUID={b.view.root_uuid} {options}".strip()
                 line = f"options {options}"
-        elif stripped and not stripped.startswith("#"):
+        elif stripped and not stripped.startswith("#") and contains_live_arguments(stripped):
             line = sanitize(line)
             if path == "/etc/kernel/cmdline" and "root=" not in line and b.view.root_uuid:
                 line = f"root=UUID={b.view.root_uuid} {line}".strip()
@@ -255,8 +256,14 @@ def esp_loader_checks(b: PlanBuilder, esp: Any, ident: str, removable: bool, fil
 
 
 def backup_esp(b: PlanBuilder, esp: Any) -> None:
-    """Archive the EFI directory into the repaired system before a boot loader is written (data safety for the ESP)."""
-    b.internal("backup-esp", f"Back up {esp.mountpoint}/EFI into /var/lib/gentoo-rescue/ before changing it", {"mountpoint": esp.mountpoint}, writes=("/var/lib/gentoo-rescue/",))
+    """Archive the EFI directory into the repaired system before a boot loader is written (data safety for the ESP).
+
+    The backup is best effort: if it cannot be made, the plan says so and goes on (the boot loader's own files are what is replaced).
+    """
+    from ..executor import MAX_BACKUP_FILE
+
+    b.internal("backup-esp", f"Back up {esp.mountpoint}/EFI into /var/lib/gentoo-rescue/ before changing it (files over {MAX_BACKUP_FILE >> 20} MiB are left out)", {"mountpoint": esp.mountpoint},
+               writes=("/var/lib/gentoo-rescue/",), on_fail="continue")
 
 
 def need_network(b: PlanBuilder, reason: str) -> None:

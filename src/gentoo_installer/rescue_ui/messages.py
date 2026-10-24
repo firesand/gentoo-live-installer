@@ -47,6 +47,11 @@ RECONNECT_FAILED_TEXT = (
     "Check the result with “Try again” before you start anything else."
 )
 
+LEFTOVERS_TEXT = (
+    "The service was stopped or restarted while a repair was open. Release these so the disks can be used again. "
+    "Only what the repair tool itself opened is released."
+)
+
 NOTHING_FOUND_TITLE = "No installed Linux system was found"
 NOTHING_FOUND_TEXT = (
     "The tool looked at every disk in this computer. These are common reasons:\n"

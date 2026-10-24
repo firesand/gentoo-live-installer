@@ -114,6 +114,18 @@ def test_d21_live_arguments_in_boot_configuration(lab_factory) -> None:
     assert len(found) >= 2 and all(f.severity == "error" and f.actions == ["boot.config"] for f in found)
 
 
+def test_ordinary_kernel_arguments_are_not_a_live_leak(lab_factory) -> None:
+    """A healthy system that boots to the console (nox) or keeps rd.debug / dokeymap must not get a D21 error and a 'Fix everything recommended'."""
+    lab, tree = lab_for(lab_factory)
+    (tree / "etc/kernel/cmdline").write_text(f"root=UUID={fr.ROOT_UUID} ro nox rd.debug dokeymap\n")
+    fr.put(tree, "etc/default/grub", 'GRUB_CMDLINE_LINUX="nogui nodhcp dospeakup"\n')
+    cfg = tree / "boot/grub/grub.cfg"
+    cfg.write_text(cfg.read_text().replace("ro\n", "ro nox rd.debug\n"))
+    findings = findings_of(lab)
+    assert "D21" not in ids(findings), [f.to_dict() for f in findings if f.id == "D21"]
+    assert "boot.config" not in recommended_actions(findings)
+
+
 def test_d07_dead_fstab_entries(lab_factory) -> None:
     text = fr.fstab_text(esp=fr.DEAD_UUID, esp_mount="/efi", swap=None, home=fr.DEAD_UUID)
     lab, _ = lab_for(lab_factory, fstab=text)

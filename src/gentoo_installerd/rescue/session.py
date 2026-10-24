@@ -281,10 +281,16 @@ class RescueSession:
         if rung:
             self.warnings.append("The root file system needed recovery options to mount; some data may be unreadable. Run a file system check.")
 
+    def _note_failed_mount(self, item: MountItem, kind: str, reason: str) -> None:
+        self.failed_mounts[:] = [entry for entry in self.failed_mounts if entry.get("mountpoint") != item.mountpoint]
+        self.failed_mounts.append({"mountpoint": item.mountpoint, "device": item.device, "kind": kind, "reason": reason})
+
+    def _missing_directory(self, item: MountItem) -> None:
+        self._note_failed_mount(item, "missing_directory", "the directory does not exist in the read-only system; it is created when repairs are enabled")
+
     def _mount_item(self, item: MountItem, graph: DeviceGraph, emit: Callable[..., None]) -> None:
         if item.needs_mkdir:
-            self.failed_mounts.append({"mountpoint": item.mountpoint, "device": item.device, "kind": "missing_directory",
-                                      "reason": "the directory does not exist in the read-only system; it is created when repairs are enabled"})
+            self._missing_directory(item)
             return
         try:
             with self.fs() as fs:
@@ -292,9 +298,13 @@ class RescueSession:
             check_mount_destination(destination, self.root)
             rung = mount_readonly(self.runner, item.device, item.fstype, destination, extra=item.options, noexec=not self.allow_write, allow_degraded=self.allow_degraded,
                                   available=self.env.host.filesystems() or None)
+        except FileNotFoundError:  # below a mount that was only made just now (/boot/efi on a separate /boot): the plan could not know; the write transition makes it
+            item.needs_mkdir = True
+            self._missing_directory(item)
+            return
         except (RescueError, OSError) as exc:
             reason = exc.message if isinstance(exc, RescueError) else str(exc)
-            self.failed_mounts.append({"mountpoint": item.mountpoint, "device": item.device, "kind": "failed", "reason": reason})
+            self._note_failed_mount(item, "failed", reason)
             self.warnings.append(f"{item.mountpoint} could not be mounted from {item.device}: {reason}")
             return
         self.ledger.add("mount", path=destination, mountpoint=item.mountpoint, device=item.device, fs=item.fstype, tier=item.tier, rw=False, rung=rung, recursive=False)
@@ -479,10 +489,11 @@ class RescueSession:
             if existing:
                 self.ledger.remove(existing)
             self.ledger.add("bind" if effect.get("fs") in {"bind", "rbind"} else "mount", **data)
+            self.failed_mounts[:] = [entry for entry in self.failed_mounts if entry.get("mountpoint") != effect.get("mountpoint")]  # it is mounted now
         elif kind == "mount_remove":
             for entry in list(self.ledger.entries):
                 if entry.kind in {"mount", "bind", "cmdline"} and entry.data.get("path") == effect["path"]:
-                    self.ledger.remove(entry)
+                    self._forget_mount(entry)
         elif kind == "blockro":
             for entry in self.ledger.of_kind("blockro"):
                 if entry.data["device"] == effect["device"]:
@@ -535,7 +546,7 @@ class RescueSession:
         if step.handler == "backup-esp":
             from .executor import backup_esp
 
-            return f"saved {backup_esp(self, step.args['mountpoint'])}"
+            return f"saved {backup_esp(self, step.args['mountpoint']).path}"
         raise RescueError("internal", f"Unknown internal step {step.handler}")
 
     def _resolv_source(self) -> tuple[str, str]:
@@ -613,11 +624,34 @@ class RescueSession:
         return True
 
     def remove_virtual(self) -> None:
-        for entry in reversed(self.ledger.entries):
+        for entry in reversed(list(self.ledger.entries)):  # a copy: unmounting changes the ledger
             if entry.data.get("virtual") or entry.kind == "cmdline":
                 self._unmount_entry(entry, force=True, tries=1)
 
     # ---- release (review: clean release, also after failures) --------------------------------------------------------------------
+    def _forget_mount(self, entry: LedgerEntry) -> None:
+        """A mount is gone: take it out of the ledger. Once the resolver file is no longer bound, the empty file made for it can be deleted."""
+        self.ledger.remove(entry)
+        if entry.data.get("virtual_name") == "resolv":
+            self._remove_placeholders()
+
+    def _remove_placeholders(self) -> None:
+        """Delete the empty files that were made only to bind over (/etc/resolv.conf), if they are still empty.
+
+        This must happen after the bind is gone and before the read-write root is unmounted: while the live file is bound over the placeholder, it shows through
+        and cannot be unlinked. A read-only mount can only forget the entry.
+        """
+        for entry in self.ledger.of_kind("placeholder"):
+            if self.mode == "rw":
+                try:
+                    with self.fs(writable=True) as fs:
+                        path = entry.data["path"]
+                        if fs.exists(path) and not fs.read_bytes(path, 1):
+                            fs.remove(path)
+                except (OSError, RescueError):
+                    pass
+            self.ledger.remove(entry)
+
     def _unmount_entry(self, entry: LedgerEntry, *, force: bool, tries: int = 3) -> tuple[bool, list[dict[str, Any]], str]:
         path = entry.data["path"]
         argv = ("umount", "-R", path) if entry.data.get("recursive") else ("umount", path)
@@ -625,7 +659,7 @@ class RescueSession:
         for attempt in range(tries):
             result = self.runner.execute(argv, timeout=60)
             if result.returncode == 0 or "not mounted" in result.stdout:
-                self.ledger.remove(entry)
+                self._forget_mount(entry)
                 return True, [], ""
             error = result.stdout.strip()
             if attempt + 1 < tries:
@@ -637,7 +671,7 @@ class RescueSession:
             lazy = self.runner.execute(("umount", "-l", path), timeout=60)
             if lazy.returncode == 0:
                 self.audit.record("release", message="lazy unmount", path=path, sync=True)
-                self.ledger.remove(entry)
+                self._forget_mount(entry)
                 return True, holders, ""
             error = lazy.stdout.strip() or error
         return False, holders, error
@@ -649,19 +683,8 @@ class RescueSession:
         self.state = "closing"
         for shell in list(self.shells):
             self.shells.remove(shell)
-        if self.mode == "rw":
-            for entry in self.ledger.of_kind("placeholder"):
-                try:
-                    with self.fs(writable=True) as fs:
-                        data = fs.read_bytes(entry.data["path"], 1) if fs.exists(entry.data["path"]) else b""
-                        if not data:
-                            fs.remove(entry.data["path"])
-                except (OSError, RescueError):
-                    pass
-                self.ledger.remove(entry)
-        else:
-            for entry in self.ledger.of_kind("placeholder"):
-                self.ledger.remove(entry)
+        if not any(entry.data.get("virtual_name") == "resolv" for entry in self.ledger.entries):
+            self._remove_placeholders()  # nothing is bound over them; otherwise this happens when the bind is unmounted below
         self.runner.execute(("sync",), timeout=120)
         for entry in reversed(self._mount_entries()):
             ok, holders, error = self._unmount_entry(entry, force=force)
@@ -732,4 +755,6 @@ def session_from_state(env: SessionEnv, raw: dict[str, Any], graph: DeviceGraph 
     session.generation = int(raw.get("generation", 0))
     session.state = raw.get("state", "mounted_ro")
     session.ledger = Ledger.from_state(raw.get("ledger", []), session.persist)
+    if session.state in {"init", "mounting", "closing"} and session.ledger.find("mount", mountpoint="/"):
+        session.state = "mounted_rw" if session.mode == "rw" else "mounted_ro"  # cut short while opening or releasing: what is mounted can be used or released
     return session

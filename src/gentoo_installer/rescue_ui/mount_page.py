@@ -56,7 +56,7 @@ class MountPage(RescuePage):
         self.table_card.content.addLayout(self.table)
         self.content.addWidget(self.table_card)
 
-        self.missing_card = Card("Not found", "The system's file list (fstab) names disks that are not in this computer. They are not opened.")
+        self.missing_card = Card("Not found", "The system's file list (fstab) names disks that are not in this computer, or that could be another disk with the same name. They are not opened.")
         self.missing_rows = QVBoxLayout()
         self.missing_card.content.addLayout(self.missing_rows)
         self.content.addWidget(self.missing_card)
@@ -132,8 +132,12 @@ class MountPage(RescuePage):
         details = model.error_details(data)
         if code == "rescue.mounted_elsewhere":
             where = details.get("mountpoint", "another place")
-            self._not_adopted_text = (f"The disk {details.get('device', '')} is already open at {where}. The file manager probably opened it.\n"
-                                      "Close it there (use the eject button next to the disk), then press “Check again”.")
+            if details.get("leftover"):
+                self._not_adopted_text = (f"The disk {details.get('device', '')} is still open from an earlier repair (at {where}), and this window cannot continue with it.\n"
+                                          "Release it with “Release them” on the first page, or run “sudo gentoo-rescue cleanup” in a terminal, then press “Check again”.")
+            else:
+                self._not_adopted_text = (f"The disk {details.get('device', '')} is already open at {where}. The file manager probably opened it.\n"
+                                          "Close it there (use the eject button next to the disk), then press “Check again”.")
             # The mount may be the tool's own: a session that an earlier window left open. The window looks for it before blaming the file manager.
             self.notice.show_message("info", "Checking whether this system is already open in a repair session…")
             self.adoptRequested.emit(str(self.candidate.get("device", "")))
@@ -260,7 +264,7 @@ class MountPage(RescuePage):
 
     def not_adopted(self) -> None:
         """No session of the daemon holds this system: what to do instead (the message set by whoever asked)."""
-        self.notice.show_message("error" if "file manager" in self._not_adopted_text else "warning", self._not_adopted_text)
+        self.notice.show_message("error" if "file manager" in self._not_adopted_text or "earlier repair" in self._not_adopted_text else "warning", self._not_adopted_text)
         self.again_button.show()
 
     def focus_first(self) -> None:

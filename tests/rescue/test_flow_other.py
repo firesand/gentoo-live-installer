@@ -12,7 +12,7 @@ from gentoo_installerd.rescue.errors import RescueError
 from . import fakeroot as fr
 from . import lsblk_fixtures as lf
 from .fakes import assert_nothing_destructive
-from .flow import chroot_commands, mount_through_the_manager, plan_and_run, uefi_gentoo_lab, unmount
+from .flow import boot_efi_lab, chroot_commands, mount_through_the_manager, plan_and_run, uefi_gentoo_lab, unmount
 
 DEBIAN_ENV = {"DEBIAN_FRONTEND": "noninteractive", "DEBCONF_NONINTERACTIVE_SEEN": "true"}
 
@@ -30,6 +30,19 @@ def test_debian_family_is_identified_and_offers_repairs(lab_factory) -> None:
     actions = {a["id"]: a for a in info["actions"]}
     assert all(actions[name]["available"] for name in ("boot.bootloader", "boot.config", "boot.initramfs", "boot.kernel", "fstab.fix") if name != "fstab.fix")
     assert [f for f in info["findings"] if f["severity"] == "error"] == []
+
+
+def test_a_wiped_esp_behind_a_separate_boot_is_seen_before_repairs_are_enabled(lab_factory) -> None:
+    """Debian, Ubuntu and Fedora with a /boot partition keep the ESP at /boot/efi, a directory on that partition: the ESP used to stay unmounted until repairs were enabled."""
+    lab, _tree, _boot = boot_efi_lab(lab_factory, loaders=False)
+    manager, sid, info = mount_through_the_manager(lab, candidate_device="/dev/mapper/ubuntu--vg-ubuntu--lv", allow_write=True)
+    ids = {finding["id"] for finding in info["findings"]}
+    assert "M01" not in ids and "D08" in ids and "boot.bootloader" in info["recommended"]
+    assert info["esp"] == {"mountpoint": "/boot/efi", "device": "/dev/sda1"}
+    plan = manager.plan({"session_id": sid, "action_id": "repair.recommended"})
+    assert plan["title"] == "Fix everything recommended" and any("grub-install" in step["display"] or "apt-get" in step["display"] for step in plan["steps"])
+    assert not any(failed in plan["summary"] for failed in ("nothing that needs repairing",))
+    unmount(manager, sid)
 
 
 def test_debian_initramfs_uses_initramfs_tools_in_a_clean_noninteractive_environment(lab_factory) -> None:
@@ -113,6 +126,57 @@ def test_network_dependent_plans_refuse_to_start_offline(lab_factory) -> None:
         manager.run_plan(manager.new_op("run", sid), {"session_id": sid, "plan_id": plan["plan_id"], "digest": plan["digest"], "confirm": True, "typed": plan["confirm"]["typed"]})
     assert err.value.short == "needs_network" and "no route" in err.value.message
     assert manager.session(sid).mode == "ro"
+
+
+def two_debian_kernels(lab_factory, *, broken: str | None = "6.1.0-10-amd64"):
+    """Debian keeps two kernels; the version strings cross a digit width (6.1.0-9, 6.1.0-10). One of them lost its module tree in an interrupted upgrade."""
+    import shutil
+
+    lab, tree = debian_lab(lab_factory, kernels=["6.1.0-9-amd64", "6.1.0-10-amd64"])
+    if broken:
+        shutil.rmtree(tree / f"usr/lib/modules/{broken}")
+    return lab, tree
+
+
+def apt_and_initramfs_targets(plan) -> tuple[list[str], list[str]]:
+    commands = [step.get("argv") or [] for step in plan["steps"]]
+    apt = [package for argv in commands if argv[:1] == ["apt-get"] for package in argv if package.startswith("linux-image-")]
+    initramfs = [argv[-1] for argv in commands if argv[:2] == ["update-initramfs", "-u"]]
+    return apt, initramfs
+
+
+@pytest.mark.parametrize("broken", ["6.1.0-10-amd64", "6.1.0-9-amd64"])
+def test_fix_everything_reinstalls_the_kernel_the_diagnosis_names(lab_factory, broken: str) -> None:
+    """The finding names the broken kernel, and the recommended plan used to reinstall the last one in text order (6.1.0-9 over 6.1.0-10)."""
+    lab, _tree = two_debian_kernels(lab_factory, broken=broken)
+    manager, sid, info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    assert [(f["id"], f["kernel"]) for f in info["findings"] if f["id"] == "D04"] == [("D04", broken)]
+    plan = manager.plan({"session_id": sid, "action_id": "repair.recommended"})
+    assert plan["params"]["kernels"] == [broken]
+    assert apt_and_initramfs_targets(plan) == ([f"linux-image-{broken}"], [broken])
+    unmount(manager, sid)
+
+
+def test_reinstalling_the_kernel_directly_goes_for_the_damaged_one_else_the_newest(lab_factory) -> None:
+    lab, _tree = two_debian_kernels(lab_factory, broken="6.1.0-9-amd64")
+    manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    assert apt_and_initramfs_targets(manager.plan({"session_id": sid, "action_id": "boot.kernel"})) == (["linux-image-6.1.0-9-amd64"], ["6.1.0-9-amd64"])
+    chosen = manager.plan({"session_id": sid, "action_id": "boot.kernel", "params": {"kernels": ["6.1.0-10-amd64"]}})  # the person's own choice wins
+    assert apt_and_initramfs_targets(chosen) == (["linux-image-6.1.0-10-amd64"], ["6.1.0-10-amd64"])
+    unmount(manager, sid)
+    healthy_lab, _ = two_debian_kernels(lab_factory, broken=None)
+    manager, sid, _ = mount_through_the_manager(healthy_lab, candidate_device="/dev/nvme0n1p5")
+    assert apt_and_initramfs_targets(manager.plan({"session_id": sid, "action_id": "boot.kernel"})) == (["linux-image-6.1.0-10-amd64"], ["6.1.0-10-amd64"])  # the newest, by number
+    unmount(manager, sid)
+
+
+def test_only_systems_that_take_a_kernel_list_are_offered_one(lab_factory) -> None:
+    lab, _tree = two_debian_kernels(lab_factory)
+    _manager, _sid, info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    assert [param["name"] for param in {a["id"]: a for a in info["actions"]}["boot.kernel"]["params"]] == ["package", "mode", "kernels"]
+    gentoo, _ = uefi_gentoo_lab(lab_factory)
+    _manager, _sid, info = mount_through_the_manager(gentoo, candidate_device="/dev/nvme0n1p5")
+    assert [param["name"] for param in {a["id"]: a for a in info["actions"]}["boot.kernel"]["params"]] == ["package", "mode"]
 
 
 def test_debian_kernel_reinstall_wraps_apt_with_policy_rc_and_rebuilds(lab_factory) -> None:
@@ -231,10 +295,65 @@ def test_fedora_bootloader_comes_from_packages_never_from_grub2_install(lab_fact
     manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
     plan, result, _ = plan_and_run(manager, sid, "boot.bootloader")
     commands = chroot_commands(lab)
-    assert ("dnf", "reinstall", "-y", "shim-x64", "grub2-efi-x64") in commands and not any(c[0] == "grub2-install" for c in commands)
+    assert ("dnf", "reinstall", "-y", "shim-x64", "grub2-efi-x64", "grub2-common") in commands and not any(c[0] == "grub2-install" for c in commands)  # Fedora's documented recipe
     entry = [c for c in lab.system.commands if c[:2] == ("efibootmgr", "--create")][0]
     assert entry[-2:] == ("--loader", "\\EFI\\fedora\\shimx64.efi") and "Fedora" in entry
     assert plan["needs"]["network"] is True
+
+
+def wiped_fedora_esp(lab_factory, wipe: str):
+    import shutil
+
+    lab, tree = fedora_lab(lab_factory)
+    esp = lab.system.device_trees["/dev/nvme0n1p1"]
+    shutil.rmtree(esp / ("EFI/fedora" if wipe == "vendor" else "EFI"))
+    return lab, tree, esp
+
+
+@pytest.mark.parametrize("wipe", ["vendor", "everything"])
+def test_fedora_bootloader_after_an_esp_wipe_restores_the_grub_cfg_stub(lab_factory, wipe: str) -> None:
+    """Windows reinstalled, or the ESP reformatted: without grub2-common (and a directory to copy into) shim and GRUB come back but GRUB stops at its prompt."""
+    lab, _tree, esp = wiped_fedora_esp(lab_factory, wipe)
+    manager, sid, info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    assert "D08" in {finding["id"] for finding in info["findings"]}
+    plan, result, _ = plan_and_run(manager, sid, "boot.bootloader")
+    shown = [step["display"] for step in plan["steps"]]
+    assert "mkdir /boot/efi/EFI/fedora" in shown and shown.index("mkdir /boot/efi/EFI/fedora") < next(i for i, text in enumerate(shown) if "dnf reinstall" in text)
+    assert ("dnf", "reinstall", "-y", "shim-x64", "grub2-efi-x64", "grub2-common") in chroot_commands(lab)
+    assert {"kind": "esp_file", "dir": "/boot/efi/EFI/fedora", "name": "grub.cfg"} in plan["post_checks"]
+    assert result["outcome"] == "success" and all(check["ok"] for check in result["post_checks"]), result
+    unmount(manager, sid)
+    assert all((esp / "EFI/fedora" / name).exists() for name in ("shimx64.efi", "grubx64.efi", "grub.cfg"))
+
+
+def test_fedora_bootloader_makes_the_stub_itself_when_the_packages_do_not(lab_factory) -> None:
+    lab, _tree, esp = wiped_fedora_esp(lab_factory, "vendor")
+    lab.system.dnf_makes_stub = False  # an image whose staging directory has no stub
+    manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    plan, result, _ = plan_and_run(manager, sid, "boot.bootloader")
+    assert ("gen_grub_cfgstub", "/boot/grub2", "/boot/efi/EFI/fedora") in chroot_commands(lab)
+    assert result["outcome"] == "success" and all(check["ok"] for check in result["post_checks"]), result
+    unmount(manager, sid)
+    assert (esp / "EFI/fedora/grub.cfg").read_text().endswith("configfile $prefix/grub.cfg\n")
+
+
+def test_fedora_bootloader_with_a_stub_already_there_does_not_make_another(lab_factory) -> None:
+    lab, _ = fedora_lab(lab_factory)
+    manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    plan, _result, _ = plan_and_run(manager, sid, "boot.bootloader")
+    assert not any(command[0] == "gen_grub_cfgstub" for command in chroot_commands(lab)) and "mkdir /boot/efi/EFI/fedora" not in [step["display"] for step in plan["steps"]]
+
+
+def test_fedora_bootloader_does_not_call_a_missing_stub_a_success(lab_factory) -> None:
+    """If nothing makes the stub, the result must say so (it used to read as success while the machine ended at the GRUB prompt)."""
+    lab, tree, _esp = wiped_fedora_esp(lab_factory, "vendor")
+    lab.system.dnf_makes_stub = False
+    (tree / "usr/bin/gen_grub_cfgstub").unlink()
+    manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    plan, result, _ = plan_and_run(manager, sid, "boot.bootloader")
+    assert not any(command[0] == "gen_grub_cfgstub" for command in chroot_commands(lab))
+    assert result["outcome"] == "warning" and [check["text"] for check in result["post_checks"] if not check["ok"]] == ["/boot/efi/EFI/fedora/grub.cfg is missing"]
+    unmount(manager, sid)
 
 
 def test_rhel_adds_grub2_common_and_uses_its_own_directory(lab_factory) -> None:
