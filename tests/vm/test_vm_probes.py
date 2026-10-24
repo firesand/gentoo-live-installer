@@ -309,6 +309,21 @@ def test_the_world_of_the_first_real_run_resolves_and_its_drift_is_listed():
     assert drift.data["new"] == ["net-libs/nghttp2-1.70.0-3", "net-libs/nghttp3-1.18.0-1", "net-libs/ngtcp2-1.25.0-1"]
 
 
+def test_binary_packages_ignored_for_their_use_do_not_fail_the_world():
+    """tests/vm/data/emerge-world-uefi-luks-systemd.log: the world resolves, and Portage adds a '!!!' notice that it builds
+    nghttp2 from source because no binary package has its USE flags."""
+    text = (DATA / "emerge-world-uefi-luks-systemd.log").read_text()
+    assert "!!! The following binary packages have been ignored due to non matching USE:" in text
+    resolve, drift = vm_probes.parse_world_probe(0, text)
+    assert resolve.success and resolve.error == ""
+    assert drift.data["counts"] == {"upgrades": 4, "new": 3, "reinstalls": 5}
+    changed = "\n!!! The following binary packages have been ignored due to changed dependencies:\n\n     app-misc/foo-1.0::gentoo\n"
+    assert vm_probes.parse_world_probe(0, NOTHING_TO_DO + changed)[0].success
+    still_an_error = text + "\n!!! Section 'gentoo' in repos.conf has location attribute set to nonexistent directory: '/var/db/repos/gentoo'\n"
+    resolve, _drift = vm_probes.parse_world_probe(0, still_an_error)
+    assert not resolve.success and "Portage reported errors (!!!)" in resolve.error
+
+
 def test_drift_is_information_even_when_the_world_does_not_resolve():
     resolve, drift = vm_probes.parse_world_probe(1, "!!! Problem resolving dependencies for @world\n[ebuild   R    ] dev-libs/drift-2.0 USE=\"b\" 10 KiB\n")
     assert not resolve.success and not resolve.advisory

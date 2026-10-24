@@ -395,7 +395,9 @@ def parse_layout_probe(returncode: int, output: str, rows: Sequence[Any]) -> Pro
 
 WORLD_COMMAND = "sudo -S -p '' emerge --color=n -pvuDN @world"
 WORLD_FAILURES = (
-    (re.compile(r"^!!!", re.M), "Portage reported errors (!!!)"),
+    # Every '!!!' line counts except Portage's notice that a binary package did not fit (non matching USE, changed dependencies):
+    # the package is then built from source, and the world still resolves.
+    (re.compile(r"^!!!(?! The following binary packages have been ignored due to )", re.M), "Portage reported errors (!!!)"),
     (re.compile(r"\[blocks", re.I), "a blocker prevents the update"),
     (re.compile(r"The following (?:USE|keyword|license|mask) changes are necessary", re.I), "the configuration cannot satisfy the world (changes are necessary)"),
     (re.compile(r"dependency conflict", re.I), "a dependency conflict"),
