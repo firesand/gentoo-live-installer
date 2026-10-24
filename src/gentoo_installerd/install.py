@@ -724,7 +724,7 @@ class Installer(Stage3Stage, RepositoryStage, PortageStage, KernelStage, Bootloa
         """What the finish page shows beyond the outcome: the boot check, unread news and the hardware first steps."""
         if not success:
             return {}
-        data: dict[str, object] = {"first_steps": list(self.hardware_plan.first_steps) if self.hardware_plan is not None else []}
+        data: dict[str, object] = {"first_steps": list(getattr(self.hardware_plan, "first_steps", ()))}
         if self.boot_check:
             data["boot_check"] = self.boot_check
         if self.news_unread is not None:

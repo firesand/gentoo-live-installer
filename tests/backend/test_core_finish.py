@@ -84,7 +84,9 @@ class ValidationWarningTests(Base):
         self.assertEqual(installer.warnings, [])
 
     def test_no_microcode_planned_means_no_microcode_check(self) -> None:
-        installer = self.prepare()
+        plan = FakePlan()
+        plan.scalars = {"microcode": "none"}
+        installer = self.prepare(plan=plan)
         self.runner.respond("chroot " + str(self.target) + " lsinitrd /boot", "nothing useful\n")
         installer._validate()
         self.assertEqual(installer.warnings, [])
