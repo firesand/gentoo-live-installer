@@ -210,7 +210,7 @@ class BaseAndDesktopStageTests(StageHarness):
         # the optional emerge (pipewire) fails once in the group, once alone
         runner.script("*pipewire", ("fail", "!!! Fetch failed for pipewire"), ("fail", "!!! Fetch failed for pipewire"),
                       ("fail", "!!! Fetch failed for pipewire"))
-        installer = self.make(target_manifest(system={"desktop": "minimal"}, options={"pipewire": True, "bluetooth": False, "printing": False}), runner)
+        installer = self.make(target_manifest(system={"desktop": "minimal"}, options={"pipewire": True, "bluetooth": False, "printing": False}), runner, FakePlan())
         installer._desktop()
         self.assertEqual(len(installer.degraded), 1)
         self.assertIn("media-video/pipewire could not be installed", installer.degraded[0])
@@ -290,7 +290,7 @@ class BootloaderAndValidationTests(StageHarness):
         installer._validate()
         self.assertEqual(os.readlink(self.target / "etc/resolv.conf"), "../run/systemd/resolve/stub-resolv.conf")
         kept = self.keep_install_log(installer)
-        self.assertEqual(sorted(path.name for path in kept.iterdir()), ["install.log", "manifest.json"])
+        self.assertEqual(sorted(path.name for path in kept.iterdir()), ["hardware-plan.json", "install.log", "manifest.json"])
         self.assertEqual((kept / "install.log").stat().st_mode & 0o777, 0o600)
         self.assertNotIn("user-password", (kept / "manifest.json").read_text())
 
@@ -409,58 +409,74 @@ class PlanSeamTests(unittest.TestCase):
         return Installer(target_manifest(), runner=ScriptedRunner(), target_root=Path(temporary) / "t", state_dir=Path(temporary) / "s",
                          dry_run=True, inspector=FakeInspector())
 
-    def test_installer_without_a_plan_behaves_as_before(self) -> None:
+    def test_every_installer_has_a_plan_even_without_probe_data(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             installer = self.installer(temporary)
-            self.assertIsNone(installer._plan())
+            plan = installer._plan()
+            self.assertIsNotNone(plan)
+            # the generic plan still decides microcode and firmware from the manifest's options
+            self.assertEqual(plan.early_atoms, ["sys-firmware/intel-microcode", "sys-kernel/linux-firmware"])
+            self.assertIs(installer._plan(), plan)  # decided once
             installer.hardware_plan = FakePlan()
-            self.assertIsNotNone(installer._plan())
+            self.assertIsNot(installer._plan(), plan)  # a plan set from outside wins
 
-    def test_the_plan_is_made_from_the_probe_when_the_hardware_module_exists(self) -> None:
-        import sys
+    def test_the_plan_is_made_from_the_probe_of_the_inspection(self) -> None:
         import types
 
         calls: list = []
-        module = types.ModuleType("gentoo_installerd.hwplan")
-        module.plan = lambda manifest, hardware: (calls.append((manifest, hardware)), FakePlan(summary=["Graphics: open drivers"]))[1]
+
+        def fake_plan(manifest, hardware):
+            calls.append((manifest, hardware))
+            return FakePlan(summary=["Graphics: open drivers"])
+
         with tempfile.TemporaryDirectory() as temporary:
             installer = self.installer(temporary)
             installer.inspection = types.SimpleNamespace(hardware={"cpu": {"vendor": "intel"}})
-            with unittest.mock.patch.dict(sys.modules, {"gentoo_installerd.hwplan": module}):
-                with unittest.mock.patch("gentoo_installerd.hwplan", module, create=True):
-                    plan = installer._plan()
-                    self.assertEqual(plan.summary, ["Graphics: open drivers"])
-                    self.assertIs(installer._plan(), plan)  # made once
+            with unittest.mock.patch("gentoo_installerd.install.plan_hardware", fake_plan):
+                plan = installer._plan()
+                self.assertEqual(plan.summary, ["Graphics: open drivers"])
+                self.assertIs(installer._plan(), plan)  # made once
             self.assertEqual(len(calls), 1)
             self.assertEqual(calls[0][1], {"cpu": {"vendor": "intel"}})
 
-    def test_a_planning_bug_falls_back_to_the_generic_setup(self) -> None:
-        import sys
+    def test_a_planning_bug_falls_back_to_the_generic_plan(self) -> None:
         import types
 
-        module = types.ModuleType("gentoo_installerd.hwplan")
+        generic = FakePlan(summary=["generic"])
 
-        def broken(manifest, hardware):
-            raise RuntimeError("table lookup failed")
+        def fake_plan(manifest, hardware):
+            if hardware:
+                raise RuntimeError("table lookup failed")
+            return generic
 
-        module.plan = broken
         with tempfile.TemporaryDirectory() as temporary:
             installer = self.installer(temporary)
             logs: list[str] = []
             installer.log = logs.append  # type: ignore[method-assign]
-            installer.inspection = types.SimpleNamespace(hardware={"cpu": {}})
-            with unittest.mock.patch.dict(sys.modules, {"gentoo_installerd.hwplan": module}):
-                with unittest.mock.patch("gentoo_installerd.hwplan", module, create=True):
-                    self.assertIsNone(installer._plan())
+            installer.inspection = types.SimpleNamespace(hardware={"cpu": {"vendor": "intel"}})
+            with unittest.mock.patch("gentoo_installerd.install.plan_hardware", fake_plan):
+                self.assertIs(installer._plan(), generic)
             self.assertTrue(any("could not be planned (table lookup failed)" in line for line in logs))
+            self.assertEqual(installer.degraded, [])
 
-    def test_no_probe_data_means_no_plan(self) -> None:
+    def test_a_planner_that_fails_completely_is_reported_as_a_degraded_install(self) -> None:
+        def broken(manifest, hardware):
+            raise RuntimeError("broken")
+
+        with tempfile.TemporaryDirectory() as temporary:
+            installer = self.installer(temporary)
+            with unittest.mock.patch("gentoo_installerd.install.plan_hardware", broken):
+                self.assertIsNone(installer._plan())
+            self.assertEqual(len(installer.degraded), 1)
+            self.assertIn("could not be planned", installer.degraded[0])
+
+    def test_no_probe_data_means_the_generic_plan(self) -> None:
         import types
 
         with tempfile.TemporaryDirectory() as temporary:
             installer = self.installer(temporary)
             installer.inspection = types.SimpleNamespace(hardware={})
-            self.assertIsNone(installer._plan())
+            self.assertIsNotNone(installer._plan())
 
 
 if __name__ == "__main__":

@@ -31,7 +31,7 @@ from gentoo_installer.manifest import InstallManifest, ManifestError
 from . import __version__
 from .events import PROTECTED_EVENT_TYPES, PROTOCOL_VERSION, ErrorCode, Event, completed_event, error_event
 from .inspect import Discovery
-from .install import STAGE_WEIGHTS, STAGES, Installer
+from .install import STAGE_WEIGHTS, STAGES, Installer, tools_for_selection
 from .runner import SubprocessRunner, redact_text
 
 LOG = logging.getLogger(__name__)
@@ -205,6 +205,7 @@ class ActionRegistry:
         self._features: dict[str, None] = {}
         self._hooks: list[Callable[[], None]] = []
         self._status_providers: dict[str, Callable[[], Any]] = {}
+        self._capability_providers: dict[str, Callable[[], Any]] = {}
         self.install_manager: InstallManager | None = None
         self.options: Any = None  # the parsed command line, for plugins that have flags of their own
         if builtins:
@@ -274,25 +275,37 @@ class ActionRegistry:
         with self._lock:
             self._status_providers[key] = provider
 
-    def status_extensions(self) -> dict[str, Any]:
+    def add_capability_provider(self, key: str, provider: Callable[[], Any]) -> None:
+        """Add ``key: provider()`` to the ``capabilities`` reply (what the rescue module can repair, for one)."""
         with self._lock:
-            providers = dict(self._status_providers)
+            self._capability_providers[key] = provider
+
+    @staticmethod
+    def _collect(providers: dict[str, Callable[[], Any]], what: str) -> dict[str, Any]:
         result: dict[str, Any] = {}
         for key, provider in providers.items():
             try:
                 value = provider()
             except Exception:
-                LOG.exception("Status provider %r failed", key)
+                LOG.exception("%s provider %r failed", what, key)
                 continue
             if value is not None:
                 result[key] = value
         return result
 
+    def status_extensions(self) -> dict[str, Any]:
+        with self._lock:
+            providers = dict(self._status_providers)
+        return self._collect(providers, "Status")
+
     def capabilities(self) -> dict[str, Any]:
         features = self.features()
         if module_available("gentoo_installer.hardware") and "hardware.v1" not in features:
             features.append("hardware.v1")
+        with self._lock:
+            providers = dict(self._capability_providers)
         return {
+            **self._collect(providers, "Capability"),
             "protocol": PROTOCOL_VERSION,
             "version": __version__,
             "features": features,
@@ -347,10 +360,13 @@ def load_plugins(registry: ActionRegistry, *, rescue: bool = True) -> list[str]:
         if not callable(register):
             continue
         try:
-            register(registry)
+            api = register(registry)
         except Exception:
             LOG.exception("Optional module %s failed to register its actions", module_name)
             continue
+        # A module that hands back an object with capabilities() (rescue does) shows up in the capabilities reply under its package name.
+        if callable(getattr(api, "capabilities", None)):
+            registry.add_capability_provider(module_name.split(".")[1], api.capabilities)
         loaded.append(module_name)
     return loaded
 
@@ -599,11 +615,13 @@ class InstallManager:
         except BaseException as exc:  # noqa: BLE001 - whatever happened, the job must end cleanly for its clients
             LOG.exception("Installation job %s crashed", self.job_id)
             text = redact_text(f"Installer crashed: {exc}", getattr(installer, "secrets", ()))
-            self._emit(error_event(ErrorCode.FAILED, text, job_id=self.job_id, stage=self.stage, retryable=True))
+            self._emit(error_event(ErrorCode.FAILED, text, job_id=self.job_id, stage=self.stage or "preflight", retryable=True, resumable=False,
+                                   bootable=bool(getattr(installer, "_bootable", False))))
         finally:
             with self.lock:
                 if self._completed is None:
-                    self._emit(completed_event(result, "Installation completed successfully" if result else "Installation failed", job_id=self.job_id))
+                    self._emit(completed_event(result, "Installation completed successfully" if result else "Installation failed", job_id=self.job_id,
+                                               bootable=bool(getattr(installer, "_bootable", False)), degraded=[], warnings=[]))
                 self.status = "completed" if result else "cancelled" if cancel.is_set() else "failed"
                 if self.status == "failed" and not self.last_error:
                     self.last_error = GENERIC_FAILURE
@@ -922,10 +940,28 @@ def _merge_warnings(existing: Any, extra: Iterable[Any]) -> list[dict[str, Any]]
     return merged
 
 
+def _selection(raw: Any) -> InstallManifest | None:
+    """The settings an ``inspect`` request carries (no accounts, no secrets), or None when there are none or they make no sense."""
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return InstallManifest.from_dict(raw)
+    except ManifestError as exc:
+        LOG.debug("The inspect request carries settings that cannot be read: %s", exc)
+        return None
+
+
 def handle_inspect(request: dict, channel: Channel) -> None:
     runner = SubprocessRunner()
-    data = Discovery(runner).inspect().to_dict()
-    if "hardware" not in data and module_available("gentoo_installer.hardware"):
+    selection = _selection(request.get("manifest"))
+    # With the user's settings the network check goes to the mirror the install will use, through the proxy it will use.
+    discovery = Discovery(runner, mirror=selection.portage.mirror, proxy=selection.network.proxy) if selection else Discovery(runner)
+    inspection = discovery.inspect()
+    data = inspection.to_dict()
+    if selection is not None:
+        data["missing_for_selection"] = sorted(tool for tool in tools_for_selection(selection) if inspection.tools.get(tool) is False)
+    # Discovery probes the hardware itself; this is for an inspector that does not.
+    if "hardware" not in data and "hardware_error" not in data and module_available("gentoo_installer.hardware"):
         try:
             hardware = importlib.import_module("gentoo_installer.hardware")
             profile = hardware.probe(Path("/"), runner).to_dict()
@@ -1227,9 +1263,11 @@ def serve(
         LOG.info("gentoo-installerd stopped")
 
 
-def run_cli(manifest_path: Path, *, dry_run: bool, target_root: Path, state_dir: Path, cache_dir: Path, resume: bool) -> int:
+def run_cli(manifest_path: Path, *, dry_run: bool, target_root: Path, state_dir: Path, cache_dir: Path, resume: bool,
+            allow_unverified_disk: bool = False) -> int:
     manifest = InstallManifest.load(manifest_path)
-    installer = Installer(manifest, target_root=target_root, state_dir=state_dir, cache_dir=cache_dir, dry_run=dry_run, resume=resume, emit=lambda event: print(event.to_json(), flush=True))
+    installer = Installer(manifest, target_root=target_root, state_dir=state_dir, cache_dir=cache_dir, dry_run=dry_run, resume=resume,
+                          allow_unverified_disk=allow_unverified_disk, emit=lambda event: print(event.to_json(), flush=True))
     restore = install_cancel_signals(installer.cancel)
     try:
         return 0 if installer.run() else 1
@@ -1305,6 +1343,9 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--dry-run", action="store_true")
     mode.add_argument("--yes", action="store_true", help="Confirm destructive installation without interactive prompts")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--allow-unverified-disk", action="store_true",
+                        help="With --manifest: install even though the manifest does not pin the target disk by serial number, WWN or bus path. "
+                             "Not available to clients of the socket.")
     parser.add_argument("--log-file", type=Path, help="Also write the daemon log to this file (default: stderr only)")
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"], type=str.upper)
     parser.add_argument("--no-rescue", action="store_true", help="Do not register the rescue actions")
@@ -1327,9 +1368,10 @@ def main(argv: list[str] | None = None) -> int:
                     LOG.error("--manifest requires either --dry-run or explicit --yes")
                     return 2
                 LOG.info("gentoo-installerd %s manifest=%s dry_run=%s resume=%s state=%s target=%s pid=%d", __version__, args.manifest, args.dry_run, args.resume, args.state_dir, args.target_root, os.getpid())
-                return run_cli(args.manifest, dry_run=args.dry_run, target_root=Path(args.target_root), state_dir=Path(args.state_dir), cache_dir=Path(args.cache_dir), resume=args.resume)
-            if args.dry_run or args.yes:
-                LOG.error("--dry-run and --yes require --manifest")
+                return run_cli(args.manifest, dry_run=args.dry_run, target_root=Path(args.target_root), state_dir=Path(args.state_dir), cache_dir=Path(args.cache_dir),
+                               resume=args.resume, allow_unverified_disk=args.allow_unverified_disk)
+            if args.dry_run or args.yes or args.allow_unverified_disk:
+                LOG.error("--dry-run, --yes and --allow-unverified-disk require --manifest")
                 return 2
             LOG.info("gentoo-installerd %s socket=%s group=%s state=%s cache=%s target=%s pid=%d", __version__, args.socket, SOCKET_GROUP, args.state_dir, args.cache_dir, args.target_root, os.getpid())
             serve(args.socket, target_root=args.target_root, state_dir=args.state_dir, cache_dir=args.cache_dir, rescue=not args.no_rescue, options=args)

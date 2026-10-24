@@ -7,7 +7,9 @@ thin compatibility names so older callers keep working.
 
 from __future__ import annotations
 
+import base64
 import json
+import logging
 import os
 import platform
 import re
@@ -18,10 +20,13 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Iterable, Sequence
 
-from gentoo_installer import blockdev
+from gentoo_installer import blockdev, hardware
 from gentoo_installer.blockdev import BlockDevice
 
-from .runner import DryRunRunner, Runner, RunnerError, SubprocessRunner, format_command
+from .proxy import mirror_clock_probe
+from .runner import DryRunRunner, Runner, RunnerError, SubprocessRunner, accepts_keyword, format_command
+
+LOG = logging.getLogger(__name__)
 
 # The daemon's historical name for a node of the lsblk tree.
 Disk = BlockDevice
@@ -53,11 +58,40 @@ class Inspection:
     findings: list[dict[str, str]] = field(default_factory=list)
     # Device paths of the live installer medium and of the disks that hold it.
     live_medium: list[str] = field(default_factory=list)
+    # gentoo_installer.hardware.HardwareProfile.to_dict() of this machine; {} when it was not probed.
+    hardware: dict[str, Any] = field(default_factory=dict)
+    # Why the probe produced nothing ("" when it ran).
+    hardware_error: str = ""
+    # The mirror's idea of this computer's clock: {skew_seconds: mirror time minus this clock, tls_ok: bool | None}.
+    clock: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         result = asdict(self)
         result["disks"] = [disk.to_dict() for disk in self.disks]
+        result["warnings"] = self.warning_items()
+        # Absent means "this inspector did not look": the daemon's inspect action then probes by itself.
+        for key in ("hardware", "hardware_error", "clock"):
+            if not result[key]:
+                del result[key]
         return result
+
+    def warning_items(self) -> list[dict[str, str]]:
+        """The warnings in their wire form: [{code, severity, message, action}].
+
+        The probe's findings (hw.* codes, any severity) and the preflight findings of severity
+        warning (preflight.*; errors travel in ``errors``). Plain texts from inspectors that
+        only fill ``warnings`` keep working under the code inspect.warning.
+        """
+        items: list[dict[str, str]] = []
+        for finding in self.findings:
+            if finding.get("severity") == "warning":
+                items.append({"code": finding.get("code", ""), "severity": "warning", "message": finding.get("message", ""), "action": ""})
+        for item in self.hardware.get("warnings") or []:
+            if isinstance(item, dict):
+                items.append({key: str(item.get(key, "")) for key in ("code", "severity", "message", "action")})
+        listed = {finding.get("message", "") for finding in self.findings}
+        items.extend({"code": "inspect.warning", "severity": "warning", "message": text, "action": ""} for text in self.warnings if text not in listed)
+        return items
 
     def blocking_errors(self) -> list[str]:
         """Messages that must stop a real installation.
@@ -191,6 +225,26 @@ class ReadOnlyRunner:
         return self._inner.run(args, **kwargs)
 
 
+class ProbeRunner:
+    """The runner the hardware probe gets: its own read-only commands only, each bounded in time.
+
+    The daemon's SubprocessRunner has no default timeout and logs every command; a tool that hangs
+    (efibootmgr on odd firmware, chronyc without chronyd) must not hold up the inspection.
+    """
+
+    def __init__(self, inner: Runner, timeout: float = 5.0) -> None:
+        self.inner = inner
+        self.timeout = timeout
+
+    def run(self, argv: Sequence[str], **kwargs: Any) -> Any:
+        name = os.path.basename(argv[0]) if argv else ""
+        if name not in hardware.PROBE_COMMANDS:
+            raise RunnerError(tuple(argv) or ("",), 126, "refused: the hardware probe may only run its own read-only commands")
+        if accepts_keyword(self.inner.run, "timeout"):
+            kwargs.setdefault("timeout", self.timeout)
+        return self.inner.run(argv, **kwargs)
+
+
 # --- discovery ------------------------------------------------------------------------
 
 
@@ -209,6 +263,7 @@ class Discovery:
         proxy: str = "",
         cmdline_path: Path | str = PROC_CMDLINE,
         by_path_dir: Path | str = BY_PATH_DIR,
+        hardware_root: Path | str | None = None,
     ) -> None:
         self.runner = runner
         # A preview runs with a DryRunRunner, which returns empty output for lsblk; reading the
@@ -218,6 +273,8 @@ class Discovery:
         self.proxy = proxy
         self.cmdline_path = Path(cmdline_path)
         self.by_path_dir = Path(by_path_dir)
+        # A captured machine to replay instead of this one (tests; $GENTOO_HW_ROOT does the same).
+        self.hardware_root = hardware_root
 
     def configure(self, *, mirror: str | None = None, proxy: str | None = None) -> None:
         """Set the network probe target after construction (the installer knows the manifest later)."""
@@ -251,6 +308,33 @@ class Discovery:
         except OSError:
             cmdline = ""
         return blockdev.live_medium_keys(disks, sources=sources, cmdline=cmdline)
+
+    def probe_hardware(self) -> tuple[dict[str, Any], str]:
+        """(HardwareProfile.to_dict(), "") of this machine, or ({}, the reason) when the probe failed.
+
+        The probe never raises and only reads. A replayed machine (``hardware_root`` or
+        $GENTOO_HW_ROOT) answers from its recorded command output and runs nothing; a preview
+        (DryRunRunner, which answers every command with nothing) uses the probe's own bounded
+        read-only runner.
+        """
+        root = hardware.default_root(self.hardware_root)
+        replay = str(root) != "/"
+        runner = None if replay or isinstance(self.runner, DryRunRunner) else ProbeRunner(self.runner)
+        try:
+            return hardware.probe(root, runner, now=hardware.fixture_now(root)).to_dict(), ""
+        except Exception as exc:  # noqa: BLE001 - inspection must still work when one probe is broken on unusual hardware
+            LOG.exception("The hardware probe failed")
+            return {}, f"{type(exc).__name__}: {exc}"
+
+    def probe_clock(self) -> dict[str, Any]:
+        """The mirror's view of this computer's clock ({} when the mirror could not be asked)."""
+        result = mirror_clock_probe(self.mirror or DEFAULT_MIRROR, self.proxy, timeout=6.0)
+        clock: dict[str, Any] = {}
+        if result.skew is not None:
+            clock["skew_seconds"] = round(-result.skew, 1)  # mirror time minus this clock
+        if result.tls_ok is not None:
+            clock["tls_ok"] = result.tls_ok
+        return clock
 
     def inspect(self) -> Inspection:
         findings: list[dict[str, str]] = []
@@ -290,7 +374,10 @@ class Discovery:
             note("preflight.tools", "error", "Missing required tools: " + ", ".join(missing))
         errors = [item["message"] for item in findings if item["severity"] == "error"]
         warnings = [item["message"] for item in findings if item["severity"] == "warning"]
-        return Inspection(architecture, memory, Path("/sys/firmware/efi").exists(), network, tools, disks, errors, warnings, findings, live)
+        profile, profile_error = self.probe_hardware()
+        clock = self.probe_clock() if network else {}
+        return Inspection(architecture, memory, Path("/sys/firmware/efi").exists(), network, tools, disks, errors, warnings, findings, live,
+                          hardware=profile, hardware_error=profile_error, clock=clock)
 
 
 # --- network probe --------------------------------------------------------------------
@@ -330,7 +417,12 @@ def _network_ready(host: str = "distfiles.gentoo.org", port: int = 443, proxy: s
         with socket.create_connection((parsed.hostname, parsed.port or 3128), timeout=timeout) as connection:
             if parsed.scheme not in {"http", "https"}:
                 return True  # SOCKS and friends: the proxy answering is all a probe can check
-            connection.sendall(f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n".encode())
+            # A proxy that wants a login answers 407 to a CONNECT without one, which is not "no network".
+            login = ""
+            if parsed.username is not None:
+                token = base64.b64encode(f"{urllib.parse.unquote(parsed.username)}:{urllib.parse.unquote(parsed.password or '')}".encode()).decode()
+                login = f"Proxy-Authorization: Basic {token}\r\n"
+            connection.sendall(f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n{login}\r\n".encode())
             connection.settimeout(timeout)
             status = connection.recv(256).split(b"\r\n", 1)[0].split()
             return len(status) >= 2 and status[1] == b"200"

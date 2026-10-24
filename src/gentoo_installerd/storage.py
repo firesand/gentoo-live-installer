@@ -56,6 +56,16 @@ BTRFS_SWAP_DIRECTORY = "/swap"
 MIN_BOOT_MIB = 256
 MIN_ESP_MIB = 64
 GIB = 1024**3
+# A release command (umount, swapoff, cryptsetup close, ...) that hangs on a dead disk must not hang the cleanup.
+CLEANUP_TIMEOUT_SECONDS = 120.0
+
+
+def cryptsetup_hint(argv: Sequence[str], error: BaseException) -> str:
+    """Plain-English reason for a failed cryptsetup command ("" for any other command or exit status)."""
+    code = getattr(error, "returncode", None)
+    if argv and argv[0] == "cryptsetup" and code in CRYPTSETUP_HINTS:
+        return f"cryptsetup {argv[1] if len(argv) > 1 else ''} failed ({code}: {CRYPTSETUP_HINTS[code]})"
+    return ""
 
 
 class StorageError(RuntimeError):
@@ -77,26 +87,6 @@ class LayoutEntry:
     # The fstab "file system" column when it is not UUID=/device: a swap file inside the target
     # (for example "/swapfile"). ``device`` is then the file's path on the live system.
     source: str = ""
-
-
-def fstab_supports_layout_fields() -> tuple[bool, bool]:
-    """(options, source): whether the installed fstab writer renders LayoutEntry.options / .source.
-
-    Asked of the real renderer instead of assumed, so a build whose fstab writer predates those
-    fields keeps working with the older layouts (flat Btrfs, no swap file) instead of writing an
-    fstab that mounts the wrong subvolume.
-    """
-    try:
-        from .configure import render_fstab
-
-        probe = [
-            LayoutEntry("/dev/probe-root", "/", "btrfs", options="subvol=@probe"),
-            LayoutEntry("/dev/probe-swap", "", "swap", source="/probe-swap-file"),
-        ]
-        text = render_fstab(probe, {"/dev/probe-root": "00000000-0000-0000-0000-000000000000", "/dev/probe-swap": "11111111-1111-1111-1111-111111111111"})
-    except Exception:  # noqa: BLE001 - any failure means "not supported"
-        return False, False
-    return "subvol=@probe" in text, "/probe-swap-file none swap" in text
 
 
 class StorageManager:
@@ -524,9 +514,9 @@ class StorageManager:
         return []
 
     def use_btrfs_subvolumes(self) -> bool:
-        """Whether the guided Btrfs layout uses the @ and @home subvolumes (needs an fstab writer that renders options)."""
+        """Whether the guided Btrfs layout uses the @ and @home subvolumes (every guided Btrfs install does)."""
         s = self.manifest.storage
-        return s.mode == "erase" and s.filesystem == "btrfs" and fstab_supports_layout_fields()[0]
+        return s.mode == "erase" and s.filesystem == "btrfs"
 
     def _erase_layout(self, *, dry_run: bool = False) -> list[LayoutEntry]:
         s = self.manifest.storage
@@ -730,9 +720,6 @@ class StorageManager:
         s = self.manifest.storage
         if not guided_layout.swap_in_root(s) or s.mode != "erase":
             return
-        if not fstab_supports_layout_fields()[1]:
-            self.notes.append("Swap was skipped: this build's fstab writer cannot describe a swap file, and swap outside the encrypted root would be stored unencrypted")
-            return
         btrfs = s.filesystem == "btrfs"
         relative = f"{BTRFS_SWAP_DIRECTORY}{SWAP_FILE}" if btrfs else SWAP_FILE
         path = self.target_path(relative)
@@ -862,7 +849,7 @@ class StorageManager:
         last: Exception | None = None
         for attempt in range(self.cleanup_retries):
             try:
-                run(argv)
+                run(argv, timeout=CLEANUP_TIMEOUT_SECONDS)
                 return None
             except Exception as exc:  # noqa: BLE001 - report every failure, keep releasing the rest
                 last = exc
@@ -872,13 +859,14 @@ class StorageManager:
         # the target root itself never is (a lazy unmount would let cryptsetup close under live files).
         if is_mount and self._is_virtual_mount(Path(str(resource))):
             try:
-                run(("sync",))
-                run(("umount", "-R", "-l", str(resource)))
+                run(("sync",), timeout=CLEANUP_TIMEOUT_SECONDS)
+                run(("umount", "-R", "-l", str(resource)), timeout=CLEANUP_TIMEOUT_SECONDS)
                 return None
             except Exception as exc:  # noqa: BLE001
                 last = exc
         busy = self._busy_report() if is_mount else ""
-        return f"{last}{busy}"
+        reason = cryptsetup_hint(argv, last) if last is not None else ""
+        return f"{reason or last}{busy}"
 
     def _is_virtual_mount(self, mount: Path) -> bool:
         return mount.parent == self.target_root and mount.name in {"dev", "proc", "sys", "run"}
@@ -1129,15 +1117,15 @@ class StorageManager:
     def describe(self, manifest: InstallManifest, disks: Sequence[Disk] | None = None) -> guided_layout.StoragePlan:
         """What this manifest will do to storage (see gentoo_installer.layout.plan_storage)."""
         self.manifest = manifest
-        return guided_layout.plan_storage(manifest, disks, btrfs_subvolumes=self.use_btrfs_subvolumes(), swap_file=fstab_supports_layout_fields()[1] if guided_layout.swap_in_root(manifest.storage) else True)
+        return guided_layout.plan_storage(manifest, disks, btrfs_subvolumes=self.use_btrfs_subvolumes())
 
     def _run(self, argv: tuple[str, ...], **kwargs: Any) -> None:
         try:
             self.runner.run(argv, **kwargs)
         except RunnerError as exc:
-            hint = CRYPTSETUP_HINTS.get(exc.returncode) if argv and argv[0] == "cryptsetup" else None
+            hint = cryptsetup_hint(argv, exc)
             if hint:
-                raise StorageError(f"cryptsetup {argv[1] if len(argv) > 1 else ''} failed ({exc.returncode}: {hint})") from exc
+                raise StorageError(hint, "storage.cryptsetup") from exc
             raise
 
 

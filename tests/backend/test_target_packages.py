@@ -16,6 +16,7 @@ from gentoo_installerd.configure import (
     render_make_conf,
     render_package_use,
 )
+from gentoo_installerd.hwplan import plan as plan_hardware
 from gentoo_installerd.storage import LayoutEntry
 
 from tests.backend.target_helpers import FakePlan, ScriptedRunner, configurer, mark_installed, read, target_manifest
@@ -189,12 +190,28 @@ class PackageSetTests(unittest.TestCase):
     def test_everything_the_installer_used_to_install_is_still_installed(self) -> None:
         # The union of the new sets covers the previous single package list (CRITIC-2).
         _, _, kde = self.sets(system={"desktop": "kde"}, options={"kde_apps": "full"})
-        for atom in ("net-misc/networkmanager", "sys-kernel/linux-firmware", "sys-firmware/intel-microcode",
+        for atom in ("net-misc/networkmanager",
                      "kde-plasma/plasma-meta", "kde-apps/kde-apps-meta", "gui-apps/sddm", "x11-base/xorg-server",
-                     "sys-power/power-profiles-daemon", "gui-libs/display-manager-init", "media-video/pipewire",
+                     "gui-libs/display-manager-init", "media-video/pipewire",
                      "net-wireless/bluez", "net-wireless/blueman", "net-print/cups", "net-misc/chrony",
                      "sys-process/cronie", "app-shells/bash-completion", "app-admin/syslog-ng", "app-admin/sudo"):
             self.assertIn(atom, kde)
+
+    def test_firmware_microcode_and_power_management_are_the_hardware_plans_to_name(self) -> None:
+        # They used to be listed here for every machine; KDE even installed power-profiles-daemon, which blocks TLP.
+        _, _, kde = self.sets(system={"desktop": "kde"})
+        for atom in ("sys-kernel/linux-firmware", "sys-firmware/intel-microcode", "sys-power/power-profiles-daemon", "sys-power/tlp"):
+            self.assertNotIn(atom, kde)
+        with tempfile.TemporaryDirectory() as temporary:
+            c = configurer(temporary)
+            m = target_manifest(system={"desktop": "kde"})
+            generic = plan_hardware(m, None)
+            self.assertEqual([a for a in c.package_atoms(m, generic) if "firmware" in a or "microcode" in a],
+                             ["sys-firmware/intel-microcode", "sys-kernel/linux-firmware"])
+            laptop = plan_hardware(target_manifest(system={"desktop": "kde"}, hardware={"power": "tlp"}), None)
+            kde_with_tlp = c.package_atoms(m, laptop)
+            self.assertIn("sys-power/tlp", kde_with_tlp)
+            self.assertNotIn("sys-power/power-profiles-daemon", kde_with_tlp)  # tlp[ppd] blocks it
 
     def test_kde_applications_default_to_the_core_set(self) -> None:
         _, core, _ = self.sets(system={"desktop": "kde"})
@@ -249,7 +266,7 @@ class PackageSetTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             c = configurer(temporary)
             m = target_manifest(storage={"luks": True, "lvm": True, "luks_passphrase": "long-enough-passphrase"})
-            plan = FakePlan(early_atoms=["sys-firmware/sof-firmware"])
+            plan = FakePlan(early_atoms=["sys-kernel/linux-firmware", "sys-firmware/sof-firmware"])
             batch = c.kernel_stage_atoms(m, [LayoutEntry("/dev/mapper/gentoo-root", "/", "ext4")], plan)
             self.assertEqual(batch[:2], ["sys-fs/cryptsetup", "sys-fs/lvm2"])
             for atom in ("sys-kernel/linux-firmware", "sys-firmware/sof-firmware", "sys-fs/dosfstools"):
@@ -514,6 +531,29 @@ class StageInstallTests(unittest.TestCase):
         self.assertTrue(any("sys-power/thermald" in e for e in emerges))
         self.assertTrue(any("sys-power/tlp" in e for e in emerges))
         self.assertEqual(result.degraded, [])
+
+    def test_tlp_is_installed_before_the_desktop_so_the_desktop_does_not_pull_in_the_daemon_it_blocks(self) -> None:
+        plan = FakePlan(optional_atoms=[("TLP", ["sys-power/tlp"]), ("Guest tools", ["app-emulation/qemu-guest-agent"])])
+        m = target_manifest(system={"desktop": "kde"}, options={"pipewire": False, "bluetooth": False, "printing": False, "install_hwmonux": False, "install_portagehub": False})
+        result = self.c.install_desktop(m, plan)
+        emerges = self.emerges()
+        tlp = next(index for index, line in enumerate(emerges) if line.endswith("sys-power/tlp"))
+        desktop = next(index for index, line in enumerate(emerges) if "kde-plasma/plasma-meta" in line)
+        guest = next(index for index, line in enumerate(emerges) if "qemu-guest-agent" in line)
+        self.assertLess(tlp, desktop)
+        self.assertLess(desktop, guest)  # every other best-effort package still follows the desktop
+        self.assertEqual(sum("sys-power/tlp" in line for line in emerges), 1)  # and TLP is not installed a second time
+        self.assertEqual(result.degraded, [])
+
+    def test_a_tlp_that_fails_is_a_degraded_install_and_the_desktop_goes_on(self) -> None:
+        runner = ScriptedRunner()
+        runner.script("*sys-power/tlp", ("fail", "!!! Fetch failed for tlp"), ("fail", "!!! Fetch failed for tlp"))
+        with tempfile.TemporaryDirectory() as temporary:
+            c = configurer(temporary, runner)
+            result = c.install_desktop(target_manifest(system={"desktop": "kde"}, options={"pipewire": False, "bluetooth": False, "printing": False,
+                                                           "install_hwmonux": False, "install_portagehub": False}), FakePlan(optional_atoms=[("TLP", ["sys-power/tlp"])]))
+        self.assertTrue(any("sys-power/tlp (TLP) could not be installed" in item for item in result.degraded))
+        self.assertTrue(any("kde-plasma/plasma-meta" in line for line in runner.lines()))
 
     def test_missing_companion_applications_degrade_instead_of_failing(self) -> None:
         m = target_manifest(system={"desktop": "minimal"}, options={"pipewire": False, "bluetooth": False, "printing": False,

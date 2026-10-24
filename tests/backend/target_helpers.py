@@ -26,6 +26,7 @@ class ScriptedRunner:
         self.envs: list[Mapping[str, str] | None] = []
         self.inputs: list[str | None] = []
         self.root_identity: list[bool] = []
+        self.options: list[dict[str, object]] = []
         self.outputs: dict[str, str] = {}
         self._scripts: list[tuple[str, list]] = []
 
@@ -36,12 +37,14 @@ class ScriptedRunner:
         self.outputs[prefix] = stdout
 
     def run(self, argv: Sequence[str], *, stdin: str | None = None, secret: bool = False,
-            env: Mapping[str, str] | None = None, cwd: Path | None = None, root_identity: bool = False) -> CommandResult:
+            env: Mapping[str, str] | None = None, cwd: Path | None = None, root_identity: bool = False,
+            timeout: float | None = None, capture: bool = True) -> CommandResult:
         args = validate_argv(argv)
         self.commands.append(args)
         self.envs.append(env)
         self.inputs.append(stdin)
         self.root_identity.append(root_identity)
+        self.options.append({"timeout": timeout, "capture": capture, "root_identity": root_identity})
         line = " ".join(args)
         for prefix, outcomes in self._scripts:
             # a leading "*" means "contains" instead of "starts with"

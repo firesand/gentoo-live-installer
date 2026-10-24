@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import inspect
 import ipaddress
 import json
 import os
@@ -22,7 +21,7 @@ from gentoo_installer import keymaps
 from gentoo_installer.manifest import ATOM_RE, CMDLINE_TOKEN_RE, USE_TOKEN_RE, InstallManifest, Network, System
 
 from .proxy import make_conf_settings, proxy_environment
-from .runner import CommandResult, Runner, RunnerError
+from .runner import CommandResult, Runner, RunnerError, accepts_keyword
 from .storage import LayoutEntry
 
 
@@ -31,6 +30,8 @@ class ConfigurationError(RuntimeError):
 
 
 COMPANION_ATOMS = ("app-misc/hwmonux", "app-portage/portagehub")
+# Installed before the desktop set so that the desktop's own choice of a power-profiles provider finds it.
+PREFERRED_FIRST = "sys-power/tlp"
 
 
 class PackageInstallError(ConfigurationError):
@@ -151,6 +152,12 @@ def _require_use(package_use: MutableMapping[str, list[str]], atom: str, *flags:
     current.extend(flag for flag in flags if flag not in current)
 
 
+def _default_use(package_use: MutableMapping[str, list[str]], atom: str, *flags: str) -> None:
+    """Set a flag for atom unless the user already decided it, either way."""
+    current = package_use.setdefault(atom, [])
+    current.extend(flag for flag in flags if flag.lstrip("-") not in {item.lstrip("-") for item in current})
+
+
 def _forbid_use(package_use: MutableMapping[str, list[str]], atom: str, *flags: str) -> None:
     """Make sure every flag is disabled for atom, overriding a user's flag."""
     current = package_use.setdefault(atom, [])
@@ -227,18 +234,28 @@ def render_package_use(package_use: Mapping[str, Sequence[str]]) -> str:
     return "\n".join(lines) + ("\n" if lines else "")
 
 
-def render_fstab(layout: Sequence[LayoutEntry], uuids: Mapping[str, str]) -> str:
+def render_fstab(layout: Sequence[LayoutEntry], uuids: Mapping[str, str], *, btrfs_discard: bool = False) -> str:
+    """The target's /etc/fstab.
+
+    An entry is named by ``LayoutEntry.source`` when it has one (a swap file inside the target),
+    else by UUID, else by its device path. ``LayoutEntry.options`` (Btrfs ``subvol=...``) is
+    appended to the default mount options. ``btrfs_discard`` adds asynchronous TRIM to every
+    Btrfs mount (mount options are per filesystem, so all subvolumes get the same).
+    """
     lines = ["# <file system> <mount point> <type> <options> <dump> <pass>"]
     for entry in sorted(layout, key=lambda item: (item.mountpoint != "/", item.mountpoint)):
         uuid = uuids.get(entry.device, "")
-        source = f"UUID={uuid}" if uuid else entry.device
+        source = entry.source or (f"UUID={uuid}" if uuid else entry.device)
         if entry.filesystem == "swap":
             lines.append(f"{source} none swap sw 0 0")
         elif entry.mountpoint:
             # fsck.btrfs is a stub that only prints a notice, so btrfs is never checked at boot.
             pass_number = 0 if entry.filesystem == "btrfs" else 1 if entry.mountpoint == "/" else 2
             options = "defaults,noatime" if entry.filesystem != "vfat" else "defaults,umask=0077"
-            lines.append(f"{source} {entry.mountpoint} {entry.filesystem} {options} 0 {pass_number}")
+            extra = [entry.options] if entry.options else []
+            if btrfs_discard and entry.filesystem == "btrfs":
+                extra.append("discard=async")
+            lines.append(f"{source} {entry.mountpoint} {entry.filesystem} {','.join([options, *extra])} 0 {pass_number}")
     return "\n".join(lines) + "\n"
 
 
@@ -692,16 +709,24 @@ class DesktopResult:
     failed: list[str] = field(default_factory=list)
 
 
-def _accepts_keyword(function: Callable[..., object], name: str) -> bool:
-    try:
-        parameter = inspect.signature(function).parameters.get(name)
-    except (TypeError, ValueError):
-        return False
-    return parameter is not None and parameter.kind in {inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
-
-
 def _plan_list(plan: object | None, name: str) -> list:
     return list(getattr(plan, name, None) or [])
+
+
+def _plan_scalar(plan: object | None, name: str, default: Any = None) -> Any:
+    """A resolved choice of the hardware plan (HardwarePlan.scalars), or ``default`` without a plan."""
+    scalars = getattr(plan, "scalars", None)
+    return scalars.get(name, default) if isinstance(scalars, dict) else default
+
+
+# GRUB's EFI file names by target: the program on the ESP and the one on the removable-media path.
+GRUB_EFI_FILES = {"x86_64-efi": ("grubx64.efi", "BOOTX64.EFI"), "i386-efi": ("grubia32.efi", "BOOTIA32.EFI")}
+
+
+def grub_efi_target(plan: object | None) -> str:
+    """x86_64-efi, or i386-efi for the PCs with 32-bit UEFI firmware (the plan knows which)."""
+    target = _plan_scalar(plan, "grub_target", "x86_64-efi")
+    return target if target in GRUB_EFI_FILES else "x86_64-efi"
 
 
 class Configurer:
@@ -722,8 +747,11 @@ class Configurer:
         self.sleep: Callable[[float], None] = time.sleep
         self.resources: Callable[[], Resources] = machine_resources
         # The daemon's runner takes root_identity=True so chrooted tools run as root:root and do
-        # not inherit the live service's group; other runners (tests) do not know the keyword.
-        self._root_identity = _accepts_keyword(runner.run, "root_identity")
+        # not inherit the live service's group, and capture=False so the output of a long emerge
+        # is streamed to the log instead of being kept in memory; other runners (tests) do not
+        # know these keywords.
+        self._root_identity = accepts_keyword(runner.run, "root_identity")
+        self._can_skip_capture = accepts_keyword(runner.run, "capture")
 
     # ----- paths and files ------------------------------------------------------------------
 
@@ -809,12 +837,15 @@ class Configurer:
         self.write(relative, "\n".join(line for line in kept).strip("\n") + "\n")
 
     def chroot(self, argv: Sequence[str], *, stdin: str | None = None, secret: bool = False,
-               env: Mapping[str, str] | None = None) -> CommandResult:
+               env: Mapping[str, str] | None = None, capture: bool = False) -> CommandResult:
+        """Run ``argv`` inside the target. Its output is only logged unless ``capture`` asks to read it back."""
         extra: dict[str, Any] = {}
         if env:
             extra["env"] = env
         if self._root_identity:
             extra["root_identity"] = True
+        if self._can_skip_capture and not capture:
+            extra["capture"] = False
         return self.runner.run(("chroot", str(self.root), *argv), stdin=stdin, secret=secret, **extra)
 
     # ----- Portage configuration ------------------------------------------------------------------
@@ -856,9 +887,6 @@ class Configurer:
         if system.bootloader == "grub" and system.dual_boot:
             # os-prober needs grub's mount support to read the other systems' filesystems.
             _require_use(package_use, "sys-boot/grub", "mount")
-        if options.microcode:
-            _require_use(package_use, "sys-kernel/linux-firmware", "initramfs", "redistributable")
-            _require_use(package_use, "sys-firmware/intel-microcode", "initramfs")
         if system.uki or system.bootloader == "systemd-boot":
             atom = "sys-apps/systemd" if system.init == "systemd" else "sys-apps/systemd-utils"
             boot_flags = ["boot", *(["kernel-install"] if system.init == "openrc" else []), *(["ukify"] if system.uki else [])]
@@ -870,6 +898,9 @@ class Configurer:
             _require_use(package_use, "dev-qt/qtbase", "opengl")
             _require_use(package_use, "dev-qt/qttools", "opengl")
             _require_use(package_use, "x11-libs/libxkbcommon", "X")
+            # NVIDIA sensors need NVML, which needs the licence-masked proprietary driver: the hardware plan
+            # turns that flag on when the driver is really installed. USB sensors (liquidctl) are optional.
+            _default_use(package_use, "app-misc/hwmonux", "-nvidia", "liquidctl")
         if options.install_hwmonux or options.install_portagehub:
             # Both companions can pull in Mesa[X], which requires libglvnd[X] on the minimal profile.
             _require_use(package_use, "media-libs/libglvnd", "X")
@@ -895,20 +926,10 @@ class Configurer:
                 _require_use(package_use, atom, *flags)
         return package_use
 
-    def package_license_lines(self, manifest: InstallManifest) -> list[str]:
-        lines: list[str] = []
-        if manifest.options.firmware or manifest.options.microcode:
-            lines.append("sys-kernel/linux-firmware linux-fw-redistributable")
-        if manifest.options.microcode:
-            lines.append("sys-firmware/intel-microcode intel-ucode")
-        return lines
-
     def configure_portage(self, manifest: InstallManifest, plan: object | None = None) -> None:
         plan = self._plan(plan)
         self.write("etc/portage/make.conf", render_make_conf(manifest, plan, make_opts=self.effective_make_opts(manifest, plan)))
         self.write("etc/portage/package.use/installer", render_package_use(self.package_use_table(manifest, plan)))
-        licenses = self.package_license_lines(manifest)
-        self.write("etc/portage/package.license/installer", "\n".join(licenses) + ("\n" if licenses else ""))
         hardware_use = getattr(plan, "package_use", None)
         if hardware_use:
             # Alphabetically after "installer", so within one directory the hardware lines win.
@@ -1141,13 +1162,8 @@ class Configurer:
     # ----- package sets ------------------------------------------------------------------------
 
     def early_boot_atoms(self, manifest: InstallManifest, plan: object | None = None) -> list[str]:
-        atoms: list[str] = []
-        if manifest.options.firmware or manifest.options.microcode:
-            atoms.append("sys-kernel/linux-firmware")
-        if manifest.options.microcode:
-            atoms.append("sys-firmware/intel-microcode")
-        atoms.extend(str(atom) for atom in _plan_list(self._plan(plan), "early_atoms"))
-        return list(dict.fromkeys(atoms))
+        """Firmware and microcode: the hardware plan decides (it reads options.firmware and options.microcode)."""
+        return list(dict.fromkeys(str(atom) for atom in _plan_list(self._plan(plan), "early_atoms")))
 
     def filesystem_atoms(self, manifest: InstallManifest, layout: Sequence[LayoutEntry] = ()) -> list[str]:
         """Userland for the filesystems in use, so the installed system can check and repair them."""
@@ -1242,7 +1258,7 @@ class Configurer:
         if system.desktop == "kde":
             result.required.extend((
                 "kde-plasma/plasma-meta", "kde-apps/kde-apps-meta" if options.kde_apps == "full" else "kde-apps/kdecore-meta",
-                "gui-apps/sddm", "x11-base/xorg-server", "sys-power/power-profiles-daemon"))
+                "gui-apps/sddm", "x11-base/xorg-server"))
         elif system.desktop == "gnome":
             result.required.extend(("gnome-base/gnome", "gnome-base/gdm", "x11-base/xorg-server"))
         elif system.desktop == "xfce":
@@ -1287,10 +1303,11 @@ class Configurer:
 
     # ----- installing packages --------------------------------------------------------------------
 
-    def emerge(self, manifest: InstallManifest, arguments: Sequence[str], *, environment: Mapping[str, str] | None = None) -> CommandResult:
+    def emerge(self, manifest: InstallManifest, arguments: Sequence[str], *, environment: Mapping[str, str] | None = None,
+               capture: bool = False) -> CommandResult:
         env = self.emerge_environment(manifest)
         env.update(environment or {})
-        return self.chroot(("emerge", *arguments), env=env)
+        return self.chroot(("emerge", *arguments), env=env, capture=capture)
 
     def is_installed(self, atom: str) -> bool:
         if self.dry_run:
@@ -1385,7 +1402,7 @@ class Configurer:
         stage3) are not drift.
         """
         try:
-            output = self.emerge(manifest, ("--pretend", "--update", "--deep", "--newuse", "--usepkg=n", "--getbinpkg=n", "@world")).stdout
+            output = self.emerge(manifest, ("--pretend", "--update", "--deep", "--newuse", "--usepkg=n", "--getbinpkg=n", "@world"), capture=True).stdout
         except RunnerError:
             return []
         rebuilds: list[str] = []
@@ -1417,6 +1434,15 @@ class Configurer:
                 self.emerge(manifest, ("--update", "--deep", "--newuse", "--keep-going", "@world"))
             except RunnerError as exc:
                 result.degraded.append("The @world update did not finish: " + explain_emerge_failure(exc.output).summary[:200])
+        # TLP goes first: KDE and GNOME need a power-profiles provider, and when TLP is not there yet they
+        # pull in power-profiles-daemon, which TLP then blocks. With TLP installed first the desktop is satisfied by it.
+        first = [(label, group) for label, group in atoms.groups if PREFERRED_FIRST in group]
+        for label, group in first:
+            outcome = self.emerge_keep_going(manifest, group, label=label, attempts=2)
+            for atom in outcome.missing:
+                result.failed.append(atom)
+                result.degraded.append(f"{atom} ({label}) could not be installed: {outcome.reason}"[:300])
+        atoms.groups = [item for item in atoms.groups if item not in first]
         if atoms.required:
             outcome = self.emerge_keep_going(manifest, atoms.required, label="Desktop")
             if outcome.missing:
@@ -1484,9 +1510,10 @@ class Configurer:
         if system.desktop != "minimal":
             manager = {"kde": "sddm", "gnome": "gdm", "xfce": "lightdm"}[system.desktop]
             desktop.append(("display-manager" if system.init == "openrc" else manager, "default", True))
-        for item in _plan_list(plan, "services"):
+        for item in [*_plan_list(plan, "services"), *_plan_list(plan, "optional_services")]:
             name, runlevel = (item, "default") if isinstance(item, str) else (item[0], item[1])
-            desktop.append((str(name), str(runlevel), True))
+            if (str(name), str(runlevel), True) not in desktop:
+                desktop.append((str(name), str(runlevel), True))
         if phase == "base":
             return base
         if phase == "desktop":
@@ -1498,7 +1525,9 @@ class Configurer:
             return True
         if init == "openrc":
             return self.path(f"etc/init.d/{name}").exists()
-        return any(self.path(f"{prefix}/{name}.service").exists() for prefix in ("usr/lib/systemd/system", "lib/systemd/system", "etc/systemd/system"))
+        # A timer or a socket is named with its suffix (fstrim.timer); a plain name is a service.
+        unit = name if name.endswith((".service", ".timer", ".socket", ".path", ".target")) else f"{name}.service"
+        return any(self.path(f"{prefix}/{unit}").exists() for prefix in ("usr/lib/systemd/system", "lib/systemd/system", "etc/systemd/system"))
 
     def configure_services(self, manifest: InstallManifest, plan: object | None = None, phase: str = "all") -> list[str]:
         """Enable services; returns warnings for optional services whose package is not installed."""
@@ -1584,6 +1613,9 @@ class Configurer:
             # Dracut uses rd.luks.uuid to select the backing device. The
             # rd.luks.name mapping only names a device selected that way.
             arguments.extend((f"rd.luks.uuid={uuid}", f"rd.luks.name={uuid}=gentoo-root"))
+            if _plan_scalar(plan, "luks_allow_discards", False):
+                # TRIM through the encryption: the user accepted what that tells an attacker about free space.
+                arguments.append(f"rd.luks.options={uuid}=discard" if manifest.system.init == "systemd" else f"rd.luks.allow-discards={uuid}")
             modules.append("crypt")
             if self.luks_prompt_uses_console_keymap(manifest):
                 keymap = self.resolve_console_keymap(manifest)
@@ -1655,7 +1687,8 @@ class Configurer:
 
     def removable_fallback_wanted(self, manifest: InstallManifest, plan: object | None = None, *, nvram_failed: bool = False) -> bool:
         """Should the removable-media boot path (EFI/BOOT/BOOTX64.EFI) be written?"""
-        choice = str(getattr(self._plan(plan), "removable_fallback", "") or manifest.hardware.removable_fallback)
+        plan = self._plan(plan)
+        choice = str(_plan_scalar(plan, "removable_fallback", "") or getattr(plan, "removable_fallback", "") or manifest.hardware.removable_fallback)
         if choice == "auto":
             # An ESP the installer just created has nothing to protect; a shared one keeps other systems' files.
             choice = "always" if manifest.storage.mode == "erase" or manifest.hardware.target == "portable" else "if-missing"
@@ -1666,12 +1699,12 @@ class Configurer:
             return False
         if choice == "if-missing" and not nvram_failed:
             efi = self.efi_mountpoint(manifest).lstrip("/")
-            return self.dry_run or not self.path(f"{efi}/EFI/BOOT/BOOTX64.EFI").exists()
+            return self.dry_run or not self.path(f"{efi}/EFI/BOOT/{GRUB_EFI_FILES[grub_efi_target(plan)][1]}").exists()
         return True
 
     def _grub_install_efi(self, manifest: InstallManifest, plan: object | None, efi_mountpoint: str) -> bool:
         """Install GRUB for UEFI with a firmware entry and the removable fallback; True when NVRAM was written."""
-        base = ("grub-install", "--target=x86_64-efi", f"--efi-directory={efi_mountpoint}")
+        base = ("grub-install", f"--target={grub_efi_target(plan)}", f"--efi-directory={efi_mountpoint}")
         nvram = True
         try:
             self.chroot((*base, "--bootloader-id=Gentoo"))
@@ -1948,8 +1981,9 @@ class Configurer:
         self.write(RECEIPT_PATH, json.dumps(receipt, indent=2) + "\n", 0o644)
         return receipt
 
-    def verify_boot_setup(self, manifest: InstallManifest, root_device: str, *, root_uuid: str = "") -> list[str]:
+    def verify_boot_setup(self, manifest: InstallManifest, root_device: str, *, root_uuid: str = "", plan: object | None = None) -> list[str]:
         """Check the finished installation; returns a list of problems (empty when it looks bootable)."""
+        plan = self._plan(plan)
         if self.dry_run:
             return []
         system, storage = manifest.system, manifest.storage
@@ -1976,7 +2010,8 @@ class Configurer:
                     if present and wanted not in config:
                         problems.append(f"grub.cfg does not pass {wanted}, so the root filesystem would not be found")
             if storage.firmware == "uefi":
-                if not self.path(f"{efi}/EFI/Gentoo/grubx64.efi").is_file() and not self.path(f"{efi}/EFI/BOOT/BOOTX64.EFI").is_file():
+                installed, removable = GRUB_EFI_FILES[grub_efi_target(plan)]
+                if not self.path(f"{efi}/EFI/Gentoo/{installed}").is_file() and not self.path(f"{efi}/EFI/BOOT/{removable}").is_file():
                     problems.append("No GRUB EFI image was installed on the EFI system partition")
         elif system.bootloader == "systemd-boot":
             if not self.path(f"{efi}/loader/entries/gentoo.conf").is_file():
@@ -1993,7 +2028,7 @@ class Configurer:
         if not images:
             return None
         try:
-            output = self.chroot(("lsinitrd", "-m", "/boot/" + images[0].name)).stdout
+            output = self.chroot(("lsinitrd", "-m", "/boot/" + images[0].name), capture=True).stdout
         except RunnerError:
             return None
         modules = {line.strip() for line in output.splitlines() if re.fullmatch(r"\s*[a-z0-9][a-z0-9_-]*", line)}

@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+from gentoo_installer.manifest import Partition
 from gentoo_installerd.install import CheckpointStore, InstallError, Installer
 from gentoo_installerd.runner import DryRunRunner, InstallCancelled
 from gentoo_installerd.storage import StorageManager
@@ -79,7 +80,7 @@ class InstallerFlowTests(unittest.TestCase):
         self.assertTrue(any(event.type == "error" for event in events))
         self.assertEqual([event.data.get("success") for event in events if event.type == "completed"], [False])
 
-    def test_cleanup_failure_changes_result_to_failure(self) -> None:
+    def test_a_cleanup_failure_after_a_finished_install_is_a_warning_not_a_failure(self) -> None:
         runner = FakeRunner()
         runner.failures["umount"] = 1
         storage = StorageManager(runner)
@@ -87,11 +88,33 @@ class InstallerFlowTests(unittest.TestCase):
         events = []
         with tempfile.TemporaryDirectory() as temporary:
             installer = Installer(manifest(), runner=runner, storage=storage, target_root=Path(temporary, "target"), state_dir=Path(temporary, "state"), dry_run=True, inspector=FakeInspector(), emit=events.append)
-            self.assertFalse(installer.run())
+            self.assertTrue(installer.run())
         completed = [event for event in events if event.type == "completed"]
         self.assertEqual(len(completed), 1)
+        self.assertTrue(completed[0].data["success"])
+        self.assertFalse([event for event in events if event.type == "error"])
+        warning = next(event for event in events if event.type == "status" and event.data.get("warning"))
+        self.assertEqual(warning.stage, "cleanup")
+        self.assertIn("The installation itself is complete", warning.message)
+        self.assertIn("umount -R", warning.message)
+        self.assertEqual(completed[0].data["warnings"], [warning.message])
+
+    def test_a_cleanup_failure_after_a_failed_install_is_reported_as_an_error(self) -> None:
+        runner = FakeRunner()
+        runner.failures["umount"] = 1
+        runner.failures["chroot"] = 1
+        storage = StorageManager(runner)
+        storage.owned_mounts = [Path("/mnt/gentoo")]
+        events = []
+        with tempfile.TemporaryDirectory() as temporary:
+            installer = Installer(manifest(), runner=runner, storage=storage, target_root=Path(temporary, "target"), state_dir=Path(temporary, "state"), dry_run=True, inspector=FakeInspector(), emit=events.append)
+            self.assertFalse(installer.run())
+        errors = [event for event in events if event.type == "error"]
+        self.assertEqual([event.data["code"] for event in errors], ["install.failed", "install.cleanup_failed"])
+        self.assertEqual(errors[-1].stage, "cleanup")
+        completed = [event for event in events if event.type == "completed"]
         self.assertFalse(completed[0].data["success"])
-        self.assertTrue(any(event.stage == "cleanup" and event.type == "error" for event in events))
+        self.assertEqual(completed[0].data["warnings"], [])
 
     def test_cancelled_before_start_is_not_success(self) -> None:
         cancel = threading.Event()
@@ -118,6 +141,10 @@ class InstallerFlowTests(unittest.TestCase):
             with self.subTest(option=option), tempfile.TemporaryDirectory() as temporary:
                 m = manifest()
                 setattr(m.storage, option, "1" if option == "raid_level" else True)
+                if option == "raid_level":
+                    # The installer does not create arrays: it installs onto an assembled /dev/md device in manual mode.
+                    m.storage.mode, m.storage.device, m.storage.firmware = "manual", "/dev/md0", "bios"
+                    m.storage.partitions = [Partition("/dev/md0", "/", "ext4")]
                 if option == "luks":
                     m.storage.luks_passphrase = "test-only-passphrase"
                 runner = DryRunRunner()

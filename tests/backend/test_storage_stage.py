@@ -8,7 +8,6 @@ from pathlib import Path
 
 import pytest
 
-from gentoo_installerd import storage as storage_module
 from gentoo_installerd.install import Installer
 from gentoo_installerd.runner import RunnerError
 from gentoo_installerd.storage import StorageError
@@ -184,8 +183,7 @@ class TestStorageStage:
             installer._storage()
         assert caught.value.code == "storage.capacity"
 
-    def test_resume_gets_btrfs_options_back_through_the_checkpoint_files(self, tmp_path, monkeypatch):
-        monkeypatch.setattr(storage_module, "fstab_supports_layout_fields", lambda: (True, True))
+    def test_resume_gets_btrfs_options_back_through_the_checkpoint_files(self, tmp_path):
         runner = StatefulRunner([FakeDisk("/dev/vda", 80 * GiB, serial="SER", wwn="WWN-1")])
         installer = storage_installer(tmp_path, runner, filesystem="btrfs")
         installer._storage()

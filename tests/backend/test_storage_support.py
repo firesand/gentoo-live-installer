@@ -98,6 +98,7 @@ class StatefulRunner:
         self.commands: list[tuple[str, ...]] = []
         self.inputs: list[str | None] = []
         self.secrets: list[bool] = []
+        self.options: list[dict] = []  # timeout/capture/root_identity of every call
         self.fail = fail or {}
         self.mapper: dict[str, dict] = {}
         self.mounts: dict[str, tuple[str, str]] = {}  # destination -> (source, options)
@@ -193,11 +194,12 @@ class StatefulRunner:
         return json.dumps({"blockdevices": roots})
 
     # -- the Runner protocol ----------------------------------------------------------------
-    def run(self, argv, *, stdin=None, secret=False, env=None, cwd=None):
+    def run(self, argv, *, stdin=None, secret=False, env=None, cwd=None, timeout=None, capture=True, root_identity=False):
         args = validate_argv(argv)
         self.commands.append(args)
         self.inputs.append(stdin)
         self.secrets.append(secret)
+        self.options.append({"timeout": timeout, "capture": capture, "root_identity": root_identity})
         text = " ".join(args)
         for prefix, (code, output) in self.fail.items():
             if text.startswith(prefix):

@@ -28,6 +28,12 @@ ATTEMPTS_PER_MIRROR = 2
 # A stage3 is rebuilt weekly; a signature much older than that means a rolled-back mirror or a wrong clock.
 MAX_SIGNATURE_AGE = 60 * 24 * 3600
 MAX_SIGNATURE_FUTURE = 24 * 3600
+MIB = 1024 * 1024
+# Room the download needs on top of the archive itself, and what the unpacked stage3 takes in the target.
+DOWNLOAD_MARGIN_BYTES = 64 * MIB
+UNPACKED_STAGE3_BYTES = 4096 * MIB
+# Used when the index does not announce the archive size (stage3 archives are 250 to 900 MiB).
+UNKNOWN_ARCHIVE_BYTES = 1024 * MIB
 BAD_SIGNATURE_STATUSES = {
     "BADSIG": "the signature does not match the file",
     "EXPSIG": "the signature itself has expired",
@@ -60,6 +66,15 @@ class Stage3Archive:
 
 
 Progress = Callable[[int, int | None], None]
+
+
+def free_bytes(path: Path) -> int:
+    """Bytes a normal process can still write below ``path`` (the nearest existing directory is asked)."""
+    probe = path
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    stats = os.statvfs(probe)
+    return stats.f_bavail * stats.f_frsize
 
 
 def latest_index_url(mirror: str, variant: str) -> str:
@@ -169,6 +184,7 @@ class Stage3Manager:
         self.fallback_mirrors: tuple[str, ...] = ()
         self.notify: Callable[[str], None] = lambda message: None
         self.now: Callable[[], float] = time.time
+        self.free_bytes: Callable[[Path], int] = free_bytes
         self._binary_keyring: Path | None = None
         self._allowed_signers: set[str] = set()
         self._expected_size: int | None = None  # size announced by the index, for the download in progress
@@ -199,7 +215,13 @@ class Stage3Manager:
             verified_path.unlink(missing_ok=True)
         archive_path = self.cache_dir / name
         self._safe_cache_file(archive_path)
-        if not self._cached_archive_is_valid(archive_path, archive, algorithm, expected):
+        cached = self._cached_archive_is_valid(archive_path, archive, algorithm, expected)
+        # Before hours of work, not after a download that fills the live system's memory.
+        self._require_space(self.cache_dir, self._download_bytes(archive, archive_path, cached), "download the stage3 archive",
+                            "The live system keeps this folder in memory, so close other programs or use a computer with more memory.")
+        self._require_space(Path(target_root), UNPACKED_STAGE3_BYTES, "unpack the stage3 into the new system",
+                            "Choose a larger disk or partition for the root filesystem.")
+        if not cached:
             for round_number in (1, 2):
                 self._download_with_retry(archive, archive_path, progress)
                 if self._hash(archive_path, algorithm) == expected:
@@ -214,6 +236,33 @@ class Stage3Manager:
                         (", ..." if len(leftovers) > 8 else "") + "); the stage3 is unpacked over the existing files")
         self.extract(archive_path, Path(target_root))
         return archive_path
+
+    def _download_bytes(self, archive: Stage3Archive, destination: Path, cached: bool) -> int:
+        """Space still needed to fetch the archive: nothing when a verified copy exists, less when a partial one does."""
+        if cached:
+            return 0
+        partial = destination.with_name(destination.name + ".part")
+        have = partial.stat().st_size if partial.is_file() else 0
+        return max((archive.size or UNKNOWN_ARCHIVE_BYTES) - have, 0) + DOWNLOAD_MARGIN_BYTES
+
+    def _require_space(self, where: Path, needed: int, action: str, advice: str) -> None:
+        if needed <= 0:
+            return
+        try:
+            available = self.free_bytes(where)
+        except OSError:
+            return  # cannot tell; the download or the unpacking will report the real problem
+        if available < needed:
+            raise Stage3Error(f"There is not enough free space to {action}: about {needed // MIB} MiB are needed in {where}, "
+                              f"but only {available // MIB} MiB are free. {advice}")
+
+    def discard(self, archive: Path) -> None:
+        """Remove a downloaded archive and its checksum file, once the unpacked stage3 is safe on the disk."""
+        for path in (archive, archive.with_name(archive.name + ".part"), archive.with_name(archive.name + ".DIGESTS")):
+            if path.parent != self.cache_dir:
+                raise Stage3Error("Refusing to remove a file outside the stage3 cache")
+            self._safe_cache_file(path)
+            path.unlink(missing_ok=True)
 
     def discover(self, mirror: str, variant: str) -> Stage3Archive:
         mirrors = [mirror, *(m for m in self.fallback_mirrors if m != mirror)]

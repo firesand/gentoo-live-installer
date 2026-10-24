@@ -228,7 +228,7 @@ class StorageResumeSafetyTests(unittest.TestCase):
         manager.owned_mounts = [Path("/fake-target")]
         with patch.object(runner, "run_cleanup", return_value=CommandResult((), 0, "")) as cleanup:
             manager.cleanup()
-        cleanup.assert_called_once_with(("umount", "-R", "/fake-target"))
+        cleanup.assert_called_once_with(("umount", "-R", "/fake-target"), timeout=120)
         self.assertTrue(cancel.is_set())
         self.assertEqual(manager.owned_mounts, [])
 

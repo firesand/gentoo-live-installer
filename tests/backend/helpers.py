@@ -16,15 +16,19 @@ class FakeRunner:
         self.logs: list[str] = []
         self.responses: list[tuple[str, str]] = []
         self.failures: dict[str, int] = {}
+        # The Runner keywords of every call (timeout, capture, root_identity), for tests that check them.
+        self.options: list[dict[str, object]] = []
 
     def respond(self, prefix: str, stdout: str) -> None:
         self.responses.append((prefix, stdout))
 
-    def run(self, argv: Sequence[str], *, stdin: str | None = None, secret: bool = False, env: Mapping[str, str] | None = None, cwd: Path | None = None) -> CommandResult:
+    def run(self, argv: Sequence[str], *, stdin: str | None = None, secret: bool = False, env: Mapping[str, str] | None = None, cwd: Path | None = None,
+            timeout: float | None = None, capture: bool = True, root_identity: bool = False) -> CommandResult:
         args = validate_argv(argv)
         self.commands.append(args)
         self.inputs.append(stdin)
         self.secrets.append(secret)
+        self.options.append({"timeout": timeout, "capture": capture, "root_identity": root_identity})
         for prefix, code in self.failures.items():
             if " ".join(args).startswith(prefix):
                 raise RunnerError(args, code, "injected failure")

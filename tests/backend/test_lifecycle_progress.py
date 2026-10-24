@@ -84,13 +84,17 @@ class ProgressTests(unittest.TestCase):
         self.assertEqual([event.progress for event in events if event.stage == "cleanup" and event.type == "stage"], [at_cancel, at_cancel])
         self.assertIsNone(next(event for event in events if event.type == "completed").progress)
 
-    def test_a_cleanup_that_fails_after_every_stage_succeeded_does_not_reach_100(self) -> None:
+    def test_a_cleanup_that_fails_after_every_stage_succeeded_still_finishes_the_install(self) -> None:
         installer, events, temporary = dry_run()
         with temporary:
             installer.storage.cleanup = lambda: (_ for _ in ()).throw(RuntimeError("umount: target is busy"))  # type: ignore[method-assign]
-            self.assertFalse(installer.run())
-        self.assertLess(max(event.progress for event in events if event.progress is not None), 100.0)
-        self.assertIsNone(next(event for event in events if event.type == "completed").progress)
+            self.assertTrue(installer.run())
+        # the cleanup stage itself never finished, so the bar stays short of the end until the result arrives
+        self.assertLess(max(event.progress for event in events if event.progress is not None and event.type != "completed"), 100.0)
+        completed = next(event for event in events if event.type == "completed")
+        self.assertEqual(completed.progress, 100.0)
+        self.assertIs(completed.data["success"], True)
+        self.assertEqual(len(completed.data["warnings"]), 1)
 
     def test_stage_and_progress_events_carry_the_overall_value_and_the_local_one(self) -> None:
         installer, events, temporary = dry_run()

@@ -9,7 +9,7 @@ from typing import Any, ClassVar, get_args, get_origin, get_type_hints
 
 
 SCHEMA_VERSION = 1
-SECRET_KEYS = {"password", "root_password", "luks_passphrase", "wifi_password", "proxy_password"}
+SECRET_KEYS = {"password", "root_password", "luks_passphrase", "wifi_password"}
 # Keys of validate_sections(); GUI pages route errors by section, not wording.
 VALIDATION_SECTIONS = ("general", "storage", "system", "locale", "portage", "network", "accounts", "options", "hardware")
 CMDLINE_TOKEN_RE = re.compile(r"[A-Za-z0-9_.:=,/+@%-]+")
@@ -25,6 +25,66 @@ PROXY_SCHEMES = {"http", "https"}
 KDE_APPS_CHOICES = {"core", "full"}
 # One word of a package.use line: a flag, a negated flag or a USE_EXPAND heading such as "VIDEO_CARDS:".
 USE_TOKEN_RE = re.compile(r"-?[A-Za-z0-9][A-Za-z0-9_+@.-]*|[A-Z][A-Z0-9_]*:")
+REDACTED = "<redacted>"
+
+# Stage3 families and the desktops the installer can build on each. KDE Plasma needs the desktop USE flags that only
+# the standard and desktop profiles enable (plasma-meta has unmet USE dependencies on no-multilib and hardened);
+# GNOME and Xfce are unverified there. Minimal always works.
+STAGE3_VARIANTS = frozenset(
+    f"{family}-{init}" for family in ("amd64", "amd64-desktop", "amd64-nomultilib", "amd64-hardened") for init in ("openrc", "systemd"))
+FAMILY_LABELS = {"standard": "Standard", "desktop": "Desktop", "nomultilib": "No multilib", "hardened": "Hardened"}
+FAMILY_DESKTOP_SUPPORT = {
+    "standard": {"kde", "gnome", "xfce"},
+    "desktop": {"kde", "gnome", "xfce"},
+    "nomultilib": {"gnome", "xfce"},
+    "hardened": {"gnome", "xfce"},
+}
+UNVERIFIED_FAMILIES = {"nomultilib", "hardened"}
+KDE_NEEDS_DESKTOP_STAGE = (
+    "KDE Plasma needs a Standard or Desktop stage3: the Hardened and No-multilib profiles do not enable the desktop USE flags Plasma requires, "
+    "so the package step would fail after your disk was erased. Choose a Standard stage3 or the Minimal system."
+)
+# The profiles Gentoo publishes under default/linux/amd64/23.0 (with and without /systemd).
+PUBLISHED_PROFILES = frozenset(
+    PROFILE_BASE + middle + suffix
+    for middle in ("", "/desktop", "/desktop/plasma", "/desktop/gnome", "/hardened", "/no-multilib", "/no-multilib/hardened")
+    for suffix in ("", "/systemd")
+)
+COMPANIONS_ON_MINIMAL = "HWMonux and PortageHub are graphical applications and cannot start on a minimal system; they only add build time and disk space there."
+
+
+def stage_family(stage_variant: str) -> str:
+    """standard | desktop | nomultilib | hardened, from the name of a published stage3 variant."""
+    if "hardened" in stage_variant:
+        return "hardened"
+    if "nomultilib" in stage_variant:
+        return "nomultilib"
+    if "desktop" in stage_variant:
+        return "desktop"
+    return "standard"
+
+
+def desktop_problem(stage_variant: str, desktop: str) -> str:
+    """Why this desktop cannot be installed on this stage3 ("" when it can)."""
+    if desktop in {"kde", "gnome", "xfce"} and desktop not in FAMILY_DESKTOP_SUPPORT[stage_family(stage_variant)]:
+        return KDE_NEEDS_DESKTOP_STAGE if desktop == "kde" else (
+            f"{desktop.upper()} is not available on this stage3: choose a Standard or Desktop stage3 or the Minimal system.")
+    return ""
+
+
+def profile_problem(profile: str, init: str, stage_variant: str) -> str:
+    """Why this Portage profile is wrong for the init system and stage3 ("" when it is fine or empty)."""
+    if not profile:
+        return ""
+    if profile not in PUBLISHED_PROFILES:
+        return f"The Portage profile “{profile}” is not a published Gentoo 23.0 profile. Choose the profile offered for your stage3."
+    if ("/systemd" in profile) != (init == "systemd"):
+        return "The Portage profile does not match the init system: systemd profiles end in /systemd and OpenRC ones do not."
+    if ("no-multilib" in profile) != ("nomultilib" in stage_variant):
+        return "The Portage profile does not match the stage3 (multilib versus no-multilib)."
+    if ("hardened" in profile) != ("hardened" in stage_variant):
+        return "The Portage profile does not match the stage3 (hardened versus standard)."
+    return ""
 
 
 def derive_profile(init: str, desktop: str, *, multilib: bool = True, hardened: bool = False) -> str:
@@ -62,9 +122,28 @@ def _known_timezones() -> frozenset[str]:
 
 
 def _redact_url_password(url: str) -> str:
-    """http://user:secret@host:3128 -> http://user:<redacted>@host:3128 (anything else unchanged)."""
-    match = re.fullmatch(r"([A-Za-z][A-Za-z0-9+.-]*://[^/@:]*):([^/@]*)@(.*)", url)
-    return f"{match.group(1)}:<redacted>@{match.group(3)}" if match and match.group(2) != "<redacted>" else url
+    """http://user:secret@host:3128 -> http://user:<redacted>@host:3128 (anything else unchanged).
+
+    Everything up to the last "@" counts as the credentials, so a password with an "@" or a "/" in it
+    is hidden completely; an address without a password is returned as it is.
+    """
+    scheme, separator, rest = url.partition("://")
+    if not separator or not re.fullmatch(r"[A-Za-z][A-Za-z0-9+.-]*", scheme):
+        return url
+    userinfo, at, host = rest.rpartition("@")
+    user, colon, password = userinfo.partition(":")
+    if not at or not colon or password in {"", REDACTED}:
+        return url
+    return f"{scheme}://{user}:{REDACTED}@{host}"
+
+
+def _unredact(value: Any) -> Any:
+    """Every value that is exactly the redaction placeholder becomes an empty field again."""
+    if isinstance(value, dict):
+        return {key: _unredact(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_unredact(item) for item in value]
+    return "" if value == REDACTED else value
 
 
 def _wifi_errors(ssid: str, password: str) -> list[str]:
@@ -421,7 +500,7 @@ class InstallManifest:
                 if not isinstance(value, list):
                     raise ManifestError(f"{name} must be a list")
                 item_type = get_args(tp)[0]
-                return [convert(item_type, item, f"{name}[]") for item in value]
+                return [convert(item_type, item, f"{name}[{index}]") for index, item in enumerate(value)]
             if origin is dict:
                 if not isinstance(value, dict):
                     raise ManifestError(f"{name} must be an object")
@@ -438,6 +517,9 @@ class InstallManifest:
                 unknown = set(value) - set(allowed)
                 if unknown:
                     raise ManifestError(f"Unknown {name} fields: {', '.join(sorted(unknown))}")
+                if tp is Partition and "format" not in value:
+                    # The default would silently format (and erase) a partition the author may have meant to keep.
+                    raise ManifestError(f"{name}.format must be stated explicitly: true formats the partition, false keeps its data")
                 return tp(**{key: convert(allowed[key], item, f"{name}.{key}") for key, item in value.items()})
             if tp is bool:
                 if type(value) is not bool:
@@ -464,6 +546,20 @@ class InstallManifest:
     @classmethod
     def load(cls, path: str | Path) -> InstallManifest:
         return cls.from_json(Path(path).read_text())
+
+    @classmethod
+    def load_redacted(cls, path: str | Path) -> InstallManifest:
+        """Read a settings file that was saved without its secrets.
+
+        Every value that is exactly "<redacted>" becomes an empty field, and the manifest is not
+        validated: the passwords have to be typed again. The password inside a proxy address stays
+        "<redacted>" (validate() refuses it) so nobody installs with a proxy that cannot sign in.
+        """
+        try:
+            raw = json.loads(Path(path).read_text())
+        except (OSError, ValueError) as exc:
+            raise ManifestError(f"Cannot read the settings file: {exc}") from exc
+        return cls.from_dict(_unredact(raw))
 
     def save(self, path: str | Path, redact: bool = True) -> None:
         target = Path(path)
@@ -562,6 +658,8 @@ class InstallManifest:
             errors.append("The LUKS passphrase must contain at least 8 characters")
         if storage.raid_level and storage.raid_level not in {"0", "1", "5", "6", "10"}:
             errors.append("Unsupported RAID level")
+        elif storage.raid_problem():
+            errors.append(storage.raid_problem())
         if storage.device_id_kind not in {"", "serial", "wwn", "path"}:
             errors.append("Unknown disk identity kind")
         if storage.device_id_kind in {"serial", "wwn"} and not storage.device_id:
@@ -579,14 +677,18 @@ class InstallManifest:
         storage, system = self.storage, self.system
         if system.init not in {"openrc", "systemd"}:
             errors.append("Init system must be OpenRC or systemd")
-        if system.stage_variant not in {"amd64-openrc", "amd64-systemd", "amd64-desktop-openrc", "amd64-desktop-systemd", "amd64-nomultilib-openrc", "amd64-nomultilib-systemd", "amd64-hardened-openrc", "amd64-hardened-systemd"}:
+        if system.stage_variant not in STAGE3_VARIANTS:
             errors.append("Select a supported published AMD64 stage3 variant")
         if (system.init == "openrc") != ("openrc" in system.stage_variant):
             errors.append("The stage3 variant and init system do not match")
         if not system.multilib and "nomultilib" not in system.stage_variant:
             errors.append("Pure 64-bit installation requires a no-multilib stage3/profile")
+        if system.multilib and "nomultilib" in system.stage_variant:
+            errors.append("A no-multilib stage3 cannot run 32-bit applications: turn off multilib, or choose a stage3 with multilib")
         if system.desktop not in {"minimal", "kde", "gnome", "xfce"}:
             errors.append("Unknown desktop selection")
+        elif desktop_problem(system.stage_variant, system.desktop):
+            errors.append(desktop_problem(system.stage_variant, system.desktop))
         if system.kernel not in {"gentoo-kernel-bin", "gentoo-kernel", "manual"}:
             errors.append("Unknown kernel selection")
         if system.initramfs not in {"dracut", "genkernel", "none"}:
@@ -603,6 +705,8 @@ class InstallManifest:
             errors.append("A Unified Kernel Image requires UEFI firmware")
         if system.profile and not PROFILE_RE.fullmatch(system.profile):
             errors.append("Unknown Portage profile; use a published default/linux/amd64/23.0 profile or leave it empty")
+        elif profile_problem(system.profile, system.init, system.stage_variant):
+            errors.append(profile_problem(system.profile, system.init, system.stage_variant))
         errors.extend(self._secure_boot_errors())
         extra = system.kernel_cmdline_extra
         if extra:
@@ -782,11 +886,32 @@ class InstallManifest:
         return system.profile or derive_profile(
             system.init, system.desktop, multilib=system.multilib, hardened="hardened" in system.stage_variant)
 
+    def warnings(self) -> list[str]:
+        """Advice that does not stop the installation (validate() lists what does)."""
+        system, options, storage = self.system, self.options, self.storage
+        advice: list[str] = []
+        family = stage_family(system.stage_variant)
+        if family in UNVERIFIED_FAMILIES and system.desktop in {"gnome", "xfce"} and system.desktop in FAMILY_DESKTOP_SUPPORT[family]:
+            advice.append(f"Not verified: {system.desktop.upper()} on a {FAMILY_LABELS[family]} stage3 may need extra USE changes during the installation.")
+        if system.desktop == "minimal" and (options.install_hwmonux or options.install_portagehub):
+            advice.append(COMPANIONS_ON_MINIMAL)
+        if system.kernel == "manual":
+            advice.append("A manual kernel: the installation stops after the boot configuration so you can install the kernel yourself with the command-line installer, then resume it.")
+        if system.secure_boot:
+            advice.append("Secure Boot: new kernels are not signed automatically. After a kernel update, sign the new boot image by hand or the PC will refuse to start it.")
+        if system.dual_boot and system.bootloader != "grub":
+            advice.append("Dual boot detection works with GRUB only: other systems will not be added to the boot menu automatically.")
+        if self.network.import_live_profiles:
+            advice.append("The saved network connections of this live session, including Wi-Fi passwords, are copied into the new system.")
+        if storage.mode == "erase" and storage.filesystem == "btrfs" and storage.separate_home:
+            advice.append("With a separate /home partition, only the root of the Btrfs disk gets a subvolume (@); /home is a plain partition.")
+        return advice
+
     def summary(self) -> list[tuple[str, str]]:
         return [
             ("Disk", f"{self.storage.device} · {self.storage.mode} · {self.storage.filesystem}"),
             ("Firmware", self.storage.firmware.upper()),
-            ("Encryption", "LUKS enabled" if self.storage.luks else "Not enabled"),
+            ("Encryption", self.storage.encryption_summary()),
             ("Base", f"{self.system.stage_variant} · {self.effective_profile()}"),
             ("Desktop", self.system.desktop.upper() if self.system.desktop != "minimal" else "Minimal (no desktop)"),
             ("Kernel", self.system.kernel),
