@@ -287,7 +287,7 @@ impl Server {
     fn portage(&self, path: &str) -> Result<(Beneath, PathBuf), String> {
         let rel = protocol::portage_rel(path).ok_or_else(|| format!("path not allowed: {path}"))?;
         if !policy::portage_write_allowed(&rel.to_string_lossy()) {
-            return Err(format!("path not allowed: {path} (hooks and ._cfg files are left to Portage)"));
+            return Err(format!("path not allowed: {path} (shell hooks, env/<category>/<package>, patches/ and ._cfg files are left to Portage)"));
         }
         let base = Beneath::open(&at(&self.root, "/etc/portage")).map_err(|e| format!("/etc/portage: {e}"))?;
         Ok((base, rel))

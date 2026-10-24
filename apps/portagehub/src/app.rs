@@ -1004,6 +1004,10 @@ impl App {
                 self.store.page = views::store::Page::Search;
             }
             Action::Pretend(opts) => {
+                if let Some(problem) = opts.policy_error() {
+                    self.toast(ToastKind::Error, problem);
+                    return;
+                }
                 let mut env = opts.env.clone();
                 env.retain(|(_, v)| !v.is_empty());
                 let mut argv = vec!["emerge".to_string()];
@@ -1025,6 +1029,10 @@ impl App {
                 }
             }
             Action::Emerge(opts, planned) => {
+                if let Some(problem) = opts.policy_error() {
+                    self.toast(ToastKind::Error, problem);
+                    return;
+                }
                 if self.running_emerge().is_some() {
                     self.toast(ToastKind::Warn, "Another emerge is already running. Wait for it to finish.");
                     return;

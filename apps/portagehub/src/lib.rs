@@ -4,6 +4,7 @@
 //! transactions and the audit log).
 
 pub mod audit;
+pub mod emerge_opts;
 pub mod journal;
 pub mod policy;
 pub mod protocol;

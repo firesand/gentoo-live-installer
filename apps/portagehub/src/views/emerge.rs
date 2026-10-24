@@ -323,7 +323,12 @@ fn custom(app: &mut App, ui: &mut Ui) {
         w::command_preview(ui, &app.emerge.options.command_line());
         ui.add_space(8.0);
         let opts = app.emerge.options.clone();
-        let needs = opts.action.needs_targets() && opts.targets.is_empty();
+        // The admin helper only runs options and targets it recognises: say so here, not after the click.
+        let refused = opts.policy_error();
+        if let Some(problem) = &refused {
+            w::callout(ui, RED, icon::WARNING, &format!("{problem}. PortageHub only passes options it knows (exactly as spelled) and package atoms or @sets as targets."));
+        }
+        let needs = (opts.action.needs_targets() && opts.targets.is_empty()) || refused.is_some();
         ui.horizontal(|ui| {
             if opts.action.previewable() {
                 if ui.add_enabled_ui(!needs, |ui| w::big_button(ui, &format!("{}  PREVIEW", icon::EYE), GRAD_GREEN, 170.0)).inner.clicked() {
@@ -332,7 +337,7 @@ fn custom(app: &mut App, ui: &mut Ui) {
             } else if ui.add_enabled_ui(!needs, |ui| w::big_button(ui, &format!("{}  RUN", icon::PLAY), GRAD_BLUE, 150.0)).inner.clicked() {
                 app.push(Action::Emerge(opts.clone(), vec![]));
             }
-            if needs {
+            if opts.action.needs_targets() && opts.targets.is_empty() {
                 ui.label(RichText::new(format!("{} add at least one target", icon::WARNING)).color(ORANGE));
             }
             if w::button(ui, icon::ARROW_COUNTER_CLOCKWISE, "Reset").clicked() {

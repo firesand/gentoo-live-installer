@@ -356,30 +356,22 @@ impl Event {
     }
 }
 
-/// Programs the helper is willing to run as root.
+/// Programs the helper is willing to run as root: exactly those PortageHub
+/// launches. Every other Portage tool forwards options to emerge or runs
+/// commands of its own (`eix-sync -c CMD`, `revdep-rebuild -- --config-root=…`),
+/// so each would need an argument allow-list in [`crate::policy::check_args`]
+/// before it can be added here.
 pub const ALLOWED_PROGRAMS: &[&str] = &[
     "emerge",
     "emaint",
     "eselect",
     "egencache",
     "emerge-webrsync",
-    "eix-update",
-    "eix-sync",
-    "etc-update",
-    "dispatch-conf",
     "env-update",
-    "revdep-rebuild",
     "glsa-check",
-    "eclean",
     "eclean-dist",
     "eclean-pkg",
-    "perl-cleaner",
-    "smart-live-rebuild",
-    "haskell-updater",
-    "fixpackages",
-    "quickpkg",
     "portageq",
-    "eread",
 ];
 
 /// Directories searched for allowed programs (never `$PATH`).
