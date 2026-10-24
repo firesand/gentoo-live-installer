@@ -204,7 +204,9 @@ class Partition:
 
     A swap row has filesystem "swap" and an empty mountpoint. label is applied when the
     row is formatted. size_mib and flags are kept for draft compatibility only: the
-    installer uses existing partitions as they are, so only 0 and [] validate.
+    installer uses existing partitions as they are, so only 0 and [] validate. The same
+    goes for the filesystem "none" (a row that mounts nothing): a partition that is not
+    listed is never touched, so validate() asks for such a row to be removed.
     """
 
     device: str = ""
@@ -624,6 +626,11 @@ class InstallManifest:
                 if partition.filesystem == "swap":
                     if partition.mountpoint:
                         errors.append(f"A swap partition has no mountpoint; leave it empty instead of {partition.mountpoint}")
+                elif partition.filesystem == "none":
+                    # Older drafts and hand-written files: such a row did nothing the installer can finish (no mount, no fstab type).
+                    errors.append(f"{partition.device or 'A partition'}: the filesystem \"none\" is not supported. Remove the row; partitions that are not listed are never touched")
+                elif not partition.mountpoint:
+                    errors.append(f"Invalid mountpoint for {partition.device or 'a partition'}: choose where it is mounted (for example /home), or remove the row")
                 elif not partition.mountpoint.startswith("/") or ".." in partition.mountpoint or any(c.isspace() or ord(c) < 32 for c in partition.mountpoint):
                     errors.append(f"Invalid mountpoint: {partition.mountpoint}")
                 if partition.filesystem not in {"ext4", "xfs", "btrfs", "vfat", "swap", "none"}:
