@@ -3,15 +3,17 @@ empty NVRAM, the console installer with a boot menu entry, an install across two
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
 
-from tests.vm.fake_env import EVENT_STREAM, FAILED_STREAM, Lab, guest_rules, hardware_plan_for
+from tests.vm.fake_env import EVENT_STREAM, FAILED_STREAM, Lab, guest_rules, hardware_plan_for, plan_record
 from tests.vm.fake_rescue import rescue_rules
 from tests.vm.helpers import PUBLIC_KEY, load_vm_module
 from tests.vm.iso_fixture import write_iso
 
 vm = load_vm_module()
+DATA = Path(__file__).resolve().parent / "data"  # files of the first real VM runs
 
 pytestmark = pytest.mark.slow  # real processes and sockets: about a second per scenario
 
@@ -35,7 +37,7 @@ def test_the_daemons_stderr_log_and_the_hardware_plan_are_copied_out_of_the_live
     lab.rules = guest_rules(vm, "bios")
     assert lab.run("--scenario", "bios", "--keep") == 0
     run = lab.run_dir()
-    assert (run / "daemon-stderr.log").read_text() == "daemon stderr\n" and json.loads((run / "hardware-plan.json").read_text())["schema"] == 1
+    assert (run / "daemon-stderr.log").read_text() == "daemon stderr\n" and json.loads((run / "hardware-plan.json").read_text())["plan"]["schema"] == 1
     artifacts = json.loads((run / "install-artifacts.json").read_text())
     assert artifacts["daemon-stderr.log"]["from"] == "/var/log/gentoo-installerd.log" and artifacts["hardware-plan.json"]["from"] == vm.HARDWARE_PLAN_PATH
     assert lab.result()["install"]["artifacts"] == artifacts and lab.result()["install"]["mode"] == "cli"
@@ -56,6 +58,31 @@ def test_a_missing_log_or_plan_is_recorded_not_an_error_of_its_own(lab):
     assert not (run / "daemon-stderr.log").exists()
     assert json.loads((run / "install-artifacts.json").read_text())["hardware-plan.json"] == {"missing": vm.HARDWARE_PLAN_PATH, "exit": 1}
     assert "hardware-plan-file" in findings(lab) and "hardware-plan.json" in findings(lab)["hardware-plan-file"]["error"]
+
+
+def test_the_plan_file_the_daemon_really_writes_passes_the_plan_checks_in_a_strict_run(lab):
+    """H1: the state file is {version, fingerprint, created, plan}; the first real runs called it 'not a plan'."""
+    real = (DATA / "hardware-plan-uefi-nvme-luks-openrc.json").read_text()
+    lab.rules = guest_rules(vm, "bios", sudo=True, extra=[{"user": "^root$", "match": r"^cat /var/lib/gentoo-installer/hardware-plan\.json$", "stdout": real}])
+    assert lab.run("--scenario", "bios", "--strict-probes") == 0
+    probes = {probe["name"]: probe for probe in lab.result()["probes"]}
+    assert probes["hardware-plan-file"]["success"] and probes["hardware-plan-file"]["output"].startswith('["CPU: QEMU Virtual CPU')
+    assert lab.result()["advisory_findings"] == []
+
+
+def test_a_plan_file_without_the_record_around_it_is_still_accepted(lab):
+    bare = hardware_plan_for(vm, "bios")
+    lab.rules = guest_rules(vm, "bios", sudo=True, extra=[{"user": "^root$", "match": r"^cat /var/lib/gentoo-installer/hardware-plan\.json$", "stdout": json.dumps(bare)}])
+    assert lab.run("--scenario", "bios", "--strict-probes") == 0
+    assert {probe["name"]: probe for probe in lab.result()["probes"]}["hardware-plan-file"]["success"]
+
+
+def test_a_plan_with_intel_microcode_inside_the_daemons_record_fails_the_run(lab):
+    plan = hardware_plan_for(vm, "bios")
+    plan["early_atoms"] = ["sys-firmware/intel-microcode"]
+    lab.rules = guest_rules(vm, "bios", extra=[{"user": "^root$", "match": r"^cat /var/lib/gentoo-installer/hardware-plan\.json$", "stdout": json.dumps(plan_record(plan))}])
+    assert lab.run("--scenario", "bios") == 1
+    assert "hardware-plan-file: the plan installs Intel microcode in a virtual machine" in lab.result()["error"]
 
 
 def test_a_missing_hardware_plan_fails_a_strict_run(lab):

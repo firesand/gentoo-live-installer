@@ -385,9 +385,15 @@ def parse_hardware_probe(returncode: int, output: str, plan: Mapping[str, Any], 
 
 
 def parse_hardware_plan_file(text: str) -> dict[str, Any] | None:
-    """The hardware-plan.json the daemon leaves in its state directory; None when it is absent or not a plan."""
+    """The plan in the hardware-plan.json the daemon leaves in its state directory; None when it is absent or holds no plan.
+
+    The daemon writes a record, ``{version, fingerprint, created, plan}`` (the fingerprint binds it to the manifest, so that a
+    resume does not decide again). A bare plan, which has a ``schema`` of its own, is accepted too.
+    """
     try:
-        plan = json.loads(text)
+        record = json.loads(text)
     except json.JSONDecodeError:
         return None
-    return plan if isinstance(plan, dict) and "schema" in plan else None
+    if isinstance(record, dict) and isinstance(record.get("plan"), dict):
+        record = record["plan"]
+    return record if isinstance(record, dict) and "schema" in record else None

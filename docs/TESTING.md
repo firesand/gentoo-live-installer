@@ -211,7 +211,7 @@ Advisory probes record a finding in `result.json` (`advisory_findings`) and prin
 | `swap` | a swap of the requested size is active (zram does not count). An encrypted install keeps swap in a **file** inside the encrypted root: a raw swap partition is a failure | failure |
 | `receipt` | `/etc/gentoo-live-installer/install.json` exists and agrees with the manifest: firmware, bootloader, init, kernel, initramfs, UKI, Secure Boot, profile, ESP mount point, root file system and UUID, LUKS UUID, LVM, RAID, separate `/boot` | missing: finding; wrong: failure |
 | `efi-fallback` | UEFI installs that must have it leave a non-empty EFI program at `EFI/BOOT/BOOTX64.EFI` on the ESP (read with `sudo`, the ESP is mounted with umask 0077) | failure; no sudo: finding |
-| `hardware-plan-file` | the daemon left `/var/lib/gentoo-installer/hardware-plan.json` in the live system (copied out to `hardware-plan.json`) and the plan fits a virtual machine: no Intel microcode, no guest tools when they are switched off, the hypervisor's tool when it is on automatic and the DMI strings name the hypervisor | missing: finding; wrong: failure |
+| `hardware-plan-file` | the daemon left `/var/lib/gentoo-installer/hardware-plan.json` in the live system (copied out to `hardware-plan.json`; the file is a record `{version, fingerprint, created, plan}`, a bare plan is read too) and the plan in it fits a virtual machine: no Intel microcode, no guest tools when they are switched off, the hypervisor's tool when it is on automatic and the DMI strings name the hypervisor | missing: finding; wrong: failure |
 | `hardware-plan` | the installed system agrees with the plan: no `sys-firmware/intel-microcode`, every guest tool of the plan installed unless the installer itself reported it as degraded, none when they are switched off | failure |
 | `layout` | in a manual layout every row is mounted from the device the manifest named (the second disk's `/home`, its swap) | failure |
 | `world-resolve` | `emerge -pvuDN @world` resolves: no blocker, no conflict, no change the configuration would need | failure; no sudo: finding |
@@ -527,8 +527,8 @@ Read these before trusting, or blaming, a result.
 * **`--gui-detect` on a BIOS machine fails until the wizard seeds the firmware from detection**
   (the unit test in `tests/vm/test_vm_gui_driver.py` is an expected failure that starts passing then).
 * **The hardware plan is read from `/var/lib/gentoo-installer/hardware-plan.json`** (the daemon's
-  state directory). Until the daemon writes it, `hardware-plan-file` is a finding; with
-  `--strict-probes` (the matrix) it fails the run.
+  state directory), from the `plan` key of the record the daemon writes there. A missing file, or one
+  without a plan, is a finding; with `--strict-probes` (the matrix) it fails the run.
 * **The cloud images are not Gentoo systems:** the harness cannot log in, so it cannot look at their
   `/proc/cmdline`; the kernel's own command line shows up on the console only when its log level
   allows it. The live arguments are therefore also searched in the boot files from the live side.

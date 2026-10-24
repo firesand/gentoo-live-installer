@@ -98,6 +98,12 @@ def hardware_plan_for(vm, scenario_name: str, firmware: str | None = None) -> di
     return hwplan.plan(scenario_manifest(vm, scenario_name, firmware), fixture_dict("qemu-q35-virtio")).to_dict()
 
 
+def plan_record(plan: dict) -> dict:
+    """The file the daemon keeps in its state directory (Installer._save_plan): the plan inside a record bound to the manifest."""
+    return {"version": 1, "fingerprint": "63308222627f71c26c7e4297df94f4a403047b31bdafd17ca9bcd8034fc04757",
+            "created": "2026-10-24T11:09:05.376Z", "plan": plan}
+
+
 def package_database(plan: dict) -> str:
     """What the package check prints on a machine where every package of the plan was installed (and nothing else)."""
     wanted = {atom for field in ("early_atoms", "driver_atoms", "required_atoms", "optional_atoms") for atom in plan.get(field, [])}
@@ -115,8 +121,12 @@ def layout_output(vm, scenario_name: str) -> str:
 
 def guest_rules(vm, scenario_name: str, *, guard: str = "vm_disk_guard", install: list | None = None,
                 companions: bool = True, extra: list | None = None, guard_options: dict | bool = True,
-                swap_mib: int = 512, firmware: str | None = None) -> list[dict]:
-    """Rules for a guest that installs and boots successfully, in the order the harness needs them."""
+                swap_mib: int = 512, firmware: str | None = None, sudo: bool = False) -> list[dict]:
+    """Rules for a guest that installs and boots successfully, in the order the harness needs them.
+
+    ``sudo`` gives the test user a working sudo: the probes that need it answer instead of ending up as findings,
+    so a ``--strict-probes`` run of a good guest can pass.
+    """
     scenario = vm.SCENARIO_MAP[scenario_name]
     plan = hardware_plan_for(vm, scenario_name, firmware)
     preset = vm.vm_hw.SMBIOS_PRESETS[scenario.hardware.smbios]
@@ -132,7 +142,7 @@ def guest_rules(vm, scenario_name: str, *, guard: str = "vm_disk_guard", install
         {"user": "^root$", "match": guard, "guard": guard_options},
         {"user": "^root$", "match": r"(?:decoy-prepare|decoy-check|partition-manual|disk-hash) '\{", "guest_tool": True},
         {"user": "^root$", "match": r"^cat /var/log/gentoo-installerd\.log$", "stdout": "daemon stderr\n"},
-        {"user": "^root$", "match": r"^cat /var/lib/gentoo-installer/hardware-plan\.json$", "stdout": json.dumps(plan) + "\n"},
+        {"user": "^root$", "match": r"^cat /var/lib/gentoo-installer/hardware-plan\.json$", "stdout": json.dumps(plan_record(plan), indent=2) + "\n"},
         {"user": "^root$", "match": r"^cat > /run/gentoo-installer-vm-manifest\.json$", "stdin_to": "manifest.json"},
         {"user": "^root$", "match": r"^gentoo-installerd --manifest \S+ --yes$", "events": install or EVENT_STREAM},
         {"user": "^root$", "match": r"^gentoo-installerd --manifest \S+ --yes --resume$", "events": RESUME_STREAM},
@@ -164,6 +174,12 @@ def guest_rules(vm, scenario_name: str, *, guard: str = "vm_disk_guard", install
         {"user": "^vmtest$", "match": r"^sh -c .* sh sys-firmware/intel-microcode", "stdout": package_database(plan)},
     ]
     rules.append({"user": "^vmtest$", "match": r"/var/db/pkg/", "stdout": "plasma-meta\n"})
+    if sudo:
+        locked = scenario_manifest(vm, scenario_name, firmware).accounts.disable_root_login
+        rules += [
+            {"user": "^vmtest$", "match": r"^sudo -S -p '' true$", "stdout": ""},
+            {"user": "^vmtest$", "match": r"^sudo -S -p '' passwd -S root$", "stdout": f"root {'L' if locked else 'P'} 2026-10-24 0 99999 7 -1\n"},
+        ]
     if companions:
         rules += [
             {"user": "^vmtest$", "match": r"^hwmonux --dump$", "stdout": "vm-host\nSensor Value Min Max\n"},

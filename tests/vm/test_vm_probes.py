@@ -5,6 +5,7 @@ import copy
 import json
 import shlex
 import types
+from pathlib import Path
 
 import pytest
 
@@ -17,6 +18,7 @@ from tests.vm.helpers import PUBLIC_KEY, load_vm_module
 
 vm = load_vm_module()
 UUID = "0a1b2c3d-1111-2222-3333-444455556666"
+DATA = Path(__file__).resolve().parent / "data"  # output of the first real VM runs (the record of what the product really prints)
 
 
 def manifest_of(name: str, **changes) -> InstallManifest:
@@ -345,3 +347,29 @@ def test_the_plan_file_is_recognised_by_its_schema():
     assert vm_probes.parse_hardware_plan_file(json.dumps({"schema": 1, "early_atoms": []}))["schema"] == 1
     assert vm_probes.parse_hardware_plan_file("") is None and vm_probes.parse_hardware_plan_file("[1]") is None
     assert vm_probes.parse_hardware_plan_file(json.dumps({"early_atoms": []})) is None
+
+
+def test_the_state_file_the_daemon_really_wrote_is_read_and_checked_against_the_machine():
+    """tests/vm/data/hardware-plan-*.json is the file of a real run (a QEMU guest, uefi-nvme-luks-openrc): {version, fingerprint, created, plan}."""
+    text = (DATA / "hardware-plan-uefi-nvme-luks-openrc.json").read_text()
+    assert set(json.loads(text)) == {"version", "fingerprint", "created", "plan"}  # the fixture is the daemon's record, not a bare plan
+    plan = vm_probes.parse_hardware_plan_file(text)
+    assert plan is not None and plan["schema"] == 1 and plan["early_atoms"] == ["sys-kernel/linux-firmware"]
+    assert plan["summary"][0].endswith("no microcode")
+    assert vm_probes.hardware_plan_problems(plan, manifest_of("uefi-nvme-luks-openrc"), "qemu") == []
+
+
+def test_a_plan_inside_the_daemons_record_is_judged_like_a_bare_one():
+    record = {"version": 1, "fingerprint": "0" * 64, "created": "2026-10-24T11:09:05.376Z",
+              "plan": {"schema": 1, "early_atoms": [vm_probes.INTEL_MICROCODE], "optional_atoms": []}}
+    plan = vm_probes.parse_hardware_plan_file(json.dumps(record))
+    assert plan == record["plan"]
+    assert "Intel microcode in a virtual machine" in " ".join(vm_probes.hardware_plan_problems(plan, manifest_of("openrc"), "qemu"))
+
+
+@pytest.mark.parametrize("text", [
+    json.dumps({"version": 1, "fingerprint": "f", "created": "x", "plan": {"early_atoms": []}}),   # a record whose plan has no schema
+    json.dumps({"version": 1, "plan": "not a plan"}), json.dumps({"version": 1, "plan": [1]}), json.dumps({"version": 1}),
+])
+def test_a_record_without_a_real_plan_is_not_a_plan(text):
+    assert vm_probes.parse_hardware_plan_file(text) is None
