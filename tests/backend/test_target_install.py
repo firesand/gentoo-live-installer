@@ -56,7 +56,7 @@ class PortageStageTests(StageHarness):
         for atom in ("sys-kernel/installkernel", "sys-kernel/gentoo-kernel-bin", "sys-kernel/dracut", "app-admin/sudo",
                      "net-misc/networkmanager", "sys-boot/grub", "kde-plasma/plasma-meta", "gui-apps/sddm", "sys-fs/dosfstools"):
             self.assertIn(atom, pretend)
-        for flag in ("--noreplace", "--usepkg=n", "--getbinpkg=n"):
+        for flag in ("--pretend", "--noreplace"):
             self.assertIn(flag, pretend)
         self.assertNotIn("media-video/pipewire", pretend)  # optional packages are not part of the gate
         self.assertEqual((self.target / "etc/portage/make.conf").read_text().count("MAKEOPTS"), 1)

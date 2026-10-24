@@ -346,8 +346,9 @@ class PretendTests(unittest.TestCase):
             self.assertIn("qtpositioning", str(context.exception))
         command = runner.commands[0]
         self.assertEqual(command[:3], ("chroot", temporary, "emerge"))
-        for flag in ("--pretend", "--noreplace", "--usepkg=n", "--getbinpkg=n"):
+        for flag in ("--pretend", "--noreplace"):
             self.assertIn(flag, command)
+        self.assertNotIn("--usepkg=n", command)  # predicts the real install, binary packages included
         self.assertEqual(command[-1], "kde-apps/kde-apps-meta")
 
     def test_other_failures_are_only_warnings(self) -> None:
@@ -463,6 +464,15 @@ class StageInstallTests(unittest.TestCase):
         self.assertTrue(any("sys-power/thermald" in e for e in emerges))
         self.assertTrue(any("sys-power/tlp" in e for e in emerges))
         self.assertEqual(result.degraded, [])
+
+    def test_missing_companion_applications_degrade_instead_of_failing(self) -> None:
+        m = target_manifest(system={"desktop": "minimal"}, options={"pipewire": False, "bluetooth": False, "printing": False,
+                                                                       "install_hwmonux": True, "install_portagehub": True})
+        c = configurer(self.root, self.runner, companion_bundle=self.root / "no-bundle")
+        result = c.install_desktop(m)
+        self.assertEqual(len(result.degraded), 1)
+        self.assertIn("companion applications were skipped", result.degraded[0])
+        self.assertEqual([e for e in self.emerges() if "hwmonux" in e or "portagehub" in e], [])
 
     def test_chroot_commands_run_as_root_when_the_runner_supports_it(self) -> None:
         self.c.chroot(("true",))

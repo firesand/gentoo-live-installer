@@ -31,6 +31,9 @@ class ConfigurationError(RuntimeError):
     pass
 
 
+COMPANION_ATOMS = ("app-misc/hwmonux", "app-portage/portagehub")
+
+
 class PackageInstallError(ConfigurationError):
     """A package set could not be installed; ``failed`` names what is missing."""
 
@@ -841,8 +844,9 @@ class Configurer:
         that layout was also active while typing (the layout chooser switches it).
         """
         system = manifest.system
-        keymap = system.keymap or keymaps.console_keymap_for(system.keyboard_layout, system.keyboard_variant)
-        return keymap != "us" and keymaps.console_keymap_for(system.keyboard_layout, system.keyboard_variant) == keymap
+        derived = keymaps.console_keymap_for(system.keyboard_layout, system.keyboard_variant)
+        keymap = system.keymap if system.keymap not in {"", "auto"} else derived
+        return keymap != "us" and derived == keymap
 
     def keyboard_files(self, manifest: InstallManifest) -> list[tuple[str, str, int]]:
         """X11/Wayland keyboard layout for display managers and sessions (graphical desktops only)."""
@@ -1189,8 +1193,10 @@ class Configurer:
         if not atoms:
             return
         try:
-            # Source-only on purpose: the configuration must resolve without a lucky binary package.
-            self.emerge(manifest, ("--pretend", "--noreplace", "--usepkg=n", "--getbinpkg=n", "--quiet", "--verbose=n", *atoms))
+            # Same sources as the real install (binary packages included): the gate must predict
+            # whether the installation would fail, not be stricter than it. scripts/lint-plan.py is
+            # the strict, source-only check that runs in development.
+            self.emerge(manifest, ("--pretend", "--noreplace", "--quiet", "--verbose=n", *atoms))
         except RunnerError as exc:
             diagnosis = explain_emerge_failure(exc.output)
             if diagnosis.resolution:
@@ -1256,12 +1262,23 @@ class Configurer:
                 rebuilds.append(match.group(2))
         return rebuilds
 
+    def prepare_companions(self, manifest: InstallManifest) -> str:
+        """Make the live image's companion applications installable; returns a problem description or ""."""
+        try:
+            self.configure_companion_overlay(manifest)
+        except (ConfigurationError, OSError) as exc:
+            return str(exc)
+        return ""
+
     def install_desktop(self, manifest: InstallManifest, plan: object | None = None) -> DesktopResult:
         """Desktop environment first (must succeed), then every optional package on its own terms."""
         plan = self._plan(plan)
         atoms = self.desktop_atoms(manifest, plan)
         result = DesktopResult()
-        self.configure_companion_overlay(manifest)
+        problem = self.prepare_companions(manifest)
+        if problem:
+            result.degraded.append("The companion applications were skipped: " + problem)
+            atoms.optional = [atom for atom in atoms.optional if atom not in COMPANION_ATOMS]
         if manifest.system.world_update:
             try:
                 self.emerge(manifest, ("--update", "--deep", "--newuse", "--keep-going", "@world"))
