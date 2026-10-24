@@ -5,8 +5,10 @@ from __future__ import annotations
 import pytest
 
 from gentoo_installer import blockdev
+from gentoo_installer.textui.conclude import conclude, confirm_release
 from gentoo_installer.textui.console import Console
 from gentoo_installer.textui.daemon import Daemon
+from gentoo_installer.textui.follow import Outcome
 from gentoo_installer.textui.inventory import MachineView
 from gentoo_installer.textui.wizard import Wizard
 
@@ -91,3 +93,15 @@ def test_the_two_installers_give_the_same_list(start) -> None:
     info = sample_info()
     info.roots = [blockdev.BlockDevice.from_lsblk(item) for item in (pool_disk("vdb", "VDB-1"), pool_disk("vdc", "VDC-1"))]
     assert holder_reasons(info, ["/dev/vdb"]) == entry.holders
+
+
+def test_the_question_after_a_refusal_names_the_pools_too(installer, host: FakeHost) -> None:
+    """The service refuses a pool member with storage.holders as well; the menu and the question say what the consent covers."""
+    script = Script([("Really switch them off", "n")])
+    assert confirm_release(Console(script.stdin, script.out, environ={})) is False
+    assert "Btrfs or ZFS pool" in script.flat
+    fake = installer(inspect_reply("qemu-q35-virtio", serials={"/dev/vda": "VDA-SERIAL-0001"}))
+    outcome = Outcome("failed", "It is a member of the Btrfs filesystem 6b1d... (also on /dev/sdc1)", code="storage.holders", stage="storage")
+    menu = Script([("What now", "5")])  # Quit
+    conclude(Console(menu.stdin, menu.out, environ={}), host, Daemon(fake.path), outcome, can_resume=True, can_release=True)
+    assert "erase them together with the disk" in menu.flat and "Btrfs or ZFS pool" in menu.flat

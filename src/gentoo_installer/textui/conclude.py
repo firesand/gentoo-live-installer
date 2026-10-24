@@ -66,7 +66,7 @@ def tell_how_to_resume(console: Console, outcome: Outcome) -> None:
 
 def confirm_release(console: Console) -> bool:
     """The service refused to erase a disk with volumes, swap or RAID/LVM members alive on it: ask whether they may be destroyed."""
-    console.para("Switching them off destroys their data, and also data stored on other disks of the same volume group or RAID array.")
+    console.para("Switching them off destroys their data, and also data stored on other disks of the same volume group, RAID array, Btrfs or ZFS pool.")
     return console.confirm("Really switch them off and erase them together with the disk?", default=False, back=False)
 
 
@@ -135,7 +135,7 @@ def conclude(console: Console, host: Host, daemon: Daemon, outcome: Outcome, *, 
             offer("Restart the computer now", "restart", "The system installed so far can start. Remove the installation medium first.")
         if outcome.state == "failed" and outcome.code == "storage.holders" and can_release:
             offer("Switch them off, erase them together with the disk, and try again", "release",
-                  "Their data is lost, and so is data stored on other disks of the same volume group or RAID array.")
+                  "Their data is lost, and so is data stored on other disks of the same volume group, RAID array, Btrfs or ZFS pool.")
         if outcome.state in {"failed", "cancelled", "invalid", "blocked"}:
             hint = {"invalid": "", "blocked": "Start again from the summary once the repair tool has let go of the disks."}
             default = "Change a setting or choose another disk. Nothing has been erased." if outcome.code == "storage.holders" else "Change a setting, or start over. Starting over erases the disk again."
