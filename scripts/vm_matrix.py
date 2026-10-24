@@ -15,7 +15,7 @@ import sys
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Mapping, Protocol, Sequence
+from typing import Any, Callable, Protocol, Sequence
 
 PARALLEL_MAX = 2                 # VMs at the same time, however many the caller asks for
 MARGIN_MIB = 3072                # host memory that stays free beyond the VMs (docs/TESTING.md, "Memory rule")

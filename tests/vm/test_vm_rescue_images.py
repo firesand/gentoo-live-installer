@@ -75,10 +75,22 @@ def test_debian_is_started_broken_repaired_and_started_again_with_uefi_and_bios(
     assert repair["system"]["device"] == "/dev/vda1" and [item["id"] for item in repair["diagnosis"]] == ["D05"]
     assert repair["plan"]["commands"][0].endswith("update-grub") and repair["outcome"]["outcome"] == "success"
     assert repair["boot_files"]["matches"] == [] and repair["cleanup"] == "nothing left behind" and repair["touches_nvram"] is False
+    assert repair["efibootmgr"] == "rescue-grub-cfg-efibootmgr.log" and (lab.run_dir() / repair["efibootmgr"]).is_file()
     assert [boot["firmware"] for boot in rescue["final_boots"]] == ["uefi", "bios"] and all(boot["state"] == "login" for boot in rescue["final_boots"])
     assert rescue["base_image_unchanged"] is True and rescue["base_image"]["size"] > 1 << 20
     assert [boot["label"] for boot in result["boots"]] == ["baseline", "final-uefi", "final-bios"]
     assert (run_dir / "rescue-grub-cfg-audit.txt").read_text().startswith("confirm plan")
+
+
+def test_whether_the_firmware_started_the_fallback_path_is_recorded_not_assumed(lab, images):
+    registered = 'BdsDxe: starting Boot0002 "UEFI QEMU HARDDISK" from HD(1,GPT,AAAA,0x800,0x200000)/\\EFI\\BOOT\\BOOTX64.EFI\n'
+    rules = cloud_image_serial_rules()
+    rules.insert(2, {"phase": "target", "firmware": "uefi", "requires": "repaired", "text": registered + console()})  # only the UEFI boot after the repair
+    prepare(lab, "debian", mode="grub-cfg", serial=rules)
+    assert run(lab, images, "rescue-debian") == 0
+    boots = {boot["label"]: boot for boot in lab.result()["boots"]}
+    assert boots["final-uefi"]["started_through_fallback"] is True and boots["final-uefi"]["firmware_boot_choices"][0]["number"] == "0002"
+    assert "started_through_fallback" not in boots["baseline"] and "started_through_fallback" not in boots["final-bios"], "no OVMF log, nothing to record"
 
 
 def test_the_machines_start_in_the_order_the_proof_needs_and_never_see_the_base_image(lab, images):

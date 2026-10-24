@@ -71,6 +71,7 @@ def rescue_rules(os_id: str, *, disk: str = "/dev/vda", mode: str = "grub-cfg", 
                    "rc": 0 if outcome == "success" else 1, "stdout": result(plan, "rescue.plan") + result(ran, "Fix everything recommended: " + outcome),
                    "touch": ["repaired"] if outcome == "success" else []}]
     rules += [
+        {**root, "match": r"^efibootmgr -v$", "stdout": "BootCurrent: 0001\nBoot0001* UEFI QEMU DVD-ROM\n"},
         {**root, "match": rf"--json audit {SESSION} --text$", "stdout": result({"name": "audit.jsonl", "text": "confirm plan p1\nrun boot-config-c1\n"}, "rescue.audit")},
         {**root, "match": rf"--json unmount {SESSION}$", "stdout": result({"released": [f"/mnt/rescue/{SESSION}"], "leftovers": [], "session_id": SESSION}, "rescue.unmount")},
         {**root, "match": r"import glob, json, os, re, sys", "stdout": json.dumps({

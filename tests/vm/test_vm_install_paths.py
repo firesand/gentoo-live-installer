@@ -3,7 +3,6 @@ empty NVRAM, the console installer with a boot menu entry, an install across two
 from __future__ import annotations
 
 import json
-from pathlib import Path
 
 import pytest
 

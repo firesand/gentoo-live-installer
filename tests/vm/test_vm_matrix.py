@@ -284,6 +284,15 @@ def test_the_run_directory_is_the_last_one_a_child_announced(tmp_path):
     assert vm_matrix.read_run_dir(log) == "/b" and vm_matrix.read_run_dir(tmp_path / "missing.log") == ""
 
 
+def test_a_child_is_a_separate_python_process_with_its_output_in_the_jobs_log(tmp_path):
+    script = tmp_path / "child.py"
+    script.write_text("import sys\nprint('RUN ' + sys.argv[sys.argv.index('--scenario') + 1] + ': logs in /vm/x', flush=True)\nraise SystemExit(3)\n")
+    log = tmp_path / "job.log"
+    process = vm_matrix.spawn_child(script)(["--scenario", "bios", "--ssh-port", "40222"], log)
+    assert process.wait(timeout=30) == 3
+    assert vm_matrix.read_run_dir(log) == "/vm/x" and vm_matrix.classify(process.returncode) == "FAIL"
+
+
 # --- test-vm.py --matrix -------------------------------------------------------------------------------------------------
 
 def test_listing_the_matrix_does_not_need_an_iso(capsys):

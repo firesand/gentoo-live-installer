@@ -2518,6 +2518,8 @@ class ScenarioRunner:
         if cmdline:
             evidence["kernel_command_line"] = cmdline
         evidence["firmware_boot_choices"] = vm_probes.firmware_boot_choices(text)
+        if evidence["firmware_boot_choices"]:  # recorded, not assumed: did the firmware start the image through EFI/BOOT/BOOTX64.EFI?
+            evidence["started_through_fallback"] = vm_probes.booted_through_fallback(text)
         if state == "login":
             evidence["prompt"] = vm_rescue.login_prompt(text)
             leaked = vm_rescue.live_arguments(cmdline)
@@ -2616,6 +2618,10 @@ class ScenarioRunner:
                 raise HarnessError(f"After breaking {mode} the rescue tool does not see or plan the repair: " + "; ".join(problems))
             outcome = driver.execute_plan(session, action, plan)
             evidence["outcome"] = {"outcome": outcome.get("outcome"), "post_checks": outcome.get("post_checks"), "warnings": outcome.get("warnings")}
+            if self.scenario.firmware == "uefi":  # what the firmware knows after the repair, for whoever reads the evidence
+                code, log = self.ssh(self.args.ssh_user, "efibootmgr -v", f"rescue-{mode}-efibootmgr.log", self.args.command_timeout)
+                if code == 0:
+                    evidence["efibootmgr"] = log.name
             code, log = self.ssh(self.args.ssh_user, vm_rescue.boot_files_command(str(mounted["path"])), f"rescue-{mode}-boot-files.log", self.args.command_timeout)
             try:
                 report = vm_rescue.parse_boot_files(code, log.read_text(errors="replace"))
