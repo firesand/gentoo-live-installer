@@ -97,7 +97,7 @@ def test_mount_rows_start_with_the_root_and_mark_data_as_optional() -> None:
                       {"mountpoint": "/home", "device": "/dev/sdb1", "fstype": "ext4", "tier_name": "data", "selected": False, "needs_mkdir": True}]}
     rows = model.mount_rows(plan)
     assert [(row.mountpoint, row.kind, row.optional, row.selected) for row in rows] == [("/", "The system", False, True), ("/efi", "Boot files", False, True), ("/home", "Your data (optional)", True, False)]
-    assert rows[0].note == "subvolume 256" and rows[2].note == "will be created"
+    assert rows[0].note == "subvolume 256" and rows[2].note == "the folder is made when repairs are enabled"
 
 
 def test_the_real_mount_repeats_the_dry_run_request_exactly() -> None:

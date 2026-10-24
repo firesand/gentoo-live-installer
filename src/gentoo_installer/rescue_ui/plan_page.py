@@ -19,7 +19,7 @@ from PySide6.QtWidgets import QCheckBox, QLabel, QLineEdit, QListWidget, QListWi
 
 from ..widgets import Card, wrapped_label
 from . import messages, model
-from .base import Busy, Expander, InlineConfirm, Notice, RescuePage, SecretField, TextView, danger_style, primary_style, soft_breaks
+from .base import Busy, Expander, FlowText, InlineConfirm, Notice, RescuePage, SecretField, TextView, danger_style, primary_style, soft_breaks
 from .client import Call, RescueClient
 from .find_page import clear_layout
 from .options_form import OptionsForm
@@ -113,11 +113,9 @@ class PlanPage(RescuePage):
         self.advice = wrapped_label("")
         self.advice.setTextFormat(Qt.TextFormat.RichText)
         column.addWidget(self.advice)
-        self.prep_text = wrapped_label("", selectable=True)
-        self.prep_text.setTextFormat(Qt.TextFormat.RichText)
+        self.prep_text = FlowText()
         self.prep = Expander("Preparation", self.prep_text)
-        self.commands_text = wrapped_label("", selectable=True)
-        self.commands_text.setTextFormat(Qt.TextFormat.RichText)
+        self.commands_text = FlowText()
         commands_holder = QWidget()
         commands_column = QVBoxLayout(commands_holder)
         commands_column.setContentsMargins(0, 0, 0, 0)
@@ -348,13 +346,13 @@ class PlanPage(RescuePage):
         preparation: list[str] = []
         main: list[str] = []
         for number, step in enumerate(steps, start=1):
-            text = html.escape(soft_breaks(str(step.get("display", ""))))
+            text = html.escape(str(step.get("display", "")))
             condition = model.CONDITION_TEXTS.get(str(step.get("when", "")))
             tail = f' <span style="color:#6d6979">[{condition}]</span>' if condition else ""
             (preparation if model.is_preparation(step) else main).append(f"{number}. {text}{tail}")
-        self.commands_text.setText("<br>".join(main))
+        self.commands_text.set_lines(main, html_text=True)
         self.commands_text.setVisible(bool(main))
-        self.prep_text.setText("<br>".join(preparation))
+        self.prep_text.set_lines(preparation, html_text=True)
         what = " The system is switched from read-only to read-write and made ready to run its own programs." if any(step.get("group") == "enter-write" for step in steps) else ""
         self.prep.set_title(f"Preparation ({len(preparation)} step{'s' if len(preparation) != 1 else ''}).{what}")
         self.prep.setVisible(bool(preparation))

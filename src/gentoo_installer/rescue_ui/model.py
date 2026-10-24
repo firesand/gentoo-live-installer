@@ -210,7 +210,7 @@ def mount_rows(plan: dict[str, Any]) -> list[MountRow]:
     for item in plan.get("items", []):
         tier = str(item.get("tier_name", "data"))
         rows.append(MountRow(str(item["mountpoint"]), str(item["device"]), str(item.get("fstype", "")), MOUNT_KINDS.get(tier, tier), tier == "data", bool(item.get("selected", True)),
-                             "will be created" if item.get("needs_mkdir") else ""))
+                             "the folder is made when repairs are enabled" if item.get("needs_mkdir") else ""))
     return rows
 
 

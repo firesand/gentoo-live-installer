@@ -58,7 +58,7 @@ def test_a_gentoo_without_a_boot_menu_is_found_opened_diagnosed_repaired_and_clo
     page.recommended_button.click()
     qtbot.waitUntil(lambda: current(window) == PLAN and window.plan_page.state == "review", timeout=20000)
     plan_page = window.plan_page
-    assert "grub-mkconfig" in plan_page.commands_text.text() and plan_page.risk_label.text().startswith("Medium risk")
+    assert "grub-mkconfig" in plan_page.commands_text.toPlainText() and plan_page.risk_label.text().startswith("Medium risk")
     assert not plan_page.run_button.isEnabled() and plan_page.reviewed.isVisibleTo(plan_page) and not plan_page.typed.isVisibleTo(plan_page)
     assert not lab.system.chroot_calls
     plan_page.reviewed.setChecked(True)

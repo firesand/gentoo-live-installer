@@ -11,7 +11,7 @@ import re
 from typing import Any
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QFontDatabase
+from PySide6.QtGui import QFontDatabase, QTextOption
 from PySide6.QtWidgets import (
     QCheckBox,
     QFrame,
@@ -273,6 +273,45 @@ class TextView(QTextEdit):
             self.append("\n".join(lines))
 
 
+class FlowText(QTextEdit):
+    """Read-only text that wraps anywhere and grows to show all its lines.
+
+    For commands and paths: a very long word cannot push the page wider than the window, and what is copied is the exact text
+    (a label would need invisible break characters in it, which break a pasted command).
+    """
+
+    def __init__(self, parent: QWidget | None = None, *, mono: bool = False) -> None:
+        super().__init__(parent)
+        self.setReadOnly(True)
+        self.setFrameShape(QFrame.Shape.NoFrame)
+        self.setWordWrapMode(QTextOption.WrapMode.WrapAtWordBoundaryOrAnywhere)
+        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.setStyleSheet("QTextEdit { background: transparent; border: 0; padding: 0; }")
+        if mono:
+            self.setFont(mono_font())
+        self.setMinimumWidth(40)
+        self.document().documentLayout().documentSizeChanged.connect(lambda _size: self._fit())
+
+    def _fit(self) -> None:
+        height = int(self.document().size().height()) + 4
+        if height != self.height():
+            self.setFixedHeight(max(height, 18))
+
+    def resizeEvent(self, event: Any) -> None:
+        super().resizeEvent(event)
+        self.document().setTextWidth(self.viewport().width())
+        self._fit()
+
+    def set_lines(self, lines: list[str], *, html_text: bool = False) -> None:
+        if html_text:
+            self.setHtml("<br>".join(lines))
+        else:
+            self.setPlainText("\n".join(lines))
+        self.document().setTextWidth(max(self.viewport().width(), 40))
+        self._fit()
+
+
 class InlineConfirm(QFrame):
     """A question that appears inside the page: a text, optionally a tick box and words to type, then Confirm or Cancel."""
 
@@ -372,4 +411,4 @@ class InlineConfirm(QFrame):
         self.cancelled.emit()
 
 
-__all__ = ["Busy", "Card", "Expander", "InlineConfirm", "Notice", "RescuePage", "SecretField", "StatusRow", "TextView", "mono_font", "soft_breaks", "wrapped_label"]
+__all__ = ["Busy", "Card", "Expander", "FlowText", "InlineConfirm", "Notice", "RescuePage", "SecretField", "StatusRow", "TextView", "mono_font", "soft_breaks", "wrapped_label"]

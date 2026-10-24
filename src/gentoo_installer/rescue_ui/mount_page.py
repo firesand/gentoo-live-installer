@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QCheckBox, QGridLayout, QHBoxLayout, QLabel, QPush
 
 from ..widgets import Card, wrapped_label
 from . import messages, model
-from .base import Busy, Expander, Notice, RescuePage, soft_breaks
+from .base import Busy, Expander, FlowText, Notice, RescuePage, soft_breaks
 from .client import Call, RescueClient
 from .find_page import clear_layout
 
@@ -71,8 +71,7 @@ class MountPage(RescuePage):
         self.warnings = wrapped_label("")
         self.warnings.setStyleSheet("color: #b87818;")
         self.content.addWidget(self.warnings)
-        self.commands_text = wrapped_label("", selectable=True)
-        self.commands_text.setStyleSheet("font-family: monospace;")
+        self.commands_text = FlowText(mono=True)
         self.commands = Expander("Show the exact commands", self.commands_text)
         self.content.addWidget(self.commands)
         self.content.addStretch()
@@ -184,7 +183,7 @@ class MountPage(RescuePage):
         self.warnings.setText(soft_breaks("\n".join(f"! {item}" for item in warnings)))
         self.warnings.setVisible(bool(warnings))
         commands = plan.get("commands") or []
-        self.commands_text.setText(soft_breaks("\n".join(commands)))
+        self.commands_text.set_lines([str(item) for item in commands])
         self.commands.setVisible(bool(commands))
         self.open_button.setEnabled(bool(plan) and not self._busy)
 
