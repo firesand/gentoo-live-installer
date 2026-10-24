@@ -8,6 +8,7 @@ mod edits;
 mod exec;
 mod fmt;
 mod portage;
+mod render;
 mod settings;
 mod shot;
 mod stop;
@@ -146,20 +147,41 @@ fn main() -> eframe::Result {
         boot_check_cli(args.get(i + 1).map(|s| s.as_str()).unwrap_or(""));
         return Ok(());
     }
+    let choice = render::Choice::parse(std::env::var(render::VAR).ok().as_deref()).unwrap_or_else(|why| {
+        eprintln!("PortageHub: {why}; using auto.");
+        render::Choice::Auto
+    });
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("PortageHub")
             .with_app_id("portagehub")
             .with_inner_size([window::WANTED.0, window::WANTED.1])
             .with_min_inner_size([window::MIN.0, window::MIN.1]),
+        renderer: choice.first(),
         ..Default::default()
     };
     if let Err(e) = eframe::run_native("PortageHub", options, Box::new(|cc| Ok(Box::new(app::App::new(cc))))) {
         let has_display = std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some();
+        if choice.falls_back(has_display) {
+            eprintln!("PortageHub: the GPU renderer could not open a window ({e}); trying plain OpenGL.");
+            // Does not return unless the restart itself fails.
+            let why = restart_with_glow();
+            eprintln!("PortageHub: cannot restart ({why}).");
+        }
         eprintln!("{}", window_error_text(&e.to_string(), has_display));
         std::process::exit(1);
     }
     Ok(())
+}
+
+/// Replace this process by a new PortageHub that uses the OpenGL renderer.
+fn restart_with_glow() -> std::io::Error {
+    use std::os::unix::process::CommandExt;
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(e) => return e,
+    };
+    std::process::Command::new(exe).args(std::env::args_os().skip(1)).env(render::VAR, "glow").exec()
 }
 
 /// What to print when no window can be opened: the reason, and what usually helps.
@@ -169,6 +191,7 @@ fn window_error_text(reason: &str, has_display: bool) -> String {
         text.push_str("\nNo display was found (DISPLAY and WAYLAND_DISPLAY are both unset): start it from a desktop session.");
     }
     text.push_str("\nOn machines without a working Vulkan driver (older hardware, virtual machines) try: WGPU_BACKEND=gl portagehub");
+    text.push_str("\nOr use plain OpenGL: PORTAGEHUB_RENDERER=glow portagehub");
     text
 }
 
@@ -180,7 +203,7 @@ mod tests {
     fn a_failed_window_is_explained() {
         let t = window_error_text("FailedToCreateSurfaceForAnyBackend", true);
         assert!(t.starts_with("PortageHub could not open a window: FailedToCreateSurfaceForAnyBackend"));
-        assert!(t.contains("WGPU_BACKEND=gl portagehub") && !t.contains("No display"));
+        assert!(t.contains("WGPU_BACKEND=gl portagehub") && t.contains("PORTAGEHUB_RENDERER=glow portagehub") && !t.contains("No display"));
         let t = window_error_text("x", false);
         assert!(t.contains("No display was found") && t.contains("WGPU_BACKEND=gl"));
     }

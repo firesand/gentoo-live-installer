@@ -1995,7 +1995,7 @@ impl eframe::App for App {
         self.settings.save();
     }
 
-    fn on_exit(&mut self) {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.settings.save();
         self.exec.stop_helper();
     }

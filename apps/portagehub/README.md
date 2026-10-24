@@ -176,9 +176,13 @@ packaging. The Gentoo ebuild installs to `/usr`.
 - *"No polkit authentication agent is running in this session"* — pkexec has nobody to ask
   for the password. Start your desktop's polkit agent (`polkit-kde-agent`,
   `polkit-gnome-authentication-agent-1`, `lxqt-policykit`, …); minimal window managers do not.
-- *PortageHub cannot open a window* — it prints the reason and a hint. Software-only machines
-  and some virtual machines work with `WGPU_BACKEND=gl portagehub` (OpenGL, via Mesa);
-  `WGPU_BACKEND=vulkan` forces Vulkan.
+- *PortageHub cannot open a window* — it prints the reason and a hint. It draws with wgpu
+  (Vulkan, or OpenGL through Mesa). When that cannot open a window, PortageHub starts itself
+  once more with a plain OpenGL renderer (glow), which older graphics hardware and some virtual
+  machines can still use; the first attempt's error is printed before the restart.
+  `PORTAGEHUB_RENDERER=wgpu` or `=glow` pins one renderer (and never falls back);
+  `WGPU_BACKEND=gl` or `=vulkan` picks the wgpu backend. Without a display (`DISPLAY` and
+  `WAYLAND_DISPLAY` both unset) nothing can open: start it from a desktop session.
 - *Everything is read-only for one file* — the Configuration page says why: not valid UTF-8,
   not readable by your user, or a symlink (the helper never writes through one, because the
   link target would decide where root writes).
@@ -189,6 +193,7 @@ packaging. The Gentoo ebuild installs to `/usr`.
 | --- | --- |
 | `PORTAGEHUB_ELEVATE` | Launcher for the helper: `pkexec` (default), another command such as `doas`, or `none` to run it unprivileged (testing). |
 | `PORTAGEHUB_HELPER` | Absolute path of the helper binary to use instead of the one next to the GUI or in `/usr/libexec`. |
+| `PORTAGEHUB_RENDERER` | `auto` (default: wgpu, then plain OpenGL if no window opens), `wgpu` or `glow`. |
 | `PORTAGEHUB_ROOT` | Work on a scratch tree instead of `/` (used by the tests; honoured only when not running as root). |
 | `PORTAGEHUB_IDLE_SECS` | Idle limit of the helper in seconds (tests only; honoured only when not root; the real limit is 15 minutes). |
 | `PORTAGEHUB_DEMO=1` | Replays a synthetic parallel emerge to try the progress view without building anything. |
