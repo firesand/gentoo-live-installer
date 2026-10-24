@@ -121,3 +121,9 @@ def failing_job_before_storage() -> list[dict[str, Any]]:
 
 def test_a_failure_after_storage_with_resumable_true_is_unchanged(installer, host: FakeHost) -> None:
     assert follow(installer(jobs=[failing_job()]), host).resumable is True
+
+
+def test_a_blocked_start_ends_the_unattended_run_with_exit_status_1() -> None:
+    from gentoo_installer.textui import cli
+
+    assert cli.exit_code(Outcome("blocked", REASON)) == 1
