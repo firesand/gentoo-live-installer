@@ -12,10 +12,12 @@ import json
 from dataclasses import dataclass, field, replace
 from typing import Any, Iterable
 
+from gentoo_installer.layout import human_size
+
 from .devices import GPT_ESP, MBR_ESP, GPT_XBOOTLDR, DeviceGraph, DeviceNode
 from .errors import RescueError
 from .fsprobe import MOUNT_TYPE, RECOVERY_SKIP
-from .fstab import CryptEntry, Fstab, Resolved, resolve_all
+from .fstab import CryptEntry, Entry, Fstab, Resolved, resolve_all
 from .paths import RootFS
 from .safety import SAFE_SUBVOL_RE, VALUE_MOUNT_OPTS
 
@@ -167,6 +169,38 @@ def _node_unusable_reason(node: DeviceNode) -> str:
     return ""
 
 
+KERNEL_NAME_KINDS = frozenset({"kernel", "md"})  # /dev/sda1, /dev/nvme0n1p2, /dev/dm-0, /dev/md0: numbered in the order the kernel finds the devices
+
+
+def _trusted_disks(root_node: DeviceNode, resolved: list[Resolved], graph: DeviceGraph) -> set[str]:
+    """The disks that are certainly part of this system: the root's, and those of every fstab entry that names its device by an ID (UUID, label, by-id, mapper name)."""
+    nodes = [root_node] + [node for item in resolved if item.status == "resolved" and item.kind not in KERNEL_NAME_KINDS for node in item.devices]
+    return {disk.key for node in nodes for disk in graph.parent_disks(node)}
+
+
+def _describe_device(node: DeviceNode, graph: DeviceGraph) -> str:
+    """Enough for a person to tell which device it is: size, file system, label and the disk model."""
+    kind = "array" if node.type.startswith("raid") else "volume" if node.type in {"lvm", "crypt"} else "partition"
+    label = f' "{node.label}"' if node.label else ""
+    disks = graph.parent_disks(node)
+    where = " and ".join(f"{disk.model or 'a disk'} ({disk.path}{', USB' if disk.tran == 'usb' else ''})" for disk in disks)
+    return f"{human_size(node.size)} {node.fstype or 'unformatted'} {kind}{label}" + (f" on {where}" if where else "")
+
+
+def _kernel_name_doubt(entry: Entry, item: Resolved, node: DeviceNode, graph: DeviceGraph, trusted: set[str]) -> str:
+    """Why a device that fstab names by a kernel name (/dev/sda1) cannot be taken for the one the system meant, or ''.
+
+    The names belong to the live session: a USB drive, another installation or a data disk can be /dev/sda here while the system was installed when its own disk was.
+    The device is believed when it shares a disk with the system and holds the file system type fstab expects.
+    """
+    start = f"{entry.spec} is only a kernel name, and kernel names change between computers and between starts. Here it is a {_describe_device(node, graph)}"
+    if item.type_mismatch:
+        return f"{start}, but {item.type_mismatch}. It is not opened automatically; choose the right partition yourself."
+    if not {disk.key for disk in graph.parent_disks(node)} & trusted:
+        return f"{start}, which is on another disk than this system. It is not opened automatically; choose the right partition yourself."
+    return ""
+
+
 def _external_logs(node: DeviceNode, graph: DeviceGraph) -> list[DeviceNode]:
     return graph.external_logs(node)
 
@@ -246,6 +280,7 @@ def plan_mounts(
     plan.root = _complete_root(root, fstab, root_node, graph, plan.warnings)
     plan.root_node_keys = [node.key for node in graph.stack_of(root_node)]
     resolved = resolve_all(fstab, graph, crypttab=crypttab)
+    trusted = _trusted_disks(root_node, resolved, graph)
     claimed = {root_node.key}
     used_mountpoints = {"/"}
     movable = tuple(unmount_existing)
@@ -276,6 +311,10 @@ def plan_mounts(
         if reason:
             plan.unresolved.append({"mountpoint": mountpoint, "spec": entry.spec, "status": "unusable", "reason": reason, "tier": tier})
             continue
+        doubt = _kernel_name_doubt(entry, item, node, graph, trusted) if item.kind in KERNEL_NAME_KINDS and tier in {TIER_BOOT, TIER_SYSTEM} else ""  # these are mounted without asking
+        if doubt:
+            plan.unresolved.append({"mountpoint": mountpoint, "spec": entry.spec, "status": "unstable", "reason": doubt, "tier": tier, "device": node.path})
+            continue
         try:
             carried, dropped = filter_options(entry.options, node.fstype)
         except ValueError as exc:
@@ -293,7 +332,10 @@ def plan_mounts(
         # Below another mount the directory lives on that file system (/boot/efi on a separate /boot): only the session can tell, once it is mounted.
         mount.needs_mkdir = not any(mount.mountpoint.startswith(prefix) for prefix in mounted_below) and not _directory_exists(fs, mount.mountpoint)
     plan.items.sort(key=lambda it: (depth_of(it.mountpoint), it.order))
-    if not fstab.entries or (plan.unresolved and not plan.selected):
+    doubtful = [entry for entry in plan.unresolved if entry["status"] == "unstable"]
+    plan.suggestions.extend({"mountpoint": entry["mountpoint"], "device": entry["device"],
+                             "reason": f"fstab calls it {entry['spec']}, which here is not on this system's disk; add it only if it is the right one"} for entry in doubtful)
+    if not fstab.entries or (plan.unresolved and not plan.selected) or doubtful:
         plan.suggestions.extend(suggest_boot_mounts(graph, root_node, esp_default_mountpoint, {item.mountpoint for item in plan.items}))
     if fs.is_dir("/boot") and not any(item.tier == TIER_BOOT for item in plan.selected) and not fs.listdir_or("/boot"):
         plan.warnings.append("/boot is empty on the root file system and no separate /boot was mounted; the kernel may be on a partition that is not listed in fstab")

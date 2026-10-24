@@ -56,7 +56,7 @@ class MountPage(RescuePage):
         self.table_card.content.addLayout(self.table)
         self.content.addWidget(self.table_card)
 
-        self.missing_card = Card("Not found", "The system's file list (fstab) names disks that are not in this computer. They are not opened.")
+        self.missing_card = Card("Not found", "The system's file list (fstab) names disks that are not in this computer, or that could be another disk with the same name. They are not opened.")
         self.missing_rows = QVBoxLayout()
         self.missing_card.content.addLayout(self.missing_rows)
         self.content.addWidget(self.missing_card)

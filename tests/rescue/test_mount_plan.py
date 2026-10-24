@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -50,6 +51,91 @@ def test_quoted_and_by_id_entries_are_mounted_like_any_other(tmp_path: Path, mon
     fstab = f'UUID="{fr.ROOT_UUID}" / ext4 defaults 0 1\n/dev/disk/by-id/nvme-Samsung_SSD_990_PRO_1TB_S7NZ0000000001-part1 /efi vfat umask=0077 0 2\n'
     plan, _ = make_plan(tmp_path, "gentoo", lf.nvme_dualboot(), "/dev/nvme0n1p5", fstab=fstab, mounts=["/efi"])
     assert [(item.mountpoint, item.device) for item in plan.selected] == [("/efi", "/dev/nvme0n1p1")] and plan.unresolved == []
+
+
+def internal_nvme_and_usb_sda() -> str:
+    """The internal disk is an NVMe here; an external USB drive with ext4 backups happens to be /dev/sda."""
+    nvme = lf.node("nvme0n1", "disk", 500 * lf.GiB, maj_min="259:0", tran="nvme", model="Samsung SSD 990 PRO", pttype="gpt", children=[
+        lf.part("nvme0n1", 1, 512 * lf.MiB, 259, 0, sep="p", fstype="vfat", uuid="AAAA-1111", parttype=lf.ESP, pttype="gpt"),
+        lf.part("nvme0n1", 2, 400 * lf.GiB, 259, 0, sep="p", fstype="ext4", uuid=fr.ROOT_UUID, parttype=lf.LINUX_ROOT, pttype="gpt"),
+    ])
+    usb = lf.node("sda", "disk", 2000 * lf.GiB, maj_min="8:0", tran="usb", model="Ultra Backup", hotplug=True, rm=True, pttype="gpt", children=[
+        lf.part("sda", 1, 2000 * lf.GiB, 8, 0, fstype="ext4", uuid="99999999-8888-4777-8666-555555555555", label="backups", parttype=lf.LINUX_FS, pttype="gpt"),
+    ])
+    return lf.lsblk(nvme, usb)
+
+
+def test_a_kernel_name_that_is_another_disk_here_is_never_mounted_on_its_own(tmp_path: Path) -> None:
+    """The system was installed when its disk was /dev/sda. In this live session /dev/sda is a USB backup drive: /dev/sda1 must not become /boot, writable."""
+    fstab = "/dev/sda2 / ext4 defaults 0 1\n/dev/sda1 /boot ext4 defaults 0 2\n"
+    plan, _ = make_plan(tmp_path, "gentoo", internal_nvme_and_usb_sda(), "/dev/nvme0n1p2", fstab=fstab, mounts=["/boot"])
+    assert plan.items == [] and plan.devices() == ["/dev/nvme0n1p2"]
+    [entry] = plan.unresolved
+    assert (entry["mountpoint"], entry["spec"], entry["status"], entry["device"], entry["tier"]) == ("/boot", "/dev/sda1", "unstable", "/dev/sda1", 2)
+    assert all(word in entry["reason"] for word in ("kernel name", "Ultra Backup", "2.0 TiB", "ext4", "backups", "another disk"))
+    first = plan.suggestions[0]  # the device itself is offered as a choice, so the window can show an Add button for it
+    assert (first["mountpoint"], first["device"]) == ("/boot", "/dev/sda1") and "/dev/sda1" in first["reason"] and "only if it is the right one" in first["reason"]
+    assert {"mountpoint": "/boot/efi", "device": "/dev/nvme0n1p1", "reason": "EFI system partition on the same disk"} in plan.suggestions  # and what this system's own disk has
+    # the person can still choose it: the override replaces the doubt
+    chosen, _ = make_plan(tmp_path / "chosen", "gentoo", internal_nvme_and_usb_sda(), "/dev/nvme0n1p2", fstab=fstab, mounts=["/boot"], overrides=[{"mountpoint": "/boot", "device": "/dev/sda1"}])
+    assert [(item.mountpoint, item.device, item.source, item.selected) for item in chosen.items] == [("/boot", "/dev/sda1", "user", True)]
+    assert chosen.unresolved == [] and chosen.suggestions == [] and chosen.digest != plan.digest
+
+
+def test_the_same_names_on_the_systems_own_disk_are_mounted_as_before(tmp_path: Path) -> None:
+    """A hand-built Gentoo, Slackware or Debian: every entry a kernel name, everything on one disk."""
+    fstab = "/dev/sda1 /efi vfat umask=0077 0 2\n/dev/sda2 /boot ext4 noatime 0 2\n/dev/sda3 / xfs noatime 0 1\n/dev/sda4 none swap sw 0 0\n"
+    plan, _ = make_plan(tmp_path, "gentoo", lf.xfs_boot_esp(), "/dev/sda3", fstab=fstab, mounts=["/efi", "/boot"])
+    assert [(item.mountpoint, item.device, item.source, item.selected) for item in plan.items] == [("/efi", "/dev/sda1", "fstab", True), ("/boot", "/dev/sda2", "fstab", True)]
+    assert plan.unresolved == [] and plan.suggestions == []
+
+
+def test_a_kernel_name_on_a_disk_that_another_entry_names_by_uuid_is_trusted(tmp_path: Path) -> None:
+    """/boot or /var on a second disk is a normal layout; the UUID entry says that disk belongs to the system."""
+    nvme, usb = json.loads(internal_nvme_and_usb_sda())["blockdevices"]
+    usb["children"].append(lf.part("sda", 2, 100 * lf.GiB, 8, 0, fstype="ext4", uuid="77777777-6666-4555-8444-333333333333", label="var", parttype=lf.LINUX_FS, pttype="gpt"))
+    text = lf.lsblk(nvme, usb)
+    fstab = f"UUID={fr.ROOT_UUID} / ext4 defaults 0 1\nUUID=99999999-8888-4777-8666-555555555555 /srv ext4 defaults 0 2\n/dev/sda2 /var ext4 defaults 0 2\n"
+    plan, _ = make_plan(tmp_path, "gentoo", text, "/dev/nvme0n1p2", fstab=fstab, mounts=["/var", "/srv"])
+    assert {item.mountpoint: (item.device, item.selected) for item in plan.items} == {"/var": ("/dev/sda2", True), "/srv": ("/dev/sda1", False)} and plan.unresolved == []
+    alone, _ = make_plan(tmp_path / "alone", "gentoo", text, "/dev/nvme0n1p2", fstab=fstab.replace("UUID=99999999-8888-4777-8666-555555555555 /srv ext4 defaults 0 2\n", ""), mounts=["/var"])
+    assert alone.items == [] and [(entry["mountpoint"], entry["status"]) for entry in alone.unresolved] == [("/var", "unstable")]
+
+
+def test_a_kernel_name_whose_file_system_type_does_not_fit_is_not_trusted_even_on_the_same_disk(tmp_path: Path) -> None:
+    fstab = f"UUID={fr.ROOT_UUID} / ext4 defaults 0 1\n/dev/sda6 /var xfs defaults 0 2\n"
+    plan, _ = make_plan(tmp_path, "gentoo", lf.plain_sata_mbr(), "/dev/sda1", fstab=fstab, mounts=["/var"])
+    assert plan.items == []
+    [entry] = plan.unresolved
+    assert entry["status"] == "unstable" and "xfs" in entry["reason"] and "ext4" in entry["reason"]
+    # ext2, ext3 and ext4 are one family, and a stable name is judged by its UUID, not by column three
+    fine, _ = make_plan(tmp_path / "fine", "gentoo", lf.plain_sata_mbr(), "/dev/sda1", fstab=fstab.replace("xfs", "ext3"), mounts=["/var"])
+    assert [item.mountpoint for item in fine.selected] == ["/var"]
+    by_uuid, _ = make_plan(tmp_path / "uuid", "gentoo", lf.plain_sata_mbr(), "/dev/sda1", fstab=fstab.replace("/dev/sda6", f"UUID={fr.HOME_UUID}"), mounts=["/var"])
+    assert [item.mountpoint for item in by_uuid.selected] == ["/var"]
+
+
+def test_a_numbered_md_array_is_not_trusted_on_its_own_either(tmp_path: Path) -> None:
+    """/dev/md0 and /dev/md127 are handed out in the order arrays are found; they change between boots and between computers."""
+    nvme, _usb = json.loads(internal_nvme_and_usb_sda())["blockdevices"]
+    members = json.loads(lf.md_raid1_under_lvm())["blockdevices"]
+    array = lf.node("md0", "raid1", 100 * lf.GiB, maj_min="9:0", fstype="ext4", uuid="55555555-4444-4333-8222-111111111111", label="data", path="/dev/md0")
+    for disk in members:
+        disk["children"][0]["children"] = [json.loads(json.dumps(array))]
+    text = lf.lsblk(nvme, *members)
+    fstab = f"UUID={fr.ROOT_UUID} / ext4 defaults 0 1\n/dev/md0 /var ext4 defaults 0 2\n"
+    plan, _ = make_plan(tmp_path, "gentoo", text, "/dev/nvme0n1p2", fstab=fstab, mounts=["/var"])
+    assert plan.items == [] and [(entry["mountpoint"], entry["status"], entry["device"]) for entry in plan.unresolved] == [("/var", "unstable", "/dev/md0")]
+    # the root is on that array (a RAID root): its member disks are the system's own
+    root_on_md, _ = make_plan(tmp_path / "md", "gentoo", lf.md_raid1_root(), "/dev/md127", fstab=f"/dev/md127 / ext4 defaults 0 1\n/dev/sda1 /efi vfat umask=0077 0 2\n", mounts=["/efi"])
+    assert [(item.mountpoint, item.device) for item in root_on_md.selected] == [("/efi", "/dev/sda1")] and root_on_md.unresolved == []
+
+
+def test_data_mounts_are_only_offered_so_a_kernel_name_there_is_listed_not_refused(tmp_path: Path) -> None:
+    """Tier 4 is never mounted on its own and always read-only; the person sees the device and ticks it."""
+    fstab = f"UUID={fr.ROOT_UUID} / ext4 defaults 0 1\n/dev/sda1 /backups ext4 defaults 0 2\n"
+    plan, _ = make_plan(tmp_path, "gentoo", internal_nvme_and_usb_sda(), "/dev/nvme0n1p2", fstab=fstab, mounts=["/backups"])
+    assert [(item.mountpoint, item.device, item.tier, item.selected) for item in plan.items] == [("/backups", "/dev/sda1", 4, False)] and plan.unresolved == []
 
 
 def test_ubuntu_lvm_plan_orders_parents_first(tmp_path: Path) -> None:

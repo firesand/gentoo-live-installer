@@ -191,6 +191,29 @@ def test_a_missing_file_list_suggests_the_boot_partition_and_it_can_be_added(qtb
     assert any(f["id"] == "M01" and "/efi was not mounted" in f["title"] for f in window.system.findings)
 
 
+def test_a_kernel_name_that_is_another_disk_here_is_offered_and_opened_only_when_chosen(qtbot, rescue_lab_factory, daemon_factory, repair_kit) -> None:
+    """fstab says /dev/sdb1 for /boot; in this session /dev/sdb is a different disk. It is shown as a choice with what it is, never opened by itself."""
+    fstab = f"UUID={fr.ROOT_UUID}\t/\text4\tnoatime\t0 1\n/dev/sdb1\t/boot\text4\tnoatime\t0 2\n"
+    lab, _tree = uefi_gentoo_lab(rescue_lab_factory, fstab=fstab)
+    window = repair_kit.open(daemon_factory(lab).path)
+    scanned(qtbot, window, 2)
+    window.find_page.group.set_value(system_card(window, "/dev/nvme0n1p5"))
+    window.find_page.continue_button.click()
+    mount = window.mount_page
+    qtbot.waitUntil(lambda: mount.open_button.isEnabled(), timeout=20000)
+    assert mount.findChild(object, "rescueMountRow:/boot") is None and mount.missing_card.isVisibleTo(mount)
+    said = plain(" ".join(label.text() for label in mount.missing_card.findChildren(type(mount.summary))))
+    assert "/boot" in said and "kernel name" in said and "Samsung SSD 870" in said and "another disk than this system" in said
+    button = mount.findChild(object, "rescueSuggest:/boot")
+    assert button is not None and button.isEnabled()
+    before = mount.mount_plan["digest"]
+    button.click()
+    qtbot.waitUntil(lambda: mount.open_button.isEnabled() and mount.mount_plan["digest"] != before, timeout=20000)
+    assert mount.choice.overrides == [{"mountpoint": "/boot", "device": "/dev/sdb1"}]
+    assert mount.findChild(object, "rescueMountRow:/boot") is not None and not mount.missing_card.isVisibleTo(mount)
+    assert lab.system.mounted_targets() == []  # still only a plan
+
+
 def test_back_from_the_mount_page_returns_to_the_list_without_opening_anything(qtbot, gentoo_machine_for_find, repair_kit) -> None:
     daemon, lab = gentoo_machine_for_find
     window = repair_kit.open(daemon.path)

@@ -127,6 +127,51 @@ def test_the_cleanup_remounts_even_when_the_check_fails(lab_factory) -> None:
     unmount(manager, sid)
 
 
+KERNEL_NAMED_FSTAB = f"UUID={fr.ROOT_UUID}\t/\text4\tnoatime\t0 1\n/dev/sdb1\t/boot\text4\tnoatime\t0 2\n"
+
+
+def test_a_kernel_named_entry_on_another_disk_is_neither_mounted_nor_made_writable(lab_factory) -> None:
+    """The reviewed case end to end: fstab says /dev/sdb1 for /boot, and /dev/sdb is an unrelated disk of this live session. Nothing on it may change."""
+    from gentoo_installerd.rescue.scan import ScanOptions
+
+    from .fakes import tree_digest
+
+    lab, tree = uefi_gentoo_lab(lab_factory, fstab=KERNEL_NAMED_FSTAB)
+    other = lab.system.device_trees["/dev/sdb1"]
+    before = tree_digest(other)
+    manager = lab.manager()
+    scan = manager.scan(None, ScanOptions())
+    request = {"candidate": next(c["id"] for c in scan["candidates"] if c["device"] == "/dev/nvme0n1p5"), "scan_id": scan["scan_id"], "allow_write": True}
+    dry = manager.mount(None, {**request, "dry_run": True})["mount_plan"]
+    assert dry["items"] == [] and [(entry["mountpoint"], entry["status"], entry["device"]) for entry in dry["unresolved"]] == [("/boot", "unstable", "/dev/sdb1")]
+    assert not any("/dev/sdb1" in line for line in dry["commands"]) and (dry["suggestions"][0]["mountpoint"], dry["suggestions"][0]["device"]) == ("/boot", "/dev/sdb1")
+    sid = manager.mount(None, {**request, "plan_digest": dry["digest"]})["session_id"]
+    session = manager.session(sid)
+    assert session.plan.devices() == ["/dev/nvme0n1p5"] and "/dev/sdb1" not in session.ctx.devices.devices
+    assert lab.system.ro["/dev/sdb"] is True  # the unrelated disk is protected like any other
+    assert not any("/dev/sdb" in step.display for step in session.enter_write_steps())
+    plan_and_run(manager, sid, "boot.config")
+    unmount(manager, sid)
+    assert tree_digest(other) == before and not any(lab.system.ro.values())
+    assert not [argv for argv in lab.system.commands_named("mount") if argv[-2] == "/dev/sdb1" and argv[-1].startswith(session.root)]  # only the scan's read-only look at it
+    assert (tree / "boot/grub/grub.cfg").read_text().count("menuentry") >= 1  # the repair went to the /boot directory of the system's own root
+
+
+def test_choosing_the_kernel_named_device_anyway_mounts_it(lab_factory) -> None:
+    from gentoo_installerd.rescue.scan import ScanOptions
+
+    lab, _tree = uefi_gentoo_lab(lab_factory, fstab=KERNEL_NAMED_FSTAB)
+    manager = lab.manager()
+    scan = manager.scan(None, ScanOptions())
+    request = {"candidate": next(c["id"] for c in scan["candidates"] if c["device"] == "/dev/nvme0n1p5"), "scan_id": scan["scan_id"], "allow_write": True,
+               "overrides": [{"mountpoint": "/boot", "device": "/dev/sdb1"}]}
+    dry = manager.mount(None, {**request, "dry_run": True})["mount_plan"]
+    assert [(item["mountpoint"], item["device"], item["source"]) for item in dry["items"]] == [("/boot", "/dev/sdb1", "user")] and dry["unresolved"] == []
+    sid = manager.mount(None, {**request, "plan_digest": dry["digest"]})["session_id"]
+    assert manager.session(sid).plan.devices() == ["/dev/nvme0n1p5", "/dev/sdb1"]
+    unmount(manager, sid)
+
+
 def test_a_file_system_check_after_a_repair_leaves_no_empty_resolv_conf_behind(lab_factory) -> None:
     """The check unmounts the bind and the system and mounts it read-only again; the placeholder made for the bind has to go before the read-write root does."""
     lab, tree = uefi_gentoo_lab(lab_factory)
