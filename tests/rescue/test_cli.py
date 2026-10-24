@@ -404,5 +404,6 @@ def test_the_wizard_offers_one_fix_for_everything_that_was_found(lab_factory) ->
     code, out, err = run("wizard", answers=["1", "y", "0", "y", "u"], interactive=True)
     assert code == 0, err
     assert "0) Fix everything recommended *" in out and "Fix everything recommended   [risk: MEDIUM]" in out
-    assert "dracut --force --regenerate-all" in out and "grub-mkconfig -o /boot/grub/grub.cfg" in out and "Done." in out
+    assert f"dracut --force /boot/initramfs-{fr.GENTOO_KVER}.img {fr.GENTOO_KVER}" in out and "--regenerate-all" not in out  # only the image that is missing is rebuilt
+    assert "grub-mkconfig -o /boot/grub/grub.cfg" in out and "Done." in out
     assert (tree / "boot/grub/grub.cfg").exists() and (tree / f"boot/initramfs-{fr.GENTOO_KVER}.img").exists() and lab.system.mounted_targets() == []

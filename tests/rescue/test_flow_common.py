@@ -370,7 +370,7 @@ def test_fix_everything_recommended_is_one_reviewed_plan(lab_factory) -> None:
     spec = {a["id"]: a for a in info["actions"]}["repair.recommended"]
     assert spec["available"] and spec["recommended"] and spec["risk"] == "high"  # the catalogue states the worst case; the plan states its own
     plan = manager.plan({"session_id": sid, "action_id": "repair.recommended"})
-    assert plan["title"] == "Fix everything recommended" and plan["params"]["actions"] == ["boot.initramfs", "boot.config"] and plan["risk"] == "medium"
+    assert plan["title"] == "Fix everything recommended" and plan["params"] == {"actions": ["boot.initramfs", "boot.config"], "kernels": [fr.GENTOO_KVER]} and plan["risk"] == "medium"
     ids = [step["id"] for step in plan["steps"]]
     assert len(ids) == len(set(ids)), "merged steps need unique ids"
     assert ids.count("smoke") == 1 and ids.count("enter-write-mount-root") == 1  # one read-write switch and one smoke test for the whole plan

@@ -32,9 +32,10 @@ class Finding:
     detail: str
     evidence: list[str] = field(default_factory=list)
     actions: list[str] = field(default_factory=list)
+    kernel: str = ""  # the kernel version a per-kernel finding is about (so a repair can be limited to it)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"id": self.id, "severity": self.severity, "title": self.title, "detail": self.detail, "evidence": self.evidence, "actions": self.actions}
+        return {"id": self.id, "severity": self.severity, "title": self.title, "detail": self.detail, "evidence": self.evidence, "actions": self.actions, **({"kernel": self.kernel} if self.kernel else {})}
 
 
 def _graph_uuids(view: SessionView) -> set[str]:
@@ -66,16 +67,16 @@ def diagnose(view: SessionView, *, hardware_changed: bool = False, efi_state: ef
     for kernel in images:
         if not kernel.initramfs and boot.uses_initramfs and view.family in {"gentoo", "debian", "fedora", "arch", "suse"}:
             findings.append(Finding("D02", "error", f"Kernel {kernel.version} has no initramfs", "The system uses an initramfs, but none exists for this kernel; it cannot mount its root file system.",
-                                    [f"kernel: {kernel.image}"], ["boot.initramfs"]))
+                                    [f"kernel: {kernel.image}"], ["boot.initramfs"], kernel.version))
         elif kernel.initramfs_truncated:
             findings.append(Finding("D03", "error", f"The initramfs of kernel {kernel.version} is incomplete", "The file is smaller than 1 MiB, which means a write was interrupted.",
-                                    [f"{kernel.initramfs}: {kernel.initramfs_size} bytes"], ["boot.initramfs"]))
+                                    [f"{kernel.initramfs}: {kernel.initramfs_size} bytes"], ["boot.initramfs"], kernel.version))
         if kernel.image_truncated:
             findings.append(Finding("D01", "error", f"The kernel {kernel.version} is incomplete", f"{kernel.image} is only {kernel.image_size} bytes, which means a write was interrupted.",
-                                    [f"kernel: {kernel.image}"], ["boot.kernel"]))
+                                    [f"kernel: {kernel.image}"], ["boot.kernel"], kernel.version))
         if not kernel.modules and any(k.modules for k in boot.kernels) and kernel.version not in {"linux"} and not kernel.is_rescue:
             findings.append(Finding("D04", "error", f"Kernel {kernel.version} has no module tree", f"/usr/lib/modules/{kernel.version} is missing, so the kernel cannot load drivers.",
-                                    [f"kernel: {kernel.image}"], ["boot.kernel"]))
+                                    [f"kernel: {kernel.image}"], ["boot.kernel"], kernel.version))
     findings.extend(_loader_findings(view, boot, esp))
     findings.extend(_fstab_findings(view))
     findings.extend(_esp_findings(view, boot, esp))

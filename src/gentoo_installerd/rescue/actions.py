@@ -162,8 +162,10 @@ def _plan_recommended(manager: RescueManager, session: RescueSession, view: Sess
         raise Unsupported("The diagnosis found nothing that needs repairing.")
     included: list[str] = []
     skipped: list[str] = []
+    broken_initramfs = sorted({f.kernel for f in findings if f.severity == "error" and f.id in {"D02", "D03"} and f.kernel})
     for action in wanted:
-        sub = _new_builder(view, session, action, {})
+        params: dict[str, Any] = {"kernels": broken_initramfs} if action == "boot.initramfs" and broken_initramfs else {}  # only the initramfs images that are missing or incomplete
+        sub = _new_builder(view, session, action, params)
         sub.title, sub.risk = ACTIONS[action]["title"], ACTIONS[action]["risk"]
         try:
             fill_builder(manager, session, view, adapter, sub, action)
@@ -174,7 +176,7 @@ def _plan_recommended(manager: RescueManager, session: RescueSession, view: Sess
         included.append(action)
     if not included:
         raise Unsupported("None of the recommended repairs can be done here. " + " ".join(skipped))
-    b.title, b.params = "Fix everything recommended", {"actions": included}
+    b.title, b.params = "Fix everything recommended", {"actions": included, **({"kernels": broken_initramfs} if broken_initramfs and "boot.initramfs" in included else {})}
     b.summary = "Runs, in this order: " + "; ".join(ACTIONS[a]["title"].lower() for a in included) + "."
     b.risk = max((ACTIONS[a]["risk"] for a in included), key=lambda r: RISK_RANK[r])
     for note in skipped:
