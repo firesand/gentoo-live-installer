@@ -29,38 +29,6 @@ pub struct Session {
     pub args: String,
 }
 
-/// Why emerge.log has no history to offer.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum LogProblem {
-    /// The file does not exist: no emerge has logged yet.
-    Missing,
-    /// It exists (0660 portage:portage) but the user is not in the portage group.
-    Denied,
-    Other(String),
-}
-
-impl LogProblem {
-    pub fn of(e: &std::io::Error) -> LogProblem {
-        match e.kind() {
-            std::io::ErrorKind::NotFound => LogProblem::Missing,
-            std::io::ErrorKind::PermissionDenied => LogProblem::Denied,
-            _ => LogProblem::Other(e.to_string()),
-        }
-    }
-
-    /// What to tell the user: (heading, advice).
-    pub fn message(&self) -> (&'static str, String) {
-        match self {
-            LogProblem::Missing => ("No emerge.log yet", "Portage writes /var/log/emerge.log with the first emerge on this system; the history, the recently installed list and build-time estimates fill in from then on.".into()),
-            LogProblem::Denied => (
-                "emerge.log is not readable",
-                "Add your user to the portage group (usermod -aG portage <user>, then log in again) to see the history, the recently installed list and build-time estimates.".into(),
-            ),
-            LogProblem::Other(e) => ("emerge.log could not be read", e.clone()),
-        }
-    }
-}
-
 #[derive(Debug, Default)]
 pub struct History {
     pub merges: Vec<MergeRecord>,
@@ -71,17 +39,9 @@ pub struct History {
     pub by_key: HashMap<String, Vec<usize>>,
     pub median_build: Duration,
     pub readable: bool,
-    /// Set when the log could not be read at all (then `readable` is false).
-    pub problem: Option<LogProblem>,
 }
 
 impl History {
-    /// The history of a log that could not be read. Build-time estimates fall back to the same
-    /// default a log without usable builds gets (a minute), not to zero.
-    pub fn unavailable(problem: LogProblem) -> History {
-        History { problem: Some(problem), median_build: Duration::from_secs(60), ..Default::default() }
-    }
-
     /// Expected build time for `cat/pn`: weighted towards the latest builds.
     pub fn estimate(&self, key: &str) -> Option<Duration> {
         let idx = self.by_key.get(key)?;
@@ -180,13 +140,9 @@ pub fn parse(text: &str) -> History {
 }
 
 pub fn load() -> History {
-    load_from(std::path::Path::new(EMERGE_LOG))
-}
-
-pub fn load_from(path: &std::path::Path) -> History {
-    match std::fs::read(path) {
+    match std::fs::read(EMERGE_LOG) {
         Ok(bytes) => parse(&String::from_utf8_lossy(&bytes)),
-        Err(e) => History::unavailable(LogProblem::of(&e)),
+        Err(_) => History::default(),
     }
 }
 
@@ -204,37 +160,6 @@ pub fn fmt_duration(d: Duration) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn a_missing_log_and_an_unreadable_one_are_told_apart() {
-        let d = std::env::temp_dir().join(format!("portagehub-history-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        std::fs::create_dir_all(&d).unwrap();
-        let missing = load_from(&d.join("emerge.log"));
-        assert!(!missing.readable);
-        assert_eq!(missing.problem, Some(LogProblem::Missing));
-        assert_eq!(missing.median_build, Duration::from_secs(60), "estimates do not collapse to zero");
-        assert_eq!(missing.problem.as_ref().unwrap().message().0, "No emerge.log yet");
-        // 0660 portage:portage for a user outside the group.
-        let denied_path = d.join("denied.log");
-        std::fs::write(&denied_path, "1: Started emerge on: x\n").unwrap();
-        std::fs::set_permissions(&denied_path, std::os::unix::fs::PermissionsExt::from_mode(0o000)).unwrap();
-        if std::fs::File::open(&denied_path).is_err() {
-            let denied = load_from(&denied_path);
-            assert_eq!(denied.problem, Some(LogProblem::Denied));
-            let (title, advice) = denied.problem.unwrap().message();
-            assert_eq!(title, "emerge.log is not readable");
-            assert!(advice.contains("portage group"), "{advice}");
-        }
-        std::fs::set_permissions(&denied_path, std::os::unix::fs::PermissionsExt::from_mode(0o644)).unwrap();
-        let ok = load_from(&denied_path);
-        assert!(ok.readable && ok.problem.is_none());
-        // A directory where the file should be is something else.
-        let dir_log = d.join("dir.log");
-        std::fs::create_dir_all(&dir_log).unwrap();
-        assert!(matches!(load_from(&dir_log).problem, Some(LogProblem::Other(_))));
-        let _ = std::fs::remove_dir_all(&d);
-    }
 
     #[test]
     fn parse_log() {

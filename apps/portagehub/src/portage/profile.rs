@@ -48,13 +48,7 @@ impl MaskDb {
 
     fn remove(&mut self, text: &str) {
         // `-atom` in a later file removes an earlier identical atom.
-        let before: Vec<usize> = self
-            .entries
-            .iter()
-            .enumerate()
-            .filter(|(_, e)| e.atom.to_string() == text)
-            .map(|(i, _)| i)
-            .collect();
+        let before: Vec<usize> = self.entries.iter().enumerate().filter(|(_, e)| e.atom.to_string() == text).map(|(i, _)| i).collect();
         if before.is_empty() {
             return;
         }

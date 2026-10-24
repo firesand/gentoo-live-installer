@@ -6,9 +6,8 @@ use crate::app::{Action, App, FileChange, JobKind};
 use crate::data::Reload;
 use crate::edits;
 use crate::portage::atom::Op as AOp;
-use crate::portage::config::{self, ConfKind, ConfSet, Entry, Line, StrayReason};
+use crate::portage::config::{ConfKind, ConfSet, Entry, Line, StrayReason};
 use crate::portage::makeconf::{self, COMMON_FEATURES};
-use crate::portage::system::{self, PendingUpdate};
 use crate::ui::theme::{self, *};
 use crate::ui::widgets as w;
 use egui::{Color32, Margin, RichText, Ui};
@@ -28,8 +27,6 @@ pub enum Page {
     News,
     Updates,
     Strays,
-    /// The helper's journal: multi-file changes that can be undone.
-    Changes,
 }
 
 #[derive(Default)]
@@ -44,6 +41,9 @@ pub struct Wizard {
     pub file: String,
 }
 
+/// `._cfg` updates found by the background scan: (update file, target).
+type UpdateSlot = Arc<Mutex<Option<Vec<(PathBuf, PathBuf)>>>>;
+
 #[derive(Default)]
 pub struct State {
     pub page: Page,
@@ -56,10 +56,18 @@ pub struct State {
     pub news_open: Option<String>,
     pub mk_raw: Option<String>,
     pub mk_edit: Option<(String, String)>,
+    /// Health check: also list INFO findings.
+    pub mk_show_info: bool,
+    /// Compiler card choices (None: from make.conf).
+    pub mk_opt: Option<String>,
+    pub mk_march: Option<String>,
+    pub mk_preview: Option<(String, super::makeconf_guide::PreviewSlot)>,
+    /// Editing a variable Portage runs as root was confirmed.
+    pub mk_cmd_ok: bool,
     pub env_edit: Option<(PathBuf, String)>,
     pub env_new: String,
     pub profile_pick: Option<usize>,
-    pub updates: Option<Arc<Mutex<Option<Vec<PendingUpdate>>>>>,
+    updates: Option<UpdateSlot>,
     pub stray_names: std::collections::HashMap<PathBuf, String>,
 }
 
@@ -75,11 +83,9 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         w::loading(ui, "Reading /etc/portage…");
         return;
     };
-    egui::Panel::left("cfg-side")
-        .resizable(true)
-        .default_size(270.0)
-        .frame(egui::Frame::new().fill(SIDEBAR).inner_margin(Margin::symmetric(0, 8)))
-        .show(ui, |ui| {
+    egui::Panel::left("cfg-side").resizable(true).default_size(270.0).frame(egui::Frame::new().fill(SIDEBAR).inner_margin(Margin::symmetric(0, 8))).show(
+        ui,
+        |ui| {
             egui::ScrollArea::vertical().id_salt("cfg-side-scroll").show(ui, |ui| {
                 ui.spacing_mut().item_spacing.y = 0.0;
                 if w::side_item(ui, icon::HOUSE, "Overview", app.config_view.page == Page::Overview, None).clicked() {
@@ -122,20 +128,14 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                     app.config_view.page = Page::Updates;
                     app.config_view.updates = None;
                 }
-                if w::side_item(ui, icon::CLOCK_COUNTER_CLOCKWISE, "Recent changes (undo)", app.config_view.page == Page::Changes, None).clicked() {
-                    app.config_view.page = Page::Changes;
-                    if app.recent_changes.is_none() && app.exec.root_ready() {
-                        app.list_changes();
-                    }
-                }
                 let strays = cfg.strays.len();
                 let label = if strays > 0 { format!("Stray files {}", icon::WARNING) } else { "Stray files".to_string() };
                 if w::side_item(ui, icon::QUESTION, &label, app.config_view.page == Page::Strays, Some(strays)).clicked() {
                     app.config_view.page = Page::Strays;
                 }
             });
-        });
-    undo_bar(app, ui);
+        },
+    );
     egui::CentralPanel::default().frame(egui::Frame::new().fill(BG)).show(ui, |ui| match app.config_view.page {
         Page::Overview => overview(app, ui),
         Page::Kind(k) => kind_page(app, ui, k),
@@ -145,93 +145,6 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         Page::News => news(app, ui),
         Page::Updates => updates(app, ui),
         Page::Strays => strays(app, ui),
-        Page::Changes => changes(app, ui),
-    });
-}
-
-/// "Saved … Undo" strip after a change that the helper recorded as a transaction.
-fn undo_bar(app: &mut App, ui: &mut Ui) {
-    let Some(last) = app.last_change.clone() else { return };
-    egui::Panel::top("cfg-undo").frame(egui::Frame::new().fill(PANEL).inner_margin(Margin::symmetric(14, 6))).show_separator_line(false).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(icon::CHECK_CIRCLE).color(GREEN));
-            ui.label(RichText::new(format!("Saved: {}", last.title)).color(TEXT));
-            if w::button(ui, icon::ARROW_COUNTER_CLOCKWISE, "Undo").on_hover_text("Restore the files as they were before this change (refused if one was edited since)").clicked() {
-                app.undo_change(&last.tx, &last.title, false);
-            }
-            if w::icon_button(ui, icon::X, "Dismiss").clicked() {
-                app.last_change = None;
-            }
-        });
-    });
-}
-
-fn changes(app: &mut App, ui: &mut Ui) {
-    let loading = app.jobs.iter().any(|j| j.running() && matches!(j.kind, JobKind::ChangeList));
-    let ready = app.exec.root_ready();
-    common::page(ui, "cfg-changes", |ui| {
-        ui.horizontal(|ui| {
-            w::title(ui, "Recent changes");
-            if ready && !loading && w::icon_button(ui, icon::ARROWS_CLOCKWISE, "Reload").clicked() {
-                app.list_changes();
-            }
-        });
-        w::subtitle(ui, "Changes that touch several files at once are recorded by the admin helper, so they can be undone later. Undo restores the files exactly as they were, and refuses when one of them was edited after the change.");
-        ui.add_space(6.0);
-        if !ready {
-            ui.label(w::dim("The journal is readable only by root. Start the admin session to see it."));
-            if w::primary(ui, icon::LOCK_OPEN, "Start admin session").clicked() {
-                app.push(Action::StartHelper);
-            }
-            return;
-        }
-        let Some(list) = app.recent_changes.clone() else {
-            if loading {
-                w::loading(ui, "Reading the journal…");
-            } else if w::primary(ui, icon::ARROWS_CLOCKWISE, "Load recent changes").clicked() {
-                app.list_changes();
-            }
-            return;
-        };
-        if list.is_empty() {
-            w::empty_state(ui, icon::CLOCK_COUNTER_CLOCKWISE, "Nothing recorded yet", "Multi-file changes you make with PortageHub show up here.");
-            return;
-        }
-        for tx in &list {
-            w::card().show(ui, |ui| {
-                ui.set_width(ui.available_width());
-                ui.horizontal(|ui| {
-                    ui.label(RichText::new(icon::CLOCK_COUNTER_CLOCKWISE).size(18.0).color(ACCENT));
-                    ui.vertical(|ui| {
-                        ui.label(w::strong(&tx.label));
-                        let when = tx.id.split('-').next().and_then(|t| t.parse::<i64>().ok()).unwrap_or(tx.created);
-                        ui.label(w::dim(format!("{} · {} file(s)", crate::fmt::ago(when), tx.files.len())));
-                    });
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| match tx.state.as_str() {
-                        "committed" => {
-                            if app.settings.show_advanced && w::danger(ui, icon::WARNING, "Undo anyway").on_hover_text("Also overwrite files edited since the change").clicked() {
-                                app.undo_change(&tx.id, &tx.label, true);
-                            }
-                            if w::button(ui, icon::ARROW_COUNTER_CLOCKWISE, "Undo").clicked() {
-                                app.undo_change(&tx.id, &tx.label, false);
-                            }
-                        }
-                        "rolled_back" => {
-                            w::badge(ui, "UNDONE", TEXT, Color32::from_rgb(0x3a, 0x46, 0x55));
-                        }
-                        _ => {
-                            w::badge(ui, "UNFINISHED", Color32::from_rgb(0x2b, 0x1a, 0x00), ORANGE);
-                        }
-                    });
-                });
-                egui::CollapsingHeader::new("Files").id_salt(&tx.id).show(ui, |ui| {
-                    for f in &tx.files {
-                        ui.label(w::mono(f));
-                    }
-                });
-            });
-            ui.add_space(3.0);
-        }
     });
 }
 
@@ -251,7 +164,12 @@ fn overview(app: &mut App, ui: &mut Ui) {
         w::subtitle(ui, "Everything below /etc/portage that shapes how Portage builds and selects packages.");
         ui.add_space(8.0);
         if !cfg.strays.is_empty() {
-            w::callout(ui, ORANGE, icon::WARNING, &format!("{} file(s) in /etc/portage are ignored by Portage because of their name. Open “Stray files” to fix them.", cfg.strays.len()));
+            w::callout(
+                ui,
+                ORANGE,
+                icon::WARNING,
+                &format!("{} file(s) in /etc/portage are ignored by Portage because of their name. Open “Stray files” to fix them.", cfg.strays.len()),
+            );
             ui.add_space(6.0);
         }
         let per_row = ((ui.available_width() + 10.0) / 330.0).floor().max(1.0) as usize;
@@ -320,18 +238,22 @@ fn kind_page(app: &mut App, ui: &mut Ui, kind: ConfKind) {
                 ui.label(w::dim(format!("{} files — Portage reads them all in alphabetical order", set.files.len())));
             } else {
                 w::badge(ui, "SINGLE FILE", Color32::from_rgb(0x2b, 0x1a, 0x00), ORANGE);
-                if w::button(ui, icon::FOLDER_PLUS, "Convert to directory").on_hover_text(format!("Moves the file to {}/main so you can split settings into several files", set.base.display())).clicked() {
-                    app.push(Action::Batch { title: format!("Convert {} to a directory", kind.file_name()), ops: edits::convert_to_dir_ops(&set.base), reload: vec![Reload::Config], then: None });
+                if w::button(ui, icon::FOLDER_PLUS, "Convert to directory")
+                    .on_hover_text(format!("Moves the file to {}/main so you can split settings into several files", set.base.display()))
+                    .clicked()
+                {
+                    app.push(Action::Batch {
+                        title: format!("Convert {} to a directory", kind.file_name()),
+                        ops: edits::convert_to_dir_ops(&set.base),
+                        reload: vec![Reload::Config],
+                        then: None,
+                    });
                 }
             }
             if kind == ConfKind::Keywords && set.entry_count() > 0 {
                 ui.label(RichText::new(format!("{} deprecated — consider moving these to package.accept_keywords", icon::WARNING)).color(ORANGE));
             }
         });
-        if let Some(why) = cfg.root_symlink.then(|| config::symlink_message(std::path::Path::new(config::ETC_PORTAGE))).or_else(|| set.symlink.then(|| config::symlink_message(&set.base))) {
-            ui.add_space(4.0);
-            w::callout(ui, ORANGE, icon::LOCK, &why);
-        }
         ui.add_space(6.0);
 
         // Add wizard
@@ -364,15 +286,18 @@ fn kind_page(app: &mut App, ui: &mut Ui, kind: ConfKind) {
         ui.horizontal(|ui| {
             w::search_box(ui, &mut app.config_view.filter, "Filter entries", 300.0);
             if let Some(fp) = app.config_view.file_filter.clone().or_else(|| (!set.is_dir && set.exists).then(|| set.base.clone())) {
-                if let Some(why) = cfg.edit_blocked_for(&fp) {
-                    ui.label(RichText::new(format!("{} {why}", icon::LOCK)).color(ORANGE));
-                } else if w::button(ui, icon::CODE, "Edit as text").clicked() {
+                if w::button(ui, icon::CODE, "Edit as text").clicked() {
                     let text = set.file(&fp).map(|f| f.raw.clone()).unwrap_or_default();
                     app.config_view.raw = Some((fp.clone(), text));
                 }
-                if set.is_dir && cfg.edit_blocked_for(&fp).is_none() && w::button(ui, icon::TRASH, "Delete this file").clicked() {
+                if set.is_dir && w::button(ui, icon::TRASH, "Delete this file").clicked() {
                     let old = set.file(&fp).map(|f| f.raw.clone()).unwrap_or_default();
-                    app.push(Action::Write { title: format!("Delete {}", fp.display()), changes: vec![FileChange { path: fp.clone(), old, new: None }], reload: vec![Reload::Config], then: None });
+                    app.push(Action::Write {
+                        title: format!("Delete {}", fp.display()),
+                        changes: vec![FileChange { path: fp.clone(), old, new: None }],
+                        reload: vec![Reload::Config],
+                        then: None,
+                    });
                     app.config_view.file_filter = None;
                 }
             }
@@ -393,7 +318,12 @@ fn kind_page(app: &mut App, ui: &mut Ui, kind: ConfKind) {
                     if !new.ends_with('\n') {
                         new.push('\n');
                     }
-                    app.push(Action::Write { title: format!("Edit {}", path.display()), changes: vec![FileChange { path: path.clone(), old, new: Some(new) }], reload: vec![Reload::Config], then: None });
+                    app.push(Action::Write {
+                        title: format!("Edit {}", path.display()),
+                        changes: vec![FileChange { path: path.clone(), old, new: Some(new) }],
+                        reload: vec![Reload::Config],
+                        then: None,
+                    });
                     close = true;
                 }
                 if w::button(ui, "", "Close editor").clicked() {
@@ -419,25 +349,13 @@ fn entries_table(app: &mut App, ui: &mut Ui, kind: ConfKind, set: &ConfSet) {
         {
             continue;
         }
-        let entries: Vec<(usize, Entry)> = f
-            .entries()
-            .filter(|(_, e)| filter.is_empty() || e.render().to_lowercase().contains(&filter))
-            .map(|(i, e)| (i, e.clone()))
-            .collect();
-        if let Some(why) = &f.unreadable {
-            any = true;
-            w::section(ui, &f.rel);
-            w::callout(ui, ORANGE, icon::WARNING, why);
-            continue;
-        }
+        let entries: Vec<(usize, Entry)> =
+            f.entries().filter(|(_, e)| filter.is_empty() || e.render().to_lowercase().contains(&filter)).map(|(i, e)| (i, e.clone())).collect();
         if entries.is_empty() {
             continue;
         }
         any = true;
         w::section(ui, &format!("{}{}", f.rel, if f.ignored { "  (ignored by Portage)" } else { "" }));
-        if f.symlink {
-            w::callout(ui, ORANGE, icon::LOCK, &config::symlink_message(&f.path));
-        }
         for (idx, e) in entries {
             let editing = app.config_view.editing.as_ref().is_some_and(|(p, i, _)| *p == f.path && *i == idx);
             let mut comment_above = None;
@@ -454,11 +372,19 @@ fn entries_table(app: &mut App, ui: &mut Ui, kind: ConfKind, set: &ConfSet) {
                     ui.set_width(ui.available_width());
                     ui.horizontal(|ui| {
                         let mut on = !e.disabled;
-                        if w::toggle(ui, &mut on).on_hover_text(if on { "Active — switch off to comment it out" } else { "Commented out — switch on to activate" }).changed() {
+                        if w::toggle(ui, &mut on)
+                            .on_hover_text(if on { "Active — switch off to comment it out" } else { "Commented out — switch on to activate" })
+                            .changed()
+                        {
                             let mut ne = e.clone();
                             ne.disabled = !on;
-                            let ch = edits::replace_entry(&cfg, &f.path, idx, Some(ne)).map(|c| vec![c]);
-                            app.push_write(format!("{} {}", if on { "Enable" } else { "Disable" }, e.atom_text), ch, vec![Reload::Config], None);
+                            let ch = edits::replace_entry(&cfg, &f.path, idx, Some(ne));
+                            app.push(Action::Write {
+                                title: format!("{} {}", if on { "Enable" } else { "Disable" }, e.atom_text),
+                                changes: vec![ch],
+                                reload: vec![Reload::Config],
+                                then: None,
+                            });
                         }
                         if editing {
                             let text = &mut app.config_view.editing.as_mut().unwrap().2;
@@ -470,8 +396,13 @@ fn entries_table(app: &mut App, ui: &mut Ui, kind: ConfKind, set: &ConfSet) {
                                     let mut ne = Entry::new(a, toks.map(String::from).collect());
                                     ne.comment = e.comment.clone();
                                     ne.disabled = e.disabled;
-                                    let ch = edits::replace_entry(&cfg, &f.path, idx, Some(ne)).map(|c| vec![c]);
-                                    app.push_write(format!("Edit {}", e.atom_text), ch, vec![Reload::Config], None);
+                                    let ch = edits::replace_entry(&cfg, &f.path, idx, Some(ne));
+                                    app.push(Action::Write {
+                                        title: format!("Edit {}", e.atom_text),
+                                        changes: vec![ch],
+                                        reload: vec![Reload::Config],
+                                        then: None,
+                                    });
                                 }
                             }
                             if w::button(ui, "", "Cancel").clicked() {
@@ -482,7 +413,13 @@ fn entries_table(app: &mut App, ui: &mut Ui, kind: ConfKind, set: &ConfSet) {
                         ui.vertical(|ui| {
                             ui.horizontal_wrapped(|ui| {
                                 let valid = e.atom.is_some() || e.atom_text.starts_with('@');
-                                let col = if e.disabled { TEXT_FAINT } else if valid { WHITE } else { RED };
+                                let col = if e.disabled {
+                                    TEXT_FAINT
+                                } else if valid {
+                                    WHITE
+                                } else {
+                                    RED
+                                };
                                 let r = ui.add(egui::Label::new(RichText::new(&e.atom_text).monospace().color(col)).sense(egui::Sense::click()));
                                 if !valid {
                                     r.clone().on_hover_text("Not a valid atom — Portage will warn about this line");
@@ -517,8 +454,13 @@ fn entries_table(app: &mut App, ui: &mut Ui, kind: ConfKind, set: &ConfSet) {
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if w::icon_button(ui, icon::TRASH, "Delete line").clicked() {
-                                let ch = edits::replace_entry(&cfg, &f.path, idx, None).map(|c| vec![c]);
-                                app.push_write(format!("Delete {}", e.atom_text), ch, vec![Reload::Config], None);
+                                let ch = edits::replace_entry(&cfg, &f.path, idx, None);
+                                app.push(Action::Write {
+                                    title: format!("Delete {}", e.atom_text),
+                                    changes: vec![ch],
+                                    reload: vec![Reload::Config],
+                                    then: None,
+                                });
                             }
                             if w::icon_button(ui, icon::PENCIL_SIMPLE, "Edit line").clicked() {
                                 let mut t = e.atom_text.clone();
@@ -535,7 +477,12 @@ fn entries_table(app: &mut App, ui: &mut Ui, kind: ConfKind, set: &ConfSet) {
         }
     }
     if !any {
-        w::empty_state(ui, kind.icon(), "No entries", if filter.is_empty() { "Use “Add an entry” to create the first one." } else { "Nothing matches the filter." });
+        w::empty_state(
+            ui,
+            kind.icon(),
+            "No entries",
+            if filter.is_empty() { "Use “Add an entry” to create the first one." } else { "Nothing matches the filter." },
+        );
     }
 }
 
@@ -586,7 +533,16 @@ fn wizard(app: &mut App, ui: &mut Ui, kind: ConfKind, set: &ConfSet) {
                 w::segmented(
                     ui,
                     &mut op,
-                    &[(AOp::Any, "Any"), (AOp::Eq, "="), (AOp::Ge, ">="), (AOp::Gt, ">"), (AOp::Le, "<="), (AOp::Lt, "<"), (AOp::Tilde, "~"), (AOp::EqGlob, "=…*")],
+                    &[
+                        (AOp::Any, "Any"),
+                        (AOp::Eq, "="),
+                        (AOp::Ge, ">="),
+                        (AOp::Gt, ">"),
+                        (AOp::Le, "<="),
+                        (AOp::Lt, "<"),
+                        (AOp::Tilde, "~"),
+                        (AOp::EqGlob, "=…*"),
+                    ],
                 );
                 wz.op = Some(op);
                 ui.label(w::dim(op.label()));
@@ -598,11 +554,13 @@ fn wizard(app: &mut App, ui: &mut Ui, kind: ConfKind, set: &ConfSet) {
                             .and_then(|k| catalog.as_ref().and_then(|c| c.get(k)))
                             .map(|p| p.ebuilds.iter().rev().map(|e| e.ver.raw.clone()).collect())
                             .unwrap_or_default();
-                        egui::ComboBox::from_id_salt("wz-ver").selected_text(if wz.version.is_empty() { "pick version".to_string() } else { wz.version.clone() }).show_ui(ui, |ui| {
-                            for v in versions {
-                                ui.selectable_value(&mut wz.version, v.clone(), v);
-                            }
-                        });
+                        egui::ComboBox::from_id_salt("wz-ver")
+                            .selected_text(if wz.version.is_empty() { "pick version".to_string() } else { wz.version.clone() })
+                            .show_ui(ui, |ui| {
+                                for v in versions {
+                                    ui.selectable_value(&mut wz.version, v.clone(), v);
+                                }
+                            });
                         ui.add(egui::TextEdit::singleline(&mut wz.version).hint_text("or type").desired_width(120.0));
                     });
                 }
@@ -653,7 +611,13 @@ fn wizard(app: &mut App, ui: &mut Ui, kind: ConfKind, set: &ConfSet) {
                             let toks: Vec<String> = wz.values.split_whitespace().map(String::from).collect();
                             let on = toks.contains(&s);
                             let off = toks.contains(&format!("-{s}"));
-                            let label = if on { s.clone() } else if off { format!("-{s}") } else { s.clone() };
+                            let label = if on {
+                                s.clone()
+                            } else if off {
+                                format!("-{s}")
+                            } else {
+                                s.clone()
+                            };
                             let r = w::chip(ui, &label, on || off);
                             if r.clicked() {
                                 let mut t: Vec<String> = toks.into_iter().filter(|x| x.trim_start_matches('-') != s).collect();
@@ -722,9 +686,15 @@ fn wizard(app: &mut App, ui: &mut Ui, kind: ConfKind, set: &ConfSet) {
             };
         });
         let file_name = if wz.file.trim().is_empty() { app.settings.target_file.clone() } else { wz.file.trim().to_string() };
-        if ui.add_enabled(entry.atom.is_some(), egui::Button::new(RichText::new(format!("{}  Add entry", icon::PLUS)).color(WHITE)).fill(Color32::from_rgb(0x1f, 0x6f, 0xb2))).clicked() {
+        if ui
+            .add_enabled(
+                entry.atom.is_some(),
+                egui::Button::new(RichText::new(format!("{}  Add entry", icon::PLUS)).color(WHITE)).fill(Color32::from_rgb(0x1f, 0x6f, 0xb2)),
+            )
+            .clicked()
+        {
             let ch = edits::add_lines(&cfg, &[(kind, entry.render())], &file_name, None);
-            app.push_write(format!("{}: {}", kind.file_name(), entry.render()), ch, vec![Reload::Config], None);
+            app.push(Action::Write { title: format!("{}: {}", kind.file_name(), entry.render()), changes: ch, reload: vec![Reload::Config], then: None });
             app.config_view.wizard.values.clear();
         }
     });
@@ -742,25 +712,25 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
     common::page(ui, "makeconf", |ui| {
         w::title(ui, "make.conf");
         ui.label(w::mono(file.to_string_lossy()));
-        common::tip(app, ui, "The global build settings. The cards below edit the most common variables; every other variable is listed further down. Effective values include what your profile adds.");
-        let blocked = mc.edit_blocked(&file);
-        if let Some(why) = &blocked {
-            w::callout(ui, ORANGE, icon::LOCK, why);
-        }
-        for (f, problem) in &mc.problems {
-            w::callout(ui, ORANGE, icon::WARNING, &format!("{}: {problem}. Portage cannot read the file as it is: fix it in the text editor at the bottom of this page first.", f.display()));
-        }
-        if !mc.sourced.is_empty() {
-            let names = mc.sourced.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ");
-            w::callout(ui, ACCENT, icon::INFO, &format!("make.conf also reads {names} (source): variables may come from there too and override what is shown here."));
-        }
+        common::tip(
+            app,
+            ui,
+            "The global build settings. Portage reads this file with its own parser (not bash) and, if a line is broken, silently falls back to the profile defaults — so every change here is checked by Portage's parser before it is written and again before it is committed. The health check compares the file with the Gentoo documentation.",
+        );
+        super::makeconf_guide::ensure_loaded(app);
+        super::makeconf_guide::machine_card(app, ui);
+        super::makeconf_guide::health(app, ui);
+        super::makeconf_guide::compiler_card(app, ui, &mc);
         let set = |app: &mut App, name: &str, value: String| {
-            match makeconf::set_var(&text, name, &value) {
-                Ok(new) => app.push(Action::Write { title: format!("Set {name} in make.conf"), changes: vec![FileChange { path: file.clone(), old: text.clone(), new: Some(new) }], reload: vec![Reload::MakeConf, Reload::Env], then: None }),
-                Err(why) => app.toast(crate::app::ToastKind::Error, why),
-            }
+            let new = makeconf::set_var(&text, name, &value);
+            app.push(Action::Write {
+                title: format!("Set {name} in make.conf"),
+                changes: vec![FileChange { path: file.clone(), old: text.clone(), new: Some(new) }],
+                reload: vec![Reload::MakeConf, Reload::Env],
+                then: None,
+            });
         };
-        let editable = |name: &str| blocked.is_none() && mc.last(name).is_none_or(|a| !a.self_ref && a.file == file);
+        let editable = |name: &str| mc.last(name).is_none_or(|a| !a.self_ref && a.file == file);
 
         // MAKEOPTS
         w::section(ui, "Parallel building (MAKEOPTS)");
@@ -796,7 +766,43 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
                 ui.add(egui::Slider::new(&mut l, 0..=threads * 2));
             });
             ui.data_mut(|d| d.insert_temp(id, (j, l)));
-            ui.label(w::dim(format!("This machine has {threads} threads. Each compile job can use ~2 GB RAM for big C++ projects.")));
+            if let Some(t) = app.data.tuning.clone() {
+                let s = crate::portage::tuning::suggest_makeopts(t.hw.threads, t.hw.mem_kib);
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(
+                        RichText::new(format!(
+                            "Suggested: -j{} -l{} — min({} threads, {:.1} GiB ÷ 2 = {}). Big C++ builds need up to 2 GB per job.",
+                            s.jobs,
+                            s.load,
+                            t.hw.threads,
+                            t.hw.mem_gib(),
+                            s.ram_jobs
+                        ))
+                        .color(TEXT),
+                    );
+                    if (j, l) != (s.jobs as i64, s.load as i64) && ui.small_button("Use suggestion").clicked() {
+                        (j, l) = (s.jobs as i64, s.load as i64);
+                        ui.data_mut(|d| d.insert_temp(id, (j, l)));
+                    }
+                });
+                let eo: Vec<String> = mc.value("EMERGE_DEFAULT_OPTS").split_whitespace().map(String::from).collect();
+                if let Some(pj) = crate::portage::makeconf_check::opt_num(&eo, "-j", "--jobs").filter(|n| *n > 1.0) {
+                    let total = pj as i64 * j;
+                    ui.label(
+                        RichText::new(format!(
+                            "EMERGE_DEFAULT_OPTS builds {pj} packages at once: up to {total} compile jobs{}.",
+                            if total > s.jobs as i64 {
+                                " — two RAM-hungry builds together can still run out of memory; --load-average limits it most of the time"
+                            } else {
+                                ""
+                            }
+                        ))
+                        .color(if total > s.jobs as i64 { ORANGE } else { TEXT_DIM }),
+                    );
+                }
+            } else {
+                ui.label(w::dim(format!("This machine has {threads} threads. Each compile job can use ~2 GB RAM for big C++ projects.")));
+            }
             let new = if l > 0 { format!("-j{j} -l{l}") } else { format!("-j{j}") };
             if new != cur && ui.add_enabled(editable("MAKEOPTS"), egui::Button::new(format!("{} Save MAKEOPTS=\"{new}\"", icon::FLOPPY_DISK))).clicked() {
                 set(app, "MAKEOPTS", new);
@@ -817,7 +823,12 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
                 w::help(ui, makeconf::describe("ACCEPT_KEYWORDS"));
             });
             if sel != testing {
-                w::callout(ui, ORANGE, icon::WARNING, "Switching the whole system to testing upgrades many packages and is hard to undo. Most users accept testing keywords per package instead.");
+                w::callout(
+                    ui,
+                    ORANGE,
+                    icon::WARNING,
+                    "Switching the whole system to testing upgrades many packages and is hard to undo. Most users accept testing keywords per package instead.",
+                );
                 if ui.button(format!("Confirm: set ACCEPT_KEYWORDS=\"{}\"", if sel { format!("~{arch}") } else { arch.clone() })).clicked() {
                     set(app, "ACCEPT_KEYWORDS", if sel { format!("~{arch}") } else { arch.clone() });
                 }
@@ -830,13 +841,22 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
             ui.set_width(ui.available_width());
             let cur = mc.value("ACCEPT_LICENSE");
             ui.horizontal_wrapped(|ui| {
-                for (v, label) in [("-* @FREE", "Free software only"), ("-* @FREE @BINARY-REDISTRIBUTABLE", "Free + redistributable binaries"), ("*", "Accept everything")] {
+                for (v, label) in
+                    [("-* @FREE", "Free software only"), ("-* @FREE @BINARY-REDISTRIBUTABLE", "Free + redistributable binaries"), ("*", "Accept everything")]
+                {
                     if w::chip(ui, label, cur == v).on_hover_text(v).clicked() && cur != v && editable("ACCEPT_LICENSE") {
                         set(app, "ACCEPT_LICENSE", v.to_string());
                     }
                 }
                 ui.label(w::dim(if cur.is_empty() { "profile default (-* @FREE)".to_string() } else { format!("current: {cur}") }));
             });
+            if cur.split_whitespace().last() == Some("*") {
+                ui.label(RichText::new(format!(
+                    "{} \"*\" accepts every end-user licence agreement without showing it. Narrower values with per-package exceptions are in the health check above.",
+                    icon::WARNING
+                ))
+                .color(ORANGE));
+            }
         });
 
         // FEATURES
@@ -852,8 +872,23 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
                     let neg = toks.iter().any(|t| *t == format!("-{f}"));
                     let eff = effective.split_whitespace().any(|t| t == *f);
                     let label = if neg { format!("-{f}") } else { f.to_string() };
-                    let r = w::chip(ui, &label, in_mc || (eff && !neg)).on_hover_text(format!("{help}\n{}", if in_mc { "set in make.conf" } else if eff { "enabled by default/profile" } else { "off" }));
-                    if r.clicked() && editable("FEATURES") {
+                    let r = w::chip(ui, &label, in_mc || (eff && !neg)).on_hover_text(format!(
+                        "{help}\n{}",
+                        if in_mc {
+                            "set in make.conf"
+                        } else if eff {
+                            "enabled by default/profile"
+                        } else {
+                            "off"
+                        }
+                    ));
+                    let safety = crate::portage::makeconf_check::SAFETY_CRITICAL.contains(f) || crate::portage::makeconf_check::SAFETY_HIGH.contains(f);
+                    if r.clicked() && safety && (in_mc || eff && !neg) {
+                        app.toast(
+                            crate::app::ToastKind::Warn,
+                            format!("{f} protects the system from build scripts and is not switched off here. If one package needs it off, use a package.env file for that package."),
+                        );
+                    } else if r.clicked() && editable("FEATURES") {
                         let mut t: Vec<String> = toks.iter().filter(|x| x.trim_start_matches('-') != *f).cloned().collect();
                         if !(in_mc || eff && !neg) {
                             t.push(f.to_string());
@@ -906,27 +941,55 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
         w::card().show(ui, |ui| {
             ui.set_width(ui.available_width());
             for (var, opts) in [
-                ("VIDEO_CARDS", &["nvidia", "amdgpu", "radeonsi", "radeon", "intel", "nouveau", "virgl", "vmware", "qxl", "fbdev", "vesa", "lavapipe", "d3d12", "freedreno"][..]),
+                (
+                    "VIDEO_CARDS",
+                    &[
+                        "nvidia",
+                        "amdgpu",
+                        "radeonsi",
+                        "radeon",
+                        "intel",
+                        "nouveau",
+                        "virgl",
+                        "vmware",
+                        "qxl",
+                        "fbdev",
+                        "vesa",
+                        "lavapipe",
+                        "d3d12",
+                        "freedreno",
+                    ][..],
+                ),
                 ("INPUT_DEVICES", &["libinput", "evdev", "synaptics", "wacom", "joystick"][..]),
             ] {
-                let cur = mc.value(var);
-                let toks: Vec<String> = cur.split_whitespace().map(String::from).collect();
+                // package.use (*/* VAR: -* …) wins over make.conf, which wins over the profile.
+                let from_pkg = super::makeconf_guide::package_use_expand(app, var);
+                let toks: Vec<String> = from_pkg.clone().unwrap_or_else(|| {
+                    let v = mc.value(var);
+                    let v = if v.is_empty() { env.as_ref().map(|e| e.get(var).to_string()).unwrap_or_default() } else { v };
+                    v.split_whitespace().map(String::from).collect()
+                });
                 ui.horizontal_wrapped(|ui| {
                     ui.label(RichText::new(var).monospace().color(WHITE));
                     w::help(ui, makeconf::describe(var));
                     for o in opts {
                         let on = toks.iter().any(|t| t == o);
-                        if w::chip(ui, o, on).clicked() && editable(var) {
+                        if w::chip(ui, o, on).clicked() {
                             let mut t = toks.clone();
                             if on {
                                 t.retain(|x| x != o);
                             } else {
                                 t.push(o.to_string());
                             }
-                            set(app, var, t.join(" "));
+                            super::makeconf_guide::set_use_expand(app, &mc, var, &t);
                         }
                     }
                 });
+                ui.label(w::dim(match (&from_pkg, mc.last(var).is_some()) {
+                    (Some(_), _) => format!("from package.use/00{} (*/* {var}: -* …)", var.to_lowercase()),
+                    (None, true) => format!("from make.conf — a change moves it to package.use/00{}", var.to_lowercase()),
+                    (None, false) => format!("profile default — a change is saved in package.use/00{}", var.to_lowercase()),
+                }));
             }
         });
 
@@ -946,7 +1009,19 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
                         w::help(ui, d);
                     }
                     if mc.count(&name) > 1 {
-                        ui.label(RichText::new(format!("×{}", mc.count(&name))).size(11.0).color(ORANGE)).on_hover_text("Assigned more than once; the last one wins");
+                        ui.label(RichText::new(format!("×{}", mc.count(&name))).size(11.0).color(ORANGE))
+                            .on_hover_text("Assigned more than once; the last one wins");
+                    }
+                    use crate::portage::makeconf_check as chk;
+                    if chk::is_command_var(&name) {
+                        w::badge(ui, "RUNS AS ROOT", Color32::from_rgb(0x2b, 0x1a, 0x00), ORANGE)
+                            .on_hover_text("Portage runs this value as a command, normally as root.");
+                    } else if chk::is_leave_alone(&name) {
+                        w::badge(ui, "PROFILE-OWNED", WHITE, Color32::from_rgb(0xa3, 0x2e, 0x2e))
+                            .on_hover_text("Set by the profile; do not set it in make.conf.");
+                    } else if let Some(r) = chk::deprecated(&name) {
+                        w::badge(ui, "DEPRECATED", TEXT, Color32::from_rgb(0x3a, 0x46, 0x55))
+                            .on_hover_text(r.map(|n| format!("Use {n}")).unwrap_or_else(|| "Configured in repos.conf / binrepos.conf now".into()));
                     }
                 });
                 let editing = app.config_view.mk_edit.as_ref().is_some_and(|(n, _)| *n == name);
@@ -962,16 +1037,30 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
                             save = Some(String::from("\u{0}"));
                         }
                     });
+                    let is_cmd = crate::portage::makeconf_check::is_command_var(&name);
+                    if is_cmd {
+                        ui.checkbox(&mut app.config_view.mk_cmd_ok, "I understand Portage runs this command as root");
+                    }
                     if let Some(v) = save {
-                        app.config_view.mk_edit = None;
-                        if v != "\u{0}" {
-                            set(app, &name, v);
+                        if v != "\u{0}" && is_cmd && !app.config_view.mk_cmd_ok {
+                            app.toast(crate::app::ToastKind::Warn, "Confirm that this command runs as root first.");
+                        } else {
+                            app.config_view.mk_edit = None;
+                            app.config_view.mk_cmd_ok = false;
+                            if v != "\u{0}" {
+                                set(app, &name, v);
+                            }
                         }
                     }
                 } else {
                     ui.horizontal(|ui| {
-                        ui.add(egui::Label::new(RichText::new(&a.expanded).monospace().size(12.0)).truncate()).on_hover_text(format!("as written: {}", a.value));
-                        if !a.self_ref && a.file == file && w::icon_button(ui, icon::PENCIL_SIMPLE, "Edit").clicked() {
+                        ui.add(egui::Label::new(RichText::new(&a.expanded).monospace().size(12.0)).truncate())
+                            .on_hover_text(format!("as written: {}", a.value));
+                        if !a.self_ref
+                            && a.file == file
+                            && !crate::portage::makeconf_check::is_leave_alone(&name)
+                            && w::icon_button(ui, icon::PENCIL_SIMPLE, "Edit").clicked()
+                        {
                             app.config_view.mk_edit = Some((name.clone(), a.value.clone()));
                         }
                     });
@@ -983,7 +1072,7 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
         });
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            if app.config_view.mk_raw.is_none() && blocked.is_none() && w::button(ui, icon::CODE, "Edit make.conf as text").clicked() {
+            if app.config_view.mk_raw.is_none() && w::button(ui, icon::CODE, "Edit make.conf as text").clicked() {
                 app.config_view.mk_raw = Some(text.clone());
             }
             if w::button(ui, icon::TERMINAL, "Show emerge --info").clicked() {
@@ -997,7 +1086,12 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
             ui.horizontal(|ui| {
                 if w::primary(ui, icon::FLOPPY_DISK, "Save make.conf").clicked() {
                     let new = app.config_view.mk_raw.clone().unwrap();
-                    app.push(Action::Write { title: "Edit make.conf".into(), changes: vec![FileChange { path: file.clone(), old: text.clone(), new: Some(new) }], reload: vec![Reload::MakeConf, Reload::Env], then: None });
+                    app.push(Action::Write {
+                        title: "Edit make.conf".into(),
+                        changes: vec![FileChange { path: file.clone(), old: text.clone(), new: Some(new) }],
+                        reload: vec![Reload::MakeConf, Reload::Env],
+                        then: None,
+                    });
                     close = true;
                 }
                 if w::button(ui, "", "Close").clicked() {
@@ -1047,22 +1141,22 @@ fn env_files(app: &mut App, ui: &mut Ui) {
                     ui.label(RichText::new(icon::FILE_CODE).size(20.0).color(ACCENT));
                     ui.label(RichText::new(&e.name).size(16.0).family(theme::bold()).color(WHITE));
                     let used = users.get(&e.name).map(|v| v.len()).unwrap_or(0);
-                    ui.label(w::dim(format!("used by {used} package.env entr{}", if used == 1 { "y" } else { "ies" }))).on_hover_text(users.get(&e.name).map(|v| v.join("\n")).unwrap_or_default());
+                    ui.label(w::dim(format!("used by {used} package.env entr{}", if used == 1 { "y" } else { "ies" })))
+                        .on_hover_text(users.get(&e.name).map(|v| v.join("\n")).unwrap_or_default());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if cfg.edit_blocked_for(&e.path).is_some() {
-                            return;
-                        }
                         if w::icon_button(ui, icon::TRASH, "Delete").clicked() {
-                            app.push(Action::Write { title: format!("Delete env/{}", e.name), changes: vec![FileChange { path: e.path.clone(), old: e.content.clone(), new: None }], reload: vec![Reload::Config], then: None });
+                            app.push(Action::Write {
+                                title: format!("Delete env/{}", e.name),
+                                changes: vec![FileChange { path: e.path.clone(), old: e.content.clone(), new: None }],
+                                reload: vec![Reload::Config],
+                                then: None,
+                            });
                         }
                         if w::icon_button(ui, icon::PENCIL_SIMPLE, "Edit").clicked() {
                             app.config_view.env_edit = Some((e.path.clone(), e.content.clone()));
                         }
                     });
                 });
-                if let Some(why) = cfg.edit_blocked_for(&e.path) {
-                    w::callout(ui, ORANGE, icon::LOCK, &why);
-                }
                 let editing = app.config_view.env_edit.as_ref().is_some_and(|(p, _)| *p == e.path);
                 if editing {
                     let buf = &mut app.config_view.env_edit.as_mut().unwrap().1;
@@ -1070,7 +1164,12 @@ fn env_files(app: &mut App, ui: &mut Ui) {
                     ui.horizontal(|ui| {
                         if w::primary(ui, icon::FLOPPY_DISK, "Save").clicked() {
                             let (p, t) = app.config_view.env_edit.take().unwrap();
-                            app.push(Action::Write { title: format!("Edit env/{}", e.name), changes: vec![FileChange { path: p, old: e.content.clone(), new: Some(t) }], reload: vec![Reload::Config], then: None });
+                            app.push(Action::Write {
+                                title: format!("Edit env/{}", e.name),
+                                changes: vec![FileChange { path: p, old: e.content.clone(), new: Some(t) }],
+                                reload: vec![Reload::Config],
+                                then: None,
+                            });
                         }
                         if w::button(ui, "", "Cancel").clicked() {
                             app.config_view.env_edit = None;
@@ -1087,7 +1186,16 @@ fn env_files(app: &mut App, ui: &mut Ui) {
             ui.add(egui::TextEdit::singleline(&mut app.config_view.env_new).hint_text("name").desired_width(180.0));
             let name = app.config_view.env_new.trim().to_string();
             if ui.add_enabled(!name.is_empty() && !name.contains('/'), egui::Button::new(format!("{} Create empty", icon::PLUS))).clicked() {
-                app.push(Action::Write { title: format!("Create env/{name}"), changes: vec![FileChange { path: PathBuf::from(format!("/etc/portage/env/{name}")), old: String::new(), new: Some("# variables for package.env\n".into()) }], reload: vec![Reload::Config], then: None });
+                app.push(Action::Write {
+                    title: format!("Create env/{name}"),
+                    changes: vec![FileChange {
+                        path: PathBuf::from(format!("/etc/portage/env/{name}")),
+                        old: String::new(),
+                        new: Some("# variables for package.env\n".into()),
+                    }],
+                    reload: vec![Reload::Config],
+                    then: None,
+                });
             }
         });
         ui.label(w::dim("Or start from a template:"));
@@ -1095,7 +1203,16 @@ fn env_files(app: &mut App, ui: &mut Ui) {
             for (name, desc, content) in ENV_TEMPLATES {
                 let exists = cfg.env_files.iter().any(|e| e.name == *name);
                 if ui.add_enabled(!exists, egui::Button::new(name.to_string())).on_hover_text(format!("{desc}\n\n{content}")).clicked() {
-                    app.push(Action::Write { title: format!("Create env/{name}"), changes: vec![FileChange { path: PathBuf::from(format!("/etc/portage/env/{name}")), old: String::new(), new: Some(format!("# {desc}\n{content}")) }], reload: vec![Reload::Config], then: None });
+                    app.push(Action::Write {
+                        title: format!("Create env/{name}"),
+                        changes: vec![FileChange {
+                            path: PathBuf::from(format!("/etc/portage/env/{name}")),
+                            old: String::new(),
+                            new: Some(format!("# {desc}\n{content}")),
+                        }],
+                        reload: vec![Reload::Config],
+                        then: None,
+                    });
                 }
             }
         });
@@ -1161,37 +1278,45 @@ fn news(app: &mut App, ui: &mut Ui) {
         w::loading(ui, "Reading news…");
         return;
     };
-    egui::Panel::left("news-list").resizable(true).default_size(360.0).frame(egui::Frame::new().fill(Color32::from_rgb(0x19, 0x22, 0x2e)).inner_margin(Margin::same(8))).show(ui, |ui| {
-        ui.horizontal(|ui| {
-            ui.label(RichText::new("NEWS").size(12.0).family(theme::bold()).color(TEXT_DIM));
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.small_button("Mark all read").on_hover_text("eselect news read --quiet all").clicked() {
-                    app.push(Action::Root {
-                        title: "Mark news as read".into(),
-                        argv: vec!["eselect".into(), "news".into(), "read".into(), "--quiet".into(), "all".into()],
-                        reload: vec![Reload::News],
-                        kind: JobKind::Generic,
-                    });
+    egui::Panel::left("news-list")
+        .resizable(true)
+        .default_size(360.0)
+        .frame(egui::Frame::new().fill(Color32::from_rgb(0x19, 0x22, 0x2e)).inner_margin(Margin::same(8)))
+        .show(ui, |ui| {
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("NEWS").size(12.0).family(theme::bold()).color(TEXT_DIM));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.small_button("Mark all read").on_hover_text("eselect news read --quiet all").clicked() {
+                        app.push(Action::Root {
+                            title: "Mark news as read".into(),
+                            argv: vec!["eselect".into(), "news".into(), "read".into(), "--quiet".into(), "all".into()],
+                            reload: vec![Reload::News],
+                            kind: JobKind::Generic,
+                        });
+                    }
+                });
+            });
+            egui::ScrollArea::vertical().id_salt("news-scroll").show(ui, |ui| {
+                for n in news.iter() {
+                    let sel = app.config_view.news_open.as_deref() == Some(&n.name);
+                    let r = ui.add_sized(
+                        [ui.available_width(), 46.0],
+                        egui::Button::new(
+                            RichText::new(format!("{} {}\n{}", if n.unread { icon::CIRCLE } else { "" }, n.title, n.posted)).color(if n.unread {
+                                WHITE
+                            } else {
+                                TEXT_DIM
+                            }),
+                        )
+                        .selected(sel)
+                        .wrap(),
+                    );
+                    if r.clicked() {
+                        app.config_view.news_open = Some(n.name.clone());
+                    }
                 }
             });
         });
-        egui::ScrollArea::vertical().id_salt("news-scroll").show(ui, |ui| {
-            for n in news.iter() {
-                let sel = app.config_view.news_open.as_deref() == Some(&n.name);
-                let r = ui.add_sized(
-                    [ui.available_width(), 46.0],
-                    egui::Button::new(
-                        RichText::new(format!("{} {}\n{}", if n.unread { icon::CIRCLE } else { "" }, n.title, n.posted)).color(if n.unread { WHITE } else { TEXT_DIM }),
-                    )
-                    .selected(sel)
-                    .wrap(),
-                );
-                if r.clicked() {
-                    app.config_view.news_open = Some(n.name.clone());
-                }
-            }
-        });
-    });
     egui::CentralPanel::default().frame(egui::Frame::new().fill(BG)).show(ui, |ui| {
         let Some(item) = app.config_view.news_open.as_ref().and_then(|n| news.iter().find(|x| x.name == *n)).or_else(|| news.first()) else {
             w::empty_state(ui, icon::NEWSPAPER, "No news", "");
@@ -1217,31 +1342,20 @@ fn news(app: &mut App, ui: &mut Ui) {
     });
 }
 
-/// Accept a pending update; the helper checks that the file it replaces is still the one that was shown.
-fn accept_op(u: &PendingUpdate) -> Op {
-    let expect = match &u.old {
-        Some(old) => Some(portagehub::protocol::Expect::of(old)),
-        None if !u.target.exists() => Some(portagehub::protocol::Expect::Absent),
-        None => None, // root-only or too large to have been read
-    };
-    Op::ConfigUpdate { path: u.update.to_string_lossy().to_string(), accept: true, expect }
-}
-
 fn updates(app: &mut App, ui: &mut Ui) {
     let protect = app.data.env.as_ref().map(|e| e.get("CONFIG_PROTECT").to_string()).unwrap_or_default();
     if app.config_view.updates.is_none() {
-        let slot: Arc<Mutex<Option<Vec<PendingUpdate>>>> = Arc::default();
+        let slot: UpdateSlot = Arc::default();
         let s2 = slot.clone();
         let ctx = ui.ctx().clone();
         std::thread::spawn(move || {
-            let r = system::find_config_updates(&protect);
+            let r = crate::portage::system::find_config_updates(&protect);
             *s2.lock().unwrap() = Some(r);
             ctx.request_repaint();
         });
         app.config_view.updates = Some(slot);
     }
     let list = app.config_view.updates.as_ref().unwrap().lock().unwrap().clone();
-    let applying = !app.batches.is_empty();
     common::page(ui, "cfg-updates", |ui| {
         ui.horizontal(|ui| {
             w::title(ui, "Configuration file updates");
@@ -1249,12 +1363,11 @@ fn updates(app: &mut App, ui: &mut Ui) {
                 app.config_view.updates = None;
             }
         });
-        w::subtitle(ui, "When a package ships a new version of a config file you edited, Portage saves it as ._cfgXXXX_name instead of overwriting yours (CONFIG_PROTECT).");
+        w::subtitle(
+            ui,
+            "When a package ships a new version of a config file you edited, Portage saves it as ._cfgXXXX_name instead of overwriting yours (CONFIG_PROTECT).",
+        );
         ui.add_space(6.0);
-        if applying {
-            w::loading(ui, "Applying…");
-            return;
-        }
         let Some(list) = list else {
             w::loading(ui, "Scanning CONFIG_PROTECT directories…");
             return;
@@ -1263,63 +1376,51 @@ fn updates(app: &mut App, ui: &mut Ui) {
             w::empty_state(ui, icon::CHECK_CIRCLE, "All configuration files are up to date", "Nothing is waiting to be merged.");
             return;
         }
-        let (fine, risky) = system::split_risky(&list);
         ui.horizontal(|ui| {
-            if !fine.is_empty() && w::primary(ui, icon::CHECKS, &format!("Review and accept {} new version{}…", fine.len(), if fine.len() == 1 { "" } else { "s" })).clicked() {
-                // Replacing many files at once is never one blind click: show every diff first.
-                let (mut changes, mut unreadable) = (Vec::new(), Vec::new());
-                for u in &fine {
-                    match (&u.old, &u.new) {
-                        (Some(old), Some(new)) => changes.push(FileChange { path: u.target.clone(), old: old.clone(), new: Some(new.clone()) }),
-                        (None, Some(new)) if !u.target.exists() => changes.push(FileChange { path: u.target.clone(), old: String::new(), new: Some(new.clone()) }),
-                        _ => unreadable.push(u.target.clone()),
-                    }
-                }
-                let mut notes = vec!["Each file below is replaced by its new version. Everything is one recorded change: you can undo it afterwards.".to_string()];
-                if !risky.is_empty() {
-                    notes.push(format!(
-                        "Not included, because they can lock you out or break the boot: {}. Review those one by one.",
-                        risky.iter().map(|u| u.target.display().to_string()).collect::<Vec<_>>().join(", ")
-                    ));
-                }
-                let ops = fine.iter().map(|u| accept_op(u)).collect();
-                app.push(Action::ReviewOps { title: format!("Accept {} new configuration file versions", fine.len()), changes, unreadable, notes, ops, reload: vec![] });
+            if w::primary(ui, icon::CHECKS, &format!("Accept all {} new versions", list.len())).clicked() {
+                let ops = list.iter().map(|(u, _)| Op::ConfigUpdate { path: u.to_string_lossy().to_string(), accept: true }).collect();
+                app.push(Action::Batch { title: "Accept all config updates".into(), ops, reload: vec![], then: None });
+                app.config_view.updates = None;
             }
-            if w::button(ui, icon::X, "Keep all current files").on_hover_text("Delete every pending new version (recorded, so it can be undone)").clicked() {
-                let ops = list.iter().map(|u| Op::ConfigUpdate { path: u.update.to_string_lossy().to_string(), accept: false, expect: None }).collect();
+            if w::button(ui, icon::X, "Keep all current files").clicked() {
+                let ops = list.iter().map(|(u, _)| Op::ConfigUpdate { path: u.to_string_lossy().to_string(), accept: false }).collect();
                 app.push(Action::Batch { title: "Discard all config updates".into(), ops, reload: vec![], then: None });
+                app.config_view.updates = None;
             }
         });
-        if !risky.is_empty() {
-            ui.add_space(4.0);
-            w::callout(
-                ui,
-                ORANGE,
-                icon::SHIELD_WARNING,
-                &format!("{} file(s) here (SSH, PAM, sudo, fstab, GRUB defaults, polkit, accounts, /etc/portage) can lock you out or break the boot. They are left out of the bulk action: read the differences and decide for each.", risky.len()),
-            );
-        }
-        for u in &list {
-            let (upd, target) = (&u.update, &u.target);
+        for (upd, target) in &list {
             w::card().show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
-                    let risky = system::is_risky(target);
-                    ui.label(RichText::new(if risky { icon::SHIELD_WARNING } else { icon::FILE_ARROW_UP }).size(18.0).color(ORANGE));
+                    ui.label(RichText::new(icon::FILE_ARROW_UP).size(18.0).color(ORANGE));
                     ui.label(w::strong(target.to_string_lossy()));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if w::button(ui, icon::X, "Keep mine").on_hover_text("Delete the new version").clicked() {
-                            app.push(Action::Batch { title: format!("Keep {}", target.display()), ops: vec![Op::ConfigUpdate { path: upd.to_string_lossy().to_string(), accept: false, expect: None }], reload: vec![], then: None });
+                            app.push(Action::Batch {
+                                title: format!("Keep {}", target.display()),
+                                ops: vec![Op::ConfigUpdate { path: upd.to_string_lossy().to_string(), accept: false }],
+                                reload: vec![],
+                                then: None,
+                            });
+                            app.config_view.updates = None;
                         }
                         if w::primary(ui, icon::CHECK, "Use new version").clicked() {
-                            app.push(Action::Batch { title: format!("Update {}", target.display()), ops: vec![accept_op(u)], reload: vec![], then: None });
+                            app.push(Action::Batch {
+                                title: format!("Update {}", target.display()),
+                                ops: vec![Op::ConfigUpdate { path: upd.to_string_lossy().to_string(), accept: true }],
+                                reload: vec![],
+                                then: None,
+                            });
+                            app.config_view.updates = None;
                         }
                     });
                 });
-                match (&u.old, &u.new) {
-                    (Some(o), Some(n)) => {
-                        egui::CollapsingHeader::new("Show differences").id_salt(upd).default_open(system::is_risky(target)).show(ui, |ui| {
-                            for (c, l) in crate::fmt::line_diff(o, n) {
+                let old = std::fs::read_to_string(target);
+                let new = std::fs::read_to_string(upd);
+                match (old, new) {
+                    (Ok(o), Ok(n)) => {
+                        egui::CollapsingHeader::new("Show differences").id_salt(upd).show(ui, |ui| {
+                            for (c, l) in crate::fmt::line_diff(&o, &n) {
                                 let col = match c {
                                     '+' => GREEN,
                                     '-' => RED,
@@ -1330,7 +1431,7 @@ fn updates(app: &mut App, ui: &mut Ui) {
                         });
                     }
                     _ => {
-                        ui.label(w::dim("Cannot show the differences: one of the files is root-only, missing or too large."));
+                        ui.label(w::dim("Cannot read one of the files as your user (root-only file)."));
                     }
                 }
             });
@@ -1356,29 +1457,23 @@ fn strays(app: &mut App, ui: &mut Ui) {
                     ui.label(RichText::new(icon::WARNING).size(20.0).color(ORANGE));
                     ui.label(w::strong(s.path.to_string_lossy()));
                 });
-                let (content, unreadable) = match config::read_utf8(&s.path) {
-                    Ok(t) => (t, None),
-                    Err(why) => (String::new(), Some(why)),
-                };
+                let content = std::fs::read_to_string(&s.path).unwrap_or_default();
                 match &s.reason {
                     StrayReason::Misnamed { kind, suggested_name } => {
-                        ui.label(format!("Looks like it was meant to be inside {}/ — the separator is missing, so Portage ignores these entries.", kind.file_name()));
+                        ui.label(format!(
+                            "Looks like it was meant to be inside {}/ — the separator is missing, so Portage ignores these entries.",
+                            kind.file_name()
+                        ));
                         let name = app.config_view.stray_names.entry(s.path.clone()).or_insert_with(|| suggested_name.clone());
                         ui.horizontal(|ui| {
                             ui.label(w::dim(format!("Move to {}/", kind.path().display())));
                             ui.add(egui::TextEdit::singleline(name).desired_width(200.0));
                         });
                         let name = name.clone();
-                        match edits::plan_stray_fix(&cfg, &s.path, *kind, &name) {
-                            Ok(plan) => {
-                                ui.label(RichText::new(format!("{} {}", icon::INFO, plan.summary)).color(ACCENT));
-                                if w::primary(ui, icon::ARROW_BEND_DOWN_RIGHT, "Fix it").clicked() {
-                                    app.push(Action::Batch { title: format!("Fix {}", s.path.display()), ops: plan.ops, reload: vec![Reload::Config], then: None });
-                                }
-                            }
-                            Err(why) => {
-                                ui.label(RichText::new(format!("{} {why}", icon::WARNING)).color(ORANGE));
-                            }
+                        let plan = edits::plan_stray_fix(&cfg, &s.path, *kind, &name);
+                        ui.label(RichText::new(format!("{} {}", icon::INFO, plan.summary)).color(ACCENT));
+                        if w::primary(ui, icon::ARROW_BEND_DOWN_RIGHT, "Fix it").clicked() {
+                            app.push(Action::Batch { title: format!("Fix {}", s.path.display()), ops: plan.ops, reload: vec![Reload::Config], then: None });
                         }
                     }
                     StrayReason::Backup => {
@@ -1393,11 +1488,14 @@ fn strays(app: &mut App, ui: &mut Ui) {
                         ui.label(w::mono(content.trim()));
                     });
                 }
-                if let Some(why) = &unreadable {
-                    ui.label(RichText::new(format!("{} {why}", icon::WARNING)).color(ORANGE));
-                } else if w::danger(ui, icon::TRASH, "Delete file").clicked() {
+                if w::danger(ui, icon::TRASH, "Delete file").clicked() {
                     // DeleteFile through a reviewed write.
-                    app.push(Action::Write { title: format!("Delete {}", s.path.display()), changes: vec![FileChange { path: s.path.clone(), old: content.clone(), new: None }], reload: vec![Reload::Config], then: None });
+                    app.push(Action::Write {
+                        title: format!("Delete {}", s.path.display()),
+                        changes: vec![FileChange { path: s.path.clone(), old: content.clone(), new: None }],
+                        reload: vec![Reload::Config],
+                        then: None,
+                    });
                 }
             });
             ui.add_space(4.0);

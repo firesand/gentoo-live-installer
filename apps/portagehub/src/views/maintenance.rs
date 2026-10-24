@@ -88,15 +88,13 @@ fn apply_fix(app: &mut App, ks: &KernelState, fix: &Fix) {
                 content.push('\n');
             }
             let path = PathBuf::from(format!("/etc/portage/sets/{}", ks.keep_set));
-            match crate::portage::config::read_utf8(&path) {
-                Ok(old) => app.push(Action::Write {
-                    title: format!("Protect known-good kernels in @{}", ks.keep_set),
-                    changes: vec![crate::app::FileChange { path, old, new: Some(content) }],
-                    reload: vec![Reload::Kernels, Reload::Config],
-                    then: None,
-                }),
-                Err(why) => app.toast(crate::app::ToastKind::Error, why),
-            }
+            let old = std::fs::read_to_string(&path).unwrap_or_default();
+            app.push(Action::Write {
+                title: format!("Protect known-good kernels in @{}", ks.keep_set),
+                changes: vec![crate::app::FileChange { path, old, new: Some(content) }],
+                reload: vec![Reload::Kernels, Reload::Config],
+                then: None,
+            });
         }
         Fix::AddKeepSetToWorld => app.push(Action::Root {
             title: format!("Add @{} to @world", ks.keep_set),
@@ -117,16 +115,6 @@ fn apply_fix(app: &mut App, ks: &KernelState, fix: &Fix) {
             kind: JobKind::BootFix,
             reload: vec![],
         }),
-        Fix::MountBoot(target) => {
-            // `mount -o ro <target>` from fstab: reading is all the check needs, and it is the safe
-            // way to look at a partition a kernel update has not asked to write to.
-            app.push(Action::RootOp {
-                title: format!("Mount {target}"),
-                op: Op::Remount { target: target.clone(), rw: false },
-                kind: JobKind::Remount,
-                reload: vec![Reload::Kernels],
-            });
-        }
         Fix::Depclean(atoms) => {
             let t: Vec<&str> = atoms.iter().map(|s| s.as_str()).collect();
             app.push(Action::Pretend(EmergeOptions { action: emerge::Action::Depclean, ..Default::default() }.targets(&t)));
@@ -147,7 +135,6 @@ fn fix_label(fix: &Fix) -> (&'static str, String) {
         Fix::RemoveOld(_) => (icon::TRASH, "Remove the .old copies".into()),
         Fix::RemoveLeftovers(_) => (icon::TRASH, "Remove leftover files".into()),
         Fix::Depclean(_) => (icon::BROOM, "Preview depclean".into()),
-        Fix::MountBoot(target) => (icon::HARD_DRIVES, format!("Mount {target}")),
     }
 }
 
@@ -339,7 +326,8 @@ fn kernels(app: &mut App, ui: &mut Ui) {
                         w::badge(ui, "NEWEST", TEXT, Color32::from_rgb(0x3a, 0x46, 0x55));
                     }
                     if ks.eselected.as_deref() == Some(k.kver.as_str()) {
-                        w::badge(ui, "/usr/src/linux", TEXT, Color32::from_rgb(0x3a, 0x46, 0x55)).on_hover_text("eselect kernel target: external modules build against it");
+                        w::badge(ui, "/usr/src/linux", TEXT, Color32::from_rgb(0x3a, 0x46, 0x55))
+                            .on_hover_text("eselect kernel target: external modules build against it");
                     }
                 });
                 match &k.pkg {
@@ -360,8 +348,12 @@ fn kernels(app: &mut App, ui: &mut Ui) {
                         (k.modules, "modules", "/lib/modules"),
                         (k.sources, "src", "/usr/src/linux-*"),
                     ] {
-                        ui.label(RichText::new(format!("{} {label}", if ok { icon::CHECK } else { icon::X })).size(12.0).color(if ok { GREEN_TEXT } else { TEXT_FAINT }))
-                            .on_hover_text(tip);
+                        ui.label(RichText::new(format!("{} {label}", if ok { icon::CHECK } else { icon::X })).size(12.0).color(if ok {
+                            GREEN_TEXT
+                        } else {
+                            TEXT_FAINT
+                        }))
+                        .on_hover_text(tip);
                     }
                     if !k.old_files.is_empty() {
                         ui.label(RichText::new(format!("+{} .old", k.old_files.len())).size(12.0).color(ORANGE));
@@ -369,7 +361,10 @@ fn kernels(app: &mut App, ui: &mut Ui) {
                 });
                 match ks.nvidia_status(k) {
                     Some(NvStatus::Ok) => {
-                        ui.label(RichText::new(format!("{} {}", icon::CHECK, k.nvidia.as_ref().map(|n| n.version.clone()).unwrap_or_default())).color(GREEN_TEXT));
+                        ui.label(
+                            RichText::new(format!("{} {}", icon::CHECK, k.nvidia.as_ref().map(|n| n.version.clone()).unwrap_or_default())).color(GREEN_TEXT),
+                        )
+                        .on_hover_text(k.nvidia.as_ref().map(|n| n.path.display().to_string()).unwrap_or_default());
                     }
                     Some(NvStatus::Missing) => {
                         ui.label(RichText::new(format!("{} missing", icon::X)).color(RED));
@@ -384,7 +379,11 @@ fn kernels(app: &mut App, ui: &mut Ui) {
                 match (&grub_cfg, &k.image) {
                     (Some(cfg), Some(img)) => {
                         let ok = cfg.contains(img.as_str());
-                        ui.label(RichText::new(if ok { format!("{} in GRUB", icon::CHECK) } else { format!("{} not in GRUB", icon::X) }).color(if ok { GREEN_TEXT } else { RED }));
+                        ui.label(RichText::new(if ok { format!("{} in GRUB", icon::CHECK) } else { format!("{} not in GRUB", icon::X) }).color(if ok {
+                            GREEN_TEXT
+                        } else {
+                            RED
+                        }));
                     }
                     (None, Some(_)) => {
                         ui.label(w::dim("not checked"));
@@ -424,7 +423,11 @@ fn kernel_menu(app: &mut App, ui: &mut Ui, ks: &KernelState, kver: &str) {
         ui.close();
     }
     if let Some(p) = &k.pkg {
-        if ui.button(format!("{}  Re-run install step (emerge --config)", icon::GEAR)).on_hover_text("installkernel: regenerates initramfs and the boot entry").clicked() {
+        if ui
+            .button(format!("{}  Re-run install step (emerge --config)", icon::GEAR))
+            .on_hover_text("installkernel: regenerates initramfs and the boot entry")
+            .clicked()
+        {
             apply_fix(app, ks, &Fix::EmergeConfig(p.clone()));
             ui.close();
         }
@@ -627,7 +630,10 @@ fn cleanup_page(app: &mut App, ui: &mut Ui) {
     let cfg = app.data.config.clone();
     page(ui, "cleanup", |ui| {
         w::title(ui, "Cleanup");
-        w::subtitle(ui, "Packages nothing needs any more, old kernels, downloaded sources, logs and other things left behind. Every scan is read-only; nothing is removed until you confirm.");
+        w::subtitle(
+            ui,
+            "Packages nothing needs any more, old kernels, downloaded sources, logs and other things left behind. Every scan is read-only; nothing is removed until you confirm.",
+        );
         ui.add_space(8.0);
 
         // Unused packages
@@ -639,17 +645,27 @@ fn cleanup_page(app: &mut App, ui: &mut Ui) {
             Some(_) if cands.is_empty() => "Nothing to remove — every installed package is needed".to_string(),
             Some(_) => format!("{} package(s) nothing in @world needs", cands.len()),
         };
-        let tint = if plan.is_none() { ACCENT } else if cands.is_empty() { GREEN } else { ORANGE };
+        let tint = if plan.is_none() {
+            ACCENT
+        } else if cands.is_empty() {
+            GREEN
+        } else {
+            ORANGE
+        };
         section_card(ui, icon::BROOM, "Unused packages", &summary, tint, |ui| {
-            scan_header(app, ui, "depclean", "Scanning for unused packages (emerge --depclean --pretend)", &["emerge", "--pretend", "--depclean", "--color=n", "--nospinner", "--ask=n"]);
+            scan_header(
+                app,
+                ui,
+                "depclean",
+                "Scanning for unused packages (emerge --depclean --pretend)",
+                &["emerge", "--pretend", "--depclean", "--color=n", "--nospinner", "--ask=n"],
+            );
             if cands.is_empty() {
                 return;
             }
             ui.label(w::dim("Untick what you want to keep, or press Keep to add it to @world (it then stops showing up here)."));
-            let protected_pkgs: Vec<String> = ks
-                .as_ref()
-                .map(|k| k.kernels.iter().filter(|e| k.is_protected(&e.kver)).filter_map(|e| e.pkg.clone()).collect())
-                .unwrap_or_default();
+            let protected_pkgs: Vec<String> =
+                ks.as_ref().map(|k| k.kernels.iter().filter(|e| k.is_protected(&e.kver)).filter_map(|e| e.pkg.clone()).collect()).unwrap_or_default();
             egui::Grid::new("depclean-grid").num_columns(3).striped(true).spacing([14.0, 4.0]).show(ui, |ui| {
                 for c in &cands {
                     let protected = protected_pkgs.contains(c);
@@ -670,7 +686,8 @@ fn cleanup_page(app: &mut App, ui: &mut Ui) {
                         ui.label("");
                     }
                     let key = crate::portage::atom::split_cpv(c).map(|(a, b, _)| format!("{a}/{b}")).unwrap_or_default();
-                    if !protected && ui.small_button(format!("{} Keep", icon::STAR)).on_hover_text(format!("emerge --noreplace {key}: add to @world")).clicked() {
+                    if !protected && ui.small_button(format!("{} Keep", icon::STAR)).on_hover_text(format!("emerge --noreplace {key}: add to @world")).clicked()
+                    {
                         app.push(Action::Root {
                             title: format!("Keep {key} (add to @world)"),
                             argv: vec!["emerge".into(), "--noreplace".into(), "--ask=n".into(), key.clone()],
@@ -684,8 +701,13 @@ fn cleanup_page(app: &mut App, ui: &mut Ui) {
                     ui.end_row();
                 }
             });
-            let selected: Vec<String> = cands.iter().filter(|c| !protected_pkgs.contains(c) && !app.maintenance.depclean_skip.contains(*c)).map(|c| format!("={c}")).collect();
-            if ui.add_enabled_ui(!selected.is_empty(), |ui| w::danger(ui, icon::TRASH, &format!("Preview removing {} package(s)", selected.len()))).inner.clicked() {
+            let selected: Vec<String> =
+                cands.iter().filter(|c| !protected_pkgs.contains(c) && !app.maintenance.depclean_skip.contains(*c)).map(|c| format!("={c}")).collect();
+            if ui
+                .add_enabled_ui(!selected.is_empty(), |ui| w::danger(ui, icon::TRASH, &format!("Preview removing {} package(s)", selected.len())))
+                .inner
+                .clicked()
+            {
                 let t: Vec<&str> = selected.iter().map(|s| s.as_str()).collect();
                 app.push(Action::Pretend(EmergeOptions { action: emerge::Action::Depclean, ..Default::default() }.targets(&t)));
             }
@@ -716,7 +738,13 @@ fn cleanup_page(app: &mut App, ui: &mut Ui) {
             (Some(_), Some((size, n))) => format!("{size}B in {n} files are not needed by installed packages (eclean-dist --deep)"),
             (Some(_), None) => "Nothing to clean".to_string(),
         };
-        let tint = if dist.is_none() { ACCENT } else if total.is_some() { ORANGE } else { GREEN };
+        let tint = if dist.is_none() {
+            ACCENT
+        } else if total.is_some() {
+            ORANGE
+        } else {
+            GREEN
+        };
         section_card(ui, icon::ARCHIVE, "Downloaded sources (distfiles)", &summary, tint, |ui| {
             if !crate::exec_available("eclean-dist") {
                 ui.label(w::dim("Install app-portage/gentoolkit to clean distfiles."));
@@ -732,7 +760,12 @@ fn cleanup_page(app: &mut App, ui: &mut Ui) {
                         }
                     });
                     if w::danger(ui, icon::TRASH, "Clean distfiles").on_hover_text("eclean-dist --deep: keeps files of installed versions").clicked() {
-                        app.push(Action::Root { title: "eclean-dist --deep".into(), argv: vec!["eclean-dist".into(), "--deep".into()], reload: vec![], kind: JobKind::Generic });
+                        app.push(Action::Root {
+                            title: "eclean-dist --deep".into(),
+                            argv: vec!["eclean-dist".into(), "--deep".into()],
+                            reload: vec![],
+                            kind: JobKind::Generic,
+                        });
                         app.cleanup_scans.remove("distfiles");
                     }
                 }
@@ -748,11 +781,22 @@ fn cleanup_page(app: &mut App, ui: &mut Ui) {
                 (Some(_), Some((size, n))) => format!("{size}B in {n} binary packages are obsolete"),
                 (Some(_), None) => "Nothing to clean".to_string(),
             };
-            let tint = if bin.is_none() { ACCENT } else if total.is_some() { ORANGE } else { GREEN };
+            let tint = if bin.is_none() {
+                ACCENT
+            } else if total.is_some() {
+                ORANGE
+            } else {
+                GREEN
+            };
             section_card(ui, icon::PACKAGE, "Binary packages", &summary, tint, |ui| {
                 scan_header(app, ui, "binpkgs", "Scanning binary packages (eclean-pkg --pretend)", &["eclean-pkg", "--deep", "--pretend"]);
                 if total.is_some() && w::danger(ui, icon::TRASH, "Clean binary packages").clicked() {
-                    app.push(Action::Root { title: "eclean-pkg --deep".into(), argv: vec!["eclean-pkg".into(), "--deep".into()], reload: vec![], kind: JobKind::Generic });
+                    app.push(Action::Root {
+                        title: "eclean-pkg --deep".into(),
+                        argv: vec!["eclean-pkg".into(), "--deep".into()],
+                        reload: vec![],
+                        kind: JobKind::Generic,
+                    });
                     app.cleanup_scans.remove("binpkgs");
                 }
             });
@@ -780,7 +824,9 @@ fn cleanup_page(app: &mut App, ui: &mut Ui) {
                     if ui.add(egui::DragValue::new(&mut app.settings.log_keep_days).range(1..=365).suffix(" days")).changed() {
                         app.push(Action::Reload(Reload::Leftovers));
                     }
-                    if lg.old_files > 0 && w::danger(ui, icon::TRASH, &format!("Delete {} old logs", lg.old_files)).on_hover_text("emaint logs --clean --time N").clicked() {
+                    if lg.old_files > 0
+                        && w::danger(ui, icon::TRASH, &format!("Delete {} old logs", lg.old_files)).on_hover_text("emaint logs --clean --time N").clicked()
+                    {
                         app.push(Action::Root {
                             title: format!("Delete build logs older than {} days", app.settings.log_keep_days),
                             argv: vec!["emaint".into(), "logs".into(), "--clean".into(), "--time".into(), app.settings.log_keep_days.to_string()],
@@ -807,38 +853,61 @@ fn cleanup_page(app: &mut App, ui: &mut Ui) {
                 ui.label(w::mono(format!("{:>10}  {}", crate::fmt::size(*size), d.display())));
             }
             let running = app.running_emerge().is_some();
-            if ui.add_enabled_ui(!running, |ui| w::danger(ui, icon::TRASH, "Delete build leftovers")).inner.on_disabled_hover_text("Wait until the running emerge has finished").clicked() {
-                app.push(Action::RootOp { title: "Delete failed build directories".into(), op: Op::CleanBuildDirs, kind: JobKind::Generic, reload: vec![Reload::Leftovers] });
+            if ui
+                .add_enabled_ui(!running, |ui| w::danger(ui, icon::TRASH, "Delete build leftovers"))
+                .inner
+                .on_disabled_hover_text("Wait until the running emerge has finished")
+                .clicked()
+            {
+                app.push(Action::RootOp {
+                    title: "Delete failed build directories".into(),
+                    op: Op::CleanBuildDirs,
+                    kind: JobKind::Generic,
+                    reload: vec![Reload::Leftovers],
+                });
             }
         });
 
         // World cruft
         if !left.world_cruft.is_empty() {
-            section_card(ui, icon::STAR_HALF, "World file entries for uninstalled packages", &format!("{} entries in /var/lib/portage/world match nothing installed", left.world_cruft.len()), ORANGE, |ui| {
-                ui.label(w::dim("They make emerge -uDN @world install these packages again. Remove them if you don't want them."));
-                ui.horizontal_wrapped(|ui| {
-                    for a in &left.world_cruft {
-                        if ui.button(format!("{}  {a}", icon::X)).on_hover_text(format!("emerge --deselect {a}")).clicked() {
-                            app.push(Action::Root {
-                                title: format!("Remove {a} from @world"),
-                                argv: vec!["emerge".into(), "--deselect".into(), "--ask=n".into(), a.clone()],
-                                reload: vec![Reload::Vdb, Reload::Leftovers],
-                                kind: JobKind::Generic,
-                            });
+            section_card(
+                ui,
+                icon::STAR_HALF,
+                "World file entries for uninstalled packages",
+                &format!("{} entries in /var/lib/portage/world match nothing installed", left.world_cruft.len()),
+                ORANGE,
+                |ui| {
+                    ui.label(w::dim("They make emerge -uDN @world install these packages again. Remove them if you don't want them."));
+                    ui.horizontal_wrapped(|ui| {
+                        for a in &left.world_cruft {
+                            if ui.button(format!("{}  {a}", icon::X)).on_hover_text(format!("emerge --deselect {a}")).clicked() {
+                                app.push(Action::Root {
+                                    title: format!("Remove {a} from @world"),
+                                    argv: vec!["emerge".into(), "--deselect".into(), "--ask=n".into(), a.clone()],
+                                    reload: vec![Reload::Vdb, Reload::Leftovers],
+                                    kind: JobKind::Generic,
+                                });
+                            }
                         }
-                    }
-                });
-            });
+                    });
+                },
+            );
         }
 
         // Obsolete config lines
         let n = left.dead_entries.len() + left.redundant_keywords.len();
-        let summary = if n == 0 { "Every /etc/portage entry still applies".to_string() } else { format!("{} dead entries, {} keyword entries no longer needed", left.dead_entries.len(), left.redundant_keywords.len()) };
+        let summary = if n == 0 {
+            "Every /etc/portage entry still applies".to_string()
+        } else {
+            format!("{} dead entries, {} keyword entries no longer needed", left.dead_entries.len(), left.redundant_keywords.len())
+        };
         section_card(ui, icon::FILE_X, "Obsolete /etc/portage entries", &summary, if n == 0 { GREEN } else { ORANGE }, |ui| {
             if n == 0 {
                 return;
             }
-            ui.label(w::dim("Tick the lines to delete. Keyword entries for packages that are stable now are harmless, but they would pull in future testing versions."));
+            ui.label(w::dim(
+                "Tick the lines to delete. Keyword entries for packages that are stable now are harmless, but they would pull in future testing versions.",
+            ));
             for (title, list) in [("Package gone from every repository", &left.dead_entries), ("Already stable", &left.redundant_keywords)] {
                 if list.is_empty() {
                     continue;
@@ -864,21 +933,33 @@ fn cleanup_page(app: &mut App, ui: &mut Ui) {
                 && let Some(cfg) = &cfg
             {
                 let ch = edits::remove_lines(cfg, &sel);
-                app.push_write("Remove obsolete /etc/portage entries", ch, vec![Reload::Config, Reload::Leftovers], None);
+                app.push(Action::Write {
+                    title: "Remove obsolete /etc/portage entries".into(),
+                    changes: ch,
+                    reload: vec![Reload::Config, Reload::Leftovers],
+                    then: None,
+                });
                 app.maintenance.config_selected.clear();
             }
         });
 
         // Preserved libs
         if !left.preserved_libs.is_empty() {
-            section_card(ui, icon::BOOKS, "Preserved libraries", &format!("{} old librar(y/ies) kept because programs still use them", left.preserved_libs.len()), ORANGE, |ui| {
-                for l in left.preserved_libs.iter().take(20) {
-                    ui.label(w::mono(l));
-                }
-                if w::primary(ui, icon::WRENCH, "Preview emerge @preserved-rebuild").clicked() {
-                    app.push(Action::Pretend(EmergeOptions::default().targets(&["@preserved-rebuild"])));
-                }
-            });
+            section_card(
+                ui,
+                icon::BOOKS,
+                "Preserved libraries",
+                &format!("{} old librar(y/ies) kept because programs still use them", left.preserved_libs.len()),
+                ORANGE,
+                |ui| {
+                    for l in left.preserved_libs.iter().take(20) {
+                        ui.label(w::mono(l));
+                    }
+                    if w::primary(ui, icon::WRENCH, "Preview emerge @preserved-rebuild").clicked() {
+                        app.push(Action::Pretend(EmergeOptions::default().targets(&["@preserved-rebuild"])));
+                    }
+                },
+            );
         }
 
         // News
@@ -887,7 +968,12 @@ fn cleanup_page(app: &mut App, ui: &mut Ui) {
             if read > 0 {
                 section_card(ui, icon::NEWSPAPER, "Read news items", &format!("{read} news items already read"), ACCENT, |ui| {
                     if w::button(ui, icon::TRASH, "Purge read news").on_hover_text("eselect news purge").clicked() {
-                        app.push(Action::Root { title: "eselect news purge".into(), argv: vec!["eselect".into(), "news".into(), "purge".into()], reload: vec![Reload::News], kind: JobKind::Generic });
+                        app.push(Action::Root {
+                            title: "eselect news purge".into(),
+                            argv: vec!["eselect".into(), "news".into(), "purge".into()],
+                            reload: vec![Reload::News],
+                            kind: JobKind::Generic,
+                        });
                     }
                 });
             }

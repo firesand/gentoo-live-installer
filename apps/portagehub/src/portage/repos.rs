@@ -35,14 +35,11 @@ impl Repo {
     }
 
     pub fn auto_sync(&self) -> bool {
-        self.get("auto-sync").is_none_or(|v| matches!(v.to_ascii_lowercase().as_str(), "yes" | "true"))
-            && self.get("sync-type").is_some()
+        self.get("auto-sync").is_none_or(|v| matches!(v.to_ascii_lowercase().as_str(), "yes" | "true")) && self.get("sync-type").is_some()
     }
 
     pub fn priority(&self) -> i32 {
-        self.get("priority")
-            .and_then(|p| p.parse().ok())
-            .unwrap_or(if self.is_main { -1000 } else { 0 })
+        self.get("priority").and_then(|p| p.parse().ok()).unwrap_or(if self.is_main { -1000 } else { 0 })
     }
 
     pub fn masters(&self) -> String {
@@ -191,11 +188,7 @@ pub fn load() -> ReposConf {
             && rn.trim() != r.name
             && !rn.trim().is_empty()
         {
-            warnings.push(format!(
-                "Repository section [{}] points to a tree whose profiles/repo_name is '{}'",
-                r.name,
-                rn.trim()
-            ));
+            warnings.push(format!("Repository section [{}] points to a tree whose profiles/repo_name is '{}'", r.name, rn.trim()));
         }
         repos.push(r);
     }

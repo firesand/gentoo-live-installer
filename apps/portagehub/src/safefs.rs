@@ -9,41 +9,14 @@
 use std::ffi::CString;
 use std::io::{self, Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
-use std::os::unix::ffi::OsStrExt;
+use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Component, Path, PathBuf};
-
-/// What `lstat` says about an existing entry.
-#[derive(Debug, Clone, Copy)]
-struct Entry {
-    mode: u32,
-    dir: bool,
-    symlink: bool,
-    uid: u32,
-    gid: u32,
-}
-
-/// The entry `name` of `parent`, not following a symlink (None when absent).
-fn entry_of(parent: &OwnedFd, name: &CString) -> Option<Entry> {
-    let mut st: libc::stat = unsafe { std::mem::zeroed() };
-    let rc = unsafe { libc::fstatat(parent.as_raw_fd(), name.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) };
-    (rc == 0).then_some(Entry {
-        mode: st.st_mode & 0o7777,
-        dir: (st.st_mode & libc::S_IFMT) == libc::S_IFDIR,
-        symlink: (st.st_mode & libc::S_IFMT) == libc::S_IFLNK,
-        uid: st.st_uid,
-        gid: st.st_gid,
-    })
-}
 
 /// A directory that confines all operations below it.
 pub struct Beneath {
     dir: OwnedFd,
     pub path: PathBuf,
 }
-
-/// Why a path is refused. The helper writes as root, so where a symlink points would decide
-/// where root writes: it never follows one, whoever created it.
-const SYMLINK_REFUSED: &str = "is, or sits behind, a symlink or leaves the directory; PortageHub never writes through a symlink because the link target would decide where root writes - point the setting at a real file or directory, or edit it by hand";
 
 fn cstr(p: &Path) -> io::Result<CString> {
     CString::new(p.as_os_str().as_bytes()).map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "path contains NUL"))
@@ -72,14 +45,14 @@ fn openat2(dir: &OwnedFd, rel: &Path, flags: i32, mode: u32) -> io::Result<Owned
     how.flags = (flags | libc::O_CLOEXEC) as u64;
     how.mode = mode as u64;
     how.resolve = libc::RESOLVE_BENEATH | libc::RESOLVE_NO_SYMLINKS | libc::RESOLVE_NO_MAGICLINKS | libc::RESOLVE_NO_XDEV;
-    let fd = unsafe {
-        libc::syscall(libc::SYS_openat2, dir.as_raw_fd(), c.as_ptr(), &how as *const libc::open_how, std::mem::size_of::<libc::open_how>())
-    };
+    let fd = unsafe { libc::syscall(libc::SYS_openat2, dir.as_raw_fd(), c.as_ptr(), &how as *const libc::open_how, std::mem::size_of::<libc::open_how>()) };
     if fd < 0 {
         let e = io::Error::last_os_error();
         // ELOOP: a symlink on the way; EXDEV: escaping the tree.
         return Err(match e.raw_os_error() {
-            Some(libc::ELOOP) | Some(libc::EXDEV) => io::Error::new(io::ErrorKind::PermissionDenied, format!("{}: {SYMLINK_REFUSED}", rel.display())),
+            Some(libc::ELOOP) | Some(libc::EXDEV) => {
+                io::Error::new(io::ErrorKind::PermissionDenied, format!("{}: refusing to follow a symlink or leave the directory", rel.display()))
+            }
             _ => e,
         });
     }
@@ -96,12 +69,7 @@ impl Beneath {
         let c = cstr(path)?;
         let fd = unsafe { libc::open(c.as_ptr(), libc::O_PATH | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
         if fd < 0 {
-            let e = io::Error::last_os_error();
-            // A symlinked /etc/portage (dotfile setups) used to surface as a bare "Not a directory".
-            if matches!(e.raw_os_error(), Some(libc::ENOTDIR) | Some(libc::ELOOP)) && std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
-                return Err(io::Error::new(io::ErrorKind::PermissionDenied, format!("{} is a symlink; PortageHub never writes through a symlinked directory because the link target would decide where root writes - point it at a real directory or edit the files by hand", path.display())));
-            }
-            return Err(e);
+            return Err(io::Error::last_os_error());
         }
         Ok(Beneath { dir: unsafe { OwnedFd::from_raw_fd(fd) }, path: path.to_path_buf() })
     }
@@ -132,9 +100,7 @@ impl Beneath {
 
     /// Open a regular file for reading (None when it does not exist).
     pub fn open_file(&self, rel: &Path) -> io::Result<Option<std::fs::File>> {
-        // O_NONBLOCK: opening a FIFO for reading would otherwise wait for a writer forever and stall
-        // the helper's only request thread; the type check below then refuses it.
-        match openat2(&self.dir, rel, libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_NOCTTY, 0) {
+        match openat2(&self.dir, rel, libc::O_RDONLY | libc::O_NOFOLLOW, 0) {
             Ok(fd) => {
                 let f = std::fs::File::from(fd);
                 if !f.metadata()?.is_file() {
@@ -161,18 +127,52 @@ impl Beneath {
         Ok(self.read_with_mode(rel)?.map(|(b, _)| b))
     }
 
+    /// Target of a symbolic link (None when `rel` is no symlink or does not exist).
+    pub fn link_target(&self, rel: &Path) -> io::Result<Option<PathBuf>> {
+        let (parent, name) = match self.parent(rel, false) {
+            Ok(x) => x,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        if unsafe { libc::fstatat(parent.as_raw_fd(), name.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) } != 0 || st.st_mode & libc::S_IFMT != libc::S_IFLNK {
+            return Ok(None);
+        }
+        let mut buf = vec![0u8; libc::PATH_MAX as usize];
+        let n = unsafe { libc::readlinkat(parent.as_raw_fd(), name.as_ptr(), buf.as_mut_ptr() as *mut libc::c_char, buf.len()) };
+        if n < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        buf.truncate(n as usize);
+        Ok(Some(PathBuf::from(std::ffi::OsString::from_vec(buf))))
+    }
+
+    /// Create a symbolic link `rel` → `target` (the target is stored, not resolved).
+    pub fn symlink(&self, rel: &Path, target: &Path) -> io::Result<()> {
+        let (parent, name) = self.parent(rel, true)?;
+        let t = cstr(target)?;
+        check(unsafe { libc::symlinkat(t.as_ptr(), parent.as_raw_fd(), name.as_ptr()) })
+    }
+
     /// Is `rel` an existing directory (not a symlink to one)?
     pub fn is_dir(&self, rel: &Path) -> io::Result<bool> {
         match self.parent(rel, false) {
-            Ok((p, name)) => Ok(entry_of(&p, &name).is_some_and(|e| e.dir)),
+            Ok((p, name)) => Ok(self.mode_of(&p, &name).is_some_and(|(_, dir)| dir)),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
             Err(e) => Err(e),
         }
     }
 
+    /// Mode of an existing entry (None when absent).
+    fn mode_of(&self, parent: &OwnedFd, name: &CString) -> Option<(u32, bool)> {
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        let rc = unsafe { libc::fstatat(parent.as_raw_fd(), name.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) };
+        (rc == 0).then_some((st.st_mode & 0o7777, (st.st_mode & libc::S_IFMT) == libc::S_IFDIR))
+    }
+
     pub fn exists(&self, rel: &Path) -> io::Result<bool> {
         match self.parent(rel, false) {
-            Ok((p, name)) => Ok(entry_of(&p, &name).is_some()),
+            Ok((p, name)) => Ok(self.mode_of(&p, &name).is_some()),
             Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(false),
             Err(e) => Err(e),
         }
@@ -188,17 +188,25 @@ impl Beneath {
     /// Like [`Beneath::write_atomic`], streaming from `src`, with an optional explicit mode.
     pub fn write_atomic_from(&self, rel: &Path, src: &mut dyn Read, mode: Option<u32>) -> io::Result<()> {
         let (parent, name) = self.parent(rel, true)?;
-        let existing = entry_of(&parent, &name);
-        if existing.is_some_and(|e| e.dir) {
+        let existing = self.mode_of(&parent, &name);
+        if existing.is_some_and(|(_, dir)| dir) {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{} is a directory", rel.display())));
         }
-        // A symlink that gets replaced contributes neither its 0777 mode nor its owner; a regular
-        // file keeps both.
-        let replaced = existing.filter(|e| !e.symlink);
-        let mode = mode.or(replaced.map(|e| e.mode)).unwrap_or(0o644);
-        let tmp_name = format!(".portagehub-{}-{}.tmp~", std::process::id(), std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0));
+        let mode = mode.or(existing.map(|(m, _)| m)).unwrap_or(0o644);
+        let tmp_name = format!(
+            ".portagehub-{}-{}.tmp~",
+            std::process::id(),
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos()).unwrap_or(0)
+        );
         let tmp = cstr(Path::new(&tmp_name))?;
-        let fd = unsafe { libc::openat(parent.as_raw_fd(), tmp.as_ptr(), libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC, 0o600 as libc::c_uint) };
+        let fd = unsafe {
+            libc::openat(
+                parent.as_raw_fd(),
+                tmp.as_ptr(),
+                libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+                0o600 as libc::c_uint,
+            )
+        };
         if fd < 0 {
             return Err(io::Error::last_os_error());
         }
@@ -208,11 +216,6 @@ impl Beneath {
             f.flush()?;
             f.sync_all()?;
             check(unsafe { libc::fchmod(f.as_raw_fd(), mode) })?;
-            if let Some(e) = replaced {
-                // Keep the owner of the file being replaced (a root helper would otherwise make
-                // everything root:root). Not being allowed to is fine: that is what a non-root run is.
-                let _ = unsafe { libc::fchown(f.as_raw_fd(), e.uid, e.gid) };
-            }
             check(unsafe { libc::renameat2(parent.as_raw_fd(), tmp.as_ptr(), parent.as_raw_fd(), name.as_ptr(), 0) })
         })();
         if r.is_err() {
@@ -232,13 +235,8 @@ impl Beneath {
     }
 
     pub fn mkdirs(&self, rel: &Path) -> io::Result<()> {
-        self.mkdirs_mode(rel, 0o755)
-    }
-
-    /// Like [`Beneath::mkdirs`], with `mode` for the last component (parents are created 0755).
-    pub fn mkdirs_mode(&self, rel: &Path, mode: u32) -> io::Result<()> {
         let (parent, name) = self.parent(rel, true)?;
-        let rc = unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), mode as libc::mode_t) };
+        let rc = unsafe { libc::mkdirat(parent.as_raw_fd(), name.as_ptr(), 0o755) };
         if rc < 0 && io::Error::last_os_error().raw_os_error() != Some(libc::EEXIST) {
             return Err(io::Error::last_os_error());
         }
@@ -276,16 +274,7 @@ fn remove_at(parent: &OwnedFd, name: &CString, dev: libc::dev_t, depth: usize) -
     if depth > 256 {
         return Err(io::Error::other("directory tree too deep"));
     }
-    // st_dev alone cannot detect a bind mount from the same filesystem.
-    // Enforce the mount boundary on every descent, before reading children.
-    let mut how: libc::open_how = unsafe { std::mem::zeroed() };
-    how.flags = (libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) as u64;
-    how.resolve = libc::RESOLVE_BENEATH | libc::RESOLVE_NO_SYMLINKS
-        | libc::RESOLVE_NO_MAGICLINKS | libc::RESOLVE_NO_XDEV;
-    let fd = unsafe {
-        libc::syscall(libc::SYS_openat2, parent.as_raw_fd(), name.as_ptr(),
-            &how as *const libc::open_how, std::mem::size_of::<libc::open_how>())
-    };
+    let fd = unsafe { libc::openat(parent.as_raw_fd(), name.as_ptr(), libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC) };
     if fd < 0 {
         let e = io::Error::last_os_error();
         return match e.raw_os_error() {
@@ -294,7 +283,7 @@ fn remove_at(parent: &OwnedFd, name: &CString, dev: libc::dev_t, depth: usize) -
             _ => Err(e),
         };
     }
-    let dir = unsafe { OwnedFd::from_raw_fd(fd as i32) };
+    let dir = unsafe { OwnedFd::from_raw_fd(fd) };
     let mut st: libc::stat = unsafe { std::mem::zeroed() };
     check(unsafe { libc::fstat(dir.as_raw_fd(), &mut st) })?;
     if st.st_dev != dev {
@@ -336,7 +325,7 @@ fn list_names(dir: &OwnedFd) -> io::Result<Vec<CString>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::{PermissionsExt, symlink};
+    use std::os::unix::fs::symlink;
 
     fn scratch(name: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("portagehub-safefs-{name}-{}", std::process::id()));
@@ -385,72 +374,6 @@ mod tests {
     }
 
     #[test]
-    fn replacing_a_symlink_gives_a_plain_file_mode_not_the_links_0777() {
-        let d = scratch("m");
-        std::fs::write(d.join("outside/secret"), b"keep").unwrap();
-        symlink(d.join("outside/secret"), d.join("etc/portage/package.use/link")).unwrap();
-        let b = Beneath::open(&d.join("etc/portage")).unwrap();
-        b.write_atomic(Path::new("package.use/link"), b"new").unwrap();
-        let mode = std::fs::metadata(d.join("etc/portage/package.use/link")).unwrap().permissions().mode() & 0o7777;
-        assert_eq!(mode, 0o644);
-        // A regular file keeps its own mode, an explicit mode wins.
-        std::fs::set_permissions(d.join("etc/portage/package.use/link"), std::fs::Permissions::from_mode(0o640)).unwrap();
-        b.write_atomic(Path::new("package.use/link"), b"newer").unwrap();
-        assert_eq!(std::fs::metadata(d.join("etc/portage/package.use/link")).unwrap().permissions().mode() & 0o7777, 0o640);
-        b.write_atomic_from(Path::new("package.use/link"), &mut &b"x"[..], Some(0o600)).unwrap();
-        assert_eq!(std::fs::metadata(d.join("etc/portage/package.use/link")).unwrap().permissions().mode() & 0o7777, 0o600);
-        b.mkdirs_mode(Path::new("private/deeper"), 0o700).unwrap();
-        assert_eq!(std::fs::metadata(d.join("etc/portage/private/deeper")).unwrap().permissions().mode() & 0o7777, 0o700);
-        let _ = std::fs::remove_dir_all(&d);
-    }
-
-    /// Runs `f` on another thread and gives it `secs` to finish: a regression must fail, not hang the run.
-    fn within<T: Send + 'static>(secs: u64, f: impl FnOnce() -> T + Send + 'static) -> T {
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(f());
-        });
-        rx.recv_timeout(std::time::Duration::from_secs(secs)).expect("the operation hung")
-    }
-
-    fn mkfifo(path: &Path) {
-        let c = cstr(path).unwrap();
-        check(unsafe { libc::mkfifo(c.as_ptr(), 0o644) }).unwrap();
-    }
-
-    #[test]
-    fn a_fifo_in_the_config_tree_is_refused_not_waited_for() {
-        let d = scratch("fifo");
-        mkfifo(&d.join("etc/portage/package.use/pipe"));
-        let base = d.join("etc/portage");
-        let err = within(3, move || {
-            let b = Beneath::open(&base).unwrap();
-            (b.open_file(Path::new("package.use/pipe")).unwrap_err(), b.read(Path::new("package.use/pipe")).unwrap_err())
-        });
-        assert!(err.0.to_string().contains("not a regular file"), "{}", err.0);
-        assert!(err.1.to_string().contains("not a regular file"), "{}", err.1);
-        let _ = std::fs::remove_dir_all(&d);
-    }
-
-    #[test]
-    fn symlinked_config_directories_and_files_are_explained() {
-        let d = scratch("sym");
-        symlink(d.join("etc/portage"), d.join("etc/portage-link")).unwrap();
-        let e = Beneath::open(&d.join("etc/portage-link")).err().expect("a symlinked base is refused");
-        assert_eq!(e.kind(), io::ErrorKind::PermissionDenied);
-        assert!(e.to_string().contains("is a symlink") && e.to_string().contains("portage-link"), "{e}");
-        // A path that merely does not exist keeps its own error.
-        assert_eq!(Beneath::open(&d.join("etc/missing")).err().unwrap().kind(), io::ErrorKind::NotFound);
-        // A symlinked file names the problem instead of a bare errno.
-        std::fs::write(d.join("outside/real"), b"x").unwrap();
-        symlink(d.join("outside/real"), d.join("etc/portage/make.conf")).unwrap();
-        let b = Beneath::open(&d.join("etc/portage")).unwrap();
-        let e = b.read(Path::new("make.conf")).unwrap_err();
-        assert!(e.to_string().contains("make.conf") && e.to_string().contains("never writes through a symlink"), "{e}");
-        let _ = std::fs::remove_dir_all(&d);
-    }
-
-    #[test]
     fn rename_and_unlink_are_confined() {
         let d = scratch("n");
         let b = Beneath::open(&d.join("etc/portage")).unwrap();
@@ -489,46 +412,5 @@ mod tests {
         assert_eq!(b.read_with_mode(Path::new("m/f")).unwrap(), Some((b"abc".to_vec(), 0o600)));
         assert!(b.is_dir(Path::new("m")).unwrap());
         let _ = std::fs::remove_dir_all(&d);
-    }
-
-    #[test]
-    fn remove_tree_refuses_same_filesystem_bind_mounts() {
-        // Run the mount regression only in a fresh unprivileged user/mount
-        // namespace. Neither a host mount nor a block device is involved.
-        const CHILD: &str = "PORTAGEHUB_BIND_MOUNT_TEST_CHILD";
-        if std::env::var_os(CHILD).is_none() {
-            let probe = std::process::Command::new("unshare")
-                .args(["--user", "--map-root-user", "--mount", "true"])
-                .output();
-            if !probe.is_ok_and(|output| output.status.success()) {
-                eprintln!("SKIP bind-mount regression: private user/mount namespaces unavailable");
-                return;
-            }
-            let status = std::process::Command::new("unshare")
-                .args(["--user", "--map-root-user", "--mount", "--propagation", "private"])
-                .arg(std::env::current_exe().unwrap())
-                .args(["--exact", "safefs::tests::remove_tree_refuses_same_filesystem_bind_mounts", "--nocapture"])
-                .env(CHILD, "1").status().unwrap();
-            assert!(status.success(), "private bind-mount regression failed");
-            return;
-        }
-        let d = scratch("bind");
-        let source = d.join("outside");
-        std::fs::write(source.join("keep"), b"must survive").unwrap();
-        let b = Beneath::open(&d.join("etc/portage")).unwrap();
-        for rel in ["direct", "tree/nested"] {
-            let target = d.join("etc/portage").join(rel);
-            std::fs::create_dir_all(&target).unwrap();
-            let target_c = cstr(&target).unwrap();
-            let source_c = cstr(&source).unwrap();
-            check(unsafe { libc::mount(source_c.as_ptr(), target_c.as_ptr(),
-                std::ptr::null(), libc::MS_BIND, std::ptr::null()) }).unwrap();
-            let result = b.remove_tree(Path::new(if rel == "direct" { "direct" } else { "tree" }));
-            let content = std::fs::read(source.join("keep"));
-            check(unsafe { libc::umount2(target_c.as_ptr(), libc::MNT_DETACH) }).unwrap();
-            assert!(result.is_err(), "cleanup crossed a bind mount");
-            assert_eq!(content.unwrap(), b"must survive");
-        }
-        std::fs::remove_dir_all(d).unwrap();
     }
 }

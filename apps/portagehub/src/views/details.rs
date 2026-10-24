@@ -20,11 +20,6 @@ use egui_phosphor::regular as icon;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
 
-/// (package, what depends on it) pairs.
-type DepPairs = Vec<(String, String)>;
-/// The USE flags of one group with their state in the user's configuration.
-type FlagRows = Vec<(String, Option<bool>)>;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DTab {
     #[default]
@@ -48,6 +43,9 @@ pub enum UseScope {
 
 type Shared<T> = Arc<Mutex<Option<T>>>;
 
+/// Reverse dependencies being computed in the background: (key, depender).
+type Rdeps = Shared<Vec<(String, String)>>;
+
 #[derive(Default)]
 pub struct State {
     pub key: Option<String>,
@@ -61,7 +59,7 @@ pub struct State {
     pub deps_active: bool,
     pub files_filter: String,
     files: Option<(String, Arc<Vec<ContentEntry>>)>,
-    rdeps: Option<(String, Shared<DepPairs>)>,
+    rdeps: Option<(String, Rdeps)>,
     pub quick_kind: Option<ConfKind>,
     pub quick_value: String,
     pub quick_atom: String,
@@ -124,9 +122,7 @@ pub fn show(app: &mut App, ui: &mut Ui, back: bool) {
             for (t, label) in &tabs {
                 let sel = app.detail.tab == *t;
                 let r = ui.add(
-                    egui::Button::new(RichText::new(label).size(13.5).color(if sel { WHITE } else { TEXT_DIM }))
-                        .frame(false)
-                        .min_size(egui::vec2(0.0, 36.0)),
+                    egui::Button::new(RichText::new(label).size(13.5).color(if sel { WHITE } else { TEXT_DIM })).frame(false).min_size(egui::vec2(0.0, 36.0)),
                 );
                 if sel {
                     ui.painter().hline(r.rect.x_range(), r.rect.bottom() - 1.0, egui::Stroke::new(2.0, ACCENT));
@@ -154,7 +150,7 @@ pub fn show(app: &mut App, ui: &mut Ui, back: bool) {
         DTab::Overview => overview(app, ui, &detail, &installed),
         DTab::Versions => versions(app, ui, &detail),
         DTab::Use => use_flags(app, ui, &detail, &installed),
-        DTab::Deps => deps(app, ui, &detail),
+        DTab::Deps => deps(app, ui, &detail, &installed),
         DTab::Ebuild => ebuild(app, ui, &detail),
         DTab::Files => files(app, ui, &installed),
         DTab::History => history(app, ui, &key),
@@ -170,7 +166,13 @@ fn hero(app: &mut App, ui: &mut Ui, key: &str, detail: Option<&PkgDetail>, insta
     let p = ui.painter();
     w::paint_hgradient(p, rect, w::lerp_color(base, Color32::BLACK, 0.15), w::lerp_color(base, BG, 0.85));
     w::paint_vgradient(p, rect, Color32::from_black_alpha(0), Color32::from_black_alpha(120));
-    p.text(rect.right_center() + egui::vec2(-120.0, -10.0), egui::Align2::CENTER_CENTER, category_icon(cat), FontId::proportional(160.0), Color32::from_white_alpha(22));
+    p.text(
+        rect.right_center() + egui::vec2(-120.0, -10.0),
+        egui::Align2::CENTER_CENTER,
+        category_icon(cat),
+        FontId::proportional(160.0),
+        Color32::from_white_alpha(22),
+    );
 
     let accepts_testing = app.data.env.as_ref().is_some_and(|e| e.accepts_testing());
     let best = detail.and_then(|d| d.best_visible(accepts_testing));
@@ -205,17 +207,27 @@ fn hero(app: &mut App, ui: &mut Ui, key: &str, detail: Option<&PkgDetail>, insta
             (format!("{}  REBUILD", icon::ARROWS_CLOCKWISE), GRAD_GREY, EmergeOptions::default().with("--oneshot", Value::On).targets(&[key]))
         };
         let can = detail.is_some_and(|d| !d.versions.is_empty());
-        if ui.add_enabled_ui(can, |ui| w::big_button(ui, &label, grad, 170.0)).inner.on_hover_text("Shows a preview first — nothing is changed until you confirm").clicked() {
+        if ui
+            .add_enabled_ui(can, |ui| w::big_button(ui, &label, grad, 170.0))
+            .inner
+            .on_hover_text("Shows a preview first — nothing is changed until you confirm")
+            .clicked()
+        {
             app.push(Action::Pretend(opts));
         }
         // Options dropdown next to the big button.
-        let drop = ui.add(egui::Button::new(RichText::new(icon::CARET_DOWN).size(18.0).color(WHITE)).fill(Color32::from_rgb(0x2a, 0x3d, 0x52)).min_size(egui::vec2(36.0, 40.0)));
+        let drop = ui.add(
+            egui::Button::new(RichText::new(icon::CARET_DOWN).size(18.0).color(WHITE))
+                .fill(Color32::from_rgb(0x2a, 0x3d, 0x52))
+                .min_size(egui::vec2(36.0, 40.0)),
+        );
         egui::Popup::menu(&drop).show(|ui| {
             ui.set_min_width(280.0);
             action_menu(app, ui, key, detail, is_inst);
         });
         ui.add_space(18.0);
-        let inst_text = if installed.is_empty() { "Not installed".to_string() } else { installed.iter().map(|i| i.ver.raw.clone()).collect::<Vec<_>>().join(", ") };
+        let inst_text =
+            if installed.is_empty() { "Not installed".to_string() } else { installed.iter().map(|i| i.ver.raw.clone()).collect::<Vec<_>>().join(", ") };
         w::stat(ui, "Installed", &inst_text);
         ui.add_space(14.0);
         w::stat(ui, "Best version", &best.map(|b| b.ver.raw.clone()).unwrap_or_else(|| "—".into()));
@@ -326,7 +338,11 @@ fn action_menu(app: &mut App, ui: &mut Ui, key: &str, detail: Option<&PkgDetail>
             app.push(Action::Pretend(EmergeOptions { action: emerge::Action::Depclean, ..Default::default() }.targets(&[key])));
             ui.close();
         }
-        if ui.button(RichText::new(format!("{}  Force remove (--unmerge)", icon::WARNING)).color(RED)).on_hover_text("Removes it even if other packages need it").clicked() {
+        if ui
+            .button(RichText::new(format!("{}  Force remove (--unmerge)", icon::WARNING)).color(RED))
+            .on_hover_text("Removes it even if other packages need it")
+            .clicked()
+        {
             app.push(Action::Pretend(EmergeOptions { action: emerge::Action::Unmerge, ..Default::default() }.targets(&[key])));
             ui.close();
         }
@@ -423,18 +439,32 @@ fn overview(app: &mut App, ui: &mut Ui, d: &PkgDetail, installed: &[vdb::Install
                     kv(ui, "Version", RichText::new(format!("{}  (slot {}, from ::{})", i.ver, i.slot, i.repo)).color(WHITE));
                 }
                 kv(ui, "Built", format!("{} ({})", crate::fmt::date(i.build_time), crate::fmt::ago(i.build_time)));
-                if let Some(meta) = d.installed_for(&i.ver) {
-                    if !meta.cflags.is_empty() {
-                        kv(ui, "CFLAGS", RichText::new(meta.cflags.clone()).monospace().size(12.0));
-                    }
-                    kv(ui, "Built with", RichText::new(meta.built_with().join(" ")).monospace().size(12.0).color(GREEN_TEXT));
+                let cflags = i.read("CFLAGS");
+                if !cflags.is_empty() {
+                    kv(ui, "CFLAGS", RichText::new(cflags).monospace().size(12.0));
                 }
+                let use_ = i.read("USE");
+                let iuse: HashSet<String> = i.read("IUSE").split_whitespace().map(|f| f.trim_start_matches(['+', '-']).to_string()).collect();
+                let on: Vec<&str> = use_.split_whitespace().filter(|f| iuse.contains(*f)).collect();
+                kv(ui, "Built with", RichText::new(on.join(" ")).monospace().size(12.0).color(GREEN_TEXT));
             });
             let mut world = app.data.vdb.as_ref().is_some_and(|v| v.in_world(&d.key));
             ui.add_space(6.0);
-            if w::switch_row(ui, &mut world, "Selected (in @world)", "Packages in @world are kept and updated. Packages not in @world are dependencies and are removed by depclean once nothing needs them.").changed() {
+            if w::switch_row(
+                ui,
+                &mut world,
+                "Selected (in @world)",
+                "Packages in @world are kept and updated. Packages not in @world are dependencies and are removed by depclean once nothing needs them.",
+            )
+            .changed()
+            {
                 let (flag, title) = if world { ("--noreplace", "Add to @world") } else { ("--deselect", "Remove from @world") };
-                app.push(Action::Root { title: format!("{title}: {}", d.key), argv: vec!["emerge".into(), flag.into(), d.key.clone()], reload: vec![Reload::Vdb], kind: JobKind::Generic });
+                app.push(Action::Root {
+                    title: format!("{title}: {}", d.key),
+                    argv: vec!["emerge".into(), flag.into(), d.key.clone()],
+                    reload: vec![Reload::Vdb],
+                    kind: JobKind::Generic,
+                });
             }
         }
     });
@@ -612,7 +642,7 @@ fn version_menu(app: &mut App, ui: &mut Ui, d: &PkgDetail, v: &VersionInfo) {
     ui.label(w::dim("Keywords (package.accept_keywords)"));
     let add = |app: &mut App, kind: ConfKind, line: String, title: String| {
         let ch = edits::add_lines(&cfg, &[(kind, line)], &target, None);
-        app.push_write(title, ch, vec![Reload::Config], None);
+        app.push(Action::Write { title, changes: ch, reload: vec![Reload::Config], then: None });
     };
     if v.kw == KwState::Testing || v.ver.is_live() || v.kw == KwState::Missing {
         let kwv = if v.kw == KwState::Testing { format!("~{arch}") } else { "**".to_string() };
@@ -637,7 +667,11 @@ fn version_menu(app: &mut App, ui: &mut Ui, d: &PkgDetail, v: &VersionInfo) {
         add(app, ConfKind::Mask, eq.clone(), format!("Mask {cpv}"));
         ui.close();
     }
-    if ui.button(format!("{}  Mask newer versions (> {})", icon::PROHIBIT, v.ver)).on_hover_text("Stay at this version: Portage won't upgrade past it").clicked() {
+    if ui
+        .button(format!("{}  Mask newer versions (> {})", icon::PROHIBIT, v.ver))
+        .on_hover_text("Stay at this version: Portage won't upgrade past it")
+        .clicked()
+    {
         add(app, ConfKind::Mask, format!(">{cpv}"), format!("Mask versions newer than {cpv}"));
         ui.close();
     }
@@ -689,7 +723,8 @@ fn use_flags(app: &mut App, ui: &mut Ui, d: &PkgDetail, installed: &[vdb::Instal
     let cfg = app.data.config.clone();
     let env = app.data.env.clone();
     let user = cfg.as_ref().map(|c| edits::user_use_state(c, &d.cat, &d.pn)).unwrap_or_default();
-    let inst_use: Option<HashSet<String>> = d.installed_for(&v.ver).map(|m| m.use_flags.iter().cloned().collect());
+    let inst = installed.iter().rev().find(|i| i.ver == v.ver).or(installed.last());
+    let inst_use: Option<HashSet<String>> = inst.map(|i| i.read("USE").split_whitespace().map(String::from).collect());
     let global: HashSet<String> = env.as_ref().map(|e| e.global_use().into_iter().collect()).unwrap_or_default();
     let cap_tag = format!("use:{}", v.cpv(&d.key));
     let effective: Option<BTreeMap<String, bool>> = app.captures.get(&cap_tag).filter(|c| c.done).map(|c| {
@@ -727,7 +762,10 @@ fn use_flags(app: &mut App, ui: &mut Ui, d: &PkgDetail, installed: &[vdb::Instal
         if running {
             ui.add(egui::Spinner::new().color(ACCENT));
             ui.label(w::dim("Asking emerge…"));
-        } else if w::button(ui, icon::MAGIC_WAND, "Ask emerge for effective flags").on_hover_text("Runs emerge -pv --nodeps for this version (no changes)").clicked() {
+        } else if w::button(ui, icon::MAGIC_WAND, "Ask emerge for effective flags")
+            .on_hover_text("Runs emerge -pv --nodeps for this version (no changes)")
+            .clicked()
+        {
             app.push(Action::Capture {
                 tag: cap_tag.clone(),
                 argv: vec!["emerge".into(), "-pv".into(), "--nodeps".into(), "--color=n".into(), "--ask=n".into(), format!("={}", v.cpv(&d.key))],
@@ -745,12 +783,9 @@ fn use_flags(app: &mut App, ui: &mut Ui, d: &PkgDetail, installed: &[vdb::Instal
         return;
     }
     // Group USE_EXPAND flags.
-    let mut groups: BTreeMap<String, FlagRows> = BTreeMap::new();
+    let mut groups: BTreeMap<String, Vec<(String, Option<bool>)>> = BTreeMap::new();
     for (f, def) in iuse {
-        let g = usedesc
-            .as_ref()
-            .and_then(|u| u.split_expand(&f).map(|(p, _)| p.to_uppercase()))
-            .unwrap_or_else(|| "Features".to_string());
+        let g = usedesc.as_ref().and_then(|u| u.split_expand(&f).map(|(p, _)| p.to_uppercase())).unwrap_or_else(|| "Features".to_string());
         groups.entry(g).or_default().push((f, def));
     }
     let filter = app.detail.use_filter.to_lowercase();
@@ -760,7 +795,7 @@ fn use_flags(app: &mut App, ui: &mut Ui, d: &PkgDetail, installed: &[vdb::Instal
         UseScope::Version => format!("={}", v.cpv(&d.key)),
     };
     let required_use = v.meta.get("REQUIRED_USE").to_string();
-    let mut ordered: Vec<(&String, &FlagRows)> = groups.iter().collect();
+    let mut ordered: Vec<_> = groups.iter().collect();
     ordered.sort_by_key(|(g, _)| (g.as_str() != "Features", g.to_string()));
     for (g, flags) in ordered {
         let shown: Vec<_> = flags.iter().filter(|(f, _)| filter.is_empty() || f.contains(&filter)).collect();
@@ -768,59 +803,63 @@ fn use_flags(app: &mut App, ui: &mut Ui, d: &PkgDetail, installed: &[vdb::Instal
             continue;
         }
         let header = if g == "Features" { format!("Features ({})", shown.len()) } else { format!("{g} ({})", shown.len()) };
-        egui::CollapsingHeader::new(RichText::new(header).family(theme::bold()).color(WHITE)).id_salt(g).default_open(g == "Features" || shown.len() <= 6).show(ui, |ui| {
-            egui::Grid::new(format!("use-{g}")).num_columns(4).striped(true).spacing([14.0, 6.0]).min_col_width(40.0).show(ui, |ui| {
-                for (flag, def) in shown {
-                    let (desc, scope) = usedesc.as_ref().map(|u| u.describe(&d.key, flag, Some(&d.xml.flags))).unwrap_or_default();
-                    let estimate = user.get(flag).map(|x| x.0).unwrap_or_else(|| global.contains(flag) || def.unwrap_or(false));
-                    let now_on = effective.as_ref().and_then(|m| m.get(flag).copied()).or_else(|| inst_use.as_ref().map(|s| s.contains(flag))).unwrap_or(estimate);
-                    // Current tri state for *this* atom
-                    let base = match user.get(flag) {
-                        Some((on, a)) if *a == atom => {
-                            if *on {
-                                Tri::On
+        egui::CollapsingHeader::new(RichText::new(header).family(theme::bold()).color(WHITE))
+            .id_salt(g)
+            .default_open(g == "Features" || shown.len() <= 6)
+            .show(ui, |ui| {
+                egui::Grid::new(format!("use-{g}")).num_columns(4).striped(true).spacing([14.0, 6.0]).min_col_width(40.0).show(ui, |ui| {
+                    for (flag, def) in shown {
+                        let (desc, scope) = usedesc.as_ref().map(|u| u.describe(&d.key, flag, Some(&d.xml.flags))).unwrap_or_default();
+                        let estimate = user.get(flag).map(|x| x.0).unwrap_or_else(|| global.contains(flag) || def.unwrap_or(false));
+                        let now_on =
+                            effective.as_ref().and_then(|m| m.get(flag).copied()).or_else(|| inst_use.as_ref().map(|s| s.contains(flag))).unwrap_or(estimate);
+                        // Current tri state for *this* atom
+                        let base = match user.get(flag) {
+                            Some((on, a)) if *a == atom => {
+                                if *on {
+                                    Tri::On
+                                } else {
+                                    Tri::Off
+                                }
+                            }
+                            _ => Tri::Default,
+                        };
+                        let mut state = *app.detail.use_edits.get(flag).unwrap_or(&base);
+                        let display = if let Some(x) = usedesc.as_ref().and_then(|u| u.split_expand(flag)) { x.1.to_string() } else { flag.clone() };
+                        ui.horizontal(|ui| {
+                            let col = if now_on { GREEN_TEXT } else { TEXT_DIM };
+                            ui.label(RichText::new(if now_on { icon::CHECK_SQUARE } else { icon::SQUARE }).color(col));
+                            ui.label(RichText::new(&display).monospace().color(if now_on { WHITE } else { TEXT })).on_hover_text(flag);
+                        });
+                        let tri_resp = w::tri(ui, &mut state, *def);
+                        if tri_resp.changed() {
+                            if state == base {
+                                app.detail.use_edits.remove(flag);
                             } else {
-                                Tri::Off
+                                app.detail.use_edits.insert(flag.clone(), state);
                             }
                         }
-                        _ => Tri::Default,
-                    };
-                    let mut state = *app.detail.use_edits.get(flag).unwrap_or(&base);
-                    let display = if let Some(x) = usedesc.as_ref().and_then(|u| u.split_expand(flag)) { x.1.to_string() } else { flag.clone() };
-                    ui.horizontal(|ui| {
-                        let col = if now_on { GREEN_TEXT } else { TEXT_DIM };
-                        ui.label(RichText::new(if now_on { icon::CHECK_SQUARE } else { icon::SQUARE }).color(col));
-                        ui.label(RichText::new(&display).monospace().color(if now_on { WHITE } else { TEXT })).on_hover_text(flag);
-                    });
-                    let tri_resp = w::tri(ui, &mut state, *def);
-                    if tri_resp.changed() {
-                        if state == base {
-                            app.detail.use_edits.remove(flag);
-                        } else {
-                            app.detail.use_edits.insert(flag.clone(), state);
-                        }
+                        ui.horizontal(|ui| {
+                            let tag = match scope {
+                                FlagScope::Local => Some(("local", ACCENT_DIM)),
+                                FlagScope::Global => Some(("global", TEXT_FAINT)),
+                                FlagScope::Expand => Some(("expand", PURPLE)),
+                                FlagScope::Unknown => None,
+                            };
+                            if let Some((t, c)) = tag {
+                                ui.label(RichText::new(t).size(10.5).color(c));
+                            }
+                            if let Some((on, a)) = user.get(flag)
+                                && *a != atom
+                            {
+                                ui.label(RichText::new(format!("{} {} via {a}", icon::PUSH_PIN, if *on { "on" } else { "off" })).size(11.0).color(ORANGE));
+                            }
+                        });
+                        ui.add(egui::Label::new(RichText::new(if desc.is_empty() { "—".to_string() } else { desc }).color(TEXT_DIM)).wrap());
+                        ui.end_row();
                     }
-                    ui.horizontal(|ui| {
-                        let tag = match scope {
-                            FlagScope::Local => Some(("local", ACCENT_DIM)),
-                            FlagScope::Global => Some(("global", TEXT_FAINT)),
-                            FlagScope::Expand => Some(("expand", PURPLE)),
-                            FlagScope::Unknown => None,
-                        };
-                        if let Some((t, c)) = tag {
-                            ui.label(RichText::new(t).size(10.5).color(c));
-                        }
-                        if let Some((on, a)) = user.get(flag)
-                            && *a != atom
-                        {
-                            ui.label(RichText::new(format!("{} {} via {a}", icon::PUSH_PIN, if *on { "on" } else { "off" })).size(11.0).color(ORANGE));
-                        }
-                    });
-                    ui.add(egui::Label::new(RichText::new(if desc.is_empty() { "—".to_string() } else { desc }).color(TEXT_DIM)).wrap());
-                    ui.end_row();
-                }
+                });
             });
-        });
     }
     if !required_use.is_empty() {
         w::section(ui, "Rules (REQUIRED_USE)");
@@ -855,14 +894,15 @@ fn use_flags(app: &mut App, ui: &mut Ui, d: &PkgDetail, installed: &[vdb::Instal
                     && let Some(cfg) = &cfg
                 {
                     let changes: Vec<(String, Tri)> = app.detail.use_edits.iter().map(|(k, v)| (k.clone(), *v)).collect();
-                    let use_expand: Vec<String> = app.data.env.as_ref().map(|e| e.get("USE_EXPAND").split_whitespace().map(String::from).collect()).unwrap_or_default();
-                    let fc = edits::set_use_flags(cfg, &atom, &changes, &app.settings.target_file, &use_expand);
+                    let fc = edits::set_use_flags(cfg, &atom, &changes, &app.settings.target_file);
                     let then = if app.detail.rebuild_after && !installed.is_empty() {
-                        Some(Box::new(Action::Pretend(EmergeOptions::default().with("--oneshot", Value::On).with("--changed-use", Value::On).targets(&[d.key.as_str()]))))
+                        Some(Box::new(Action::Pretend(
+                            EmergeOptions::default().with("--oneshot", Value::On).with("--changed-use", Value::On).targets(&[d.key.as_str()]),
+                        )))
                     } else {
                         None
                     };
-                    app.push_write(format!("USE flags for {atom}"), fc, vec![Reload::Config], then);
+                    app.push(Action::Write { title: format!("USE flags for {atom}"), changes: fc, reload: vec![Reload::Config], then });
                     app.detail.use_edits.clear();
                 }
                 if w::button(ui, icon::X, "Discard").clicked() {
@@ -876,7 +916,7 @@ fn use_flags(app: &mut App, ui: &mut Ui, d: &PkgDetail, installed: &[vdb::Instal
     });
 }
 
-fn deps(app: &mut App, ui: &mut Ui, d: &PkgDetail) {
+fn deps(app: &mut App, ui: &mut Ui, d: &PkgDetail, installed: &[vdb::Installed]) {
     if d.versions.is_empty() {
         return;
     }
@@ -890,8 +930,9 @@ fn deps(app: &mut App, ui: &mut Ui, d: &PkgDetail) {
         w::toggle(ui, &mut app.detail.deps_active);
     });
     let enabled: HashSet<String> = {
-        match d.installed_for(&v.ver) {
-            Some(m) => m.use_flags.iter().cloned().collect(),
+        let inst = installed.iter().rev().find(|i| i.ver == v.ver).or(installed.last());
+        match inst {
+            Some(i) => i.read("USE").split_whitespace().map(String::from).collect(),
             None => {
                 let mut s: HashSet<String> = app.data.env.as_ref().map(|e| e.global_use().into_iter().collect()).unwrap_or_default();
                 for (f, def) in v.meta.iuse() {
@@ -1006,13 +1047,22 @@ fn dep_tree(app: &mut App, ui: &mut Ui, nodes: &[DepNode], active: Option<&HashS
                     .show(ui, |ui| dep_tree(app, ui, children, active, enabled, vdb));
             }
             DepNode::AnyOf(c) => {
-                egui::CollapsingHeader::new(RichText::new("any one of ( || )").color(YELLOW)).id_salt(ui.next_auto_id()).default_open(true).show(ui, |ui| dep_tree(app, ui, c, active, enabled, vdb));
+                egui::CollapsingHeader::new(RichText::new("any one of ( || )").color(YELLOW))
+                    .id_salt(ui.next_auto_id())
+                    .default_open(true)
+                    .show(ui, |ui| dep_tree(app, ui, c, active, enabled, vdb));
             }
             DepNode::ExactlyOne(c) => {
-                egui::CollapsingHeader::new(RichText::new("exactly one of ( ^^ )").color(YELLOW)).id_salt(ui.next_auto_id()).default_open(true).show(ui, |ui| dep_tree(app, ui, c, active, enabled, vdb));
+                egui::CollapsingHeader::new(RichText::new("exactly one of ( ^^ )").color(YELLOW))
+                    .id_salt(ui.next_auto_id())
+                    .default_open(true)
+                    .show(ui, |ui| dep_tree(app, ui, c, active, enabled, vdb));
             }
             DepNode::AtMostOne(c) => {
-                egui::CollapsingHeader::new(RichText::new("at most one of ( ?? )").color(YELLOW)).id_salt(ui.next_auto_id()).default_open(true).show(ui, |ui| dep_tree(app, ui, c, active, enabled, vdb));
+                egui::CollapsingHeader::new(RichText::new("at most one of ( ?? )").color(YELLOW))
+                    .id_salt(ui.next_auto_id())
+                    .default_open(true)
+                    .show(ui, |ui| dep_tree(app, ui, c, active, enabled, vdb));
             }
             DepNode::All(c) => dep_tree(app, ui, c, active, enabled, vdb),
         }
@@ -1025,7 +1075,35 @@ pub fn highlight_bash(text: &str, font: FontId) -> egui::text::LayoutJob {
     let mut job = LayoutJob::default();
     let fmt = |c: Color32| TextFormat { font_id: font.clone(), color: c, ..Default::default() };
     const KW: &[&str] = &[
-        "if", "then", "else", "elif", "fi", "for", "in", "do", "done", "case", "esac", "while", "until", "function", "local", "export", "return", "inherit", "die", "use", "usex", "usev", "use_enable", "use_with", "default", "einfo", "ewarn", "eerror", "elog",
+        "if",
+        "then",
+        "else",
+        "elif",
+        "fi",
+        "for",
+        "in",
+        "do",
+        "done",
+        "case",
+        "esac",
+        "while",
+        "until",
+        "function",
+        "local",
+        "export",
+        "return",
+        "inherit",
+        "die",
+        "use",
+        "usex",
+        "usev",
+        "use_enable",
+        "use_with",
+        "default",
+        "einfo",
+        "ewarn",
+        "eerror",
+        "elog",
     ];
     for line in text.split_inclusive('\n') {
         let trimmed = line.trim_start();
@@ -1241,8 +1319,13 @@ fn my_settings(app: &mut App, ui: &mut Ui, d: &PkgDetail) {
                 if w::toggle(ui, &mut on).on_hover_text(if on { "Active — click to comment out" } else { "Commented out — click to enable" }).changed() {
                     let mut ne = e.clone();
                     ne.disabled = !on;
-                    let ch = edits::replace_entry(&cfg, path, *idx, Some(ne)).map(|c| vec![c]);
-                    app.push_write(format!("{} {}", if on { "Enable" } else { "Disable" }, e.atom_text), ch, vec![Reload::Config], None);
+                    let ch = edits::replace_entry(&cfg, path, *idx, Some(ne));
+                    app.push(Action::Write {
+                        title: format!("{} {}", if on { "Enable" } else { "Disable" }, e.atom_text),
+                        changes: vec![ch],
+                        reload: vec![Reload::Config],
+                        then: None,
+                    });
                 }
                 ui.label(RichText::new(kind.icon()).color(ACCENT));
                 ui.vertical(|ui| {
@@ -1257,8 +1340,8 @@ fn my_settings(app: &mut App, ui: &mut Ui, d: &PkgDetail) {
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if w::icon_button(ui, icon::TRASH, "Delete this line").clicked() {
-                        let ch = edits::replace_entry(&cfg, path, *idx, None).map(|c| vec![c]);
-                        app.push_write(format!("Delete {}", e.atom_text), ch, vec![Reload::Config], None);
+                        let ch = edits::replace_entry(&cfg, path, *idx, None);
+                        app.push(Action::Write { title: format!("Delete {}", e.atom_text), changes: vec![ch], reload: vec![Reload::Config], then: None });
                     }
                 });
             });
@@ -1277,7 +1360,13 @@ fn my_settings(app: &mut App, ui: &mut Ui, d: &PkgDetail) {
                 app.detail.quick_kind = Some(k);
                 app.detail.quick_value = match k {
                     ConfKind::AcceptKeywords => format!("~{}", app.data.arch()),
-                    ConfKind::License => d.versions.first().map(|v| v.meta.get("LICENSE").replace(['(', ')', '|'], " ").split_whitespace().filter(|t| !t.ends_with('?')).collect::<Vec<_>>().join(" ")).unwrap_or_default(),
+                    ConfKind::License => d
+                        .versions
+                        .first()
+                        .map(|v| {
+                            v.meta.get("LICENSE").replace(['(', ')', '|'], " ").split_whitespace().filter(|t| !t.ends_with('?')).collect::<Vec<_>>().join(" ")
+                        })
+                        .unwrap_or_default(),
                     _ => String::new(),
                 };
             }
@@ -1347,9 +1436,15 @@ fn my_settings(app: &mut App, ui: &mut Ui, d: &PkgDetail) {
         });
         let target = edits::target_path(&cfg, kind, &app.settings.target_file);
         ui.label(w::dim(format!("Will be written to {}", target.display())));
-        if ui.add_enabled(entry.atom.is_some(), egui::Button::new(RichText::new(format!("{}  Add", icon::PLUS)).color(WHITE)).fill(Color32::from_rgb(0x1f, 0x6f, 0xb2))).clicked() {
+        if ui
+            .add_enabled(
+                entry.atom.is_some(),
+                egui::Button::new(RichText::new(format!("{}  Add", icon::PLUS)).color(WHITE)).fill(Color32::from_rgb(0x1f, 0x6f, 0xb2)),
+            )
+            .clicked()
+        {
             let ch = edits::add_lines(&cfg, &[(kind, line.clone())], &app.settings.target_file, None);
-            app.push_write(format!("{}: {line}", kind.file_name()), ch, vec![Reload::Config], None);
+            app.push(Action::Write { title: format!("{}: {line}", kind.file_name()), changes: ch, reload: vec![Reload::Config], then: None });
         }
     });
 }

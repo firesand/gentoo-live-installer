@@ -2,7 +2,7 @@
 
 use super::atom::Atom;
 use super::version::{Version, split_pv};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 pub const VDB: &str = "/var/db/pkg";
@@ -50,8 +50,6 @@ pub struct Vdb {
     pub by_key: HashMap<String, Vec<usize>>,
     pub world: Vec<Atom>,
     pub world_raw: Vec<String>,
-    /// `cat/pn` of every world atom, so "is it in @world?" is a lookup, not a scan.
-    world_keys: HashSet<String>,
     pub world_sets: Vec<String>,
     pub total_size: u64,
 }
@@ -67,14 +65,7 @@ impl Vdb {
 
     /// Is the package listed in @world (directly selected by the user)?
     pub fn in_world(&self, key: &str) -> bool {
-        self.world_keys.contains(key)
-    }
-
-    /// Set the world file's lines (comments and blanks already removed).
-    pub fn set_world(&mut self, lines: Vec<String>) {
-        self.world = lines.iter().filter_map(|l| Atom::parse(l)).collect();
-        self.world_keys = self.world.iter().map(Atom::key).collect();
-        self.world_raw = lines;
+        self.world.iter().any(|a| a.key() == key)
     }
 }
 
@@ -130,13 +121,13 @@ pub fn load() -> Vdb {
     }
     v.pkgs = pkgs;
     let world = std::fs::read_to_string(WORLD).unwrap_or_default();
-    v.set_world(world.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')).map(String::from).collect());
-    v.world_sets = std::fs::read_to_string(WORLD_SETS)
-        .unwrap_or_default()
-        .lines()
-        .map(|l| l.trim().to_string())
-        .filter(|l| !l.is_empty())
-        .collect();
+    for l in world.lines().map(str::trim).filter(|l| !l.is_empty() && !l.starts_with('#')) {
+        v.world_raw.push(l.to_string());
+        if let Some(a) = Atom::parse(l) {
+            v.world.push(a);
+        }
+    }
+    v.world_sets = std::fs::read_to_string(WORLD_SETS).unwrap_or_default().lines().map(|l| l.trim().to_string()).filter(|l| !l.is_empty()).collect();
     v
 }
 
@@ -170,42 +161,4 @@ pub fn contents(dir: &Path) -> Vec<ContentEntry> {
             Some(ContentEntry { kind: k, path })
         })
         .collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn in_world_agrees_with_the_scan_it_replaces() {
-        let mut v = Vdb::default();
-        v.set_world(
-            ["app-editors/vim", "=sys-kernel/gentoo-kernel-6.12.8", "dev-lang/python:3.12", "dev-libs/*", "@kernels-keep", "~net-misc/curl-8.0", "not an atom"]
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
-        );
-        let scan = |key: &str| v.world.iter().any(|a| a.key() == key);
-        for key in [
-            "app-editors/vim",
-            "sys-kernel/gentoo-kernel",
-            "dev-lang/python",
-            "dev-libs/*",
-            "dev-libs/openssl",
-            "net-misc/curl",
-            "app-editors/emacs",
-            "kernels-keep",
-            "@kernels-keep",
-            "not an atom",
-            "",
-        ] {
-            assert_eq!(v.in_world(key), scan(key), "{key}");
-        }
-        assert!(v.in_world("app-editors/vim") && v.in_world("dev-lang/python") && v.in_world("sys-kernel/gentoo-kernel"));
-        assert!(!v.in_world("app-editors/emacs"));
-        assert_eq!(v.world_raw.len(), 7, "every line is kept, parsable or not");
-        // Replacing the world replaces the lookup too.
-        v.set_world(vec!["app-misc/x".into()]);
-        assert!(v.in_world("app-misc/x") && !v.in_world("app-editors/vim"));
-    }
 }

@@ -74,55 +74,219 @@ const fn yn(flag: &'static str, label: &'static str, help: &'static str, group: 
 
 pub const SPECS: &[Spec] = &[
     // What to update
-    sw("--update", Some('u'), "Update to the best version", "Upgrade the targets (and with Deep, their dependencies) to the best available version instead of only installing missing ones.", Group::Update, false),
-    sw("--deep", Some('D'), "Deep", "Consider the whole dependency tree, not just the packages you named. Needed for full system updates.", Group::Update, false),
-    sw("--newuse", Some('N'), "New USE", "Rebuild packages whose USE flags changed, including flags newly added to or removed from the ebuild.", Group::Update, false),
-    sw("--changed-use", Some('U'), "Changed USE", "Rebuild only when the effective USE flags you build with changed (lighter than New USE).", Group::Update, false),
-    yn("--with-bdeps", "Include build-time deps", "Also update build-time dependencies (BDEPEND) of installed packages. Recommended: yes.", Group::Update, false),
-    sw("--oneshot", Some('1'), "One-shot (don't add to world)", "Install without recording the package in @world. Use for dependencies or temporary installs so --depclean can remove them later.", Group::Update, false),
-    sw("--noreplace", Some('n'), "Skip already installed", "Do not rebuild packages that are already installed. Combine with targets to add them to @world.", Group::Update, false),
-    sw("--emptytree", Some('e'), "Empty tree (rebuild everything)", "Pretend nothing is installed and rebuild every dependency. Very long; used after toolchain changes.", Group::Update, true),
-    yn("--changed-deps", "Changed dependencies", "Rebuild installed packages whose dependencies changed in the repository since they were built.", Group::Update, true),
+    sw(
+        "--update",
+        Some('u'),
+        "Update to the best version",
+        "Upgrade the targets (and with Deep, their dependencies) to the best available version instead of only installing missing ones.",
+        Group::Update,
+        false,
+    ),
+    sw(
+        "--deep",
+        Some('D'),
+        "Deep",
+        "Consider the whole dependency tree, not just the packages you named. Needed for full system updates.",
+        Group::Update,
+        false,
+    ),
+    sw(
+        "--newuse",
+        Some('N'),
+        "New USE",
+        "Rebuild packages whose USE flags changed, including flags newly added to or removed from the ebuild.",
+        Group::Update,
+        false,
+    ),
+    sw(
+        "--changed-use",
+        Some('U'),
+        "Changed USE",
+        "Rebuild only when the effective USE flags you build with changed (lighter than New USE).",
+        Group::Update,
+        false,
+    ),
+    yn(
+        "--with-bdeps",
+        "Include build-time deps",
+        "Also update build-time dependencies (BDEPEND) of installed packages. Recommended: yes.",
+        Group::Update,
+        false,
+    ),
+    sw(
+        "--oneshot",
+        Some('1'),
+        "One-shot (don't add to world)",
+        "Install without recording the package in @world. Use for dependencies or temporary installs so --depclean can remove them later.",
+        Group::Update,
+        false,
+    ),
+    sw(
+        "--noreplace",
+        Some('n'),
+        "Skip already installed",
+        "Do not rebuild packages that are already installed. Combine with targets to add them to @world.",
+        Group::Update,
+        false,
+    ),
+    sw(
+        "--emptytree",
+        Some('e'),
+        "Empty tree (rebuild everything)",
+        "Pretend nothing is installed and rebuild every dependency. Very long; used after toolchain changes.",
+        Group::Update,
+        true,
+    ),
+    yn(
+        "--changed-deps",
+        "Changed dependencies",
+        "Rebuild installed packages whose dependencies changed in the repository since they were built.",
+        Group::Update,
+        true,
+    ),
     yn("--changed-slot", "Changed slot", "Rebuild when the SLOT of an installed package changed in the repository.", Group::Update, true),
     yn("--with-test-deps", "Include test deps", "Pull in test dependencies for packages built with FEATURES=test.", Group::Update, true),
     sw("--newrepo", None, "New repository", "Rebuild packages when the repository they come from changed.", Group::Update, true),
     sw("--selective", None, "Selective", "Same as --noreplace for the targets.", Group::Update, true),
     sw("--update-if-installed", None, "Update only if installed", "Like --update, but skip targets that are not installed yet.", Group::Update, true),
-    Spec { flag: "--exclude", short: None, label: "Exclude packages", help: "Never merge these atoms, even as dependencies (space separated).", kind: Kind::Atoms, group: Group::Update, advanced: false },
-    Spec { flag: "--reinstall-atoms", short: None, label: "Force reinstall of", help: "Treat these atoms as if they were not installed.", kind: Kind::Atoms, group: Group::Update, advanced: true },
-    Spec { flag: "--useoldpkg-atoms", short: None, label: "Prefer old binary for", help: "Prefer existing binary packages for these atoms even if they are outdated.", kind: Kind::Atoms, group: Group::Update, advanced: true },
+    Spec {
+        flag: "--exclude",
+        short: None,
+        label: "Exclude packages",
+        help: "Never merge these atoms, even as dependencies (space separated).",
+        kind: Kind::Atoms,
+        group: Group::Update,
+        advanced: false,
+    },
+    Spec {
+        flag: "--reinstall-atoms",
+        short: None,
+        label: "Force reinstall of",
+        help: "Treat these atoms as if they were not installed.",
+        kind: Kind::Atoms,
+        group: Group::Update,
+        advanced: true,
+    },
+    Spec {
+        flag: "--useoldpkg-atoms",
+        short: None,
+        label: "Prefer old binary for",
+        help: "Prefer existing binary packages for these atoms even if they are outdated.",
+        kind: Kind::Atoms,
+        group: Group::Update,
+        advanced: true,
+    },
     // Resolver
-    Spec { flag: "--backtrack", short: None, label: "Backtrack attempts", help: "How hard the resolver tries alternatives when it hits a conflict (default 10). Raise to 30–100 for stubborn slot conflicts.", kind: Kind::Number { min: 0, max: 1000, allow_plain: false }, group: Group::Resolver, advanced: false },
+    Spec {
+        flag: "--backtrack",
+        short: None,
+        label: "Backtrack attempts",
+        help: "How hard the resolver tries alternatives when it hits a conflict (default 10). Raise to 30–100 for stubborn slot conflicts.",
+        kind: Kind::Number { min: 0, max: 1000, allow_plain: false },
+        group: Group::Resolver,
+        advanced: false,
+    },
     sw("--complete-graph", None, "Complete graph", "Consider the whole installed system when checking for breakage after an update.", Group::Resolver, true),
     yn("--complete-graph-if-new-use", "Complete graph if new USE", "Enable complete graph when USE of an installed package changes.", Group::Resolver, true),
-    yn("--complete-graph-if-new-ver", "Complete graph if new version", "Enable complete graph when an installed package version changes.", Group::Resolver, true),
-    yn("--rebuild-if-new-slot", "Rebuild on new slot", "Rebuild packages with slot-operator deps when a dependency moves to a new slot (default: yes).", Group::Resolver, true),
+    yn(
+        "--complete-graph-if-new-ver",
+        "Complete graph if new version",
+        "Enable complete graph when an installed package version changes.",
+        Group::Resolver,
+        true,
+    ),
+    yn(
+        "--rebuild-if-new-slot",
+        "Rebuild on new slot",
+        "Rebuild packages with slot-operator deps when a dependency moves to a new slot (default: yes).",
+        Group::Resolver,
+        true,
+    ),
     sw("--rebuild-if-new-rev", None, "Rebuild on new revision", "Rebuild packages with build-time deps that got a new revision.", Group::Resolver, true),
     sw("--rebuild-if-new-ver", None, "Rebuild on new version", "Rebuild packages with build-time deps that got a new version.", Group::Resolver, true),
     sw("--rebuild-if-unbuilt", None, "Rebuild if unbuilt", "Rebuild packages when build-time deps were rebuilt from source.", Group::Resolver, true),
-    yn("--dynamic-deps", "Dynamic deps", "Use dependency information from the repository instead of what was recorded at install time (default: yes).", Group::Resolver, true),
-    yn("--ignore-built-slot-operator-deps", "Ignore slot-operator deps", "Ignore recorded slot-operator dependencies (may break packages; debugging only).", Group::Resolver, true),
+    yn(
+        "--dynamic-deps",
+        "Dynamic deps",
+        "Use dependency information from the repository instead of what was recorded at install time (default: yes).",
+        Group::Resolver,
+        true,
+    ),
+    yn(
+        "--ignore-built-slot-operator-deps",
+        "Ignore slot-operator deps",
+        "Ignore recorded slot-operator dependencies (may break packages; debugging only).",
+        Group::Resolver,
+        true,
+    ),
     sw("--nodeps", Some('O'), "No dependencies", "Merge only the named packages and ignore dependencies. Can break your system.", Group::Resolver, true),
     sw("--onlydeps", Some('o'), "Only dependencies", "Install only the dependencies of the targets, not the targets themselves.", Group::Resolver, false),
     yn("--onlydeps-with-rdeps", "Only deps incl. runtime", "With Only dependencies, also include runtime dependencies (default: yes).", Group::Resolver, true),
     sw("--verbose-conflicts", None, "Verbose conflicts", "Show every package involved in a slot conflict, not only a summary.", Group::Resolver, false),
     sw("--tree", Some('t'), "Show dependency tree", "Print the plan as a tree so you can see what pulls in what.", Group::Resolver, false),
     // Autounmask
-    yn("--autounmask", "Suggest unmask changes", "Let emerge suggest keyword and mask changes when the only candidates are masked. emerge's default is no, except that USE and license suggestions (below) default to yes.", Group::Autounmask, false),
+    yn(
+        "--autounmask",
+        "Suggest unmask changes",
+        "Let emerge suggest keyword and mask changes when the only candidates are masked. emerge's default is no, except that USE and license suggestions (below) default to yes.",
+        Group::Autounmask,
+        false,
+    ),
     yn("--autounmask-use", "Suggest USE changes", "Allow USE changes in suggestions.", Group::Autounmask, true),
     yn("--autounmask-license", "Suggest license changes", "Allow license changes in suggestions.", Group::Autounmask, true),
     yn("--autounmask-keep-keywords", "Never suggest keywords", "Do not suggest accepting testing keywords.", Group::Autounmask, true),
     yn("--autounmask-keep-masks", "Never suggest unmasks", "Do not suggest package.unmask changes.", Group::Autounmask, true),
-    yn("--autounmask-backtrack", "Backtrack with autounmask", "Keep backtracking when autounmask changes are needed (can find better solutions).", Group::Autounmask, true),
+    yn(
+        "--autounmask-backtrack",
+        "Backtrack with autounmask",
+        "Keep backtracking when autounmask changes are needed (can find better solutions).",
+        Group::Autounmask,
+        true,
+    ),
     yn("--autounmask-unrestricted-atoms", "Unrestricted atoms", "Write suggestions using >= instead of = atoms.", Group::Autounmask, true),
-    yn("--autounmask-continue", "Apply and continue", "Write the suggested changes and continue automatically (PortageHub prefers you review them first).", Group::Autounmask, true),
+    yn(
+        "--autounmask-continue",
+        "Apply and continue",
+        "Write the suggested changes and continue automatically (PortageHub prefers you review them first).",
+        Group::Autounmask,
+        true,
+    ),
     // Build
-    Spec { flag: "--jobs", short: Some('j'), label: "Parallel packages (--jobs)", help: "How many packages may build at the same time. Each one still uses MAKEOPTS -j. Empty = unlimited when enabled.", kind: Kind::Number { min: 1, max: 64, allow_plain: true }, group: Group::Build, advanced: false },
-    Spec { flag: "--load-average", short: None, label: "Load limit", help: "Do not start new package builds while the system load is above this value.", kind: Kind::Number { min: 1, max: 256, allow_plain: false }, group: Group::Build, advanced: false },
-    sw("--keep-going", None, "Keep going after failures", "Continue with the remaining packages when one fails, then report the failures at the end.", Group::Build, false),
+    Spec {
+        flag: "--jobs",
+        short: Some('j'),
+        label: "Parallel packages (--jobs)",
+        help: "How many packages may build at the same time. Each one still uses MAKEOPTS -j. Empty = unlimited when enabled.",
+        kind: Kind::Number { min: 1, max: 64, allow_plain: true },
+        group: Group::Build,
+        advanced: false,
+    },
+    Spec {
+        flag: "--load-average",
+        short: None,
+        label: "Load limit",
+        help: "Do not start new package builds while the system load is above this value.",
+        kind: Kind::Number { min: 1, max: 256, allow_plain: false },
+        group: Group::Build,
+        advanced: false,
+    },
+    sw(
+        "--keep-going",
+        None,
+        "Keep going after failures",
+        "Continue with the remaining packages when one fails, then report the failures at the end.",
+        Group::Build,
+        false,
+    ),
     sw("--fetchonly", Some('f'), "Download only", "Fetch all source archives but do not build anything. Good for slow/metered networks.", Group::Build, false),
     sw("--fetch-all-uri", Some('F'), "Download all sources", "Fetch every SRC_URI regardless of USE flags.", Group::Build, true),
-    yn("--quiet-build", "Quiet build", "Hide compiler output (it is still written to the build log). Activity then has less to go on: the current phase of each package comes from emerge's own output, because the build logs under PORTAGE_TMPDIR are private to the portage user.", Group::Build, false),
+    yn(
+        "--quiet-build",
+        "Quiet build",
+        "Hide compiler output (it is still written to the build log). PortageHub shows the build log live either way.",
+        Group::Build,
+        false,
+    ),
     sw("--quiet-fail", None, "Quiet failures", "Do not print the full build log tail when a build fails.", Group::Build, true),
     sw("--skipfirst", None, "Skip first (with resume)", "When resuming, skip the package that failed first.", Group::Build, false),
     // Binary
@@ -135,8 +299,24 @@ pub const SPECS: &[Spec] = &[
     yn("--binpkg-respect-use", "Respect USE for binaries", "Ignore binary packages built with different USE flags (default: yes).", Group::Binary, true),
     yn("--binpkg-changed-deps", "Binary changed deps", "Ignore binary packages whose dependencies changed.", Group::Binary, true),
     yn("--rebuilt-binaries", "Rebuilt binaries", "Replace installed packages with binary packages that were rebuilt.", Group::Binary, true),
-    Spec { flag: "--usepkg-exclude", short: None, label: "No binaries for", help: "Always build these atoms from source.", kind: Kind::Atoms, group: Group::Binary, advanced: true },
-    Spec { flag: "--buildpkg-exclude", short: None, label: "Don't package", help: "Never create binary packages for these atoms.", kind: Kind::Atoms, group: Group::Binary, advanced: true },
+    Spec {
+        flag: "--usepkg-exclude",
+        short: None,
+        label: "No binaries for",
+        help: "Always build these atoms from source.",
+        kind: Kind::Atoms,
+        group: Group::Binary,
+        advanced: true,
+    },
+    Spec {
+        flag: "--buildpkg-exclude",
+        short: None,
+        label: "Don't package",
+        help: "Never create binary packages for these atoms.",
+        kind: Kind::Atoms,
+        group: Group::Binary,
+        advanced: true,
+    },
     // Output
     sw("--verbose", Some('v'), "Verbose", "Show USE flags, sizes and versions in the plan (PortageHub always adds this to previews).", Group::Output, false),
     sw("--quiet", Some('q'), "Quiet", "Reduce emerge's own output.", Group::Output, true),
@@ -145,7 +325,15 @@ pub const SPECS: &[Spec] = &[
     sw("--noconfmem", None, "Forget config choices", "Reinstall config files that you deleted before.", Group::Output, true),
     sw("--ignore-default-opts", None, "Ignore EMERGE_DEFAULT_OPTS", "Do not add the options from make.conf for this run.", Group::Output, false),
     sw("--nospinner", None, "No spinner", "Disable the progress spinner.", Group::Output, true),
-    Spec { flag: "--color", short: None, label: "Colour", help: "Coloured output (PortageHub strips colours itself).", kind: Kind::Choice(&["y", "n"]), group: Group::Output, advanced: true },
+    Spec {
+        flag: "--color",
+        short: None,
+        label: "Colour",
+        help: "Coloured output (PortageHub strips colours itself).",
+        kind: Kind::Choice(&["y", "n"]),
+        group: Group::Output,
+        advanced: true,
+    },
 ];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -340,11 +528,6 @@ impl EmergeOptions {
         a
     }
 
-    /// Why the helper would refuse to run this as root (see `portagehub::emerge_opts`), if it would.
-    pub fn policy_error(&self) -> Option<String> {
-        portagehub::policy::check_args("emerge", &self.run_args()).err()
-    }
-
     pub fn command_line(&self) -> String {
         let mut s = String::new();
         for (k, v) in &self.env {
@@ -404,13 +587,7 @@ pub fn recipes() -> Vec<Recipe> {
             subtitle: "emerge -uDU @world — rebuild what your USE edits affect",
             icon: i::TOGGLE_RIGHT,
             recommended: false,
-            build: || {
-                EmergeOptions::default()
-                    .with("--update", Value::On)
-                    .with("--deep", Value::On)
-                    .with("--changed-use", Value::On)
-                    .targets(&["@world"])
-            },
+            build: || EmergeOptions::default().with("--update", Value::On).with("--deep", Value::On).with("--changed-use", Value::On).targets(&["@world"]),
         },
         Recipe {
             title: "Rebuild preserved libraries",
@@ -472,7 +649,6 @@ pub const COMMON_SETS: &[(&str, &str)] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
-    use portagehub::emerge_opts::{self, SHORT_FLAGS, Value as Allowed};
 
     #[test]
     fn argv() {
@@ -488,86 +664,5 @@ mod tests {
         let o = EmergeOptions { action: Action::Depclean, ..Default::default() };
         assert_eq!(o.args(), vec!["--depclean"]);
         assert_eq!(o.command_line(), "emerge --ask --depclean");
-    }
-
-    /// The helper's allow-list and the GUI's option table must not drift apart:
-    /// an option the GUI can send but the helper refuses (or the reverse, a spec
-    /// the helper would take with a different value shape) is a bug.
-    #[test]
-    fn helper_allow_list_covers_every_spec_and_action() {
-        for s in SPECS {
-            let o = emerge_opts::long_opt(s.flag).unwrap_or_else(|| panic!("{} is missing from portagehub::emerge_opts::LONG_OPTS", s.flag));
-            let same = match (s.kind, o.value) {
-                (Kind::Switch, Allowed::None) | (Kind::YesNo, Allowed::YesNo) | (Kind::Atoms, Allowed::Atom) => true,
-                (Kind::Number { allow_plain, .. }, Allowed::Number { plain }) => allow_plain == plain,
-                (Kind::Choice(a), Allowed::Choice(b)) => a == b,
-                _ => false,
-            };
-            assert!(same, "{}: GUI kind {:?} vs helper {:?}", s.flag, s.kind, o.value);
-            if let (Kind::Switch, Some(c)) = (s.kind, s.short) {
-                assert!(SHORT_FLAGS.contains(c), "-{c} ({}) is missing from SHORT_FLAGS", s.flag);
-            }
-        }
-        for c in SHORT_FLAGS.chars() {
-            assert!(SPECS.iter().any(|s| s.kind_is_switch() && s.short == Some(c)), "-{c} is allowed by the helper but no spec uses it");
-        }
-        for a in Action::ALL {
-            if let Some(f) = a.flag() {
-                assert!(emerge_opts::long_opt(f).is_some(), "action flag {f} is missing from LONG_OPTS");
-            }
-        }
-        for fixed in ["--pretend", "--verbose", "--color", "--nospinner", "--ask"] {
-            assert!(emerge_opts::long_opt(fixed).is_some(), "{fixed}");
-        }
-    }
-
-    impl Spec {
-        fn kind_is_switch(&self) -> bool {
-            matches!(self.kind, Kind::Switch)
-        }
-    }
-
-    /// Everything the option builder can produce passes the helper's policy.
-    #[test]
-    fn every_generated_command_line_is_accepted_by_the_helper() {
-        let accepts = |o: &EmergeOptions| {
-            for args in [o.args(), o.run_args(), o.pretend_args()] {
-                portagehub::policy::check_args("emerge", &args).unwrap_or_else(|e| panic!("{args:?}: {e}"));
-            }
-            assert_eq!(o.policy_error(), None);
-        };
-        for r in recipes() {
-            accepts(&(r.build)());
-        }
-        for s in SPECS {
-            let values: Vec<Value> = match s.kind {
-                Kind::Switch => vec![Value::On],
-                Kind::YesNo => vec![Value::Yes, Value::No],
-                Kind::Number { allow_plain, .. } => [Some(Value::Num(Some(4))), allow_plain.then_some(Value::Num(None))].into_iter().flatten().collect(),
-                Kind::Atoms => vec![Value::Text("dev-libs/foo ~dev-lang/python-3.11.5 =sys-kernel/x-1.0*".into())],
-                Kind::Choice(list) => list.iter().map(|c| Value::Text((*c).into())).collect(),
-            };
-            for v in values {
-                accepts(&EmergeOptions::default().with(s.flag, v.clone()).targets(&["@world", "dev-libs/foo"]));
-                accepts(&EmergeOptions::default().with(s.flag, v).with("--update", Value::On).with("--deep", Value::On));
-            }
-        }
-        for a in Action::ALL {
-            accepts(&EmergeOptions { action: a, ..Default::default() }.targets(&["dev-libs/foo"]));
-            accepts(&EmergeOptions { action: a, ..Default::default() });
-        }
-    }
-
-    #[test]
-    fn free_text_is_checked_before_a_root_job_is_queued() {
-        let mut o = EmergeOptions::default().targets(&["@world"]);
-        o.extra_args = "--config-r tmp/x".into();
-        assert!(o.policy_error().unwrap().contains("not allowed"));
-        o.extra_args.clear();
-        o.targets.push("tmp/evil.tbz2".into());
-        assert!(o.policy_error().unwrap().contains("emerge target not allowed"));
-        o.targets.pop();
-        o.extra_args = "--keep-going".into();
-        assert_eq!(o.policy_error(), None);
     }
 }

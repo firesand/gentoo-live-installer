@@ -2,10 +2,7 @@
 //! buttons, badges, cards, progress bars …
 
 use super::theme::{self, *};
-use egui::{
-    Align2, Color32, CornerRadius, FontId, Frame, Margin, Pos2, Rect, Response, RichText, Sense, Stroke, Ui, WidgetInfo,
-    WidgetType, epaint::Mesh,
-};
+use egui::{Align2, Color32, CornerRadius, FontId, Frame, Margin, Pos2, Rect, Response, RichText, Sense, Stroke, Ui, WidgetInfo, WidgetType, epaint::Mesh};
 use egui_phosphor::regular as icon;
 
 pub fn paint_hgradient(painter: &egui::Painter, rect: Rect, left: Color32, right: Color32) {
@@ -59,11 +56,10 @@ pub fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
 
 /// Small "?" with a tooltip, for beginner explanations.
 pub fn help(ui: &mut Ui, text: &str) -> Response {
-    ui.add(egui::Label::new(RichText::new(icon::QUESTION).color(TEXT_FAINT).size(14.0)).sense(Sense::hover()))
-        .on_hover_ui(|ui| {
-            ui.set_max_width(340.0);
-            ui.label(text);
-        })
+    ui.add(egui::Label::new(RichText::new(icon::QUESTION).color(TEXT_FAINT).size(14.0)).sense(Sense::hover())).on_hover_ui(|ui| {
+        ui.set_max_width(340.0);
+        ui.label(text);
+    })
 }
 
 /// A full-width settings row: label (+ help) on the left, switch on the right.
@@ -100,10 +96,7 @@ pub fn tri(ui: &mut Ui, v: &mut Tri, default_on: Option<bool>) -> Response {
 pub fn segmented<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[(T, &str)]) -> Response {
     let font = FontId::new(12.5, theme::medium());
     let pad = egui::vec2(10.0, 4.0);
-    let galleys: Vec<_> = options
-        .iter()
-        .map(|(_, l)| ui.painter().layout_no_wrap(l.to_string(), font.clone(), TEXT))
-        .collect();
+    let galleys: Vec<_> = options.iter().map(|(_, l)| ui.painter().layout_no_wrap(l.to_string(), font.clone(), TEXT)).collect();
     let h = 24.0;
     let w: f32 = galleys.iter().map(|g| g.size().x + pad.x * 2.0).sum();
     let (rect, mut resp) = ui.allocate_exact_size(egui::vec2(w, h), Sense::hover());
@@ -128,7 +121,13 @@ pub fn segmented<T: PartialEq + Copy>(ui: &mut Ui, value: &mut T, options: &[(T,
             Color32::TRANSPARENT
         };
         painter.rect_filled(seg.shrink(2.0), CornerRadius::same(3), fill);
-        let col = if selected { WHITE } else if r.hovered() { TEXT } else { TEXT_DIM };
+        let col = if selected {
+            WHITE
+        } else if r.hovered() {
+            TEXT
+        } else {
+            TEXT_DIM
+        };
         painter.galley(seg.center() - g.size() / 2.0, g, col);
     }
     resp
@@ -161,7 +160,13 @@ pub fn big_button(ui: &mut Ui, text: &str, grad: (Color32, Color32), min_width: 
 
 /// Compact flat button with optional icon.
 pub fn button(ui: &mut Ui, icon_s: &str, text: &str) -> Response {
-    let label = if icon_s.is_empty() { text.to_string() } else if text.is_empty() { icon_s.to_string() } else { format!("{icon_s}  {text}") };
+    let label = if icon_s.is_empty() {
+        text.to_string()
+    } else if text.is_empty() {
+        icon_s.to_string()
+    } else {
+        format!("{icon_s}  {text}")
+    };
     ui.add(egui::Button::new(RichText::new(label).color(TEXT)).min_size(egui::vec2(0.0, 28.0)))
 }
 
@@ -169,24 +174,17 @@ pub fn button(ui: &mut Ui, icon_s: &str, text: &str) -> Response {
 pub fn primary(ui: &mut Ui, icon_s: &str, text: &str) -> Response {
     let label = if icon_s.is_empty() { text.to_string() } else { format!("{icon_s}  {text}") };
     ui.add(
-        egui::Button::new(RichText::new(label).color(WHITE).family(theme::medium()))
-            .fill(Color32::from_rgb(0x1f, 0x6f, 0xb2))
-            .min_size(egui::vec2(0.0, 28.0)),
+        egui::Button::new(RichText::new(label).color(WHITE).family(theme::medium())).fill(Color32::from_rgb(0x1f, 0x6f, 0xb2)).min_size(egui::vec2(0.0, 28.0)),
     )
 }
 
 pub fn danger(ui: &mut Ui, icon_s: &str, text: &str) -> Response {
     let label = if icon_s.is_empty() { text.to_string() } else { format!("{icon_s}  {text}") };
-    ui.add(
-        egui::Button::new(RichText::new(label).color(WHITE))
-            .fill(Color32::from_rgb(0x8a, 0x2c, 0x2c))
-            .min_size(egui::vec2(0.0, 28.0)),
-    )
+    ui.add(egui::Button::new(RichText::new(label).color(WHITE)).fill(Color32::from_rgb(0x8a, 0x2c, 0x2c)).min_size(egui::vec2(0.0, 28.0)))
 }
 
 pub fn icon_button(ui: &mut Ui, icon_s: &str, tooltip: &str) -> Response {
-    ui.add(egui::Button::new(RichText::new(icon_s).size(16.0).color(TEXT)).frame(false).min_size(egui::vec2(26.0, 26.0)))
-        .on_hover_text(tooltip)
+    ui.add(egui::Button::new(RichText::new(icon_s).size(16.0).color(TEXT)).frame(false).min_size(egui::vec2(26.0, 26.0))).on_hover_text(tooltip)
 }
 
 pub fn badge(ui: &mut Ui, text: &str, fg: Color32, bg: Color32) -> Response {
@@ -364,7 +362,8 @@ use egui::FontFamily;
 /// Flag chip coloured by state: green on, red off, grey default.
 pub fn flag_chip(ui: &mut Ui, name: &str, on: bool, changed: bool) -> Response {
     let text = if on { name.to_string() } else { format!("-{name}") };
-    let (fg, bg) = if on { (GREEN_TEXT, Color32::from_rgb(0x2d, 0x40, 0x16)) } else { (Color32::from_rgb(0xe8, 0x9a, 0x9a), Color32::from_rgb(0x40, 0x22, 0x22)) };
+    let (fg, bg) =
+        if on { (GREEN_TEXT, Color32::from_rgb(0x2d, 0x40, 0x16)) } else { (Color32::from_rgb(0xe8, 0x9a, 0x9a), Color32::from_rgb(0x40, 0x22, 0x22)) };
     let font = FontId::new(12.0, FontFamily::Monospace);
     let label = if changed { format!("{text}*") } else { text };
     let g = ui.painter().layout_no_wrap(label, font, fg);
@@ -452,4 +451,3 @@ pub fn link(ui: &mut Ui, text: &str, url: &str) -> Response {
     }
     r.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
-
