@@ -65,6 +65,7 @@ class CustomizePage(Page):
         self.content.addWidget(tabs)
         self.hardware.changed.connect(self._hardware_changed)
         self.load_manifest()
+        self.finish_layout()
 
     def _portage_tab(self) -> QWidget:
         page = QWidget()

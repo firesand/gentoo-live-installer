@@ -166,6 +166,7 @@ class SystemPage(Page):
         self.advance_on_enter(self.signing_key, self.signing_cert)
         self._refresh_stages()
         self.load_manifest()
+        self.finish_layout()
 
     # --- stage3, profile, desktop ----------------------------------------------------------------
 

@@ -10,7 +10,7 @@ from PySide6.QtWidgets import QCheckBox, QFormLayout, QHBoxLayout, QLineEdit, QP
 from .. import diagnostics, theme
 from ..manifest import InstallManifest
 from ..system_info import MIN_DISK_BYTES, SystemInfo, desktop_disk_bytes, format_size, smallest_disk_bytes
-from ..widgets import Card, Page, StatusRow, wrapped_label
+from ..widgets import Card, FlowLayout, Page, StatusRow, wrapped_label
 
 DAEMON_LOG = Path("/var/log/gentoo-installerd.log")
 PROXY_RE = re.compile(r"^(https?|socks5h?)://([^\s@/:]+(:[^\s@/]*)?@)?[A-Za-z0-9.-]+(:\d{1,5})?/?$")
@@ -110,7 +110,7 @@ class ReadinessPage(Page):
         self.continue_anyway.hide()
         self.content.addWidget(self.continue_anyway)
 
-        actions = QHBoxLayout()
+        actions = FlowLayout()
         self.refresh_button = QPushButton("Check &again")
         self.refresh_button.clicked.connect(self.refreshRequested)
         actions.addWidget(self.refresh_button)
@@ -125,7 +125,6 @@ class ReadinessPage(Page):
         self.diagnostics_button.setToolTip("Write a file with your hardware and settings (no passwords) that you can attach to a bug report.")
         self.diagnostics_button.clicked.connect(self.diagnosticsRequested)
         actions.addWidget(self.diagnostics_button)
-        actions.addStretch()
         self.content.addLayout(actions)
         self.action_note = wrapped_label("", selectable=True)
         self.action_note.hide()
@@ -134,6 +133,7 @@ class ReadinessPage(Page):
         self.content.addWidget(note)
         self.advance_on_enter(self.proxy)
         self.load_manifest()
+        self.finish_layout()
 
     # --- manifest -------------------------------------------------------------------------------
 

@@ -116,6 +116,7 @@ class AccountsPage(Page):
         self.content.addWidget(regional)
         self.advance_on_enter(self.hostname, self.full_name, self.username, self.password, self.password_confirm, self.root_password, self.root_confirm)
         self.load_manifest()
+        self.finish_layout()
 
     def _show_keymap(self, keymap: str) -> None:
         """Show the manifest's console keymap; one that is not in the table is added as a flagged entry, never replaced."""

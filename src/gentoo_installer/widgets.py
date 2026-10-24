@@ -2,16 +2,19 @@ from __future__ import annotations
 
 from typing import Callable
 
-from PySide6.QtCore import QObject, Qt, Signal
+from PySide6.QtCore import QObject, QPoint, QRect, QSize, Qt, Signal
 from PySide6.QtGui import QAccessible, QAccessibleActionInterface, QAccessibleStateChangeEvent
 from PySide6.QtWidgets import (
     QAbstractButton,
     QAccessibleWidget,
     QComboBox,
+    QFormLayout,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QLayout,
+    QLayoutItem,
     QLineEdit,
     QPlainTextEdit,
     QPushButton,
@@ -150,6 +153,86 @@ def _accessible_factory(class_name: str, obj: QObject):
 QAccessible.installFactory(_accessible_factory)
 
 
+class FlowLayout(QLayout):
+    """Lays widgets out left to right and starts a new line when the row is full.
+
+    A row of buttons made with this layout never forces the page wider than the window: on a narrow window the
+    buttons wrap onto a second line instead of being cut off."""
+
+    def __init__(self, parent: QWidget | None = None, spacing: int = 8):
+        super().__init__(parent)
+        self._items: list[QLayoutItem] = []
+        self._gap = spacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item: QLayoutItem) -> None:
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index: int) -> QLayoutItem | None:
+        return self._items[index] if 0 <= index < len(self._items) else None
+
+    def takeAt(self, index: int) -> QLayoutItem | None:
+        return self._items.pop(index) if 0 <= index < len(self._items) else None
+
+    def expandingDirections(self) -> Qt.Orientation:
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        return self._arrange(QRect(0, 0, width, 0), test_only=True)
+
+    def setGeometry(self, rect: QRect) -> None:
+        super().setGeometry(rect)
+        self._arrange(rect, test_only=False)
+
+    def sizeHint(self) -> QSize:
+        return self.minimumSize()
+
+    def minimumSize(self) -> QSize:
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        margins = self.contentsMargins()
+        return size + QSize(margins.left() + margins.right(), margins.top() + margins.bottom())
+
+    def _arrange(self, rect: QRect, *, test_only: bool) -> int:
+        margins = self.contentsMargins()
+        area = rect.adjusted(margins.left(), margins.top(), -margins.right(), -margins.bottom())
+        x, y, line_height = area.x(), area.y(), 0
+        for item in self._items:
+            if item.isEmpty():
+                continue
+            hint = item.sizeHint()
+            if x > area.x() and x + hint.width() > area.right() + 1:
+                x, y, line_height = area.x(), y + line_height + self._gap, 0
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), hint))
+            x += hint.width() + self._gap
+            line_height = max(line_height, hint.height())
+        return y + line_height - rect.y() + margins.bottom()
+
+
+def wrap_long_rows(root: QWidget) -> None:
+    """Forms below ``root`` put a label above its field when the window is too narrow for both side by side."""
+    for form in root.findChildren(QFormLayout):
+        form.setRowWrapPolicy(QFormLayout.RowWrapPolicy.WrapLongRows)
+
+
+def shrinkable_combos(root: QWidget, width: int = 120) -> None:
+    """Let the combo boxes below ``root`` get narrower than their longest entry when the window is narrow.
+
+    A combo box asks for the width of its longest item, which can push a page wider than a small window.
+    With an explicit minimum the layout still gives it the full width when there is room."""
+    for combo in root.findChildren(QComboBox):
+        if combo.minimumWidth() == 0:
+            combo.setMinimumWidth(width)
+
+
 class Page(QWidget):
     advanceRequested = Signal()
 
@@ -159,7 +242,8 @@ class Page(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         self.scroll_area = QScrollArea()  # not "scroll": that is a QWidget method
         self.scroll_area.setWidgetResizable(True)
-        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        # Normally everything fits the width; on a very small window a scroll bar appears instead of cutting content off.
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         outer.addWidget(self.scroll_area)
         body = QWidget()
         self.scroll_area.setWidget(body)
@@ -176,6 +260,15 @@ class Page(QWidget):
             text.setWordWrap(True)
             text.setProperty("muted", True)
             self.content.addWidget(text)
+
+    def finish_layout(self) -> None:
+        """Called at the end of a page's constructor: narrow-window rules for the widgets the page has built."""
+        shrinkable_combos(self)
+        wrap_long_rows(self)
+
+    def showEvent(self, event) -> None:
+        self.finish_layout()  # also reaches the combo boxes that were added after construction
+        super().showEvent(event)
 
     def validate_page(self) -> tuple[bool, str]:
         return True, ""

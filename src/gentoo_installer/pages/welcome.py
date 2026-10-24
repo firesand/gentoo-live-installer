@@ -5,7 +5,7 @@ from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QPushButton, QVB
 
 from ..keyboard import KeyboardChooser
 from ..manifest import InstallManifest
-from ..widgets import Card, Page
+from ..widgets import Card, FlowLayout, Page
 
 
 class WelcomePage(Page):
@@ -69,7 +69,7 @@ class WelcomePage(Page):
         self.content.addLayout(grid)
         self.content.addSpacing(8)
 
-        actions = QHBoxLayout()
+        actions = FlowLayout()
         live = QPushButton("Continue trying the live desktop")
         live.clicked.connect(self.tryLiveRequested)
         actions.addWidget(live)
@@ -80,10 +80,9 @@ class WelcomePage(Page):
         self.import_button.setToolTip("Load a settings file saved from an earlier run. Passwords are never saved and must be typed again.")
         self.import_button.clicked.connect(self.importRequested)
         actions.addWidget(self.import_button)
-        actions.addStretch()
         self.content.addLayout(actions)
 
-        companions = QHBoxLayout()
+        companions = FlowLayout()
         explore = QLabel("Explore the included tools:")
         explore.setProperty("muted", True)
         companions.addWidget(explore)
@@ -92,9 +91,9 @@ class WelcomePage(Page):
             button.setObjectName("linkButton")
             button.clicked.connect(lambda _=False, name=tool: self.applicationRequested.emit(name))
             companions.addWidget(button)
-        companions.addStretch()
         self.content.addLayout(companions)
         self.load_manifest()
+        self.finish_layout()
 
     def load_manifest(self) -> None:
         if self.manifest is not None:

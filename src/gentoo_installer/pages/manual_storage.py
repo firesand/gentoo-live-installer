@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
 from ..keyboard import start_detached
 from ..manifest import Partition
 from ..system_info import DiskInfo, PartitionInfo, SystemInfo
-from ..widgets import wrapped_label
+from ..widgets import FlowLayout, wrapped_label
 
 MOUNT_CHOICES = ("/", "/boot", "/efi", "/home", "swap")
 FILESYSTEMS = (
@@ -75,7 +75,7 @@ class ManualLayoutEditor(QWidget):
         self.table.setMinimumHeight(220)
         self.table.setAccessibleName("Manual partitions")
         box.addWidget(self.table)
-        buttons = QHBoxLayout()
+        buttons = FlowLayout()
         self.add_button = QPushButton("Add partition")
         self.add_button.clicked.connect(lambda: self.add_row())
         self.remove_button = QPushButton("Remove selected row")
@@ -90,7 +90,6 @@ class ManualLayoutEditor(QWidget):
         self.gparted_button.clicked.connect(self.open_gparted)
         for button in (self.add_button, self.remove_button, self.suggest_button, self.rescan_button, self.gparted_button):
             buttons.addWidget(button)
-        buttons.addStretch()
         box.addLayout(buttons)
         self.note = wrapped_label("", muted=True, selectable=True)
         self.note.hide()

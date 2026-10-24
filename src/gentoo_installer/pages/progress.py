@@ -24,7 +24,7 @@ from PySide6.QtWidgets import (
 from .. import daemon_client, diagnostics
 from ..backend import BackendWorker
 from ..manifest import InstallManifest
-from ..widgets import Card, Page, wrapped_label
+from ..widgets import Card, FlowLayout, Page, wrapped_label
 
 # The visible log keeps the newest lines only; the daemon keeps the whole log.
 LOG_MAX_BLOCKS = 5000
@@ -300,7 +300,7 @@ class ProgressPage(Page):
         self.outcome_details.setAccessibleName("What did not work")
         self.outcome_details.hide()
         panel.addWidget(self.outcome_details)
-        buttons = QHBoxLayout()
+        buttons = FlowLayout()
         self.retry_button = QPushButton("Try again")
         self.resume_button = QPushButton("Resume installation")
         self.resume_button.setObjectName("primaryButton")
@@ -312,7 +312,6 @@ class ProgressPage(Page):
         self.quit_button = QPushButton("Quit")
         for button in (self.reconnect_button, self.resume_button, self.retry_button, self.settings_button, self.save_log_button, self.diagnostics_button, self.quit_button):
             buttons.addWidget(button)
-        buttons.addStretch()
         panel.addLayout(buttons)
         self.notice = wrapped_label("", muted=True, selectable=True)
         self.notice.hide()

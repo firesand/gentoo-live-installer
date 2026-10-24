@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 from .. import diagnostics, layout
 from ..manifest import InstallManifest
 from ..system_info import DiskInfo, SystemInfo, tools_for_selection
-from ..widgets import Card, Page, wrapped_label
+from ..widgets import Card, FlowLayout, Page, wrapped_label
 from .hardware import CAPACITY_CODES, blocking_findings, hardware_plan, plan_lines
 from .system import FAMILY_DESKTOP_SUPPORT, FAMILY_LABELS, UNVERIFIED_FAMILIES, stage_family
 
@@ -255,14 +255,13 @@ class ReviewPage(Page):
         self.extra_confirmations: list[tuple[str, QLineEdit]] = []
         self.confirm_card.content.addLayout(self.confirm_form)
         self.content.addWidget(self.confirm_card)
-        buttons = QHBoxLayout()
+        buttons = FlowLayout()
         export = QPushButton("Save a redacted copy of these settings")
         export.clicked.connect(self._export)
         buttons.addWidget(export)
         importer = QPushButton("Import settings…")
         importer.clicked.connect(self.importRequested)
         buttons.addWidget(importer)
-        buttons.addStretch()
         self.content.addLayout(buttons)
         self.advance_on_enter(self.confirmation)
 

@@ -21,7 +21,7 @@ from .. import blockdev, keymaps, layout, theme
 from ..keyboard import start_detached
 from ..manifest import InstallManifest
 from ..system_info import MEMBER_SIGNATURES, DiskInfo, SystemInfo, format_size, smallest_disk_bytes
-from ..widgets import Card, ChoiceGroup, FormGrid, Page, wrapped_label
+from ..widgets import Card, ChoiceGroup, FlowLayout, FormGrid, Page, wrapped_label
 from .manual_storage import ManualLayoutEditor
 
 UEFI_ON_BIOS = (
@@ -99,7 +99,7 @@ class StoragePage(Page):
         self.empty_card = Card("No disk can be used")
         self.empty_text = wrapped_label("", muted=True, selectable=True)
         self.empty_card.content.addWidget(self.empty_text)
-        empty_buttons = QHBoxLayout()
+        empty_buttons = FlowLayout()
         self.rescan_button = QPushButton("Rescan disks")
         self.rescan_button.clicked.connect(self.rescanRequested)
         empty_buttons.addWidget(self.rescan_button)
@@ -107,7 +107,6 @@ class StoragePage(Page):
         self.gparted_button.setToolTip("Look at the disks and partitions of this computer, then press Rescan disks.")
         self.gparted_button.clicked.connect(self.open_gparted)
         empty_buttons.addWidget(self.gparted_button)
-        empty_buttons.addStretch()
         self.empty_card.content.addLayout(empty_buttons)
         self.empty_message = wrapped_label("", muted=True)
         self.empty_message.hide()
@@ -243,6 +242,7 @@ class StoragePage(Page):
         self.release_holders.toggled.connect(lambda _=False: self._update_holders())
         self._mode_changed()
         self.load_manifest()
+        self.finish_layout()
 
     # --- the disk list ---------------------------------------------------------------------------
 
