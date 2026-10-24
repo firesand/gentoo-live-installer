@@ -1730,8 +1730,11 @@ class Configurer:
     # ----- initramfs, boot loader -----------------------------------------------------------------
 
     def configure_initramfs(self, manifest: InstallManifest, root_device: str, luks_device: str | None = None,
-                            plan: object | None = None) -> None:
-        """Persist the root discovery arguments before a kernel/initramfs is built."""
+                            plan: object | None = None, resume_device: str | None = None) -> None:
+        """Persist the root discovery arguments before a kernel/initramfs is built.
+
+        ``resume_device`` is the swap partition that hibernation writes to; the kernel looks for the image there.
+        """
         plan = self._plan(plan)
         root_uuid = "" if self.dry_run else self.runner.run(
             ("blkid", "-s", "UUID", "-o", "value", root_device)).stdout.strip()
@@ -1763,6 +1766,12 @@ class Configurer:
             modules.append("lvm")
         if manifest.storage.raid_level:
             modules.append("mdraid")
+        if resume_device:
+            swap_uuid = "" if self.dry_run else self.runner.run(("blkid", "-s", "UUID", "-o", "value", resume_device)).stdout.strip()
+            if not self.dry_run and not re.fullmatch(r"[0-9a-fA-F-]{36}", swap_uuid):
+                raise ConfigurationError("The swap partition has no valid UUID, so the system could not resume from hibernation")
+            arguments.append(f"resume={'UUID=' + swap_uuid if swap_uuid else resume_device}")
+            modules.append("resume")  # included by hostonly="no" anyway; asked for so that it stays that way
         arguments.extend(token for token in _plan_list(plan, "kernel_cmdline") if CMDLINE_TOKEN_RE.fullmatch(str(token)))
         arguments.extend(manifest.system.kernel_cmdline_extra.split())
         cmdline = " ".join(arguments)

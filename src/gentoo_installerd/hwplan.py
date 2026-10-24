@@ -883,11 +883,26 @@ def _memory_issues(m: InstallManifest, hw: HardwareProfile) -> list[Issue]:
             out.append(Issue("hw.hibernate_luks", "error", "Hibernation is not available on an encrypted install: its swap is a file inside the encrypted root, "
                              "and the installer does not set up resuming from it. Turn hibernation off or install without disk encryption."))
         needed = recommend.nominal_ram_gib(hw.memory.total_kib) * 1024 if hw.memory.total_kib else 0
-        if needed and m.storage.swap_mib < needed:
-            out.append(Issue("hw.hibernate_swap_small", "error", f"Hibernation needs a swap partition of at least {needed} MiB (the size of memory); it is {m.storage.swap_mib} MiB."))
+        swap = _swap_mib(m, hw)
+        if swap == 0:
+            out.append(Issue("hw.hibernate_swap_small", "error", "Hibernation needs a swap partition as large as the memory, but this installation has no swap partition. "
+                             "Add one, or turn hibernation off."))
+        elif swap is not None and needed and swap < needed:
+            out.append(Issue("hw.hibernate_swap_small", "error", f"Hibernation needs a swap partition of at least {needed} MiB (the size of memory); it is {swap} MiB."))
         if hw.firmware.lockdown in ("integrity", "confidentiality"):
             out.append(Issue("hw.hibernate_lockdown", "warning", "The kernel is in lockdown mode, which blocks hibernation."))
     return out
+
+
+def _swap_mib(m: InstallManifest, hw: HardwareProfile) -> int | None:
+    """MiB of swap the installation will have; None when a manual layout's swap is not a partition the probe lists (so it is not measured)."""
+    if m.storage.mode != "manual":
+        return m.storage.swap_mib
+    rows = [row for row in m.storage.partitions if row.filesystem == "swap"]
+    if not rows:
+        return 0
+    sizes = [next((part.size for disk in hw.disks for part in disk.partitions if f"/dev/{part.name}" == row.device), None) for row in rows]
+    return None if None in sizes else sum(size or 0 for size in sizes) // 1024**2
 
 
 def _power_issues(m: InstallManifest, hw: HardwareProfile) -> list[Issue]:

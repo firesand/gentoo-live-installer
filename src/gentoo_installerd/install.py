@@ -890,7 +890,7 @@ class Installer:
         plan = self._plan()
         self.configurer.notify = self.log
         root = self._root_device()
-        self.configurer.configure_initramfs(self.manifest, root, self.storage._stack.get("luks_device"), plan)
+        self.configurer.configure_initramfs(self.manifest, root, self.storage._stack.get("luks_device"), plan, resume_device=self._resume_device())
         kernel = self.manifest.system.kernel
         if kernel == "manual":
             # "Manual kernel" is a command-line option: the graphical installer cannot pause for it.
@@ -929,6 +929,20 @@ class Installer:
         if self.manifest.system.initramfs == "dracut":
             self.configurer.emerge(self.manifest, ("--noreplace", "sys-kernel/dracut"))
             self.configurer.chroot(("dracut", "--force", "--regenerate-all"))
+
+    def _resume_device(self) -> str | None:
+        """The swap partition to resume from when hibernation is allowed (None when it is not).
+
+        The kernel only looks for a hibernation image where resume= points, so without a swap partition the
+        option cannot work: a swap file (the encrypted install's) cannot be named this way.
+        """
+        if not self.manifest.hardware.hibernate:
+            return None
+        swap = next((entry.device for entry in self.storage.layout if entry.filesystem == "swap" and not entry.source), None)
+        if swap is None:
+            raise InstallError("Hibernation is on, but this installation has no swap partition to resume from. "
+                               "Add a swap partition as large as the memory, or turn hibernation off.")
+        return swap
 
     def _target(self) -> None:
         self.configurer.notify = self.log
