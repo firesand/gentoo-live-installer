@@ -36,15 +36,16 @@ The text entries ask for a keyboard layout first (you type passwords in both too
 | | |
 |---|---|
 | **Works** | 64-bit x86 PCs, laptops and virtual machines. BIOS/CSM, 64-bit UEFI and 32-bit UEFI firmware (the ISO carries `bootx64.efi` and `bootia32.efi`). SATA/AHCI, NVMe (also behind Intel VMD), USB, SD/eMMC and virtio disks. Wi-Fi, Bluetooth and sound that the Linux 6.18 kernel and `linux-firmware` support. Intel, AMD and (with the open nouveau driver) NVIDIA graphics. The proprietary NVIDIA driver is an option of the installed system. |
-| **Needs a step from you** | Secure Boot off (above). If the disk does not show up, switch the firmware's SATA mode from Intel RST/"RAID" to AHCI (mind Windows). A wrong clock is corrected once the network is up; the live system never writes to the hardware clock. |
+| **Needs a step from you** | Secure Boot off (above). If the disk does not show up, switch the firmware's SATA mode from Intel RST/"RAID" to AHCI (mind Windows). A wrong clock is corrected once the network is up; the live system does not change a hardware clock that keeps local time (Windows). A disk that reports no serial number (a virtual disk, some USB adapters) must be approved in the installer's storage step: it is then recognised by its hardware path, size and model. |
 | **Not supported** | 32-bit CPUs, ARM machines (Apple Silicon Macs, Windows-on-ARM laptops, Raspberry Pi), Intel Macs with a T2 chip (the internal SSD is not visible), ZFS root, speech output or braille (the disc has no screen reader). |
-| **Known limits** | The live kernel has **no generic framebuffer driver** (no `simpledrm`/`efidrm`): a GPU that is too new for this kernel gets no desktop, only the text entries. `nomodeset` gives a text console, not a "safe graphics" desktop ([docs/ISO.md](docs/ISO.md) section 9). The image is built from a fixed snapshot (Linux 6.18.57, Gentoo tree 2026-10): hardware released after it may lack drivers. Real-hardware boots are not part of the automated tests, only QEMU with BIOS and UEFI firmware. |
+| **Known limits** | The live kernel has **no generic framebuffer driver** (no `simpledrm`/`efidrm`): a GPU that is too new for this kernel gets no desktop, only the text entries. `nomodeset` gives a text console, not a "safe graphics" desktop ([docs/ISO.md](docs/ISO.md) section 9). The image is built from a fixed snapshot (Linux 6.18.57, Gentoo tree 2026-10): hardware released after it may lack drivers. Real-hardware boots are not part of the automated tests, only QEMU with BIOS and UEFI firmware. HWMonux, an optional program of the installed system, needs PySide6, which is compiled from source: about 40 minutes and up to 4 GiB of memory per compile job. On a PC with less than 8 GiB the installer says so and leaves the choice to you. |
 
 The live session never mounts or activates the PC's disks, volume groups or RAID arrays by itself. It ignores the lid switch and idle timers, so an installation or repair is not interrupted.
 
 ## Using the disc
 
 * **Write it** to a USB stick (at least 8 GB) with `dd`, Rufus in *DD image* mode or balenaEtcher. Check the `.sha512` first. Everything on the stick is erased. Tools that unpack files instead of copying the image do not give a bootable stick.
+* **Another PC or laptop than yours?** The installer reads the hardware of the computer it runs on and sets the new system up for it (graphics, firmware, power, disks). If the disk will move to other computers, choose *A portable disk* on the Hardware tab of the Customization step.
 * **Install, repair, laptops, NVIDIA, logs for a bug report**: everything is in [docs/USER-GUIDE.md](docs/USER-GUIDE.md), in plain language.
 
 ## Build the ISO

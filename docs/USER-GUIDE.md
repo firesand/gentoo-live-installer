@@ -8,7 +8,7 @@ Contents: [what you need](#1-what-you-need) · [write the disc](#2-write-the-dis
 
 * A 64-bit PC or laptop (Intel or AMD). Not Apple Silicon Macs, Windows-on-ARM laptops or Raspberry Pi boards.
 * A USB stick of at least 8 GB that you can erase. The image is between 2 and 3 GB. A blank DVD also works.
-* Memory: 2 GiB or more is recommended for an installation. The installer warns below 2 GiB and refuses below 1 GiB. The boot entry "Desktop in RAM" needs 6 GiB, "Text console in RAM" needs 4 GiB.
+* Memory: 2 GiB or more is recommended for an installation. The installer warns below 2 GiB and refuses below 1 GiB. The boot entry "Desktop in RAM" needs 6 GiB, "Text console in RAM" needs 4 GiB. With less than 8 GiB the optional hardware monitor HWMonux is slow and heavy to install (step 5 of section 6).
 * For an installation: a wired network if you can (Wi-Fi works too), power for a laptop, and time. Most packages come as binaries. Even so, a desktop installation takes from half an hour to several hours.
 * Disk space for the new system: 8 GiB for a minimal system, 14 GiB for Xfce, 18 GiB for GNOME, 24 GiB for KDE Plasma. More if you compile packages yourself. The installer shows what it needs.
 * For an installation that keeps Windows: a backup, and the BitLocker recovery key if Windows uses BitLocker.
@@ -94,7 +94,7 @@ Open the one-time boot menu (table above). Choose the stick. The disc's own menu
 | UEFI firmware settings | Opens the firmware setup (UEFI only). |
 | Continue with the next boot device | Leaves the disc and starts what is on the PC's disk (UEFI only). |
 
-To try a kernel option for one boot, press `e` on an entry. Change the line that starts with `linux`. Press Ctrl+X.
+There is no entry for speech output or braille: the disc has no screen reader (section 13). To try a kernel option for one boot, press `e` on an entry. Change the line that starts with `linux`. Press Ctrl+X.
 
 ## 4. If the disc does not start or the screen stays black
 
@@ -116,7 +116,7 @@ To try a kernel option for one boot, press `e` on an entry. Change the line that
 * **Login pages** (hotel, campus): the browser button in the panel opens the text browser Links, which handles simple login pages. It cannot do pages that need JavaScript.
 * **A network behind a proxy**: enter it on the Customization page (Network tab, *Download proxy*).
 * **Keyboard layout**: the desktop starts with a US layout. Change it with the layout button in the panel or in *Settings > Keyboard > Layout* **before** you type a disk password. On a text console you choose the layout in the boot menu step. Later: `sudo loadkeys de` (or `fr`, `uk`, ...).
-* **Clock**: PCs that share Windows keep local time in the hardware clock, so the live clock can be hours off until the network is up. `chronyd` then corrects it. The live system never writes to the hardware clock. The Readiness page has a **Set clock from network** button, and a **Network settings** button.
+* **Clock**: PCs that share Windows keep local time in the hardware clock, so the live clock can be hours off until the network is up. `chronyd` then corrects it. The live system does not change a hardware clock that keeps local time. When the clock is wrong, the Readiness page offers **Set clock from network**. It waits up to 15 seconds, and it says so when no time server answered (some networks block them). Then set the date and time by hand with the clock of the desktop, and press **Check again**. The page also has a **Network settings** button. In the text installer press `t` on the "This computer" step.
 
 ## 6. Install Gentoo with the desktop wizard
 
@@ -129,9 +129,16 @@ The installer starts with the desktop. Or run `gentoo-installer`. It has eight s
    * *Manual* lets you use partitions you made yourself. Make them first with GParted (applications menu, or `sudo gparted` in a terminal; the live user has no password). Then choose which partition is the root, the boot partition and so on, and which ones to format. Use *Manual* to keep Windows or other systems.
    * Further down: encryption and advanced storage (LUKS, LVM, RAID).
    * Pick the right disk by size and model. If you have two SSDs, write them down before you start.
+   * **A disk without a serial number must be approved.** Virtual disks and some USB adapters report no serial number, and two disks can report the same one. The installer then has no serial number to check that it is still the same disk later. The page shows *This disk has no serial number*. Check the model and the size. Then tick *I confirm that /dev/... is the disk to use*. From then on the installer knows the disk by its hardware path, its size and its model, and it refuses to go on if one of them changes. Without the tick you cannot continue. If the disk has no stable hardware path either, it cannot be used. (For a virtual machine, give the disk a serial number.)
+   * **A disk that is in use asks for your consent.** The page shows *This disk is in use* when the disk, or a partition you format, holds active swap, an LVM volume group, a RAID array, or one half of a Btrfs or ZFS pool whose other half is on another disk. Erasing it destroys that data, and the data on the other disks of the same volume group, array or pool. Tick *Switch these volumes off and erase them together with the disk* to go on, or choose another disk. A disk with mounted partitions must be unmounted first.
+   * In *Manual* mode, if you keep (do not format) the root partition, the installer asks **Install over the existing system?** before it starts. Say Yes only if the new system may go into that partition. If it already holds a Linux system, that system's `/etc`, its accounts and its boot files are replaced. A copy of `/etc` and of the SSH keys is saved in `/root` first. To repair that system instead, say No and use *Repair an existing system* (section 9).
 4. **Base system**: stage3 (OpenRC or systemd), Portage profile, desktop (KDE Plasma, GNOME, Xfce or none), kernel, initramfs and boot loader. The preselected choices (a binary kernel, GRUB, a desktop profile) are the quickest and the most tested. Change them only when you know why.
-5. **Customization**: Portage settings, network configuration, optional applications and the hardware choices, such as the graphics driver, power management and compressed RAM swap. The installer fills in what it detected. Change it if you want something else.
-6. **Accounts**: your user, passwords, language, time zone and keyboard.
+5. **Customization** has four tabs. The installer fills in what it detected. Change it if you want something else.
+   * **Hardware** comes first. It shows what the installer found on this computer (processor, memory, graphics, disks, firmware), advice for it, and the list *What the installer will set up*. Here you choose *This computer* (tuned for this hardware) or *A portable disk* (for a disk that will move to other computers: generic settings, all firmware, both microcode families and a fallback boot entry). You also choose the graphics driver, power management, compressed RAM swap, TRIM, hibernation and more. Most choices are on *Automatic*, and the page says what Automatic means on this computer. Set *Experience* (top right) to *Advanced* to see all of them.
+   * **Portage**: the package mirror, binary packages, build jobs, compiler flags and USE flags.
+   * **Network**: the network manager, DHCP or a static address, a download proxy and Wi-Fi.
+   * **Applications & tools**: optional programs such as the HWMonux hardware monitor and the PortageHub package manager, and services such as printing, Bluetooth and SSH. **On a PC with less than 8 GiB of memory** a note appears under HWMonux: *HWMonux needs PySide6, which is compiled from source: about 40 minutes and up to 4 GiB of memory per compile job.* HWMonux stays ticked: the installer does not leave it out for you. Untick it if you do not need it, or if the PC is small and you do not want to wait.
+6. **Accounts**: your user, passwords, language, time zone and keyboard. Tick **The clock keeps local time (for Windows dual boot)** if Windows stays on this PC. Windows keeps local time in the hardware clock and Linux normally keeps UTC, so without the tick the clock is wrong by some hours after you switch systems. The page suggests the tick when it finds Windows, or a hardware clock that already keeps local time. It never ticks the box for you.
 7. **Review**: nothing has been changed yet. Read the summary, especially the target disk. Type the disk's name to confirm.
 8. **Install**: follow the log. Keep the live session running. Keep a laptop on power. Do not close or restart the installer. The disc prevents suspend (lid, idle) while the live system runs.
 
@@ -139,7 +146,7 @@ You can import and export settings. A settings file never contains passwords.
 
 When it finishes, restart, remove the stick, and boot the new system. If the new system does not start, boot the disc again and use the repair tool (section 9).
 
-If an installation fails, the installer shows the failing step and the buttons **Try again**, **Resume installation** and **Save diagnostics…**. It resumes on the same disk. The log is in `/var/lib/gentoo-installer/install.log` (read it with `sudo less`). The daemon's own messages are in `/var/log/gentoo-installerd.log`.
+If an installation fails, the installer shows the failing step and the buttons **Try again**, **Resume installation** and **Save diagnostics…**. It resumes on the same disk. If a late step fails after the boot loader was installed, the installer says *Your new system is installed and can start*: restart now and fix the rest from the installed system, or press **Retry the desktop step**. If you cancel while the disk is being changed, only **Start over** is offered, because the disk is half done. If a repair session still holds the disks, the installer says it cannot start yet and nothing is changed (section 12). The log is in `/var/lib/gentoo-installer/install.log` (read it with `sudo less`). The daemon's own messages are in `/var/log/gentoo-installerd.log`.
 
 ## 7. Install in text mode
 
@@ -147,7 +154,12 @@ Use this when the desktop does not start, or on a PC with little memory. It inst
 
 1. Start the disc and choose **Install in text mode**. Choose your keyboard layout when the menu asks for it.
 2. After the automatic login the text installer starts by itself. If it does not (for example after another boot entry), type: `sudo gentoo-installer-text`.
-3. Answer the questions one at a time. They cover the same choices as the wizard. Read the summary at the end. **The disk you choose is erased** (in guided mode). You confirm by typing its name.
+3. Answer the questions one at a time. They cover the main choices of the wizard: keyboard, network, disk, file system and encryption, desktop and init system, accounts, time zone and language. The text installer sets up the whole disk (guided mode), and it picks the hardware choices of the Hardware tab itself from what it finds. Read the summary at the end: it lists what was chosen for this computer, what happens to every disk, notes and advice. **The disk you choose is erased.** You confirm by typing its name.
+   * The disk step shows what is on each disk. If something is in use on a disk (active swap, a volume group, a RAID array, half of a Btrfs or ZFS pool), it says so and asks *Switch them off and erase them together with the disk?* The default answer is No.
+   * A disk without a serial number needs your approval: *Is this the disk to install on?*
+   * If Windows seems to stay on the PC, it asks *Keep the hardware clock in local time?* (see section 8, *Windows on the same disk*).
+   * On a PC with less than 8 GiB of memory it prints the HWMonux note of section 6, step 5. The text installer has no question for HWMonux. To leave it out, use the wizard, or a settings file with `"install_hwmonux": false`.
+   * For your own partitions (manual mode) use the wizard, or a settings file.
 4. When the installer ends you are at a normal shell. To run it again: `sudo gentoo-installer-text`. To leave: restart, remove the stick.
 
 For scripts and test machines, the text installer can run without questions:
@@ -157,7 +169,7 @@ sudo gentoo-installer-text --manifest settings.json --dry-run                   
 sudo gentoo-installer-text --manifest settings.json --yes --confirm-device /dev/vda  # install; the device name is the confirmation
 ```
 
-Exit codes: 0 done, 1 the installation failed, 2 wrong usage or an invalid settings file, 3 refused (the confirmation is missing or wrong), 4 the installer service cannot be reached, 130 interrupted. `--json-events` prints the progress as JSON lines. A settings file saved by the wizard has no passwords. Add them in the file or answer when asked.
+`--confirm-device` also approves a disk that has no serial number. A disk that is in use needs `--release-holders`, which gives the consent that the questions ask for. Exit codes: 0 done, 1 the installation failed, 2 wrong usage or an invalid settings file, 3 refused (the confirmation is missing or wrong), 4 the installer service cannot be reached, 130 interrupted. `--json-events` prints the progress as JSON lines. A settings file saved by the wizard has no passwords. Add them in the file or answer when asked.
 
 ## 8. Laptops, graphics and special hardware
 
@@ -180,13 +192,13 @@ Exit codes: 0 done, 1 the installation failed, 2 wrong usage or an invalid setti
 
 ### Windows on the same disk
 
-In Windows, shrink the Windows partition with Disk Management first. Switch off *Fast Startup* (`powercfg /h off` in an administrator terminal). Shut down completely (not hibernate). Otherwise Windows' file systems are left "dirty" and Linux cannot touch them safely. Back up first. Use *Manual* storage in the installer, keep the existing EFI system partition, and do not format it.
+In Windows, shrink the Windows partition with Disk Management first. Switch off *Fast Startup* (`powercfg /h off` in an administrator terminal). Shut down completely (not hibernate). Otherwise Windows' file systems are left "dirty" and Linux cannot touch them safely. Back up first. Use *Manual* storage in the installer, keep the existing EFI system partition, and do not format it. Windows keeps local time in the hardware clock and Linux normally keeps UTC. Two systems that disagree show a clock that is wrong by some hours after you switch. Tick **The clock keeps local time (for Windows dual boot)** on the Accounts page, so both agree. The text installer asks the same as *Keep the hardware clock in local time?*
 
 ### Disks and controllers
 
 * **No disk is shown**: the firmware may be in Intel RST or "RAID" mode, which hides NVMe or SATA disks from some systems. The kernel on this disc supports Intel VMD. If no disk appears, switch the SATA mode to **AHCI** in the firmware. Windows may then fail to boot until you start it once in safe mode. Think about whether you need that.
 * **4K sectors, NVMe-only machines, servers with RAID controllers**: the common controllers (AHCI, NVMe, Intel VMD, mpt3sas, megaraid, hpsa, smartpqi, aacraid) have drivers in the live kernel. Hardware RAID volumes appear as one disk.
-* The live system does not start LVM volume groups or RAID arrays by itself. The installer and the repair tool start exactly the ones you select. An existing volume group or RAID array on the target disk is shown as a warning before anything is erased.
+* The live system does not start LVM volume groups or RAID arrays by itself. The installer and the repair tool start exactly the ones you select. An existing volume group, RAID array, or half of a Btrfs or ZFS pool on the target disk is shown as *This disk is in use* before anything is erased, and you must agree to switch it off and erase it (step 3 of section 6).
 
 ### Older or unusual PCs
 
@@ -220,7 +232,7 @@ It never formats or repartitions a disk. The tool shows a guided menu on a text 
 
 Repairs that work the same on every system:
 
-* **Fix the disk list (fstab)**: shows lines that point at disks that are not there. For each you choose: replace by a disk that exists, add `nofail`, comment it out, or keep it. You see a diff first.
+* **Fix the disk list (fstab)**: finds the lines that point at disks that are not there, and proposes a fix for each one. If the tool is sure which disk is meant (the root you opened, the only swap area, the only EFI partition on the system's disk), it points the line at that disk by UUID. If not, it adds `nofail`, so the start does not wait for the disk. A line that already has `nofail` or `noauto`, or whose file system type is wrong (you correct that by hand), is left alone. Before anything is written you see the changes (a diff) and the lines the tool leaves alone, each with its reason. A backup copy of the old file is kept. The repair window shows this proposal, and you accept it or not as a whole. To choose line by line, use the terminal tool: `gentoo-rescue fstab show SESSION` lists the lines with their numbers, then `gentoo-rescue fstab fix SESSION --choose 3=replace:UUID=<uuid> --choose 5=comment`. The actions are `replace:UUID=<uuid>`, `nofail`, `comment` and `keep`.
 * **Add, remove or reorder firmware boot entries** (UEFI): `efibootmgr`. Also: boot an entry once, and create the fallback file `EFI/BOOT/BOOTX64.EFI` so that firmware which forgot its entries can still find the system.
 * **Check a file system**: a read-only check first. Repairs only when you ask, with the file system unmounted. Works for ext2/3/4, XFS, Btrfs, FAT, F2FS, exFAT, JFS and NTFS (NTFS only gets a check with `ntfsfix -n`).
 * **Reset a password** or unlock an account in the repaired system.
@@ -236,6 +248,14 @@ Repairs that work the same on every system:
   Every finding says what it means and which repair helps.
 
 A moved disk (a system now in another computer): choose *Rebuild the initramfs* with the option for many kinds of hardware. It adds the drivers for the new machine.
+
+### What you may meet in the repair window
+
+* **A disk that is already open.** The file manager of the desktop may have opened the disk of the system. The window then says where, and the tool does not touch it. Close it there (the eject button next to the disk, or `sudo umount DIRECTORY` in a terminal), then press **Check again**. The tool never unmounts something it did not open itself. The old option `gentoo-rescue mount --unmount-existing` was removed: it only hid this message, and the mount failed anyway.
+* **Left open by an earlier repair.** If a repair was cut short (the window was closed, the service restarted, the power went), the system can stay open. The first page lists these under *Still open* (you can continue with them) and *Left open by an earlier repair* (no window can continue with them: disks still locked against writing, an unlocked disk, an active volume group). Press **Release them** to give them back. Only what the repair tool itself opened is released. If something else is mounted there, the page names it, and you unmount it yourself. In a terminal: `sudo gentoo-rescue cleanup`. The installer does not start while something is left open.
+* **Disk names that can change.** A line of the system's disk list (fstab) can name a disk as `/dev/sda2`, or by the port it is plugged into (`by-path`), instead of by UUID. Such names change between starts and between computers: a USB stick can be `/dev/sda` in the live session. If the name now points at a partition on another disk than the system's own, the tool does not open it by itself. The mount plan lists the line under *Not found* and offers the partition under *Suggestions*. Press **Add** only if it is the right disk. In a terminal add `--mount MOUNTPOINT=DEVICE`. The diagnosis notes such names too: write UUIDs in their place (`blkid` shows them).
+* **Change options.** On the page with the plan, **Change options** opens the options of the repair. *Rebuild the initramfs* lists the installed kernels: tick the ones to rebuild, or none for all of them. *Reinstall the kernel* lists them on Debian and Ubuntu (none ticked: the damaged kernel, or else the newest one). On Gentoo it asks for the kernel package and the method instead. In a terminal: `--param kernels=VERSION,VERSION`.
+* **Read the journal.** The logs page shows the last lines of the text log files the system kept. Many systems keep their messages in a binary journal instead. For those, **Read the journal of the last boot…** runs the system's own `journalctl` as root, so the window asks first: tick *I trust this system and want to read its journal*. You can limit it to errors, or to kernel messages. The system must be open with repairs allowed (not *Look only*). In a terminal: `gentoo-rescue logs SESSION --journal --allow-run-system-program`.
 
 ### What is only detected: Arch, openSUSE and others
 
@@ -331,7 +351,7 @@ A good report lets someone else help you. Include:
 * what you did and what you expected;
 * the files below.
 
-**The installer's diagnostics file.** The wizard has a **Save diagnostics…** button on the Readiness page and on the Install page when something failed. It writes one JSON file with the hardware view, the daemon state and read-only command output. Passwords are removed and serial numbers are shortened. Read it before you share it.
+**The installer's diagnostics file.** The wizard has a **Save diagnostics…** button on the Readiness page and on the Install page when something failed. It writes one JSON file with the hardware view, the daemon state and read-only command output. Serial numbers and other identifiers are shortened or removed, and passwords are removed. Read it before you share it.
 
 **Hardware report from a terminal** (also works on a text console):
 
@@ -361,7 +381,9 @@ The disc is read-only and its files are gone at power off. Save reports to a sec
 | Time is wrong (certificate errors) | Connect to the network, the clock is corrected within a minute. Or use **Set clock from network** on the Readiness page. |
 | The desktop does not appear | Restart and choose *Install in text mode* or *Repair a system (text console)* (section 4). Keep `lspci -nnk`, `dmesg` and `cat /proc/cmdline` for your report. |
 | The text tool did not start by itself | Log in on the first console (Ctrl+Alt+F1) and type `sudo gentoo-rescue` or `sudo gentoo-installer-text`. |
-| Installation stops at a package | The log shows it. Most failures are network problems. Try again, the installer resumes. With the defaults, binary packages are used. |
+| Installation stops at a package | The log shows it. Most failures are network problems. Try again, the installer resumes. With the defaults, binary packages are used. On a PC with less than 8 GiB, a big package that is built from source can run out of memory (the log says *Killed*). HWMonux needs PySide6 for this reason: leave HWMonux out (section 6, step 5) and try again. |
+| The installer says it cannot start yet | A repair session, or a disk the repair tool unlocked, still holds the disks. Nothing was changed. Finish the repair (*Unmount and quit*, or `sudo gentoo-rescue unmount`), or release what a cut-short repair left (`sudo gentoo-rescue cleanup`). Then press **Try again**. |
+| The repair tool says a disk is already mounted | The file manager, or an earlier repair, opened it. Unmount it (section 9, *A disk that is already open*), then press **Check again**. |
 | Laptop battery runs low during an install | Plug in. Nothing can prevent a flat battery from stopping the install. The installer resumes on the same disk. |
 | The installed system boots to a GRUB prompt | Boot the disc, choose *Repair a system (text console)* (section 9). |
 | The installed system does not start with Secure Boot on | GRUB does not work with Secure Boot (section 3). Turn it off, or reinstall with systemd-boot and your own keys. |

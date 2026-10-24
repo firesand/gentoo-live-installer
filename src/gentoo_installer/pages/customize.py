@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import system_info
+from .. import recommend, system_info
 from ..manifest import InstallManifest
 from ..widgets import Card, Page, wrapped_label
 from .hardware import HardwareTab, hardware_plan
@@ -26,6 +26,11 @@ from .readiness import proxy_problem
 
 COMPANIONS = ("install_hwmonux", "install_portagehub")
 AUTO_PLACEHOLDER = "Leave empty: chosen for this computer"
+# HWMonux needs PySide6, and the binary host has no matching PySide6 package, so it is compiled on every installation.
+# The text installer says the same (textui/summary.py); a test keeps the two sentences equal.
+HWMONUX_LOW_MEMORY = "HWMonux needs PySide6, which is compiled from source: about 40 minutes and up to 4 GiB of memory per compile job."
+HWMONUX_MEMORY_GIB = 8  # a computer with less memory than this gets the note
+HWMONUX_ADVICE = "rec.hwmonux_low_memory"  # the same advice from recommend.recommend(), when it gives one
 KDE_APPS = (
     ("core", "Core: file manager, terminal, editor and help"),
     ("full", "Full: all KDE applications (games, education, multimedia; a long build)"),
@@ -41,6 +46,23 @@ def auto_jobs() -> int:
 
 def auto_make_opts() -> str:
     return f"-j{auto_jobs()} -l{os.cpu_count() or 2}"
+
+
+def hwmonux_memory_note(info: system_info.SystemInfo | None, manifest: InstallManifest) -> str:
+    """What the PySide6 build of HWMonux costs on a computer with little memory ('' when there is enough, or nothing is known).
+
+    The advice of recommend.recommend() is used when it gives one; otherwise the memory of this computer decides.
+    It only informs: nothing here unticks HWMonux."""
+    if info is None:
+        return ""
+    if info.hardware:
+        try:
+            for item in recommend.recommend(info.profile, manifest):
+                if item.code == HWMONUX_ADVICE:
+                    return item.message
+        except Exception:  # noqa: BLE001 - advice only
+            pass
+    return HWMONUX_LOW_MEMORY if 0 < info.memory_gib < HWMONUX_MEMORY_GIB else ""
 
 
 def parse_jobs(make_opts: str) -> int | None:
@@ -205,7 +227,11 @@ class CustomizePage(Page):
         for index, (key, label) in enumerate(entries):
             check = QCheckBox(label)
             self.checks[key] = check
-            grid.addWidget(check, index // 2, index % 2)
+            grid.addWidget(check, index // 2 + (1 if index >= 2 else 0), index % 2)  # row 1 is for the note under HWMonux
+        self.hwmonux_note = wrapped_label("", muted=True)
+        self.hwmonux_note.hide()
+        grid.addWidget(self.hwmonux_note, 1, 0, 1, 2)
+        self.checks["install_hwmonux"].toggled.connect(lambda _=False: self._update_hwmonux_note())
         card.content.addLayout(grid)
         self.companion_note = wrapped_label(
             "HWMonux and PortageHub are graphical applications; they only start inside a desktop session. They are switched off for the minimal system, tick them again if you plan to add a desktop later.",
@@ -236,6 +262,7 @@ class CustomizePage(Page):
         self.hardware.set_info(info)
         self.refresh_placeholders()
         self._update_network_notes()
+        self._update_hwmonux_note()
         names = sorted({nic.iface for nic in info.profile.nics if nic.iface})
         if names:
             self.interface.setCompleter(QCompleter(names, self.interface))
@@ -318,6 +345,16 @@ class CustomizePage(Page):
             check.setChecked(getattr(self.manifest.options, key))
         minimal = self.manifest.system.desktop == "minimal"
         self.companion_note.setVisible(minimal and self._cleared_companions is not None)
+        self._update_hwmonux_note()
+
+    def _update_hwmonux_note(self) -> None:
+        """Say what the PySide6 build costs under the HWMonux box while it is ticked. The box is the user's choice: it is never changed here."""
+        box = self.checks["install_hwmonux"]
+        note = hwmonux_memory_note(self.hardware.info, self.manifest)
+        shown = bool(note) and box.isChecked()
+        self.hwmonux_note.setText(note)
+        self.hwmonux_note.setVisible(shown)
+        box.setToolTip(note if shown else "")
 
     # --- manifest -----------------------------------------------------------------------------------------------
 

@@ -21,6 +21,10 @@ INIT_NAMES = {"openrc": "OpenRC", "systemd": "systemd"}
 # Advice about choices the text installer does not offer.
 ONLY_ELSEWHERE_FIELDS = frozenset({"hardware.gpu_driver", "hardware.prime", "hardware.cpu_flags_mode"})
 ONLY_ELSEWHERE = "(The text installer cannot change this: use the graphical installer or a settings file.)"
+# HWMonux needs PySide6, and the binary host has no matching PySide6 package, so it is compiled on every installation.
+HWMONUX_LOW_MEMORY = "HWMonux needs PySide6, which is compiled from source: about 40 minutes and up to 4 GiB of memory per compile job."
+HWMONUX_MEMORY_GIB = 8  # a computer with less memory than this gets the note
+HWMONUX_ADVICE = "rec.hwmonux_low_memory"  # the same advice from recommend.recommend(), when it gives one
 
 
 @dataclass
@@ -51,6 +55,22 @@ def keyboard_label(manifest: InstallManifest) -> str:
             return preset.label
     variant = f" ({system.keyboard_variant})" if system.keyboard_variant else ""
     return f"{system.keyboard_layout}{variant}"
+
+
+def hwmonux_note(manifest: InstallManifest, view: MachineView) -> str:
+    """What the PySide6 build of HWMonux costs, for a computer with little memory that is going to get HWMonux ('' otherwise).
+
+    The advice of recommend.recommend() is used when it gives one; otherwise the memory of this computer decides.
+    It only informs: nothing here leaves HWMonux out."""
+    if not manifest.options.install_hwmonux:
+        return ""
+    try:
+        for item in recommend.recommend(view.hardware, manifest):
+            if item.code == HWMONUX_ADVICE:
+                return item.message
+    except Exception:  # noqa: BLE001 - advice only
+        pass
+    return HWMONUX_LOW_MEMORY if 0 < view.memory_gib < HWMONUX_MEMORY_GIB else ""
 
 
 def settings_rows(manifest: InstallManifest, view: MachineView) -> list[tuple[str, str]]:
@@ -122,6 +142,9 @@ def build_summary(manifest: InstallManifest, view: MachineView, *, require_ident
         ][:MAX_ADVICE]
     except Exception:  # noqa: BLE001
         summary.advice = []
+    note = hwmonux_note(manifest, view)
+    if note and note not in summary.advice:
+        notes.append(note)
     summary.problems = list(dict.fromkeys(problems))
     summary.notes = [note for note in dict.fromkeys(notes) if note not in summary.problems]
     return summary

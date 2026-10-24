@@ -264,7 +264,12 @@ def test_after_the_service_restarted_the_open_system_is_listed_and_can_be_contin
     window.diagnose_page.finish_button.click()
     window.finish_page.unmount_button.click()
     qtbot.waitUntil(lambda: window.finish_page.state == "done", timeout=20000)
-    assert lab.system.mounted_targets() == [] and not any(lab.system.ro.values())
+
+    def nothing_is_left() -> None:
+        assert lab.system.mounted_targets() == [] and not any(lab.system.ro.values())
+
+    # The window looks at the disks again after the unmount, and its probes flag a disk read-only for a moment: wait for what stays.
+    qtbot.waitUntil(nothing_is_left, timeout=20000)
 
 
 def test_what_a_cut_short_repair_left_behind_is_shown_on_the_first_page_and_released_there(qtbot, rescue_lab_factory, daemon_factory, repair_kit) -> None:

@@ -77,6 +77,7 @@ class DiskEntry:
     problem: str = ""
     by_path: str = ""
     shared_identity: bool = False  # another disk reports the same serial number or WWN (cheap USB adapters do)
+    pool_reasons: tuple[str, ...] = ()  # Btrfs or ZFS pools with a member on this disk and on another one (that takes every disk of the reply to find out)
 
     @property
     def usable(self) -> bool:
@@ -89,8 +90,8 @@ class DiskEntry:
 
     @property
     def holders(self) -> list[str]:
-        """What is alive on the disk: volumes, swap, a volume group or RAID set it belongs to (the list of the graphical installer)."""
-        return system_info.holder_reasons_of(self.disk)
+        """What is alive on the disk: volumes, swap, a volume group, RAID set or Btrfs/ZFS pool it belongs to (the list of the graphical installer)."""
+        return list(dict.fromkeys([*system_info.holder_reasons_of(self.disk), *self.pool_reasons]))
 
     @property
     def mounts(self) -> list[str]:
@@ -121,6 +122,14 @@ class MachineView:
     def known(self) -> bool:
         """Whether the reply says anything at all (an empty view means nothing could be probed)."""
         return bool(self.reply)
+
+    @property
+    def memory_gib(self) -> float:
+        """Installed memory as the probe measured it (a few percent below what was fitted); 0 when the reply does not say."""
+        value = self.reply.get("memory_bytes")
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+            return value / 1024**3
+        return self.profile.memory.total_kib / 1024**2
 
     @property
     def network(self) -> bool | None:
@@ -192,7 +201,8 @@ class MachineView:
             problem = blockdev.TARGET_PROBLEMS[key] if key else (
                 f"is smaller than {system_info.format_size(system_info.MIN_DISK_BYTES)}, the least a Gentoo installation needs"
                 if node.size < system_info.MIN_DISK_BYTES else "")
-            entry = DiskEntry(node, problem, self.by_path_for(node), bool({node.serial, node.wwn} & self._shared))
+            pools = tuple(pool.reason() for pool in blockdev.filesystem_pools(self.roots, [node]))
+            entry = DiskEntry(node, problem, self.by_path_for(node), bool({node.serial, node.wwn} & self._shared), pools)
             (refused if problem else usable).append(entry)
         return usable + refused
 

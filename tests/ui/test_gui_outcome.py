@@ -91,11 +91,30 @@ def test_the_retry_button_is_hidden_when_the_daemon_says_it_cannot_resume(page):
 
 
 def test_another_failing_step_is_named_the_last_step(page):
+    """After a good install the cleanup step can still fail (the disks stay mounted): the system starts, and the window offers to retry that step."""
     started(page)
     stage(page, "storage", "completed", progress=20)
-    page.handle_event({"type": "error", "stage": "validation", "message": "check failed", "data": {"bootable": True, "resumable": True}})
-    page.handle_event({"type": "completed", "data": {"success": False}})
-    assert page.resume_button.text() == "Retry the last step" and "validation" not in page.stage.text().lower()
+    stage(page, "bootloader", "completed", progress=70)
+    page.handle_event({"type": "error", "stage": "cleanup", "message": "Could not unmount /mnt/gentoo",
+                       "data": {"code": "install.cleanup_failed", "retryable": True, "resumable": True, "bootable": True}})
+    page.handle_event({"type": "completed", "data": {"success": False, "bootable": True, "resumable": True}})
+    assert page.stage.text() == "Your new system is installed and can start" and "cleanup" not in page.stage.text().lower()
+    assert "finishing and unmounting" in page.detail.text()
+    assert page.resume_button.text() == "Retry the last step" and page.reboot.isVisible() and not page.retry_button.isVisible()
+
+
+def test_a_failed_final_check_is_not_a_system_that_can_start(page):
+    """BOOT-1: the service clears 'bootable' when the check of the finished system fails, so the window never offers a restart for it."""
+    started(page)
+    stage(page, "storage", "completed", progress=20)
+    stage(page, "bootloader", "completed", progress=70)
+    page.handle_event({"type": "error", "stage": "validation", "message": "The installed system has no /etc/fstab",
+                       "data": {"code": "install.failed", "retryable": True, "resumable": True, "bootable": False}})
+    page.handle_event({"type": "completed", "data": {"success": False, "bootable": False, "resumable": True}})
+    assert page.stage.text() == "Installation needs attention · Checking the installed system"
+    assert not page.bootable and not page.reboot.isVisible()
+    assert page.resume_button.isVisible() and page.resume_button.text() == "Resume installation"
+    assert page.retry_button.isVisible() and page.settings_button.isVisible()  # nothing says the disk holds a working system
 
 
 def test_bootable_may_arrive_only_with_the_completed_event(page):
