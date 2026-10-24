@@ -241,12 +241,12 @@ prepare_snapshot() {
 		|| die "Catalyst did not create the pinned repository snapshot"
 }
 
-# write_catalyst_config [EXTRA_EMERGE_OPTIONS]
+# write_catalyst_config
 # seedcache lets stage2 start from the stage1 chroot that was just built. When the stage1
 # archive is the input (stage2-only, reseed) it must not: a retained chroot directory from
 # an earlier run would win over the archive that was verified against its receipt.
 write_catalyst_config() {
-	local options='["pkgcache"]' emerge_options="${EMERGE_DEFAULT_OPTS}${1:+ $1}"
+	local options='["pkgcache"]'
 	[[ ${PLAN} != full ]] || options='["seedcache", "pkgcache"]'
 	cat > "${BUILD_DIR}/catalyst.conf" <<EOF
 storedir = "${CATALYST_STORE}"
@@ -260,7 +260,9 @@ digests = ["sha512", "blake2b"]
 options = ${options}
 jobs = ${JOBS}
 load-average = ${LOAD_AVERAGE}
-envvars = { SOURCE_DATE_EPOCH = "${SOURCE_DATE_EPOCH}", EMERGE_DEFAULT_OPTS = "${emerge_options}" }
+# Names of the variables Catalyst copies from its own environment into the chroot; the values
+# always come from the environment (catalyst/base/targetbase.py, wiki.gentoo.org/wiki/Catalyst).
+envvars = ["SOURCE_DATE_EPOCH", "EMERGE_DEFAULT_OPTS"]
 EOF
 }
 
@@ -294,12 +296,13 @@ resolve_build_plan() {
 			;;
 		reseed)
 			if [[ ${BUILD_MODE} == auto ]]; then
-				# In a real Catalyst run the reseed did not reinstall the changed packages (the
-				# --reinstall-atoms given through EMERGE_DEFAULT_OPTS never reached emerge in the
-				# chroot), so the image kept the old installer while its receipt claimed the new
-				# one. Build stage1 fresh instead: the binary package cache keeps that short, and the
-				# project's own packages are always built from this tree. BUILD_MODE=reseed still
-				# runs the reseed for whoever works on it.
+				# The first real reseed did not reinstall the changed package (the reinstall options
+				# were written into catalyst.conf, where Catalyst ignores values: envvars only names
+				# variables of its environment), so the image kept the old installer while its
+				# receipt claimed the new one. That is fixed, but until a reseed has been checked in
+				# a real build, stage1 is built fresh: the binary package cache keeps that short and
+				# the project's own packages always come from this tree. BUILD_MODE=reseed still
+				# runs the reseed.
 				log "Stage1 is built fresh, not reseeded ($(json_field reason <<<"${decision}")): the project's packages are built from this tree"
 				PLAN=full
 				STAGE1_MODE=fresh
@@ -341,14 +344,17 @@ build_stage1() {
 		seed_subpath="23.0-default/livecd-stage1-amd64-${VERSION_STAMP}-completed"
 		python3 "${WORKSPACE}/iso/stage_reuse.py" reseed-spec "${BUILD_DIR}/livecd-stage1.spec" "${seed_subpath}" \
 			> "${BUILD_DIR}/livecd-stage1-reseed.spec"
-		local atom reinstall=
+		local atom reinstall= saved_options=${EMERGE_DEFAULT_OPTS}
 		for atom in ${RESEED_ATOMS}; do
 			reinstall+="${reinstall:+ }--reinstall-atoms=${atom}"
 		done
-		write_catalyst_config "${reinstall}"
-		run_catalyst "${BUILD_DIR}/livecd-stage1-reseed.spec"
-		rm -f -- "${seed}"
+		# Catalyst hands EMERGE_DEFAULT_OPTS from this environment to emerge in the chroot
+		# (envvars); the reinstall options apply to this run only.
+		export EMERGE_DEFAULT_OPTS="${saved_options} ${reinstall}"
 		write_catalyst_config
+		run_catalyst "${BUILD_DIR}/livecd-stage1-reseed.spec"
+		export EMERGE_DEFAULT_OPTS="${saved_options}"
+		rm -f -- "${seed}"
 	else
 		log "Building Catalyst livecd-stage1"
 		run_catalyst "${BUILD_DIR}/livecd-stage1.spec"

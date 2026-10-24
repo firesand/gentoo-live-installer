@@ -110,9 +110,9 @@ def test_bad_numbers_are_refused(sandbox, var: str, value: str) -> None:
 # --- catalyst.conf --------------------------------------------------------------------------
 
 
-def catalyst_conf(sandbox, plan: str, extra: str = "") -> str:
+def catalyst_conf(sandbox, plan: str) -> str:
     result = sandbox.run(
-        f"load_environment; EMERGE_DEFAULT_OPTS='--getbinpkg'; PLAN={plan}; write_catalyst_config {shlex.quote(extra)}; cat \"$BUILD_DIR/catalyst.conf\"",
+        f"load_environment; EMERGE_DEFAULT_OPTS='--getbinpkg'; PLAN={plan}; write_catalyst_config; cat \"$BUILD_DIR/catalyst.conf\"",
         JOBS="3",
     )
     assert result.returncode == 0, result.stderr
@@ -134,13 +134,12 @@ def test_catalyst_conf_values(sandbox) -> None:
     text = catalyst_conf(sandbox, "full")
     assert "jobs = 3" in text and "load-average = 6" in text
     assert 'target_pkgdir = "/var/cache/binpkgs"' in text
-    assert 'envvars = { SOURCE_DATE_EPOCH = "1792327555", EMERGE_DEFAULT_OPTS = "--getbinpkg" }' in text
+    # Catalyst takes the values of these names from its environment (a value written here is ignored)
+    assert 'envvars = ["SOURCE_DATE_EPOCH", "EMERGE_DEFAULT_OPTS"]' in text
+    assert "--getbinpkg" not in text
     assert 'repo_openpgp_key_path = ""' in text
 
 
-def test_reseed_adds_exactly_the_reinstall_options(sandbox) -> None:
-    text = catalyst_conf(sandbox, "reseed", "--reinstall-atoms=app-misc/hwmonux --reinstall-atoms=app-portage/portagehub")
-    assert 'EMERGE_DEFAULT_OPTS = "--getbinpkg --reinstall-atoms=app-misc/hwmonux --reinstall-atoms=app-portage/portagehub"' in text
 
 
 # --- stage1 reuse planning ---------------------------------------------------------------------

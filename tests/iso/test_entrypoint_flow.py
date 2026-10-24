@@ -23,10 +23,10 @@ def flow(sandbox, body: str, **env: str):
     prelude = f"""
 load_environment
 STAGE1_ARCHIVE={shlex.quote(str(sandbox.dirs['store'] / 'builds/23.0-default' / ARCHIVE_NAME))}
-EMERGE_DEFAULT_OPTS='--getbinpkg'
+export EMERGE_DEFAULT_OPTS='--getbinpkg'
 mkdir -p "$(dirname "$STAGE1_ARCHIVE")"
 run_catalyst() {{
-	{{ echo "== $1"; cat "$BUILD_DIR/catalyst.conf"; if [[ -f $1 ]]; then grep '^source_subpath' "$1"; fi; ls "$(dirname "$STAGE1_ARCHIVE")"; }} >> {shlex.quote(str(log))}
+	{{ echo "== $1"; echo "env EMERGE_DEFAULT_OPTS=$(printenv EMERGE_DEFAULT_OPTS)"; cat "$BUILD_DIR/catalyst.conf"; if [[ -f $1 ]]; then grep '^source_subpath' "$1"; fi; ls "$(dirname "$STAGE1_ARCHIVE")"; }} >> {shlex.quote(str(log))}
 	printf 'new stage1 %s' "$RANDOM" > "$STAGE1_ARCHIVE"
 }}
 """
@@ -67,11 +67,13 @@ def test_a_reseed_starts_from_a_copy_and_reinstalls_only_the_changed_packages(sa
     archive = sandbox.dirs["store"] / "builds/23.0-default" / ARCHIVE_NAME
     archive.parent.mkdir(parents=True, exist_ok=True)
     archive.write_bytes(b"previous stage1")
-    result, calls = flow(sandbox, 'PLAN=reseed\nRESEED_ATOMS="app-misc/hwmonux app-portage/portagehub"\nbuild_stage1')
+    result, calls = flow(sandbox, 'PLAN=reseed\nRESEED_ATOMS="app-misc/hwmonux app-portage/portagehub"\nbuild_stage1\necho "after: $(printenv EMERGE_DEFAULT_OPTS)"')
     assert result.returncode == 0, result.stderr
+    assert "after: --getbinpkg\n" in result.stdout, "stage2 must not inherit the reinstall options"
     assert f"== {sandbox.dirs['build']}/livecd-stage1-reseed.spec" in calls
     assert "source_subpath: 23.0-default/livecd-stage1-amd64-installer-20261018T124555Z-completed" in calls
-    assert 'EMERGE_DEFAULT_OPTS = "--getbinpkg --reinstall-atoms=app-misc/hwmonux --reinstall-atoms=app-portage/portagehub"' in calls
+    # Catalyst passes the environment's EMERGE_DEFAULT_OPTS into the chroot (envvars), so that is where they must be
+    assert "env EMERGE_DEFAULT_OPTS=--getbinpkg --reinstall-atoms=app-misc/hwmonux --reinstall-atoms=app-portage/portagehub" in calls
     assert 'options = ["pkgcache"]' in calls and "seedcache" not in calls
     assert "livecd-stage1-amd64-installer-20261018T124555Z-completed.tar.gz" in calls, "the seed copy exists while Catalyst runs"
     names = sorted(p.name for p in archive.parent.iterdir())
