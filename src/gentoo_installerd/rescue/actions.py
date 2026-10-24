@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from . import efi as efimod
+from .adapters import base as efi_base
 from .adapters import detect_adapter
 from .builder import USERNAME_RE, PlanBuilder
 from .devices import GPT_ESP, MBR_ESP
@@ -278,7 +279,7 @@ def _efi_add(b: PlanBuilder) -> None:
     view = b.view
     esp = view.esp()
     if esp is None:
-        raise Unsupported("The EFI system partition is not mounted, so there is no boot loader file to register.")
+        raise Unsupported(efi_base.esp_missing_reason(b))
     node = view.graph.find(esp.device)
     disk = esp.disk
     b.precondition(bool(disk) and disk in b.session.ctx.devices.disks, "The disk of the EFI partition is one of this system's disks" if disk else "The disk of the EFI partition is unknown")
@@ -316,7 +317,7 @@ def _plan_esp_fallback(b: PlanBuilder) -> None:
     view = b.view
     esp = view.esp()
     if esp is None:
-        raise Unsupported("The EFI system partition is not mounted.")
+        raise Unsupported(efi_base.esp_missing_reason(b))
     b.title, b.risk = "Create the fallback boot file", "medium"
     names = {name.lower(): name for name in esp.files}
     source = ""

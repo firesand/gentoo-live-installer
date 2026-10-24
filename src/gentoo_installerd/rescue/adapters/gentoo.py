@@ -162,7 +162,7 @@ class GentooAdapter(Adapter):
         if firmware == "uefi":
             esp = base.esp_for(b)
             if esp is None:
-                raise Unsupported("The EFI system partition is not mounted. Fix fstab (or choose it in the mount plan) and try again.")
+                raise Unsupported(base.esp_missing_reason(b))
             ident = base.bootloader_id(b, esp, self.default_bootloader_id, ("gentoo",))
             removable = base.removable_wanted(b, esp)
             base.backup_esp(b, esp)
@@ -185,7 +185,7 @@ class GentooAdapter(Adapter):
             raise Unsupported("bootctl (systemd) is not installed in this system.")
         esp = base.esp_for(b)
         if esp is None:
-            raise Unsupported("The EFI system partition is not mounted.")
+            raise Unsupported(base.esp_missing_reason(b))
         installed = any(name.lower() == "systemd" for name in esp.files)
         b.title, b.summary = "Reinstall systemd-boot", "Writes systemd-boot to the EFI system partition."
         base.backup_esp(b, esp)

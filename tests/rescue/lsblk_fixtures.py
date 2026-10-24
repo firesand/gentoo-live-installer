@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import json
 import zlib
+from pathlib import Path
 from typing import Any
 
 from . import fakeroot as fr
@@ -193,6 +194,70 @@ def xfs_external_log() -> str:
     return lsblk(root_disk, log_disk, other)
 
 
+def xfs_boot_esp() -> str:
+    """GPT SATA disk: ESP (/efi), ext4 /boot, XFS root and swap - the layout of a hand-made Gentoo or a RHEL-style install."""
+    kids = [
+        part("sda", 1, 512 * MiB, 8, 0, fstype="vfat", uuid=fr.ESP_UUID, label="EFI", parttype=ESP, pttype="gpt"),
+        part("sda", 2, 1 * GiB, 8, 0, fstype="ext4", uuid=fr.BOOT_UUID, label="boot", parttype=LINUX_FS, pttype="gpt"),
+        part("sda", 3, 200 * GiB, 8, 0, fstype="xfs", uuid=fr.ROOT_UUID, label="root", parttype=LINUX_ROOT, pttype="gpt"),
+        part("sda", 4, 8 * GiB, 8, 0, fstype="swap", uuid=fr.SWAP_UUID, parttype=LINUX_SWAP, pttype="gpt"),
+    ]
+    return lsblk(sata_disk("a", 0, 250 * GiB, kids))
+
+
+def md_raid1_root() -> str:
+    """An assembled md RAID1 (members sda2 and sdb1) holds the ext4 root; the ESP sits next to it on sda. The array is printed under both members."""
+    md = node("md127", "raid1", 100 * GiB, maj_min="9:127", fstype="ext4", uuid=fr.ROOT_UUID, label="root", path="/dev/md127")
+    first = sata_disk("a", 0, 101 * GiB, [
+        part("sda", 1, 512 * MiB, 8, 0, fstype="vfat", uuid=fr.ESP_UUID, parttype=ESP, pttype="gpt"),
+        part("sda", 2, 100 * GiB, 8, 0, fstype="linux_raid_member", uuid="aaaa1111-bbbb-2222-cccc-333344445555", label="host:root", parttype=LINUX_RAID, pttype="gpt",
+             children=[copy.deepcopy(md)]),
+    ])
+    second = sata_disk("b", 1, 100 * GiB, [
+        part("sdb", 1, 100 * GiB, 8, 1, fstype="linux_raid_member", uuid="aaaa1111-bbbb-2222-cccc-333344445555", label="host:root", parttype=LINUX_RAID, pttype="gpt",
+             children=[copy.deepcopy(md)]),
+    ])
+    return lsblk(first, second)
+
+
+def usb_installed_root() -> str:
+    """A system installed on a USB stick (ESP + ext4), next to the live stick itself and an internal Windows-only disk."""
+    live = node("sdc", "disk", 16 * GiB, maj_min="8:32", tran="usb", model="Cruzer", serial="USB0001", hotplug=True, rm=True, pttype="dos", ptuuid="12345678", children=[
+        part("sdc", 1, 3 * GiB, 8, 2, fstype="iso9660", label="GENTOO_INSTALLER_AMD64", uuid="2026-10-24-08-00-00-00", parttype="0x0", pttype="dos", mountpoints=["/run/initramfs/live"]),
+        part("sdc", 2, 8 * MiB, 8, 2, fstype="vfat", uuid="BEEF-0001", label="ISOEFI", parttype="0xef", pttype="dos"),
+    ])
+    portable = node("sdb", "disk", 64 * GiB, maj_min="8:16", tran="usb", model="Extreme SSD", serial="USB0002", hotplug=True, rm=True, pttype="gpt", ptuuid="bbbbbbbb-0000-4000-8000-000000000002", children=[
+        part("sdb", 1, 512 * MiB, 8, 1, fstype="vfat", uuid=fr.ESP_UUID, label="EFI", parttype=ESP, pttype="gpt"),
+        part("sdb", 2, 60 * GiB, 8, 1, fstype="ext4", uuid=fr.ROOT_UUID, label="portable", parttype=LINUX_ROOT, pttype="gpt"),
+    ])
+    internal = sata_disk("a", 0, 500 * GiB, [
+        part("sda", 1, 100 * MiB, 8, 0, fstype="vfat", uuid="C0DE-0001", parttype=ESP, pttype="gpt"),
+        part("sda", 2, 400 * GiB, 8, 0, fstype="ntfs", uuid="CCCC3333DDDD4444", label="OS", parttype=MS_BASIC, pttype="gpt"),
+    ])
+    return lsblk(internal, portable, live)
+
+
+def multiboot_three() -> str:
+    """One NVMe disk with a shared ESP and three Linux systems: ext4 Gentoo, ext4 Debian and btrfs Fedora."""
+    kids = [
+        part("nvme0n1", 1, 1 * GiB, 259, 0, sep="p", fstype="vfat", uuid=fr.ESP_UUID, label="ESP", parttype=ESP, pttype="gpt"),
+        part("nvme0n1", 2, 80 * GiB, 259, 0, sep="p", fstype="ext4", uuid=fr.ROOT_UUID, label="gentoo", parttype=LINUX_ROOT, pttype="gpt"),
+        part("nvme0n1", 3, 80 * GiB, 259, 0, sep="p", fstype="ext4", uuid=fr.HOME_UUID, label="debian", parttype=LINUX_ROOT, pttype="gpt"),
+        part("nvme0n1", 4, 80 * GiB, 259, 0, sep="p", fstype="btrfs", uuid=fr.BOOT_UUID, label="fedora", parttype=LINUX_FS, pttype="gpt"),
+        part("nvme0n1", 5, 16 * GiB, 259, 0, sep="p", fstype="swap", uuid=fr.SWAP_UUID, parttype=LINUX_SWAP, pttype="gpt"),
+    ]
+    disk = node("nvme0n1", "disk", 300 * GiB, maj_min="259:0", tran="nvme", model="WD_BLACK SN850X", serial="S7NZ0000000002", pttype="gpt", ptuuid="dddddddd-0000-4000-8000-000000000001", children=kids)
+    return lsblk(disk)
+
+
+def author_pc() -> str:
+    """A real capture (anonymized) of a desktop with seven drives: btrfs root mounted at / and /var/lib/docker, ESP at /boot/efi, NTFS and ext4 data disks.
+
+    Taken with an older lsblk command: no PKNAME, PARTN or FSROOTS columns, so parent relations come only from the nesting.
+    """
+    return (Path(__file__).parent / "data" / "author_pc_lsblk.json").read_text()
+
+
 def usb_live_hybrid() -> str:
     """The live USB stick (iso9660 + appended EFI partition) next to an internal disk with a Linux root."""
     stick = node("sdb", "disk", 16 * GiB, maj_min="8:16", tran="usb", model="Cruzer", serial="USB0001", hotplug=True, rm=True, pttype="dos", ptuuid="12345678", children=[
@@ -261,6 +326,7 @@ def exotic_filesystems() -> str:
 
 
 SCENARIOS = {
+    "xfs_boot_esp": xfs_boot_esp, "md_raid1_root": md_raid1_root, "usb_installed_root": usb_installed_root, "multiboot_three": multiboot_three, "author_pc": author_pc,
     "plain_sata_mbr": plain_sata_mbr, "nvme_dualboot": nvme_dualboot, "debian_cloud": debian_cloud, "fedora_cloud_btrfs": fedora_cloud_btrfs, "ubuntu_lvm": ubuntu_lvm,
     "luks_lvm_ext4": luks_lvm_ext4, "luks_btrfs": luks_btrfs, "md_raid1_under_lvm": md_raid1_under_lvm, "md_raid1_unassembled": md_raid1_unassembled,
     "lvm_inactive": lvm_inactive, "btrfs_multi_device": btrfs_multi_device, "xfs_external_log": xfs_external_log, "usb_live_hybrid": usb_live_hybrid, "ventoy_live": ventoy_live,

@@ -100,7 +100,7 @@ class DebianAdapter(Adapter):
         if firmware == "uefi":
             esp = base.esp_for(b)
             if esp is None:
-                raise Unsupported("The EFI system partition is not mounted. Fix fstab (or choose it in the mount plan) and try again.")
+                raise Unsupported(base.esp_missing_reason(b))
             ident = base.bootloader_id(b, esp, self.ident(view), (self.ident(view).lower(), "ubuntu", "debian"))
             shim = view.exists("/usr/lib/shim/shimx64.efi.signed") or view.exists("/usr/lib/shim/shimx64.efi.signed.latest")
             signed = view.exists("/usr/lib/grub/x86_64-efi-signed/grubx64.efi.signed")
@@ -132,7 +132,7 @@ class DebianAdapter(Adapter):
             raise Unsupported("bootctl is not installed in this system.")
         esp = base.esp_for(b)
         if esp is None:
-            raise Unsupported("The EFI system partition is not mounted.")
+            raise Unsupported(base.esp_missing_reason(b))
         installed = any(name.lower() == "systemd" for name in esp.files)
         b.title, b.risk, b.summary = "Reinstall systemd-boot", "high", "Writes systemd-boot to the EFI system partition."
         base.backup_esp(b, esp)

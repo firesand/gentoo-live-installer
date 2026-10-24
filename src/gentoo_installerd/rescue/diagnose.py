@@ -52,6 +52,10 @@ def diagnose(view: SessionView, *, hardware_changed: bool = False, efi_state: ef
     esp = view.esp()
     session = view._session
     for failed in session.failed_mounts:
+        if failed.get("kind") == "missing_directory":
+            findings.append(Finding("M01", "warn", f"{failed['mountpoint']} was not mounted", f"The directory {failed['mountpoint']} does not exist in the system. It is created when repairs are enabled, and "
+                                    f"{failed.get('device', 'the partition')} is mounted there then.", [f"device: {failed.get('device', 'not mounted')}"], []))
+            continue
         findings.append(Finding("M01", "error", f"{failed['mountpoint']} could not be mounted", failed.get("reason", ""),
                                 [f"device: {failed.get('device', 'not mounted')}"], ["fs.check"]))
     mounted_boot = view.is_mounted("/boot") or not any(f["mountpoint"] == "/boot" for f in session.failed_mounts)
@@ -97,8 +101,9 @@ def _loader_findings(view: SessionView, boot: Any, esp: Any) -> list[Finding]:
             if kernels_present and "menuentry" not in text and "blscfg" not in text and "configfile" not in text:
                 found.append(Finding("D05", "error", "The boot menu lists no system", f"{boot.grub_cfg} contains no menu entry.", [boot.grub_cfg], ["boot.config"]))
             found.extend(_uuid_findings(view, boot.grub_cfg, text))
-    if view.family == "fedora" and kernels_present and not boot.bls_entries and not boot.grub_cfg:
-        found.append(Finding("D05", "error", "There are no boot entries", "/boot/loader/entries is empty although kernels are installed.", ["/boot/loader/entries: empty"], ["boot.config"]))
+    uses_bls = view.family == "fedora" and (not boot.grub_cfg or "blscfg" in view.read(boot.grub_cfg, 1 << 20))
+    if uses_bls and kernels_present and not boot.bls_entries:
+        found.append(Finding("D05", "error", "There are no boot entries", "/boot/loader/entries is empty although kernels are installed, so the boot menu has nothing to show.", ["/boot/loader/entries: empty"], ["boot.config"]))
     if boot.bls_entries and kernels_present:
         for name in boot.bls_entries:
             found.extend(_uuid_findings(view, f"/boot/loader/entries/{name}", view.read(f"/boot/loader/entries/{name}", 8192)))

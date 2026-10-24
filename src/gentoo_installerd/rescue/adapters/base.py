@@ -77,8 +77,17 @@ def firmware_choice(b: PlanBuilder) -> str:
 
 def esp_for(b: PlanBuilder) -> Any:
     esp = b.view.esp()
-    b.precondition(esp is not None, "The EFI system partition is mounted" if esp is not None else "The EFI system partition could not be found or mounted (check fstab)")
+    b.precondition(esp is not None, "The EFI system partition is mounted" if esp is not None else esp_missing_reason(b))
     return esp
+
+
+def esp_missing_reason(b: PlanBuilder) -> str:
+    """Why there is no EFI system partition to work on, in terms of what the user can do about it."""
+    for failed in b.session.failed_mounts:
+        if failed.get("kind") == "missing_directory" and failed["mountpoint"] in {"/efi", "/boot/efi", "/boot/EFI"}:
+            return (f"The directory {failed['mountpoint']} is missing, so the EFI system partition was not mounted. Enable repairs first (the directory is created and the partition mounted "
+                    "then) and make this plan again.")
+    return "The EFI system partition is not mounted. Fix fstab (or choose it in the mount plan) and try again."
 
 
 def bootloader_id(b: PlanBuilder, esp: Any, default: str, preferred: tuple[str, ...] = ()) -> str:

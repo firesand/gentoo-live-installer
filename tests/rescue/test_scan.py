@@ -175,6 +175,21 @@ def test_busy_elsewhere_devices_are_read_through_their_mountpoint(lab_factory, t
     assert not [argv for argv in lab.system.commands_named("mount") if "/dev/sda1" in argv]
 
 
+def test_a_system_mounted_several_times_is_found_through_the_mount_that_shows_it(lab_factory, tmp_path: Path) -> None:
+    """The running system of a btrfs user: /var/lib/docker (a subvolume) is listed before / (the root), as lsblk prints them."""
+    root, docker = tmp_path / "rootfs", tmp_path / "rootfs-docker"
+    fr.make_root(root, "gentoo")
+    docker.mkdir()
+    data = json.loads(lf.desktop_automount())
+    data["blockdevices"][0]["children"][1]["mountpoints"] = [str(docker), str(root)]
+    data["blockdevices"][0]["children"][1]["fsroots"] = ["/docker", "/@"]
+    lab = lab_factory(json.dumps(data))
+    result = run_scan(lab)
+    candidates = [item for item in result.candidates if item["device"] == "/dev/sda2"]
+    assert len(candidates) == 1 and candidates[0]["busy_elsewhere"] == str(root) and candidates[0]["os"]["id"] == "gentoo"
+    assert not [argv for argv in lab.system.commands_named("mount") if "/dev/sda2" in argv]
+
+
 def test_probe_mounts_use_the_lsblk_filesystem_not_fstab(lab_factory) -> None:
     data = json.loads(lf.plain_sata_mbr())
     data["blockdevices"][0]["children"][0]["fstype"] = "ext3"

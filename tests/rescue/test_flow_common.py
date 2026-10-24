@@ -438,3 +438,23 @@ def test_xfs_repair_names_the_external_log(lab_factory) -> None:
     assert commands == [["xfs_repair", "-l", "/dev/sdb1", "/dev/sda2"]]
     check = manager.plan({"session_id": sid, "action_id": "fs.check", "params": {"mode": "check"}})
     assert [step["argv"] for step in check["steps"] if step.get("argv") and step["argv"][0] == "xfs_repair"] == [["xfs_repair", "-n", "-l", "/dev/sdb1", "/dev/sda2"]]
+
+
+def test_a_missing_mount_point_directory_is_explained_and_repairs_create_it(lab_factory) -> None:
+    import shutil
+
+    lab, tree = uefi_gentoo_lab(lab_factory)
+    shutil.rmtree(tree / "efi")
+    manager, sid, info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    m01 = [f for f in info["findings"] if f["id"] == "M01"]
+    assert len(m01) == 1 and m01[0]["severity"] == "warn" and m01[0]["actions"] == [] and m01[0]["detail"].startswith("The directory /efi does not exist in the system.")
+    assert "fs.check" not in info["recommended"]  # the file system is fine; only the directory is gone
+    with pytest.raises(RescueError) as err:
+        manager.plan({"session_id": sid, "action_id": "boot.bootloader"})
+    assert err.value.short == "unsupported_action" and "The directory /efi is missing" in err.value.message and "Enable repairs first" in err.value.message
+    plan_and_run(manager, sid, "session.enter_write")
+    assert [m.data["device"] for m in manager.session(sid).ledger.of_kind("mount") if m.data["mountpoint"] == "/efi"] == ["/dev/nvme0n1p1"]
+    plan = manager.plan({"session_id": sid, "action_id": "boot.bootloader"})
+    assert plan["action"] == "boot.bootloader" and any("grub-install" in step["display"] for step in plan["steps"])
+    unmount(manager, sid)
+    assert (tree / "efi").is_dir()  # the directory was created in the repaired system

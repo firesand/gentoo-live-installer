@@ -219,7 +219,7 @@ class Scanner:
     def _probe_node(self, node: DeviceNode, graph: DeviceGraph) -> list[dict[str, Any]]:
         busy = [mp for mp in node.mountpoints if not mp.startswith(("/run/initramfs", "[SWAP]")) and "/mnt/rescue" not in mp]
         if busy:
-            return self._probe_mounted_elsewhere(node, graph, busy[0])
+            return self._probe_mounted_elsewhere(node, graph, busy)
         try:
             with probe_mounted(self.runner, self.host, self.probe_root, node, sleep=self.sleep) as (target, rung):
                 return self._identify_mounted(node, graph, target, rung)
@@ -228,16 +228,22 @@ class Scanner:
             self.warnings.append(f"{node.path}: {exc.message}")
             return []
 
-    def _probe_mounted_elsewhere(self, node: DeviceNode, graph: DeviceGraph, mountpoint: str) -> list[dict[str, Any]]:
-        try:
-            with RootFS(mountpoint) as fs:
-                found = self._candidate_for(node, graph, fs, rootflags="", subvol=None, rung=0)
-        except OSError:
-            return []
-        if found:
-            found["busy_elsewhere"] = mountpoint
-            found["warnings"].append(f"{node.path} is mounted at {mountpoint}; rescue will ask you to unmount it before repairing")
-            return [found]
+    def _probe_mounted_elsewhere(self, node: DeviceNode, graph: DeviceGraph, mountpoints: list[str]) -> list[dict[str, Any]]:
+        """Read a device that is already mounted through the mount point that shows a system.
+
+        A btrfs file system is often mounted several times (``/``, ``/var/lib/docker``, ``/home`` ...), and lsblk lists
+        the subvolume mounts in any order, so every mount point is tried, the shallowest first.
+        """
+        for mountpoint in sorted(mountpoints, key=lambda path: (path.count("/"), path)):
+            try:
+                with RootFS(mountpoint) as fs:
+                    found = self._candidate_for(node, graph, fs, rootflags="", subvol=None, rung=0)
+            except OSError:
+                continue
+            if found:
+                found["busy_elsewhere"] = mountpoint
+                found["warnings"].append(f"{node.path} is mounted at {mountpoint}; rescue will ask you to unmount it before repairing")
+                return [found]
         return []
 
     def _identify_mounted(self, node: DeviceNode, graph: DeviceGraph, target: str, rung: int) -> list[dict[str, Any]]:

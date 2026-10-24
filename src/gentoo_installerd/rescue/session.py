@@ -247,7 +247,8 @@ class RescueSession:
 
     def _mount_item(self, item: MountItem, graph: DeviceGraph, emit: Callable[..., None]) -> None:
         if item.needs_mkdir:
-            self.failed_mounts.append({"mountpoint": item.mountpoint, "reason": "the directory does not exist in the read-only system; it is created when repairs are enabled"})
+            self.failed_mounts.append({"mountpoint": item.mountpoint, "device": item.device, "kind": "missing_directory",
+                                      "reason": "the directory does not exist in the read-only system; it is created when repairs are enabled"})
             return
         try:
             with self.fs() as fs:
@@ -257,7 +258,7 @@ class RescueSession:
                                   available=self.env.host.filesystems() or None)
         except (RescueError, OSError) as exc:
             reason = exc.message if isinstance(exc, RescueError) else str(exc)
-            self.failed_mounts.append({"mountpoint": item.mountpoint, "device": item.device, "reason": reason})
+            self.failed_mounts.append({"mountpoint": item.mountpoint, "device": item.device, "kind": "failed", "reason": reason})
             self.warnings.append(f"{item.mountpoint} could not be mounted from {item.device}: {reason}")
             return
         self.ledger.add("mount", path=destination, mountpoint=item.mountpoint, device=item.device, fs=item.fstype, tier=item.tier, rw=False, rung=rung, recursive=False)

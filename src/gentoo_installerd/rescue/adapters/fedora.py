@@ -91,7 +91,7 @@ class FedoraAdapter(Adapter):
         if firmware == "uefi":
             esp = base.esp_for(b)
             if esp is None:
-                raise Unsupported("The EFI system partition is not mounted. Fix fstab (or choose it in the mount plan) and try again.")
+                raise Unsupported(base.esp_missing_reason(b))
             manager = self.manager(view)
             if not manager:
                 raise Unsupported("Neither dnf nor yum was found in this system.")
