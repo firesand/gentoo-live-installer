@@ -572,14 +572,20 @@ def ssh_command(args: argparse.Namespace, known_hosts: Path, user: str, remote: 
     return [*ssh_base_arguments(args, known_hosts, user), "--", remote]
 
 
+UNKNOWN_FIELDS_RE = re.compile(r"Unknown (\w+) fields?: ([\w, ]+)")
+
+
 def parse_install_result(returncode: int, output: str) -> InstallResult:
     events: list[dict] = []
     errors: list[str] = []
+    stray: list[str] = []
     completed: dict | None = None
     for line in ANSI_RE.sub("", output).splitlines():
         try:
             event = json.loads(line)
         except json.JSONDecodeError:
+            if line.strip():
+                stray.append(line.strip())
             continue
         if not isinstance(event, dict):
             continue
@@ -589,7 +595,14 @@ def parse_install_result(returncode: int, output: str) -> InstallResult:
         if event.get("type") == "completed":
             completed = event
     if completed is None:
-        return InstallResult(False, "Backend output has no completed event" + (f" (exit {returncode})" if returncode else ""), events)
+        reason = "Backend output has no completed event" + (f" (exit {returncode})" if returncode else "")
+        if stray:  # the daemon refused to start: its message is the cause
+            reason += f": {stray[-1][:300]}"
+            unknown = UNKNOWN_FIELDS_RE.search(stray[-1])
+            if unknown:
+                reason += (f" (the ISO does not know the manifest field(s) {unknown.group(2).strip()} that this harness sends: "
+                           "rebuild the test ISO from the same tree)")
+        return InstallResult(False, reason, events)
     success = completed.get("data", {}).get("success") is True
     if returncode != 0:
         errors.append(f"Backend exited with status {returncode}")

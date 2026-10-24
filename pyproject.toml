@@ -30,3 +30,11 @@ pythonpath = [".", "src", "scripts"]
 addopts = "-ra -p no:anyio -p no:pkgcore"
 # Per-test limit in seconds: pytest-timeout when installed, tests/conftest.py otherwise.
 timeout = 120
+
+[tool.mypy]
+# scripts/check.sh compares the findings with scripts/mypy-baseline.txt.
+python_version = "3.13"
+mypy_path = "src:scripts"
+explicit_package_bases = true
+ignore_missing_imports = true
+show_error_codes = true

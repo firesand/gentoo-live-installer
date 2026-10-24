@@ -146,3 +146,38 @@ def test_minimal_desktop_has_no_desktop_probe():
     manifest = InstallManifest()
     manifest.system.desktop = "minimal"
     assert vm.desktop_probe_plan(manifest) == []
+
+
+def _flatten(value, prefix=""):
+    if isinstance(value, dict) and value:
+        return {path: item for key, child in value.items() for path, item in _flatten(child, f"{prefix}.{key}" if prefix else key).items()}
+    return {prefix: value}
+
+
+ACCESS_ONLY = {"storage.device", "storage.device_id", "accounts.hostname", "accounts.username", "accounts.password",
+               "accounts.root_password", "accounts.ssh_authorized_keys", "options.ssh"}
+
+
+@pytest.mark.parametrize(("kwargs", "extra"), [
+    ({}, set()),
+    ({"build_jobs": 1}, {"portage.make_opts"}),
+    ({"build_jobs": 1, "swap_mib": 8192}, {"portage.make_opts", "storage.swap_mib"}),
+])
+def test_defaults_scenario_differs_from_the_wizard_defaults_only_in_disk_credentials_and_resources(kwargs, extra):
+    """T14: the untouched install must stay untouched; a new field's default can never drift in unnoticed."""
+    expected = _flatten(InstallManifest().to_dict(redact=False))
+    actual = _flatten(vm.build_manifest(vm.SCENARIO_MAP["defaults"], PUBLIC_KEY, **kwargs).to_dict(redact=False))
+    changed = {path for path in set(expected) | set(actual) if expected.get(path) != actual.get(path)}
+    assert changed <= ACCESS_ONLY | extra, sorted(changed - ACCESS_ONLY - extra)
+    # and the defaults the user cares most about are the real ones
+    for path in ("system.desktop", "system.profile", "options.microcode", "options.firmware", "options.pipewire",
+                 "options.bluetooth", "options.printing", "options.chrony", "options.cron", "hardware.guest_tools"):
+        assert actual[path] == expected[path], path
+
+
+def test_the_defaults_scenario_probes_the_default_desktop_and_both_companions():
+    manifest = vm.build_manifest(vm.SCENARIO_MAP["defaults"], PUBLIC_KEY)
+    assert vm.companion_selection(manifest) == {"hwmonux": True, "portagehub": True}
+    assert [name for name, _, _ in vm.desktop_probe_plan(manifest)] == ["desktop"]
+    probes = {probe[0] for probe in vm.installed_system_probes(manifest, vm.SCENARIO_MAP["defaults"])}
+    assert {"firmware", "cmdline", "root-source", "swap"} <= probes
