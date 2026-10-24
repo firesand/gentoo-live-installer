@@ -319,7 +319,7 @@ def _fedora_like(root: Path, opts: dict[str, Any], key: str) -> None:
                     f"options root=UUID={opts.get('root_uuid', ROOT_UUID)} ro rootflags=subvol=root\ngrub_users $grub_users\ngrub_arg --unrestricted\ngrub_class fedora\n")
     if not opts.get("separate_boot") and opts.get("grub_cfg", True):
         put(root, "boot/grub2/grub.cfg", FEDORA_GRUB_CFG)
-    for name in ("dnf", "dracut", "kernel-install", "rpm", "chpasswd", "usermod", "chage", "passwd", "efibootmgr", "grub2-mkconfig", "grub2-install", "grubby"):
+    for name in ("dnf", "dracut", "kernel-install", "rpm", "chpasswd", "usermod", "chage", "passwd", "efibootmgr", "grub2-mkconfig", "grub2-install", "grubby", "gen_grub_cfgstub"):
         tool(root, f"usr/bin/{name}", elf())
     if opts.get("selinux", key == "fedora"):
         put(root, "etc/selinux/config", "SELINUX=enforcing\nSELINUXTYPE=targeted\n")

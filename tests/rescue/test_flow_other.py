@@ -244,10 +244,65 @@ def test_fedora_bootloader_comes_from_packages_never_from_grub2_install(lab_fact
     manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
     plan, result, _ = plan_and_run(manager, sid, "boot.bootloader")
     commands = chroot_commands(lab)
-    assert ("dnf", "reinstall", "-y", "shim-x64", "grub2-efi-x64") in commands and not any(c[0] == "grub2-install" for c in commands)
+    assert ("dnf", "reinstall", "-y", "shim-x64", "grub2-efi-x64", "grub2-common") in commands and not any(c[0] == "grub2-install" for c in commands)  # Fedora's documented recipe
     entry = [c for c in lab.system.commands if c[:2] == ("efibootmgr", "--create")][0]
     assert entry[-2:] == ("--loader", "\\EFI\\fedora\\shimx64.efi") and "Fedora" in entry
     assert plan["needs"]["network"] is True
+
+
+def wiped_fedora_esp(lab_factory, wipe: str):
+    import shutil
+
+    lab, tree = fedora_lab(lab_factory)
+    esp = lab.system.device_trees["/dev/nvme0n1p1"]
+    shutil.rmtree(esp / ("EFI/fedora" if wipe == "vendor" else "EFI"))
+    return lab, tree, esp
+
+
+@pytest.mark.parametrize("wipe", ["vendor", "everything"])
+def test_fedora_bootloader_after_an_esp_wipe_restores_the_grub_cfg_stub(lab_factory, wipe: str) -> None:
+    """Windows reinstalled, or the ESP reformatted: without grub2-common (and a directory to copy into) shim and GRUB come back but GRUB stops at its prompt."""
+    lab, _tree, esp = wiped_fedora_esp(lab_factory, wipe)
+    manager, sid, info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    assert "D08" in {finding["id"] for finding in info["findings"]}
+    plan, result, _ = plan_and_run(manager, sid, "boot.bootloader")
+    shown = [step["display"] for step in plan["steps"]]
+    assert "mkdir /boot/efi/EFI/fedora" in shown and shown.index("mkdir /boot/efi/EFI/fedora") < next(i for i, text in enumerate(shown) if "dnf reinstall" in text)
+    assert ("dnf", "reinstall", "-y", "shim-x64", "grub2-efi-x64", "grub2-common") in chroot_commands(lab)
+    assert {"kind": "esp_file", "dir": "/boot/efi/EFI/fedora", "name": "grub.cfg"} in plan["post_checks"]
+    assert result["outcome"] == "success" and all(check["ok"] for check in result["post_checks"]), result
+    unmount(manager, sid)
+    assert all((esp / "EFI/fedora" / name).exists() for name in ("shimx64.efi", "grubx64.efi", "grub.cfg"))
+
+
+def test_fedora_bootloader_makes_the_stub_itself_when_the_packages_do_not(lab_factory) -> None:
+    lab, _tree, esp = wiped_fedora_esp(lab_factory, "vendor")
+    lab.system.dnf_makes_stub = False  # an image whose staging directory has no stub
+    manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    plan, result, _ = plan_and_run(manager, sid, "boot.bootloader")
+    assert ("gen_grub_cfgstub", "/boot/grub2", "/boot/efi/EFI/fedora") in chroot_commands(lab)
+    assert result["outcome"] == "success" and all(check["ok"] for check in result["post_checks"]), result
+    unmount(manager, sid)
+    assert (esp / "EFI/fedora/grub.cfg").read_text().endswith("configfile $prefix/grub.cfg\n")
+
+
+def test_fedora_bootloader_with_a_stub_already_there_does_not_make_another(lab_factory) -> None:
+    lab, _ = fedora_lab(lab_factory)
+    manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    plan, _result, _ = plan_and_run(manager, sid, "boot.bootloader")
+    assert not any(command[0] == "gen_grub_cfgstub" for command in chroot_commands(lab)) and "mkdir /boot/efi/EFI/fedora" not in [step["display"] for step in plan["steps"]]
+
+
+def test_fedora_bootloader_does_not_call_a_missing_stub_a_success(lab_factory) -> None:
+    """If nothing makes the stub, the result must say so (it used to read as success while the machine ended at the GRUB prompt)."""
+    lab, tree, _esp = wiped_fedora_esp(lab_factory, "vendor")
+    lab.system.dnf_makes_stub = False
+    (tree / "usr/bin/gen_grub_cfgstub").unlink()
+    manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    plan, result, _ = plan_and_run(manager, sid, "boot.bootloader")
+    assert not any(command[0] == "gen_grub_cfgstub" for command in chroot_commands(lab))
+    assert result["outcome"] == "warning" and [check["text"] for check in result["post_checks"] if not check["ok"]] == ["/boot/efi/EFI/fedora/grub.cfg is missing"]
+    unmount(manager, sid)
 
 
 def test_rhel_adds_grub2_common_and_uses_its_own_directory(lab_factory) -> None:

@@ -19,7 +19,7 @@ class FedoraAdapter(Adapter):
     label: ClassVar[str] = "Fedora"
     esp_default: ClassVar[str] = "/boot/efi"
     tools: ClassVar[frozenset[str]] = frozenset({"dracut", "kernel-install", "grub2-mkconfig", "grub2-install", "dnf", "yum", "rpm", "chpasswd", "usermod", "passwd", "chage", "faillock",
-                                                  "grubby", "true", "journalctl"})
+                                                  "grubby", "gen_grub_cfgstub", "true", "journalctl"})
 
     def esp_dir(self, view: SessionView) -> str:
         return ESP_DIRS.get(view.os.flavor, view.os.flavor or "fedora")
@@ -98,9 +98,16 @@ class FedoraAdapter(Adapter):
             ident = self.esp_dir(view)
             base.need_network(b, "download shim and GRUB (Fedora installs them from signed packages, never with grub2-install)")
             base.backup_esp(b, esp)
-            b.chroot([manager, "reinstall", "-y", "shim-x64", "grub2-efi-x64", *( ["grub2-common"] if view.os.flavor != "fedora" else [])], writes=(f"{esp.mountpoint}/EFI/{ident}/*",), timeout=1800)
+            directory = f"{esp.mountpoint}/EFI/{ident}"
+            files = next((names for name, names in esp.files.items() if name.lower() == ident.lower()), None)
+            if files is None:  # the packages copy their files with 'cp -a ... || :', which does nothing when the directory (a reformatted ESP) is not there
+                b.file({"op": "mkdir", "path": directory, "mode": 0o755, "parents": True}, f"mkdir {directory}", writes=(directory,))
+            # grub2-common makes the grub.cfg stub that sends GRUB to /boot/grub2/grub.cfg; shim and GRUB alone leave it at its prompt (Fedora's own recipe lists all three)
+            b.chroot([manager, "reinstall", "-y", "shim-x64", "grub2-efi-x64", "grub2-common"], writes=(f"{directory}/*",), timeout=1800)
+            if "grub.cfg" not in {name.lower() for name in files or []} and view.which("gen_grub_cfgstub"):  # for an image whose packages do not bring the stub
+                b.chroot(["gen_grub_cfgstub", "/boot/grub2", directory], writes=(f"{directory}/grub.cfg",), timeout=120, on_fail="continue")
             b.chroot(["grub2-mkconfig", "-o", path], writes=(path,), timeout=600)
-            base.esp_loader_checks(b, esp, ident, False, ("shimx64.efi", "grubx64.efi"))
+            base.esp_loader_checks(b, esp, ident, False, ("shimx64.efi", "grubx64.efi", "grub.cfg"))
             if base.nvram_ok(b.env) and not b.params.get("no_entry"):
                 node = view.graph.find(esp.device)
                 label = LABELS.get(view.os.flavor, "Linux")
