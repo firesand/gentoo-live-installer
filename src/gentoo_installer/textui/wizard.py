@@ -121,6 +121,7 @@ class Wizard:
         view: MachineView | None = None,
         state: DaemonState | None = None,
         from_file: bool = False,
+        resume: bool = False,
     ) -> None:
         self.console = console
         self.host = host
@@ -129,6 +130,7 @@ class Wizard:
         self.view = view if view is not None else MachineView()
         self.state = state
         self.from_file = from_file
+        self.resume_requested = resume  # --resume: continue the interrupted installation instead of asking
         self.entry: DiskEntry | None = None
         self.applied_keymap = ""
         self.root_mode = "off" if self.manifest.accounts.disable_root_login else "same"
@@ -779,7 +781,11 @@ class Wizard:
         self.ensure_identity()
         wrong = 0
         resume = False
-        if self._resumable():
+        if self.resume_requested and not self._resumable():
+            c.warn("There is no interrupted installation to resume, so this would be a new installation that erases the disk.")
+        elif self.resume_requested:
+            resume = True
+        elif self._resumable():
             resume = c.confirm("An earlier installation stopped after the disk was prepared. Resume it, without erasing the disk again?", default=False)
         help_text = "c = change a setting, r = check this computer again, b = back, q = quit"
         summary = build_summary(manifest, self.view, require_identity=True)

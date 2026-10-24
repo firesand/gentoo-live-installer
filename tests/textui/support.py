@@ -158,6 +158,14 @@ class FakeHost(Host):
 # --- what the service says about the computer ----------------------------------------------------------------------
 
 
+_MINORS: dict[str, int] = {}
+
+
+def device_number(name: str) -> str:
+    """A MAJ:MIN for a test device that is the same every time for one name and never shared by two names."""
+    return f"259:{_MINORS.setdefault(name, len(_MINORS) + 1)}"
+
+
 def lsblk_disk(disk: dict[str, Any], *, serial: str | None = None, mounted: bool = False) -> dict[str, Any]:
     """A hardware-profile disk as the service reports it in ``data.disks`` (BlockDevice.to_dict() keys)."""
     partitions = disk["partitions"] or ([{"name": disk["name"] + "1", "size": disk["size"] // 2, "fstype": "ext4", "label": "", "parttype": ""}] if mounted else [])
@@ -172,7 +180,7 @@ def lsblk_disk(disk: dict[str, Any], *, serial: str | None = None, mounted: bool
         name=disk["name"], path=disk["path"], type="disk", size=disk["size"], model=disk["model"],
         serial=disk["serial"] if serial is None else serial, wwn=disk["wwn"], transport=disk["tran"] or disk["bus"],
         removable=disk["removable"], hotplug=disk["hotplug"], ro=disk["ro"], log_sec=disk["log_sec"] or 512, phy_sec=disk["phy_sec"] or 512,
-        maj_min=f"{8 if disk['name'].startswith('sd') else 252}:{abs(hash(disk['name'])) % 200 * 16}", pttype=disk["pttype"], children=children,
+        maj_min=device_number(disk["name"]), pttype=disk["pttype"], children=children,
     )
     return node.to_dict()
 

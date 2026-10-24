@@ -240,3 +240,34 @@ def test_a_saved_copy_can_be_changed_before_it_is_installed(installer, host: Fak
     sent = fake.manifests[0]
     assert result.code == 0 and sent["system"]["desktop"] == "minimal" and sent["system"]["init"] == "systemd" and sent["system"]["stage_variant"] == "amd64-systemd"
     assert sent["accounts"]["password"] == "typed-password-1"
+
+
+def test_the_resume_flag_continues_an_interrupted_installation_without_asking(installer, host: FakeHost, tmp_path: Path) -> None:
+    from tests.textui.support import failing_job, good_job
+
+    fake = serial_installer(installer, jobs=[failing_job(), good_job()])
+    run_main(["--manifest", write_manifest_file(tmp_path), "--yes", "--confirm-device", "/dev/vda", "--socket", fake.path], Script(), host)
+    assert fake.state["resumable"] is True
+    script = Script([
+        ("does not contain passwords", "x"), ("at least", "typed-password-1"), ("Type it again", "typed-password-1"), ("no root password", "y"),
+        ("continue the installation on /dev/vda (nothing is erased again)", "/dev/vda"), ("The installation finished", "4"),
+    ])
+    result = run_main(["--manifest", write_redacted(tmp_path), "--resume", "--socket", fake.path], script, host)
+    script.assert_finished()
+    assert result.code == 0 and fake.resumes == [False, True] and "Resume it, without erasing" not in script.text
+
+
+def test_the_resume_flag_without_anything_to_resume_says_so(installer, host: FakeHost, tmp_path: Path) -> None:
+    fake = serial_installer(installer)
+    script = Script([
+        ("does not contain passwords", "x"), ("at least", "typed-password-1"), ("Type it again", "typed-password-1"), ("no root password", "y"),
+        ("type the disk name exactly", "/dev/vda"), ("The installation finished", "4"),
+    ])
+    run_main(["--manifest", write_redacted(tmp_path), "--resume", "--socket", fake.path], script, host)
+    assert "no interrupted installation to resume" in script.flat and fake.resumes == [False]
+
+
+def write_manifest_file(tmp_path: Path) -> str:
+    path = tmp_path / "full.json"
+    path.write_text(valid_manifest().to_json())
+    return str(path)

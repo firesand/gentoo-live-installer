@@ -11,7 +11,7 @@ from gentoo_installer import blockdev
 from gentoo_installer.manifest import InstallManifest, Storage
 from gentoo_installer.textui.inventory import DiskEntry, Finding, MachineView, apply_disk, findings_from, lsblk_shape, parse_disks
 
-from tests.textui.support import inspect_reply
+from tests.textui.support import device_number, inspect_reply
 
 GIB = 1024**3
 LSBLK_JSON = json.dumps({"blockdevices": [{
@@ -22,7 +22,7 @@ LSBLK_JSON = json.dumps({"blockdevices": [{
 
 
 def node(name: str, size: int = 64 * GIB, **kwargs) -> blockdev.BlockDevice:
-    return blockdev.BlockDevice(name=name, path="/dev/" + name, type=kwargs.pop("type", "disk"), size=size, maj_min=kwargs.pop("maj_min", f"8:{abs(hash(name)) % 90}"), **kwargs)
+    return blockdev.BlockDevice(name=name, path="/dev/" + name, type=kwargs.pop("type", "disk"), size=size, maj_min=kwargs.pop("maj_min", device_number(name)), **kwargs)
 
 
 def view_of(*roots: blockdev.BlockDevice, **reply) -> MachineView:

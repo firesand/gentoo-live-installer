@@ -332,3 +332,19 @@ def test_the_module_can_be_run_and_needs_no_qt(tmp_path: Path) -> None:
     assert done.returncode == 0 and "gentoo-installer-text" in done.stdout, done.stderr
     module = subprocess.run([sys.executable, "-m", "gentoo_installer.textui", "--version"], capture_output=True, text=True, env=env, timeout=60, cwd=tmp_path)
     assert module.returncode == 0 and "gentoo-installer-text" in module.stdout, module.stderr
+
+
+def test_a_dry_run_can_check_a_saved_copy_whose_passwords_were_left_out(tmp_path: Path, installer, host: FakeHost) -> None:
+    fake = serial_installer(installer)
+    result = run_main(["--manifest", write_manifest(tmp_path, redact=True), "--dry-run", "--socket", fake.path], Script(), host)
+    assert result.code == 0 and "blanked out" in result.out and "ERASE  /dev/vda" in result.out and not requests_of(fake, "start")
+
+
+def test_leaving_while_an_installation_runs_does_not_claim_that_nothing_changed(installer, host: FakeHost) -> None:
+    fake = serial_installer(installer)
+    fake.current = fake._numbered(good_job())
+    fake.state.update(status="running", seq=len(good_job()), stage="base", progress=40.0)
+    script = Script([("already running", "q"), ("Quit the installer?", "y")])
+    result = run_main(["--socket", fake.path], script, host)
+    assert result.code == 130 and "Nothing has been changed" not in script.text and "gentoo-installer-text --attach" in script.text
+    assert "You left the installer. The installation keeps running" in script.flat

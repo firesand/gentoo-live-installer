@@ -273,7 +273,8 @@ class Console:
 
     def confirm_quit(self) -> bool:
         """Ask whether to leave. A second Ctrl-C, or the end of the input, counts as yes."""
-        self.para(self.quit_note)
+        if self.quit_note:
+            self.para(self.quit_note)
         try:
             answer = self._read_once("Quit the installer? [y/N] ", False)
         except (KeyboardInterrupt, InputClosed):

@@ -116,8 +116,14 @@ class ManifestFileError(Exception):
     """The settings file cannot be used."""
 
 
-def load_manifest_file(path: Path, *, blank_redacted: bool = False) -> InstallManifest:
-    """Read a manifest. A saved copy has no passwords (``<redacted>``); ``blank_redacted`` turns them into empty ones so they can be asked."""
+PLACEHOLDER_SECRET = "placeholder-secret-1"
+
+
+def load_manifest_file(path: Path, *, redacted: str = "keep") -> InstallManifest:
+    """Read a manifest. A saved copy has no passwords (``<redacted>``).
+
+    ``redacted`` says what to do with them: "keep" (the manifest then fails validation), "blank" (empty, so that
+    they can be asked) or "placeholder" (a valid dummy, so that a dry run can check everything else)."""
     try:
         text = path.read_text(encoding="utf-8")
     except OSError as exc:
@@ -130,11 +136,11 @@ def load_manifest_file(path: Path, *, blank_redacted: bool = False) -> InstallMa
         manifest = InstallManifest.from_dict(raw)
     except ManifestError as exc:
         raise ManifestFileError(f"{path}: {exc}") from exc
-    if blank_redacted:
+    if redacted != "keep":
         for section in (manifest.storage, manifest.system, manifest.portage, manifest.network, manifest.accounts, manifest.options):
             for key in SECRET_KEYS:
                 if getattr(section, key, None) == "<redacted>":
-                    setattr(section, key, "")
+                    setattr(section, key, "" if redacted == "blank" else PLACEHOLDER_SECRET)
     return manifest
 
 
@@ -267,6 +273,8 @@ def run_dry_run(ctx: Context, manifest: InstallManifest) -> int:
     summary = build_summary(manifest, view)
     if not manifest.storage.device_id:
         summary.notes.append("The manifest does not pin the disk to a serial number; a real run pins it before it starts.")
+    if PLACEHOLDER_SECRET in (manifest.accounts.password, manifest.storage.luks_passphrase):
+        summary.notes.append("The passwords in this file are blanked out (saved copies never keep them); a real run asks for them.")
     if source != "daemon":
         summary.notes.append("The installer service did not answer, so this plan uses only what can be read without it." if source == "local"
                              else "This computer could not be inspected, so only the settings were checked.")
@@ -327,11 +335,12 @@ def run_wizard(ctx: Context, manifest: InstallManifest | None = None, *, from_fi
         progress = state.status.get("progress")
         percent = f", {progress:.0f}% done" if isinstance(progress, (int, float)) else ""
         console.para(f"An installation is already running on this computer ({stage_label(str(state.status.get('stage') or ''))}{percent}).")
+        console.quit_note = "The installation keeps running in the background. To follow it again, run: gentoo-installer-text --attach"
         console.menu([Option("Watch it")], default=0, back=False)
         return follow_existing(ctx, state)
     console.say("Checking this computer...")
     view, _ = obtain_view(ctx, manifest.network.proxy if manifest else "")
-    wizard = Wizard(console, ctx.host, ctx.daemon, manifest=manifest, view=view, state=state, from_file=from_file)
+    wizard = Wizard(console, ctx.host, ctx.daemon, manifest=manifest, view=view, state=state, from_file=from_file, resume=bool(ctx.args.resume))
     at_review = from_file
     while True:
         plan = wizard.run(start_at_review=at_review)
@@ -351,7 +360,7 @@ def run_manifest(ctx: Context) -> int:
     args, console = ctx.args, ctx.console
     unattended = bool(args.yes or args.dry_run)
     try:
-        manifest = load_manifest_file(Path(args.manifest), blank_redacted=not unattended)
+        manifest = load_manifest_file(Path(args.manifest), redacted="keep" if args.yes and not args.dry_run else "placeholder" if args.dry_run else "blank")
     except ManifestFileError as exc:
         console.error(str(exc))
         return EXIT_USAGE
@@ -415,15 +424,15 @@ def main(
     try:
         return run(ctx)
     except Quit:
-        console.say(f"You left the installer. {console.quit_note}")
+        console.say(" ".join(part for part in ("You left the installer.", console.quit_note) if part))
         return EXIT_INTERRUPTED
     except InputClosed:
         console.say()
-        console.say(f"The input ended, so the installer stops. {console.quit_note}")
+        console.say(" ".join(part for part in ("The input ended, so the installer stops.", console.quit_note) if part))
         return EXIT_INTERRUPTED
     except KeyboardInterrupt:
         console.say()
-        console.say(f"Interrupted. {console.quit_note}")
+        console.say(" ".join(part for part in ("Interrupted.", console.quit_note) if part))
         return EXIT_INTERRUPTED
     except BrokenPipeError:
         return EXIT_INTERRUPTED

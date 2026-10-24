@@ -286,13 +286,23 @@ def test_without_somebody_to_ask_ctrl_c_just_stops_watching(installer, host: Fak
     assert follower.run(start_request()).state == "detached"
 
 
-def test_the_quit_note_tells_the_truth_while_watching_and_is_restored_afterwards(installer, host: FakeHost) -> None:
+def test_the_quit_note_stops_claiming_that_nothing_changed_once_the_installation_runs(installer, host: FakeHost) -> None:
     fake = installer()
     follower, script = follower_for(fake, host, [("What do you want to do", CTRL_C), ("Quit the installer?", "y")], daemon=InterruptedOnce(fake.path, 3))
-    before = follower.console.quit_note
+    assert follower.console.quit_note == "Nothing has been changed on your disks."
     outcome = follower.run(start_request())
     assert outcome.state == "detached" and "keeps running in the background" in script.text and "gentoo-installer-text --attach" in script.text
-    assert follower.console.quit_note == before
+    assert "Nothing has been changed" not in script.text
+    assert "keeps running in the background" in follower.console.quit_note  # still true after leaving
+
+
+def test_after_the_end_the_note_matches_the_result(installer, host: FakeHost) -> None:
+    follower, _ = follower_for(installer(), host)
+    follower.run(start_request())
+    assert follower.console.quit_note == ""
+    failing, _ = follower_for(installer(jobs=[failing_job()]), host)
+    failing.run(start_request())
+    assert "may be partly installed" in failing.console.quit_note
 
 
 # --- the machine-readable stream --------------------------------------------------------------------------------------------------------------

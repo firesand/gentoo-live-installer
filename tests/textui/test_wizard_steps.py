@@ -12,7 +12,7 @@ from gentoo_installer.textui.daemon import Daemon
 from gentoo_installer.textui.inventory import MachineView
 from gentoo_installer.textui.wizard import Wizard
 
-from tests.textui.support import END, FakeHost, FakeInstaller, Script, inspect_reply
+from tests.textui.support import END, FakeHost, FakeInstaller, Script, device_number, inspect_reply
 
 GIB = 1024**3
 PASSWORD = "correct-horse-1"
@@ -43,7 +43,7 @@ def with_disks(reply: dict, *disks: dict) -> dict:
 def disk_dict(name: str, size: int = 100 * GIB, **kwargs) -> dict:
     from gentoo_installer import blockdev
 
-    return blockdev.BlockDevice(name=name, path="/dev/" + name, type="disk", size=size, maj_min=kwargs.pop("maj_min", f"8:{abs(hash(name)) % 90 + 100}"), **kwargs).to_dict()
+    return blockdev.BlockDevice(name=name, path="/dev/" + name, type="disk", size=size, maj_min=kwargs.pop("maj_min", device_number(name)), **kwargs).to_dict()
 
 
 # --- keyboard --------------------------------------------------------------------------------------------------------------

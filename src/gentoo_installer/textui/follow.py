@@ -251,12 +251,12 @@ class InstallFollower:
     # --- the loop --------------------------------------------------------------------------------
 
     def run(self, request: dict[str, Any]) -> Outcome:
-        previous_note = self.console.quit_note
+        # From here on "Nothing has been changed on your disks" would be untrue.
         self.console.quit_note = "The installation keeps running in the background. To follow it again, run: gentoo-installer-text --attach"
-        try:
-            return self._run(request)
-        finally:
-            self.console.quit_note = previous_note
+        outcome = self._run(request)
+        if outcome.state != "detached":
+            self.console.quit_note = "" if outcome.ok else "The installation stopped; the disk may be partly installed (the log says how far it got)."
+        return outcome
 
     def _run(self, request: dict[str, Any]) -> Outcome:
         self.run_state = _Run()
@@ -278,8 +278,6 @@ class InstallFollower:
                 continue
             except OSError:
                 pass  # connection lost or silent for too long: decided below from the daemon's own status
-            except Quit:
-                return self._partial("detached", "You stopped watching. The installation is still running.")
             verdict = self._after_drop(request, received, failures, final_attach)
             if isinstance(verdict, Outcome):
                 return verdict
