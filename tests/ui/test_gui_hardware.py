@@ -352,7 +352,7 @@ def test_the_first_inspection_seeds_what_the_machine_suggests(make_window):
     options, storage = window.manifest.options, window.manifest.storage
     assert options.microcode is False  # the hypervisor owns the microcode
     assert options.bluetooth is False  # no radio in a virtual machine
-    assert storage.swap_mib == 2048  # 4 GiB of memory with compressed RAM swap
+    assert (storage.swap_choice, storage.swap_mib) == ("recommended", 4096)  # 4 GiB of memory: the Handbook size
     assert window.manifest.hardware == Hardware()  # the hardware choices themselves stay on automatic
 
 
@@ -377,10 +377,10 @@ def test_a_manifest_from_the_command_line_keeps_its_firmware(make_window):
 def test_check_again_corrects_the_seeding_until_the_user_changes_the_value(make_window):
     first = machine("qemu-q35-virtio")
     window = make_window(info=first)
-    assert window.manifest.storage.swap_mib == 2048
+    assert window.manifest.storage.swap_mib == 4096
     bigger = machine("asus-desktop-rtx4090")
     window.apply_info(bigger)
-    assert window.manifest.storage.swap_mib == 8192  # 47 GiB of memory: the seeding was corrected
+    assert window.manifest.storage.swap_mib == 16384  # 47 GiB of memory (Handbook: 16 GiB above 32 GiB): the seeding was corrected
     window.manifest.storage.swap_mib = 3000  # the user chose
     window.apply_info(first)
     assert window.manifest.storage.swap_mib == 3000

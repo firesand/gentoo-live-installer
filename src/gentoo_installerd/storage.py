@@ -243,10 +243,9 @@ class StorageManager:
         if storage.mode == "manual" and manifest.system.bootloader == "grub" and any(p.mountpoint == "/" and p.filesystem == "f2fs" for p in storage.partitions) \
                 and not any(p.mountpoint == "/boot" for p in storage.partitions):
             raise StorageError("GRUB cannot reliably read an F2FS root: keep /boot on a separate ext4 partition, or choose another root filesystem", "storage.layout")
-        if storage.mode == "erase" and storage.table == "dos":
-            count = 1 + int(storage.firmware == "uefi") + int(guided_layout.swap_partition_mib(storage) > 0) + int(storage.separate_home) + int(guided_layout.has_boot_partition(storage))
-            if count > 4:
-                raise StorageError("DOS partition tables support at most four primary partitions; select GPT", "storage.layout")
+        problems = guided_layout.table_problems(storage)
+        if problems:
+            raise StorageError(problems[0], "storage.layout")
         if storage.mode == "manual" and storage.luks and not any(p.mountpoint == "/boot" for p in storage.partitions):
             raise StorageError("Manual LUKS installation requires a separate unencrypted /boot partition", "storage.layout")
         if storage.mode == "manual" and (storage.luks or storage.lvm):

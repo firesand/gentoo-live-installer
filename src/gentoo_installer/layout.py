@@ -173,6 +173,23 @@ def guided_plan(storage: Storage, disk_bytes: int) -> GuidedPlan:
     return GuidedPlan(disk_mib, tuple(fixed), disk_mib - RESERVED_MIB - sum(size for _, size in fixed), disk_swap_mib(storage) if swap_in_root(storage) else 0)
 
 
+def table_problems(storage: Storage, disk_bytes: int = 0, log_sec: int = 512) -> list[str]:
+    """Why the chosen partition table cannot hold a guided layout: a DOS table's size limit and its four primary partitions."""
+    if storage.mode != "erase" or storage.table != "dos":
+        return []
+    errors: list[str] = []
+    if disk_bytes > DOS_MAX_SECTORS * max(log_sec, 512):
+        limit = DOS_MAX_SECTORS * max(log_sec, 512) / 1024**4
+        errors.append(
+            f"A DOS/MBR partition table cannot address more than {limit:.0f} TiB, but the disk has {disk_bytes / 1024**4:.1f} TiB: "
+            "choose GPT (legacy BIOS boot then uses a BIOS boot partition)"
+        )
+    count = 1 + int(storage.firmware == "uefi") + int(swap_partition_mib(storage) > 0) + int(storage.separate_home) + int(has_boot_partition(storage))
+    if count > 4:
+        errors.append("DOS partition tables support at most four primary partitions; select GPT")
+    return errors
+
+
 def capacity_problems(manifest: InstallManifest, disk_bytes: int, log_sec: int = 512) -> tuple[list[str], list[str]]:
     """(errors, warnings) for a guided erase of a disk of ``disk_bytes``; ([], []) for other modes.
 
@@ -183,12 +200,7 @@ def capacity_problems(manifest: InstallManifest, disk_bytes: int, log_sec: int =
         return [], []
     errors: list[str] = []
     warnings: list[str] = []
-    if storage.table == "dos" and disk_bytes > DOS_MAX_SECTORS * max(log_sec, 512):
-        limit = DOS_MAX_SECTORS * max(log_sec, 512) / 1024**4
-        errors.append(
-            f"A DOS/MBR partition table cannot address more than {limit:.0f} TiB, but the disk has {disk_bytes / 1024**4:.1f} TiB: "
-            "choose GPT (legacy BIOS boot then uses a BIOS boot partition)"
-        )
+    errors.extend(table_problems(storage, disk_bytes, log_sec))
     plan = guided_plan(storage, disk_bytes)
     desktop = manifest.system.desktop
     minimum = minimum_root_mib(manifest)
@@ -558,3 +570,15 @@ def plan_table(disk: PlannedDisk, *, lvm: bool = False) -> list[TableRow]:
         title = volume.device or _ROLE_TITLES.get(volume.role, volume.role)
         rows.append(TableRow(title, volume.mountpoint or "-", _FS_TEXT.get(volume.filesystem, volume.filesystem), volume.size_mib, purpose, volume.role, volume.action, note))
     return rows
+
+
+# --- hardware that XFS does not suit -------------------------------------------------------------
+
+# Early Intel NVMe drives (the 600p and Pro 6000p families) are known to corrupt XFS with some firmware.
+INTEL_XFS_RISK_MODELS = ("SSDPEKKW", "SSDPEKKF")
+
+
+def xfs_risky_model(model: str) -> bool:
+    """Whether a drive of this model name is an Intel 600p or Pro 6000p NVMe, which can corrupt XFS."""
+    text = (model or "").upper()
+    return "INTEL" in text and (any(name in text for name in INTEL_XFS_RISK_MODELS) or "600P" in text or "6000P" in text)

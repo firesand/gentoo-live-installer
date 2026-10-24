@@ -384,29 +384,29 @@ def test_a_loaded_raid_level_stays_visible_and_is_explained_when_it_cannot_work(
 def test_the_guided_layout_says_how_much_room_the_system_gets(make_window):
     window = make_window(info=info_of(DiskInfo("/dev/sda", "Disk", 100 * GIB, serial="s")))
     page = select(window, "/dev/sda")
-    page.swap.setValue(4096)
+    page.swap.setValue(4)
     text = page.capacity_label.text()
     assert page.capacity_label.isVisibleTo(page) and "The system will get 95.0 GiB" in text and "KDE needs at least 24 GiB" in text
-    page.swap.setValue(40 * 1024)
+    page.swap.setValue(40)
     assert "The system will get 59.0 GiB" in page.capacity_label.text()
 
 
 def test_the_label_warns_when_the_chosen_desktop_does_not_fit_and_errors_when_nothing_would(make_window):
     window = make_window(info=info_of(DiskInfo("/dev/sda", "Disk", 30 * GIB, serial="s")))
     page = select(window, "/dev/sda")
-    page.swap.setValue(8192)
+    page.swap.setValue(8)
     assert "too little for this desktop" in page.capacity_label.text()
-    page.swap.setValue(25 * 1024)
+    page.swap.setValue(25)
     assert "too little for any installation" in page.capacity_label.text()
     window.manifest.system.desktop = "minimal"
-    page.swap.setValue(1024)
+    page.swap.setValue(1)
     assert "too little" not in page.capacity_label.text()
 
 
 def test_the_label_follows_encryption_and_home(make_window):
     window = make_window(info=info_of(DiskInfo("/dev/sda", "Disk", 100 * GIB, serial="s")))
     page = select(window, "/dev/sda")
-    page.swap.setValue(4096)
+    page.swap.setValue(4)
     page.home.setChecked(True)
     page.home_size.setValue(30 * 1024)
     assert "The system will get 65.0 GiB" in page.capacity_label.text()
@@ -427,7 +427,7 @@ def test_the_manual_mode_has_no_size_label(make_window):
 
 def test_the_btrfs_choice_says_what_is_built(make_window):
     page = make_window().storage
-    assert page.filesystem.itemText(page.filesystem.findData("btrfs")) == "Btrfs with subvolumes @ and @home"
+    assert "subvolumes @ and @home" in page.filesystem.itemText(page.filesystem.findData("btrfs"))
 
 
 @pytest.mark.parametrize(

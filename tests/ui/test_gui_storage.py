@@ -73,6 +73,7 @@ def test_uefi_machines_keep_uefi_and_bios_on_uefi_is_only_a_note(make_window):
     window = make_window()
     assert window.storage.firmware.currentData() == "uefi"
     window.storage.disk_group.set_value("/dev/sda")
+    window.storage.advanced_section.set_open(True)
     window.storage.firmware.setCurrentIndex(window.storage.firmware.findData("bios"))
     window.storage._firmware_picked()
     assert window.storage.firmware_note.isVisibleTo(window.storage) and "CSM" in window.storage.firmware_note.text()

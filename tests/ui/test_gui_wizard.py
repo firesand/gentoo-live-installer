@@ -590,12 +590,19 @@ def test_the_experience_mode_survives_a_restart(make_window):
     assert "All available controls are shown" in reopened.header_subtitle.text()
 
 
-def test_guided_mode_hides_the_encryption_card_until_needed(make_window):
+def test_guided_mode_offers_one_encryption_checkbox_and_advanced_the_storage_group(make_window):
     window = make_window()
     window.mode.setCurrentIndex(window.mode.findData("guided"))
-    assert not window.storage.encryption.isVisibleTo(window.storage)
+    storage = window.storage
+    assert storage.luks.isVisibleTo(storage) and "Encrypt my disk" in storage.luks.text()
+    assert not storage.passphrase.isVisibleTo(storage) and not storage.lvm.isVisibleTo(storage)  # the passphrase shows when the box is ticked
+    storage.luks.setChecked(True)
+    assert storage.passphrase.isVisibleTo(storage)
+    storage.luks.setChecked(False)
     window.mode.setCurrentIndex(window.mode.findData("advanced"))
-    assert window.storage.encryption.isVisibleTo(window.storage)
+    assert storage.advanced_section.is_open() and storage.lvm.isVisibleTo(storage)
+    window.mode.setCurrentIndex(window.mode.findData("guided"))
+    assert not storage.lvm.isVisibleTo(storage)
 
 
 def test_blank_secrets_strips_credentials_everywhere():
