@@ -42,6 +42,7 @@ class ResolveGateTests(StageMixin, unittest.TestCase):
         self.runner.respond("lsblk --json", lvm_tree())
         installer._portage()
         looked = [command for command in self.runner.commands if command[:1] == ("lvs",)]
+        self.assertTrue(looked)   # the gate did look at the volumes
         installer._storage_stack()
         self.assertEqual([command for command in self.runner.commands if command[:1] == ("lvs",)], looked)  # asked once for the whole job
 
