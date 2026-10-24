@@ -925,7 +925,8 @@ def _network_issues(m: InstallManifest, hw: HardwareProfile) -> list[Issue]:
     wifi_only = bool(hw.nics) and all(nic.kind == "wifi" for nic in hw.nics if not nic.no_driver)
     if wifi_only and m.network.manager != "networkmanager":
         out.append(Issue("hw.net_wifi_needs_nm", "warning", "The only network adapter is Wi-Fi; only NetworkManager sets up Wi-Fi networks on the installed system."))
-    if m.network.import_live_profiles and m.hardware.target == "portable":
+    target_disks = _target_disks(m, hw)
+    if m.network.import_live_profiles and (m.hardware.target == "portable" or any(disk.external for disk in target_disks)):
         out.append(Issue("hw.import_profiles_portable", "warning", "Wi-Fi passwords from this session would be copied to a disk meant for other computers. Turn that option off."))
     if m.hardware.target == "portable" and m.network.manager == "netifrc":
         out.append(Issue("hw.net_names_hardware_specific", "warning", "Network interface names differ between PCs; NetworkManager works better for a portable install."))

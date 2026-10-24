@@ -172,6 +172,8 @@ def test_wifi_only_machines_need_networkmanager_and_portable_disks_do_not_carry_
     assert "hw.net_wifi_needs_nm" not in codes(manifest(), wifi_only)
     assert "hw.import_profiles_portable" in codes(manifest(hardware={"target": "portable"}, network={"import_live_profiles": True}), profile())
     assert "hw.import_profiles_portable" not in codes(manifest(network={"import_live_profiles": True}), profile())
+    stick = disk("/dev/sdb", bus="usb", hotplug=True)
+    assert "hw.import_profiles_portable" in codes(manifest(storage={"device": "/dev/sdb"}, network={"import_live_profiles": True}), profile(disks=(stick,)))   # a removable target
     assert "hw.net_names_hardware_specific" in codes(manifest(hardware={"target": "portable"}, network={"manager": "netifrc", "interface": "eth0"}), profile())
 
 

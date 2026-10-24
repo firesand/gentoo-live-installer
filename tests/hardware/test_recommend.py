@@ -264,3 +264,10 @@ def test_defaults_for_is_a_pure_preview():
     changes = rec.defaults_for(fixture_dict("old-bios-sata-radeon"), m)
     assert changes == {"storage.firmware": "bios", "storage.swap_mib": 2048, "options.bluetooth": False}
     assert m == InstallManifest()
+
+
+@pytest.mark.parametrize("machine", [None, {}, {"warnings": []}, "junk"])
+def test_apply_defaults_without_detection_changes_nothing(machine):
+    m = InstallManifest()
+    rec.apply_defaults(m, machine)    # type: ignore[arg-type]
+    assert m == InstallManifest()

@@ -267,6 +267,7 @@ class PeripheralInfo:
 
 @dataclass
 class ClockInfo:
+    chrony_running: bool | None = None  # chronyd answered `chronyc tracking`; None when chronyc is unavailable
     ntp_synced: bool | None = None
     offset_s: float | None = None  # |system clock - NTP time| when chrony is tracking
     rtc_mode: str = "unknown"  # utc | local | unknown
@@ -293,6 +294,8 @@ class HardwareProfile:
     peripherals: PeripheralInfo = field(default_factory=PeripheralInfo)
     clock: ClockInfo = field(default_factory=ClockInfo)
     hypervisor: HypervisorInfo = field(default_factory=HypervisorInfo)
+    # Names (not contents) of the NetworkManager connections of this session; readable by root only.
+    network_profiles: list[str] = field(default_factory=list)
     warnings: list[HardwareWarning] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
 
@@ -994,6 +997,7 @@ class _Prober:
             ("audio", self.collect_audio),
             ("usb", self.collect_usb),
             ("clock", self.collect_clock),
+            ("network_profiles", self.collect_network_profiles),
         )
         for name, step in steps:
             try:
@@ -1433,13 +1437,45 @@ class _Prober:
             if vendor in data.FINGERPRINT_USB_VENDORS and data.USB_CLASS_VENDOR_SPECIFIC in classes:
                 info.fingerprint_usb.append(f"{vendor}:{product}")
 
+    def collect_network_profiles(self) -> None:
+        directory = "/etc/NetworkManager/system-connections"
+        self.profile.network_profiles = [name[: -len(".nmconnection")] for name in self.fs.listdir(directory) if name.endswith(".nmconnection")]
+
     def collect_clock(self) -> None:
         clock = self.profile.clock
         clock.year = time.gmtime(self.now).tm_year
         synced, offset = parse_chrony_tracking(self.command(("chronyc", "-c", "tracking")))
         clock.ntp_synced, clock.offset_s = synced, offset
+        clock.chrony_running = None if synced is None else True
         rtc = parse_rtc(self.fs.line("/sys/class/rtc/rtc0/date"), self.fs.line("/sys/class/rtc/rtc0/time"))
         clock.rtc_mode, clock.rtc_delta_s = rtc_mode(rtc, self.now, synced)
+
+
+def sync_time_argv(clock: ClockInfo) -> list[str]:
+    """Command that corrects the system clock: `chronyc makestep` when chronyd runs (a second `chronyd -q` would fail), else a one-shot chronyd."""
+    if clock.chrony_running:
+        return ["chronyc", "makestep"]
+    return ["chronyd", "-q", "pool pool.ntp.org iburst"]
+
+
+def parse_set_time(text: str) -> int | None:
+    """Epoch seconds for an ISO 8601 UTC time such as '2026-10-24T12:00:00Z', None unless the year is 2020-2100."""
+    import calendar
+    match = re.fullmatch(r"(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2}):(\d{2})(?:Z|\+00:00)?", text.strip())
+    if not match:
+        return None
+    year, month, day, hour, minute, second = (int(part) for part in match.groups())
+    if not 2020 <= year <= 2100 or not (1 <= month <= 12 and 1 <= day <= 31 and hour < 24 and minute < 60 and second < 61):
+        return None
+    try:
+        return calendar.timegm((year, month, day, hour, minute, second))
+    except (ValueError, OverflowError):
+        return None
+
+
+def rtc_write_allowed(clock: ClockInfo) -> bool:
+    """Whether `hwclock --systohc` may run: only when the hardware clock is known to hold UTC (never over a Windows local-time clock)."""
+    return clock.rtc_mode == "utc"
 
 
 def parent_disk_name(name: str) -> str:

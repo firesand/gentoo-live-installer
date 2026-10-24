@@ -239,6 +239,8 @@ def defaults_for(profile: HardwareProfile | Mapping[str, Any] | None, manifest: 
     """Dotted field -> value for the fields apply_defaults() would change (pure; the manifest is not modified)."""
     hw = _profile(profile)
     changes: dict[str, Any] = {}
+    if not (hw.cpu.threads or hw.gpus or hw.disks or hw.memory.total_kib):
+        return changes  # no detection data: keep the manifest as it is
     if include_firmware and not hw.errors_for("firmware") and hw.firmware.mode in ("uefi", "bios"):
         changes["storage.firmware"] = hw.firmware.mode
     if hw.memory.total_kib and manifest.storage.swap_mib == DEFAULT_SWAP_MIB:

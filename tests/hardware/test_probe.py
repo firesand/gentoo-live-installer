@@ -333,3 +333,33 @@ def test_lsblk_output_with_a_warning_in_front_of_the_json_is_still_used():
 
     profile = hw.probe(FIXTURES / "old-bios-sata-radeon", Noisy(), now=fixture_now("old-bios-sata-radeon"))
     assert profile.errors == [] and next(disk for disk in profile.disks if disk.name == "sda").signatures == ["ntfs"]
+
+
+def test_network_profile_names_are_listed_but_never_read(tmp_path):
+    connections = tmp_path / "etc/NetworkManager/system-connections"
+    connections.mkdir(parents=True)
+    (connections / "Home Wi-Fi.nmconnection").write_text("[wifi-security]\npsk=top-secret\n")
+    (connections / "Wired connection 1.nmconnection").write_text("")
+    (connections / "notes.txt").write_text("not a profile")
+    profile = hw.probe(tmp_path, now=1.0)
+    assert sorted(profile.network_profiles) == ["Home Wi-Fi", "Wired connection 1"]
+    assert "top-secret" not in json.dumps(profile.to_dict())
+    assert hw.probe(tmp_path / "nowhere", now=1.0).network_profiles == []
+
+
+def test_clock_helpers():
+    running = hw.ClockInfo(chrony_running=True, ntp_synced=False)
+    assert hw.sync_time_argv(running) == ["chronyc", "makestep"]
+    assert hw.sync_time_argv(hw.ClockInfo()) == ["chronyd", "-q", "pool pool.ntp.org iburst"]
+    assert hw.parse_set_time("2026-10-24T12:00:00Z") == 1792843200
+    assert hw.parse_set_time("2026-10-24 12:00:00") == 1792843200 and hw.parse_set_time("2026-10-24T12:00:00+00:00") == 1792843200
+    for bad in ("2019-12-31T23:59:59Z", "2101-01-01T00:00:00Z", "yesterday", "2026-13-01T00:00:00Z", "2026-10-24T25:00:00Z", "2026-10-24T12:00:00+07:00", ""):
+        assert hw.parse_set_time(bad) is None
+    assert hw.rtc_write_allowed(hw.ClockInfo(rtc_mode="utc")) and not hw.rtc_write_allowed(hw.ClockInfo(rtc_mode="local"))
+    assert not hw.rtc_write_allowed(hw.ClockInfo(rtc_mode="unknown"))
+
+
+def test_chrony_state_in_the_profile():
+    assert probe_fixture("asus-desktop-rtx4090").clock.chrony_running is True
+    assert probe_fixture("qemu-q35-virtio").clock.chrony_running is None        # no chronyc output: unknown
+    assert probe_fixture("amd-laptop-sof").clock.chrony_running is True and probe_fixture("amd-laptop-sof").clock.ntp_synced is False
