@@ -118,7 +118,8 @@ for it, so it is compiled from source on every install, for an hour or more, and
 needs several GiB.** The first real runs (4 GiB of memory, 512 MiB of swap, two jobs) had the compiler
 killed by the kernel (and, once, a guest that thrashed until SSH gave up). Treat `--companions both`
 like a desktop install, or use `--companions portagehub` (a Rust build that a 4 GiB VM does; the probe
-`disabled-hwmonux-absent` then checks that HWMonux really is not there). `--install-mode gui` drives the real graphical installer as the live user,
+`disabled-hwmonux-absent` then checks that HWMonux really is not there).
+`--install-mode gui` drives the real graphical installer as the live user,
 `--install-mode text` the console installer (below); `--check-resume` reruns the daemon with
 `--resume`; `--cancel-then-resume` (GUI mode) cancels at stage3 and resumes. `--keep` keeps the disk
 and the firmware variables after success (failed runs always keep them).
@@ -138,7 +139,7 @@ them and even when the harness is killed with SIGKILL (the kernel sends QEMU SIG
 | `uefi-luks` | an encrypted root, unlocked over the serial console without an operator |
 | `bios` | SeaBIOS, MBR partition table, static network configuration |
 | `defaults` | the untouched wizard defaults (KDE, OpenRC, firmware, microcode, both companions); hours |
-| `bios-gpt` | SeaBIOS with a GPT disk: BIOS-boot partition and `grub-install i386-pc` |
+| `bios-gpt` | SeaBIOS with a GPT disk: BIOS-boot partition and `grub-install i386-pc`; the boot flag of the protective MBR is read |
 | `openrc-luks` | OpenRC with dracut's non-systemd passphrase prompt |
 | `uefi-fresh-nvram` | the installed disk boots with empty NVRAM, so it needs the removable fallback path |
 | `decoy-disk` | a second disk with data survives the installation byte for byte |
@@ -542,8 +543,13 @@ clean up its own QEMU. `--matrix-parallel` cannot exceed 2.
 
 Read these before trusting, or blaming, a result.
 
-* **Nothing outside the original four scenarios has run on real QEMU.** The new scenarios, the
-  hardware options, `--live-only`, the rescue flow and everything in the Wave 3 matrix are tested
+* **Little outside the original four scenarios has run on real QEMU.** The first Wave 3 matrix runs
+  (OpenRC with LUKS on NVMe, OpenRC, the install part of `rescue-gentoo`) installed a system that
+  booted and passed the basic probes. They failed on the HWMonux build (PySide ran out of memory, see
+  "Companions" above), on a check that read the daemon's plan file wrongly and on a drift of the
+  Portage world that the installer did not cause (the harness reads the plan record now, and the drift
+  is information). The new scenarios, the
+  hardware options, `--live-only`, the rescue flow and the rest of the Wave 3 matrix are tested
   as argument lists and against the fake lab. The first real runs are also where QEMU and the
   guests confirm what the harness assumes and the fake lab cannot know: that `-smbios file=`
   replaces QEMU's own enclosure record (the `dmi` probe of `laptop-smbios` checks `chassis_type`),

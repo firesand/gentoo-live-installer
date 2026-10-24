@@ -68,9 +68,8 @@ def test_a_dos_disk_needs_its_boot_or_root_partition_to_be_the_active_one():
     assert len(none) == 1 and "no partition" in none[0] and "active" in none[0]
     wrong = vm_probes.boot_flag_problems(report_for("dos-swap-active", 2))
     assert len(wrong) == 1 and "partition 1 is active" in wrong[0] and "/ is on partition 2" in wrong[0]
-    boot_wrong = vm_probes.boot_flag_problems(report_for("dos-root-active", 2, holder="/boot"))  # /boot on partition 2, flag on 2: fine
-    assert boot_wrong == []
-    assert "/boot is on partition 1" in vm_probes.boot_flag_problems(report_for("dos-root-active", 1, holder="/boot"))[0]
+    assert vm_probes.boot_flag_problems(report_for("dos-root-active", 2, holder="/boot")) == []  # /boot on partition 2, the flag on 2: fine
+    assert "/boot is on partition 1" in vm_probes.boot_flag_problems(report_for("dos-root-active", 1, holder="/boot"))[0]  # /boot on 1, the flag on 2
 
 
 def test_two_active_partitions_and_a_status_byte_the_firmware_would_refuse_are_problems():

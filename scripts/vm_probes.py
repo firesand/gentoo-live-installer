@@ -419,8 +419,8 @@ def summarize_world(output: str) -> dict[str, list[str]]:
     return groups
 
 
-DRIFT_NOTE = ("information only: the tree the installer synced is newer than the stage3, so Portage wants newer versions and "
-              "changed USE defaults; the installer did not cause it")
+DRIFT_NOTE = ("information only: right after an install this usually comes from a tree that is newer than the stage3 (new versions, "
+              "changed USE defaults), not from the installer")
 DRIFT_LISTED = 40  # packages named per group in the text of the probe (the data has all of them)
 
 
