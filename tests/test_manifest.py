@@ -308,6 +308,7 @@ def test_uki_requires_uefi():
 @pytest.mark.parametrize(("field", "value", "valid"), [
     ("keymap", "us", True), ("keymap", "de-latin1-nodeadkeys", True), ("keymap", "pt-latin9", True),
     ("keymap", 'us"; reboot', False), ("keymap", "-us", False), ("keymap", "x" * 41, False),
+    ("keymap", "", True), ("keymap", "auto", True),
     ("locale", "en_US.UTF-8", True), ("locale", "de_DE@euro", True), ("locale", "C.UTF-8", True),
     ("locale", "de_DE.UTF-8@euro", True), ("locale", "sr_RS@latin", True), ("locale", "zh_CN.GB18030", True),
     ("locale", "en_US.UTF-8; rm", False), ("locale", "english", False),
@@ -418,8 +419,8 @@ def test_wifi_only_with_networkmanager_and_sane_values():
                            ("Home", "x" * 64), ("", "correct horse")):
         manifest.network.wifi_ssid, manifest.network.wifi_password = ssid, password
         assert manifest.validate_sections()["network"], (ssid, password)
-    manifest.network.wifi_ssid, manifest.network.wifi_password = "Café", "a" * 64
-    assert not [e for e in manifest.validate_sections()["network"] if "Wi-Fi" in e and "password" in e] or True
+    manifest.network.wifi_ssid, manifest.network.wifi_password = "Café", "g" * 64  # a non-ASCII name is fine, 64 characters must be hex
+    assert manifest.validate_sections()["network"] == ["The Wi-Fi password must be 8 to 63 printable ASCII characters or 64 hexadecimal digits"]
     manifest.network.wifi_ssid, manifest.network.wifi_password = "Open cafe", ""
     assert manifest.validate_sections()["network"] == []
     manifest.network.wifi_ssid, manifest.network.wifi_password = "Home", "0123456789abcdef" * 4
@@ -440,3 +441,18 @@ def test_static_dhcpcd_needs_an_interface_and_live_profile_import_needs_networkm
     assert manifest.validate_sections()["network"] == []
     manifest.network.interface = "bad name"
     assert any("interface name" in error for error in manifest.validate_sections()["network"])
+
+
+def test_proxy_credentials_are_redacted_in_saved_manifests():
+    manifest = valid_manifest()
+    manifest.network.proxy = "http://user:s3cr3t@proxy.example:3128"
+    data = manifest.to_dict(redact=True)
+    assert data["network"]["proxy"] == "http://user:<redacted>@proxy.example:3128"
+    assert "s3cr3t" not in manifest.to_json(redact=True)
+    assert manifest.to_dict()["network"]["proxy"] == "http://user:s3cr3t@proxy.example:3128"
+    manifest.network.proxy = "http://proxy.example:3128"
+    assert manifest.to_dict(redact=True)["network"]["proxy"] == "http://proxy.example:3128"
+    # a redacted proxy must be completed before it can be used for an installation
+    redacted = InstallManifest.from_dict(valid_manifest().to_dict())
+    redacted.network.proxy = "http://user:<redacted>@proxy.example:3128"
+    assert "Replace the redacted proxy password before installing" in redacted.validate_sections()["network"]

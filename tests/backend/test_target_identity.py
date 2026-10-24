@@ -9,6 +9,7 @@ from unittest.mock import patch
 from gentoo_installer import keymaps
 from gentoo_installerd.configure import (
     ConfigurationError,
+    locale_gen_line,
     render_dconf_keyboard,
     render_kxkbrc,
     render_nm_wifi,
@@ -133,6 +134,22 @@ class IdentityTests(unittest.TestCase):
         self.assertEqual(read(root, "etc/locale.conf"), "LANG=de_DE.UTF-8\n")
         root, _, _ = self.configure(target_manifest(system={"locale": "C.UTF-8"}))
         self.assertEqual(read(root, "etc/locale.gen"), "")
+
+    def test_locale_gen_uses_the_charmap_glibc_lists_for_the_name(self) -> None:
+        supported = "en_US.UTF-8 UTF-8\nde_DE@euro ISO-8859-15\nsr_RS@latin UTF-8\n"
+        self.assertEqual(locale_gen_line("de_DE@euro", supported), "de_DE@euro ISO-8859-15")
+        self.assertEqual(locale_gen_line("sr_RS@latin", supported), "sr_RS@latin UTF-8")
+        self.assertEqual(locale_gen_line("en_US.UTF-8", supported), "en_US.UTF-8 UTF-8")
+        self.assertEqual(locale_gen_line("zh_CN.GB18030"), "zh_CN.GB18030 GB18030")
+        self.assertEqual(locale_gen_line("de_DE@euro"), "de_DE@euro UTF-8")  # not listed: the old behaviour
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "usr/share/i18n").mkdir(parents=True)
+            (root / "usr/share/i18n/SUPPORTED").write_text(supported)
+            (root / "usr/share/zoneinfo").mkdir(parents=True)
+            (root / "usr/share/zoneinfo/UTC").write_text("tz")
+            configurer(root).configure_identity(target_manifest(system={"locale": "de_DE@euro"}))
+            self.assertEqual(read(root, "etc/locale.gen"), "de_DE@euro ISO-8859-15\nen_US.UTF-8 UTF-8\n")
 
     def test_empty_console_keymap_is_derived_from_the_keyboard_layout(self) -> None:
         root, _, _ = self.configure(keyboard(keymap=""))

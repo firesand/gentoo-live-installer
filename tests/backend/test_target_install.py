@@ -288,6 +288,15 @@ class BootloaderAndValidationTests(StageHarness):
         self.assertEqual((kept / "install.log").stat().st_mode & 0o777, 0o600)
         self.assertNotIn("user-password", (kept / "manifest.json").read_text())
 
+    def test_the_kept_manifest_never_holds_the_proxy_password(self) -> None:
+        installer = self.prepare(target_manifest(network={"proxy": "http://user:hunter2-secret@proxy.example:3128"}))
+        self.finish_install(installer)
+        installer._validate()
+        kept = (self.target / "var/log/gentoo-installer/manifest.json").read_text()
+        self.assertNotIn("hunter2-secret", kept)
+        self.assertIn("http://user:<redacted>@proxy.example:3128", kept)
+        self.assertNotIn("hunter2-secret", (self.target / "var/log/gentoo-installer/install.log").read_text())
+
     def test_validation_does_not_touch_resolv_conf_when_it_fails(self) -> None:
         m = target_manifest(system={"init": "systemd", "stage_variant": "amd64-systemd", "desktop": "minimal"}, network={"manager": "systemd-networkd"})
         installer = self.prepare(m)

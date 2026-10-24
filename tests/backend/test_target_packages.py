@@ -398,7 +398,7 @@ class StageInstallTests(unittest.TestCase):
 
     def test_desktop_retries_what_is_still_missing_and_then_succeeds(self) -> None:
         m = target_manifest(system={"desktop": "xfce"}, options={"bluetooth": False, "pipewire": False, "printing": False})
-        self.runner.script("chroot", ("fail", " * The following 1 packages failed to build:\n * 1) x11-misc/lightdm-1.32::gentoo (/log)\n"))
+        self.runner.script("chroot", ("fail", "!!! Fetch failed for lightdm-1.32.tar.xz, continuing..."))
         mark_installed(self.root, "xfce-base/xfce4-meta", "x11-base/xorg-server")
         result = self.c.install_desktop(m)
         required = [e for e in self.emerges() if "xfce4-meta" in e or "lightdm" in e]
@@ -409,15 +409,39 @@ class StageInstallTests(unittest.TestCase):
         self.assertEqual(result.degraded, [])
         self.assertTrue(any("retrying (2/3)" in note for note in self.notes))
 
-    def test_desktop_gives_up_after_three_attempts_with_a_bootable_system(self) -> None:
+    def test_desktop_gives_up_after_three_downloads_fail(self) -> None:
         m = target_manifest(system={"desktop": "gnome"})
         for _ in range(3):
-            self.runner.script("chroot", ("fail", " * 1) gnome-base/gdm-48::gentoo (/log)"))
+            self.runner.script("chroot", ("fail", "!!! Fetch failed for gdm-48.tar.xz, continuing..."))
         with self.assertRaises(PackageInstallError) as context:
             self.c.install_desktop(m)
-        self.assertIn("gnome-base/gdm", str(context.exception))
+        self.assertIn("download failed for gdm-48.tar.xz", str(context.exception))
         self.assertIn("gnome-base/gnome", context.exception.failed)
         self.assertEqual(sum("--keep-going" in e for e in self.emerges()), 3)
+
+    def test_a_package_that_fails_to_build_is_not_built_again(self) -> None:
+        # a deterministic compile error would be repeated after hours; the user gets the reason at once
+        m = target_manifest(system={"desktop": "gnome"})
+        self.runner.script("chroot", ("fail", " * The following 1 packages failed to build:\n * 1) gnome-base/gdm-48::gentoo (/log)\n"))
+        with self.assertRaisesRegex(PackageInstallError, "failed to build: gnome-base/gdm-48"):
+            self.c.install_desktop(m)
+        self.assertEqual(sum("--keep-going" in e for e in self.emerges()), 1)
+
+    def test_a_build_that_runs_out_of_memory_is_retried_with_one_compile_job(self) -> None:
+        m = target_manifest(system={"desktop": "xfce"}, options={"bluetooth": False, "pipewire": False, "printing": False})
+        self.runner.script("chroot", ("fail", "c++: fatal error: Killed signal terminated program cc1plus\n * 1) xfce-base/xfce4-meta-4.20::gentoo (/log)"))
+        mark_installed(self.root, "x11-base/xorg-server")
+        self.c.install_desktop(m)
+        first, second = [i for i, e in enumerate(self.emerges()) if "--keep-going" in e][:2]
+        envs = [env or {} for env, command in zip(self.runner.envs, self.runner.commands) if "emerge" in command]
+        self.assertNotIn("MAKEOPTS", envs[first])
+        self.assertEqual(envs[second]["MAKEOPTS"], "-j1")
+        self.assertTrue(any("single compile job" in note for note in self.notes))
+
+    def test_unrecognised_failures_are_retried(self) -> None:
+        self.runner.script("chroot", ("fail", "something strange happened"))
+        self.c.install_desktop(target_manifest(system={"desktop": "gnome"}, options={"bluetooth": False, "pipewire": False, "printing": False}))
+        self.assertEqual(sum("--keep-going" in e for e in self.emerges()), 3)  # the failed attempt, its retry, and the optional packages
 
     def test_desktop_does_not_retry_an_unresolvable_set(self) -> None:
         self.runner.script("chroot", ("fail", EmergeDiagnosisTests.USE_CHANGES))
@@ -434,20 +458,27 @@ class StageInstallTests(unittest.TestCase):
         self.assertEqual(result.degraded, [])
         self.assertTrue(any("everything requested is installed" in note for note in self.notes))
 
-    def test_optional_packages_degrade_one_by_one(self) -> None:
+    def test_optional_packages_that_cannot_be_built_degrade_with_the_reason(self) -> None:
         m = target_manifest(system={"desktop": "minimal"}, options={"pipewire": True, "bluetooth": True, "printing": False,
                                                                        "extra_packages": ["app-misc/typo", "app-editors/vim"]})
         mark_installed(self.root, "net-wireless/bluez")  # bluez installs, pipewire does not
-        self.runner.script("chroot", ("fail", "!!! Fetch failed for pipewire.tar.xz"), ("fail", "!!! Fetch failed for pipewire.tar.xz"),
-                           ("fail", "!!! Fetch failed for pipewire.tar.xz"))
-        self.runner.script("chroot", )
+        self.runner.script("chroot", ("fail", "!!! Fetch failed for pipewire.tar.xz"), ("fail", "!!! Fetch failed for pipewire.tar.xz"))
         result = self.c.install_desktop(m)
-        self.assertIn("media-video/pipewire", result.failed)
-        self.assertNotIn("net-wireless/bluez", result.failed)
-        self.assertTrue(any("media-video/pipewire could not be installed" in item for item in result.degraded))
-        # the user's packages are separate emerges, so a typo cannot take the others down
+        self.assertEqual(result.failed, ["media-video/pipewire"])
+        self.assertEqual(len(result.degraded), 1)
+        self.assertIn("media-video/pipewire could not be installed: download failed for pipewire.tar.xz", result.degraded[0])
+        # the packages the user typed are separate emerges, so a typo cannot take the others down
         self.assertTrue(any(e.endswith("app-misc/typo") for e in self.emerges()))
         self.assertTrue(any(e.endswith("app-editors/vim") for e in self.emerges()))
+
+    def test_an_unresolvable_optional_group_is_tried_package_by_package(self) -> None:
+        m = target_manifest(system={"desktop": "minimal"}, options={"pipewire": True, "bluetooth": True, "printing": False})
+        self.runner.script("chroot", ("fail", 'emerge: there are no ebuilds to satisfy "net-wireless/bluez".'))
+        mark_installed(self.root, "media-video/pipewire")
+        result = self.c.install_desktop(m)
+        singles = [e for e in self.emerges() if e.endswith("media-video/pipewire") or e.endswith("net-wireless/bluez")]
+        self.assertEqual(len(singles), 2)  # the group emerge that resolved nothing, then bluez on its own
+        self.assertEqual(result.degraded, [])
 
     def test_world_update_is_best_effort(self) -> None:
         m = target_manifest(system={"desktop": "minimal", "world_update": True}, options={"pipewire": False, "bluetooth": False, "printing": False})

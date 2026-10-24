@@ -243,6 +243,16 @@ def render_fstab(layout: Sequence[LayoutEntry], uuids: Mapping[str, str]) -> str
     return "\n".join(lines) + "\n"
 
 
+def locale_gen_line(locale: str, supported: str = "") -> str:
+    """A line for /etc/locale.gen: the name and the charmap glibc generates it with."""
+    for line in supported.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[0] == locale:
+            return f"{locale} {fields[1]}"
+    codeset = re.search(r"\.([A-Za-z0-9-]+)", locale)
+    return f"{locale} {codeset.group(1) if codeset else 'UTF-8'}"
+
+
 def render_hosts(hostname: str) -> str:
     return f"127.0.0.1\tlocalhost\n::1\tlocalhost\n127.0.1.1\t{hostname}.localdomain {hostname}\n"
 
@@ -560,6 +570,19 @@ def live_input_problems(manifest: InstallManifest, *, root: str | Path = "/", ru
 class EmergeDiagnosis:
     resolution: bool  # the package set cannot be resolved; retrying cannot help
     summary: str  # short explanation for the user, empty when nothing recognisable was found
+    build_failure: bool = False  # a package failed to compile or install
+    transient: bool = False  # a download or network problem; a retry may well work
+    out_of_memory: bool = False  # a build was killed for lack of memory; fewer parallel jobs may help
+
+    @property
+    def kind(self) -> str:
+        if self.resolution:
+            return "resolution"
+        if self.out_of_memory:
+            return "memory"
+        if self.transient:
+            return "transient"
+        return "build" if self.build_failure else "unknown"
 
 
 _RESOLUTION_MARKERS = (
@@ -568,6 +591,15 @@ _RESOLUTION_MARKERS = (
     "Multiple package instances within a single package slot", "cannot be installed at the same time",
     "has unmet requirements", "Dependency problem", "circular dependencies", "Circular dependencies",
 )
+
+
+_TRANSIENT_PATTERN = re.compile(
+    r"Fetch failed for|Temporary failure in name resolution|Could not resolve host|Name or service not known|"
+    r"Connection (?:timed out|reset|refused)|Network is unreachable|Operation timed out|Couldn't connect|"
+    r"Failed to connect|SSL connection|HTTP(?: error)? 5\d\d|503 Service|502 Bad Gateway", re.IGNORECASE)
+_MEMORY_PATTERN = re.compile(
+    r"signal terminated program|Killed\b|virtual memory exhausted|Cannot allocate memory|std::bad_alloc|"
+    r"out of memory|memory exhausted|oom-kill", re.IGNORECASE)
 
 
 def explain_emerge_failure(output: str) -> EmergeDiagnosis:
@@ -626,7 +658,11 @@ def explain_emerge_failure(output: str) -> EmergeDiagnosis:
     if not summary:
         tail = [line.strip() for line in lines if line.strip()][-3:]
         summary = " | ".join(tail)[:400]
-    return EmergeDiagnosis(resolution, summary)
+    build_failure = bool(failed) or bool(re.search(r"\* ERROR: \S+ failed \(", output))
+    memory = build_failure and bool(_MEMORY_PATTERN.search(output))
+    if memory:
+        summary += " (the build ran out of memory)"
+    return EmergeDiagnosis(resolution, summary, build_failure, bool(fetch) or bool(_TRANSIENT_PATTERN.search(output)), memory)
 
 
 # --- package sets ---------------------------------------------------------------------------------
@@ -642,6 +678,13 @@ class DesktopAtoms:
     def everything(self) -> list[str]:
         merged = [*self.required, *self.optional, *(atom for _, atoms in self.groups for atom in atoms), *self.extras]
         return list(dict.fromkeys(merged))
+
+
+@dataclass
+class KeepGoingResult:
+    missing: list[str] = field(default_factory=list)  # requested packages that are still not installed
+    reason: str = ""
+    kind: str = ""  # "" (all installed) | EmergeDiagnosis.kind of the last failure
 
 
 @dataclass
@@ -934,7 +977,9 @@ class Configurer:
         self.write("etc/conf.d/hostname", f'hostname="{accounts.hostname}"\n')
         self.write("etc/hosts", render_hosts(accounts.hostname))
         locales = [system.locale] if system.locale in {"C", "C.UTF-8", "POSIX"} else [system.locale, "en_US.UTF-8"]
-        self.write("etc/locale.gen", "".join(f"{name} UTF-8\n" for name in dict.fromkeys(locales) if name not in {"C", "C.UTF-8", "POSIX"}))
+        supported = "" if self.dry_run else self.read_text("usr/share/i18n/SUPPORTED")
+        self.write("etc/locale.gen", "".join(locale_gen_line(name, supported) + "\n" for name in dict.fromkeys(locales)
+                                            if name not in {"C", "C.UTF-8", "POSIX"}))
         self.write("etc/env.d/02locale", f"LANG={shell_value(system.locale)}\n")
         # systemd, its user manager and localed read /etc/locale.conf, not env.d.
         self.write("etc/locale.conf", f"LANG={system.locale}\n")
@@ -1243,8 +1288,10 @@ class Configurer:
 
     # ----- installing packages --------------------------------------------------------------------
 
-    def emerge(self, manifest: InstallManifest, arguments: Sequence[str]) -> CommandResult:
-        return self.chroot(("emerge", *arguments), env=self.emerge_environment(manifest))
+    def emerge(self, manifest: InstallManifest, arguments: Sequence[str], *, environment: Mapping[str, str] | None = None) -> CommandResult:
+        env = self.emerge_environment(manifest)
+        env.update(environment or {})
+        return self.chroot(("emerge", *arguments), env=env)
 
     def is_installed(self, atom: str) -> bool:
         if self.dry_run:
@@ -1261,7 +1308,7 @@ class Configurer:
             # Same sources as the real install (binary packages included): the gate must predict
             # whether the installation would fail, not be stricter than it. scripts/lint-plan.py is
             # the strict, source-only check that runs in development.
-            self.emerge(manifest, ("--pretend", "--noreplace", "--quiet", "--verbose=n", *atoms))
+            self.emerge(manifest, ("--pretend", "--noreplace", "--verbose=n", *atoms))
         except RunnerError as exc:
             diagnosis = explain_emerge_failure(exc.output)
             if diagnosis.resolution:
@@ -1286,29 +1333,38 @@ class Configurer:
             raise PackageInstallError(f"The base system packages could not be installed: {diagnosis.summary}",
                                       resolution=diagnosis.resolution) from exc
 
-    def emerge_keep_going(self, manifest: InstallManifest, atoms: Sequence[str], *, label: str, attempts: int = 3) -> tuple[list[str], str]:
-        """Emerge atoms with --keep-going, retrying what is still missing; returns (missing atoms, reason)."""
+    def emerge_keep_going(self, manifest: InstallManifest, atoms: Sequence[str], *, label: str, attempts: int = 3) -> KeepGoingResult:
+        """Emerge atoms with --keep-going and retry what is still missing when a retry can help.
+
+        Downloads that failed are retried; a build killed for lack of memory is retried with one
+        compile job; a package that fails to build, or a set that cannot be resolved, is not (the
+        same build would fail again, possibly after hours).
+        """
         remaining = list(dict.fromkeys(atoms))
-        reason = ""
+        result = KeepGoingResult(remaining, "", "unknown")
+        environment: dict[str, str] = {}
         for attempt in range(1, attempts + 1):
             if not remaining:
                 break
             try:
-                self.emerge(manifest, ("--noreplace", "--keep-going", *remaining))
-                return [], ""
+                self.emerge(manifest, ("--noreplace", "--keep-going", *remaining), environment=environment)
+                return KeepGoingResult()
             except RunnerError as exc:
                 diagnosis = explain_emerge_failure(exc.output)
-                reason = diagnosis.summary
                 remaining = [atom for atom in remaining if not self.is_installed(atom)]
                 if not remaining:
-                    self.notify(f"warning: {label}: some dependencies failed ({reason[:200]}) but everything requested is installed")
-                    return [], ""
-                if diagnosis.resolution:
-                    return remaining, reason
-                if attempt < attempts:
-                    self.notify(f"{label}: {len(remaining)} package(s) failed ({reason[:160]}); retrying ({attempt + 1}/{attempts})")
-                    self.sleep(5.0 * attempt)
-        return remaining, reason
+                    self.notify(f"warning: {label}: some dependencies failed ({diagnosis.summary[:200]}) but everything requested is installed")
+                    return KeepGoingResult()
+                result = KeepGoingResult(remaining, diagnosis.summary, diagnosis.kind)
+                if diagnosis.kind in {"resolution", "build"} or attempt == attempts:
+                    return result
+                if diagnosis.kind == "memory":
+                    environment = {"MAKEOPTS": "-j1"}
+                    self.notify(f"{label}: a build ran out of memory; retrying with a single compile job ({attempt + 1}/{attempts})")
+                else:
+                    self.notify(f"{label}: {len(remaining)} package(s) failed ({diagnosis.summary[:160]}); retrying ({attempt + 1}/{attempts})")
+                self.sleep(5.0 * attempt)
+        return result
 
     def world_drift(self, manifest: InstallManifest) -> list[str]:
         """Installed packages that a USE change would rebuild; a drift between make.conf and the system.
@@ -1350,28 +1406,29 @@ class Configurer:
             except RunnerError as exc:
                 result.degraded.append("The @world update did not finish: " + explain_emerge_failure(exc.output).summary[:200])
         if atoms.required:
-            missing, reason = self.emerge_keep_going(manifest, atoms.required, label="Desktop")
-            if missing:
-                raise PackageInstallError("The desktop environment could not be installed completely (" + ", ".join(missing) + "): " + reason,
-                                          failed=missing, resolution=False)
-        optional = list(atoms.optional)
-        if optional:
-            missing, reason = self.emerge_keep_going(manifest, optional, label="Optional packages", attempts=2)
-            for atom in missing:  # one broken package must not take the others down
-                single, why = self.emerge_keep_going(manifest, [atom], label=atom, attempts=1)
-                if single:
+            outcome = self.emerge_keep_going(manifest, atoms.required, label="Desktop")
+            if outcome.missing:
+                raise PackageInstallError("The desktop environment could not be installed completely (" + ", ".join(outcome.missing) + "): " + outcome.reason,
+                                          failed=outcome.missing, resolution=outcome.kind == "resolution")
+        if atoms.optional:
+            outcome = self.emerge_keep_going(manifest, list(atoms.optional), label="Optional packages", attempts=2)
+            # An unresolvable group installed nothing: try its packages one by one so a bad one cannot take
+            # the others down. After build or download failures the missing ones are the broken ones.
+            for atom in outcome.missing:
+                single = self.emerge_keep_going(manifest, [atom], label=atom, attempts=1) if outcome.kind == "resolution" else outcome
+                if single.missing:
                     result.failed.append(atom)
-                    result.degraded.append(f"{atom} could not be installed: {why or reason}"[:300])
+                    result.degraded.append(f"{atom} could not be installed: {single.reason or outcome.reason}"[:300])
         for label, group in atoms.groups:
-            missing, reason = self.emerge_keep_going(manifest, group, label=label, attempts=2)
-            for atom in missing:
+            outcome = self.emerge_keep_going(manifest, group, label=label, attempts=2)
+            for atom in outcome.missing:
                 result.failed.append(atom)
-                result.degraded.append(f"{atom} ({label}) could not be installed: {reason}"[:300])
+                result.degraded.append(f"{atom} ({label}) could not be installed: {outcome.reason}"[:300])
         for atom in atoms.extras:
-            missing, reason = self.emerge_keep_going(manifest, [atom], label=atom, attempts=1)
-            if missing:
+            outcome = self.emerge_keep_going(manifest, [atom], label=atom, attempts=1)
+            if outcome.missing:
                 result.failed.append(atom)
-                result.degraded.append(f"{atom} could not be installed: {reason}"[:300])
+                result.degraded.append(f"{atom} could not be installed: {outcome.reason}"[:300])
         return result
 
     # ----- services ---------------------------------------------------------------------------------

@@ -61,6 +61,12 @@ def _known_timezones() -> frozenset[str]:
         return frozenset()
 
 
+def _redact_url_password(url: str) -> str:
+    """http://user:secret@host:3128 -> http://user:<redacted>@host:3128 (anything else unchanged)."""
+    match = re.fullmatch(r"([A-Za-z][A-Za-z0-9+.-]*://[^/@:]*):([^/@]*)@(.*)", url)
+    return f"{match.group(1)}:<redacted>@{match.group(3)}" if match and match.group(2) != "<redacted>" else url
+
+
 def _wifi_errors(ssid: str, password: str) -> list[str]:
     errors: list[str] = []
     if ssid:
@@ -83,6 +89,8 @@ def _proxy_errors(proxy: str) -> list[str]:
         port = parts.port
     except ValueError:
         return ["The proxy address is not a valid URL"]
+    if "<redacted>" in proxy:
+        return ["Replace the redacted proxy password before installing"]
     if has_control_characters(proxy) or " " in proxy or parts.scheme not in PROXY_SCHEMES or not parts.hostname \
             or parts.path not in {"", "/"} or parts.query or parts.fragment or (port is not None and port == 0):
         return ["The proxy must look like http://host:port (http or https; SOCKS proxies are not supported)"]
@@ -314,6 +322,8 @@ class InstallManifest:
         def scrub(value: Any, key: str = "") -> Any:
             if redact and key in SECRET_KEYS and value:
                 return "<redacted>"
+            if redact and key == "proxy" and isinstance(value, str):
+                return _redact_url_password(value)
             if is_dataclass(value):
                 return {f.name: scrub(getattr(value, f.name), f.name) for f in fields(value)}
             if isinstance(value, dict):
@@ -536,7 +546,7 @@ class InstallManifest:
             errors.append(f"Unknown timezone: {system.timezone}")
         if not LOCALE_RE.fullmatch(system.locale):
             errors.append("Invalid locale")
-        if not KEYMAP_RE.fullmatch(system.keymap):
+        if system.keymap not in {"", "auto"} and not KEYMAP_RE.fullmatch(system.keymap):
             errors.append("Invalid console keymap")
         if not re.fullmatch(r"[a-z][a-z0-9_-]{0,15}(?:,[a-z][a-z0-9_-]{0,15}){0,3}", system.keyboard_layout):
             errors.append("Invalid keyboard layout")
