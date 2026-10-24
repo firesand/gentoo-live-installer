@@ -404,6 +404,8 @@ class Installer:
 
     def _overall_progress(self, stage: str, local: float | None) -> float:
         """Overall percentage after ``stage`` reached ``local`` percent; never goes backwards."""
+        if stage == "cleanup" and self._outcome not in ("", "completed"):
+            return self._overall  # releasing mounts after a failure or a cancel is not progress
         weight = self.stage_weights.get(stage)
         if weight is not None and local is not None:
             self._overall = max(self._overall, round(self._offsets[stage] + weight * local / 100.0, 2))

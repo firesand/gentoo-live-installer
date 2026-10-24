@@ -106,7 +106,8 @@ _EXTRA_SECRET_KEYS = {"passphrase", "secret", "token", "psk"}
 _KEY_ALTERNATIVES = "|".join(re.escape(key) for key in sorted(SECRET_KEYS | _EXTRA_SECRET_KEYS, key=len, reverse=True))
 # scheme://user:password@host (any scheme; a raw "@" inside the password is
 # swallowed because the match runs to the last "@" before the first "/").
-_URL_CREDENTIALS = re.compile(r"(?i)([a-z][a-z0-9+.-]*://)[^\s/'\"@:]+:[^\s/'\"]*@")
+# The repetition bounds keep a pathological line (thousands of "x://u:" without a space) linear.
+_URL_CREDENTIALS = re.compile(r"(?i)([a-z][a-z0-9+.-]{0,15}://)[^\s/'\"@:]{1,128}:[^\s/'\"]{0,512}@")
 _JSON_SECRET = re.compile(rf'(?i)("(?:{_KEY_ALTERNATIVES})"\s*:\s*")(?:[^"\\]|\\.)*("?)')
 _FLAG_SECRET = re.compile(rf"(?i)(--?(?:{_KEY_ALTERNATIVES})(?:=|\s+))\S+")
 _ASSIGN_SECRET = re.compile(rf"(?i)(\b(?:{_KEY_ALTERNATIVES})\b\s*[:=]\s*)(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)")

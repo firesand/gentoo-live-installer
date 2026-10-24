@@ -360,6 +360,18 @@ class StreamingTests(DaemonCase):
         snapshot = self.manager.snapshot()
         self.assertEqual((snapshot["status"], snapshot["error"], snapshot["error_stage"], snapshot["retryable"]), ("failed", "boom", "kernel", True))
 
+    def test_a_failed_job_never_reports_100_percent(self) -> None:
+        def script(installer):
+            installer.stage("stage3", 10.0)
+            installer.emit(Event("error", job_id=installer.job_id, stage="stage3", message="download failed", error="download failed", data={"code": "install.failed"}))
+            installer.stage("cleanup", 10.0, "completed")
+            return finishing(installer, False)
+
+        self.use_installer(scripted(script))
+        self.call(self.start_request())
+        self.assertTrue(wait_for(lambda: self.manager.status == "failed"))
+        self.assertEqual(self.manager.snapshot()["progress"], 10.0)
+
     def test_without_an_error_event_a_failure_gets_the_generic_text(self) -> None:
         self.use_installer(scripted(lambda installer: False))
         self.call(self.start_request())

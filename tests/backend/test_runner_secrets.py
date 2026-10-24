@@ -84,6 +84,15 @@ class RedactionGapTests(unittest.TestCase):
         self.assertNotIn("ss@", clean)
         self.assertIn("proxy.lan:3128/path", clean)
 
+    def test_a_pathological_line_is_scrubbed_in_linear_time(self) -> None:
+        import time
+
+        line = "ab://u:" * 9000  # 63 KB without whitespace
+        started = time.monotonic()
+        redact_text(line)
+        redact_text("password=" + "x" * 60000)
+        self.assertLess(time.monotonic() - started, 2.0)
+
     def test_plain_user_at_host_is_left_alone(self) -> None:
         self.assertEqual(redact_text("scp root@example.org:/x"), "scp root@example.org:/x")
         self.assertEqual(redact_text("rsync://git@example.org/repo"), "rsync://git@example.org/repo")

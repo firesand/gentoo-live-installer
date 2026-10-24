@@ -1082,16 +1082,15 @@ class ShutdownController:
         self.grace = grace
         self.requested = threading.Event()
         self.finished = threading.Event()
-        self._thread: threading.Thread | None = None
-        self._lock = threading.Lock()
+        # Claimed with a single non-blocking acquire: atomic even when a second signal interrupts
+        # the first handler on the same thread (a lock held by the interrupted code would deadlock).
+        self._claim = threading.Lock()
 
     def request(self, reason: str = "requested") -> None:
         self.requested.set()
-        with self._lock:
-            if self._thread is not None:
-                return
-            self._thread = threading.Thread(target=self._run, args=(reason,), name="gentoo-shutdown", daemon=True)
-            self._thread.start()
+        if not self._claim.acquire(blocking=False):
+            return  # a shutdown is already under way
+        threading.Thread(target=self._run, args=(reason,), name="gentoo-shutdown", daemon=True).start()
 
     def _run(self, reason: str) -> None:
         LOG.info("Shutting down (%s)", reason)
@@ -1200,19 +1199,18 @@ def serve(
     restore_signals: Callable[[], None] = lambda: None
     manager = InstallManager(Path(target_root), Path(state_dir), Path(cache_dir))
     try:
+        active = registry if registry is not None else REGISTRY
+        active.install_manager = manager
+        active.options = options
+        leftovers = find_leftovers(manager.target_root)
+        if leftovers:
+            LOG.warning("Found what an earlier installation left behind: %s", "; ".join(leftovers))
+        plugins = load_plugins(active, rescue=rescue)
         path.unlink(missing_ok=True)  # a stale socket; the lock proves no other daemon is using it
         with UnixServer(str(path), manager) as server:
             bound = True
-            if registry is not None:
-                server.registry = registry
-            active = getattr(server, "registry", None) or REGISTRY
-            active.install_manager = manager
-            active.options = options
-            leftovers = find_leftovers(manager.target_root)
-            if leftovers:
-                LOG.warning("Found what an earlier installation left behind: %s", "; ".join(leftovers))
-            plugins = load_plugins(active, rescue=rescue)
-            secure_socket(path, group_id)
+            secure_socket(path, group_id)  # right away: until now only root could connect
+            server.registry = active
             controller = ShutdownController(server, manager, active)
             if install_signals:
                 restore_signals = install_signal_handlers(controller)

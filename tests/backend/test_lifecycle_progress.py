@@ -56,6 +56,42 @@ class ProgressTests(unittest.TestCase):
         self.assertEqual(cleanup[-1].progress, 100.0)
         self.assertTrue(all(event.progress >= validation_done.progress for event in cleanup))
 
+    def test_cleaning_up_after_a_failure_does_not_move_the_bar(self) -> None:
+        installer, events, temporary = dry_run()
+        with temporary:
+            installer._stage3 = lambda: (_ for _ in ()).throw(InstallError("download failed"))  # type: ignore[method-assign]
+            self.assertFalse(installer.run())
+        failure_point = next(event.progress for event in events if event.type == "stage" and event.stage == "stage3" and event.data["status"] == "running")
+        self.assertEqual(failure_point, 10.0)
+        cleanup = [event for event in events if event.stage == "cleanup" and event.type == "stage"]
+        self.assertEqual(len(cleanup), 2)
+        self.assertEqual([event.progress for event in cleanup], [failure_point, failure_point])
+        self.assertEqual([event.data["stage_progress"] for event in cleanup], [0.0, 100.0])
+        self.assertTrue(all(event.progress <= failure_point for event in events if event.progress is not None))
+        completed = next(event for event in events if event.type == "completed")
+        self.assertIsNone(completed.progress)
+        self.assertIs(completed.data["success"], False)
+
+    def test_cleaning_up_after_a_cancel_does_not_move_the_bar_either(self) -> None:
+        import threading
+
+        cancel = threading.Event()
+        installer, events, temporary = dry_run(cancel=cancel)
+        with temporary:
+            installer._kernel = lambda: cancel.set() or installer._check_cancel()  # type: ignore[method-assign]
+            self.assertFalse(installer.run())
+        at_cancel = max(event.progress for event in events if event.progress is not None and event.stage != "cleanup")
+        self.assertEqual([event.progress for event in events if event.stage == "cleanup" and event.type == "stage"], [at_cancel, at_cancel])
+        self.assertIsNone(next(event for event in events if event.type == "completed").progress)
+
+    def test_a_cleanup_that_fails_after_every_stage_succeeded_does_not_reach_100(self) -> None:
+        installer, events, temporary = dry_run()
+        with temporary:
+            installer.storage.cleanup = lambda: (_ for _ in ()).throw(RuntimeError("umount: target is busy"))  # type: ignore[method-assign]
+            self.assertFalse(installer.run())
+        self.assertLess(max(event.progress for event in events if event.progress is not None), 100.0)
+        self.assertIsNone(next(event for event in events if event.type == "completed").progress)
+
     def test_stage_and_progress_events_carry_the_overall_value_and_the_local_one(self) -> None:
         installer, events, temporary = dry_run()
         with temporary:
