@@ -24,17 +24,24 @@ from catalyst.base.stagebase import StageBase
 from catalyst.main import main as catalyst_main
 from catalyst.support import CatalystError, get_repo_name
 
+# Run as a script this directory is already first on sys.path; the explicit insert keeps
+# the import working when the file is loaded some other way (the tests do that).
+_HERE = str(Path(__file__).resolve().parent)
+if _HERE not in sys.path:
+    sys.path.insert(0, _HERE)
+import make_conf_keys  # noqa: E402
 
-def read_make_conf_extra() -> str:
-    """Read literal builder settings that Catalyst otherwise discards."""
+
+def read_make_conf_extra() -> dict[str, str]:
+    """Read literal builder settings that Catalyst otherwise discards.
+
+    Returns {} when GENTOO_INSTALLER_MAKE_CONF_EXTRA is unset. Every line must be a plain
+    KEY="value" assignment of a key from make_conf_keys.BUILD_KEYS, without shell syntax.
+    """
     filename = os.environ.get("GENTOO_INSTALLER_MAKE_CONF_EXTRA")
     if not filename:
-        return ""
-    allowed = {
-        "ACCEPT_LICENSE", "GRUB_PLATFORMS", "INPUT_DEVICES", "VIDEO_CARDS",
-        "PYTHON_TARGETS", "PYTHON_SINGLE_TARGET", "MAKEOPTS", "NINJAOPTS", "FEATURES",
-        "EMERGE_DEFAULT_OPTS",
-    }
+        return {}
+    allowed = set(make_conf_keys.BUILD_KEYS)
     path = Path(filename)
     try:
         if not path.is_absolute():
@@ -44,19 +51,54 @@ def read_make_conf_extra() -> str:
             if not stat.S_ISREG(info.st_mode) or info.st_size > 16384:
                 raise ValueError("expected a small regular file")
             content = stream.read(16385)
-        seen: set[str] = set()
-        lines = []
+        values: dict[str, str] = {}
         for line in content.splitlines():
             if not line.strip() or line.lstrip().startswith("#"):
                 continue
             match = re.fullmatch(r'([A-Z_]+)="([A-Za-z0-9_ ./,:=+*?@%-]*)"', line)
-            if not match or match[1] not in allowed or match[1] in seen:
+            if not match or match[1] not in allowed or match[1] in values:
                 raise ValueError(f"unsupported or duplicate literal assignment: {line!r}")
-            seen.add(match[1])
-            lines.append(line)
-        return "\n# Installer builder settings preserved after Catalyst generation.\n" + "\n".join(lines) + "\n"
+            values[match[1]] = match[2]
+        return values
     except (OSError, UnicodeError, ValueError) as exc:
         raise CatalystError(f"Invalid builder make.conf settings {path}: {exc}") from exc
+
+
+def format_make_conf_extra(values: dict[str, str], *, live: bool) -> str:
+    """Render the settings that are appended after one of Catalyst's rewrites.
+
+    live=False is the build chroot: every key. live=True is the rewrite that ends up in
+    the squashfs: only make_conf_keys.LIVE_KEYS, and FEATURES without buildpkg.
+    """
+    if not values:
+        return ""
+    if live:
+        keys = [key for key in make_conf_keys.LIVE_KEYS if key in values]
+        header = (
+            "\n# Settings of the installer and rescue disc image. The builder's job counts,\n"
+            "# binary-package options and licence wildcard are deliberately absent: livecd-tools'\n"
+            "# autoconfig sets EMERGE_DEFAULT_OPTS from the CPU count at boot.\n"
+        )
+    else:
+        keys = [key for key in make_conf_keys.BUILD_KEYS if key in values]
+        header = "\n# Installer builder settings preserved after Catalyst generation.\n"
+    lines = []
+    for key in keys:
+        value = values[key]
+        if live and key == "FEATURES":
+            dropped = set(make_conf_keys.LIVE_DROPPED_FEATURES)
+            value = " ".join(word for word in value.split() if word not in dropped)
+        lines.append(f'{key}="{value}"')
+    return header + "\n".join(lines) + "\n"
+
+
+def strip_builder_variables(path: Path) -> None:
+    """Remove the DISTDIR and PKGDIR lines that Catalyst derives from catalyst.conf."""
+    names = tuple(f"{name}=" for name in make_conf_keys.BUILDER_ONLY_VARIABLES)
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    kept = [line for line in lines if not line.lstrip().startswith(names)]
+    if len(kept) != len(lines):
+        path.write_text("".join(kept), encoding="utf-8")
 
 
 def set_directory_snapshot(stage: StageBase, treeish: str | None = None) -> None:
@@ -131,11 +173,14 @@ def main(argv: list[str] | None = None) -> None:
 
     def write_make_conf(stage: StageBase, setup: bool = True) -> None:
         original_write_make_conf(stage, setup=setup)
+        # Catalyst rewrites this file both before emerge (setup=True) and at cleanup
+        # (setup=False). Only the cleanup version is shipped in the image.
+        destination = Path(stage.settings["chroot_path"] + stage.settings["make_conf"])
+        if not setup:
+            strip_builder_variables(destination)
         if extra:
-            # Catalyst rewrites this file both before emerge and at cleanup.
-            destination = Path(stage.settings["chroot_path"] + stage.settings["make_conf"])
             with destination.open("a", encoding="utf-8") as stream:
-                stream.write(extra)
+                stream.write(format_make_conf_extra(extra, live=not setup))
 
     def setup_environment(stage: StageBase) -> None:
         original_setup_environment(stage)
