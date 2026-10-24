@@ -88,6 +88,7 @@
       "intel",
       "nvidia"
      ],
+     "grub_target": "x86_64-efi",
      "hidpi": "dpi:240",
      "hybrid": true,
      "hypervisor": "",
@@ -116,8 +117,7 @@
      "Audio: Sound Open Firmware (many laptop audio chips need it)",
      "Power: power-profiles-daemon and thermald",
      "Storage: weekly TRIM for the solid-state disk (cron)",
-     "Boot: fallback boot path is always written",
-     "Display: 240 dpi interface scale (set per screen by the desktop)"
+     "Boot: fallback boot path is always written"
     ],
     "warnings": []
    }
@@ -238,6 +238,7 @@
       "intel",
       "nvidia"
      ],
+     "grub_target": "x86_64-efi",
      "hidpi": "dpi:240",
      "hybrid": true,
      "hypervisor": "",
@@ -266,8 +267,7 @@
      "Audio: Sound Open Firmware (many laptop audio chips need it)",
      "Power: power-profiles-daemon and thermald",
      "Storage: weekly TRIM for the solid-state disk (cron)",
-     "Boot: fallback boot path is always written",
-     "Display: 240 dpi interface scale (set per screen by the desktop)"
+     "Boot: fallback boot path is always written"
     ],
     "warnings": []
    }
@@ -376,6 +376,7 @@
       "intel",
       "nvidia"
      ],
+     "grub_target": "x86_64-efi",
      "hidpi": "dpi:240",
      "hybrid": true,
      "hypervisor": "",
@@ -402,8 +403,7 @@
      "Graphics: two graphics cards; GPU switching helpers installed",
      "Firmware: Linux firmware (a portable install can meet any hardware, Intel graphics, Wi-Fi, Bluetooth)",
      "Audio: Sound Open Firmware (many laptop audio chips need it)",
-     "Boot: fallback boot path is always written",
-     "Display: 240 dpi interface scale (set per screen by the desktop)"
+     "Boot: fallback boot path is always written"
     ],
     "warnings": []
    }
@@ -503,6 +503,7 @@
       "intel",
       "nvidia"
      ],
+     "grub_target": "x86_64-efi",
      "hidpi": "dpi:240",
      "hybrid": true,
      "hypervisor": "",

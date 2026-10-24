@@ -182,3 +182,27 @@ def test_virtualbox_is_best_effort_and_empty_manual_flags_warn():
 def test_every_fixture_validates_without_raising(name):
     m = manifest(storage={"device": next((d["path"] for d in fixture_dict(name)["disks"] if d["installable"]), "/dev/null")})
     assert isinstance(hwplan.validate_plan(m, fixture_dict(name)), list)
+
+
+# -- blocking issues -------------------------------------------------------------------------------------------
+
+def test_blocking_issues_combine_validation_errors_and_probe_errors():
+    broken = fixture_dict("intel-rst-hidden-nvme")
+    m = manifest()
+    blocking = {issue.code for issue in hwplan.blocking_issues(m, broken)}
+    assert {"hw.st_disk_missing", "hw.st_rst_no_disks", "hw.st_no_disk"} <= blocking
+    assert all(issue.severity == "error" for issue in hwplan.blocking_issues(m, broken))
+    healthy = fixture_dict("thinkpad-intel-nvidia-hybrid")
+    m.storage.device = "/dev/nvme0n1"
+    assert hwplan.blocking_issues(m, healthy) == []
+    m.hardware.hibernate = True
+    m.storage.swap_mib = 1024
+    assert {issue.code for issue in hwplan.blocking_issues(m, healthy)} == {"hw.hibernate_swap_small"}
+
+
+def test_probe_errors_that_are_not_installation_blockers_do_not_block():
+    machine = profile()
+    machine["warnings"] = [{"code": "hw.fw_sb_enabled", "severity": "warning", "message": "x", "action": ""},
+                           {"code": "hw.clock_skew", "severity": "error", "message": "The clock is wrong.", "action": "sync_time"}]
+    assert [issue.code for issue in hwplan.blocking_issues(manifest(), machine)] == ["hw.clock_skew"]
+    assert hwplan.blocking_issues(manifest(), {}) == []

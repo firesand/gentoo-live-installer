@@ -74,6 +74,7 @@
      "gpu_vendors": [
       "amd"
      ],
+     "grub_target": "i386-pc",
      "hidpi": "off",
      "hybrid": false,
      "hypervisor": "",
@@ -180,6 +181,7 @@
      "gpu_vendors": [
       "amd"
      ],
+     "grub_target": "i386-pc",
      "hidpi": "off",
      "hybrid": false,
      "hypervisor": "",
@@ -312,6 +314,7 @@
      "gpu_vendors": [
       "amd"
      ],
+     "grub_target": "i386-pc",
      "hidpi": "off",
      "hybrid": false,
      "hypervisor": "",
@@ -404,6 +407,7 @@
      "gpu_vendors": [
       "amd"
      ],
+     "grub_target": "i386-pc",
      "hidpi": "off",
      "hybrid": false,
      "hypervisor": "",

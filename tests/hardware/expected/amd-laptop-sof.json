@@ -71,6 +71,7 @@
      "gpu_vendors": [
       "amd"
      ],
+     "grub_target": "x86_64-efi",
      "hidpi": "dpi:144",
      "hybrid": false,
      "hypervisor": "",
@@ -97,8 +98,7 @@
      "Audio: Sound Open Firmware (many laptop audio chips need it)",
      "Power: power-profiles-daemon",
      "Storage: weekly TRIM for the solid-state disk (cron)",
-     "Boot: fallback boot path is always written",
-     "Display: 144 dpi interface scale (set per screen by the desktop)"
+     "Boot: fallback boot path is always written"
     ],
     "warnings": []
    }
@@ -178,6 +178,7 @@
      "gpu_vendors": [
       "amd"
      ],
+     "grub_target": "x86_64-efi",
      "hidpi": "dpi:144",
      "hybrid": false,
      "hypervisor": "",
@@ -205,7 +206,6 @@
      "Power: power-profiles-daemon",
      "Storage: weekly TRIM for the solid-state disk (cron)",
      "Boot: fallback boot path is always written",
-     "Display: 144 dpi interface scale (set per screen by the desktop)",
      "The proprietary NVIDIA driver was not installed because it does not fit this PC or these settings (nvidia_no_gpu). The open driver is used."
     ],
     "warnings": [
@@ -309,6 +309,7 @@
      "gpu_vendors": [
       "amd"
      ],
+     "grub_target": "x86_64-efi",
      "hidpi": "dpi:144",
      "hybrid": false,
      "hypervisor": "",
@@ -333,8 +334,7 @@
      "Graphics: AMD Lucienne - open AMD driver",
      "Firmware: Linux firmware (a portable install can meet any hardware, AMD graphics, Wi-Fi, Bluetooth, Ethernet adapter)",
      "Audio: Sound Open Firmware (many laptop audio chips need it)",
-     "Boot: fallback boot path is always written",
-     "Display: 144 dpi interface scale (set per screen by the desktop)"
+     "Boot: fallback boot path is always written"
     ],
     "warnings": []
    }
@@ -414,6 +414,7 @@
      "gpu_vendors": [
       "amd"
      ],
+     "grub_target": "x86_64-efi",
      "hidpi": "dpi:144",
      "hybrid": false,
      "hypervisor": "",

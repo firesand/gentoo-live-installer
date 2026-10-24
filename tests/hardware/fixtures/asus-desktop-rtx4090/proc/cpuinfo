@@ -5,7 +5,7 @@ model		: 183
 model name	: Intel(R) Core(TM) i9-14900K
 stepping	: 1
 microcode	: 0x137
-cpu MHz		: 5700.000
+cpu MHz		: 5520.061
 cache size	: 36864 KB
 physical id	: 0
 siblings	: 32

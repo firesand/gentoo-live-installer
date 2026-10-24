@@ -48,6 +48,12 @@ def case_for(case_id: str, m, machine) -> dict:
             "package_license": result.package_license, "package_mask": result.package_mask, "atoms": result.all_atoms(), "plan": result.to_dict()}
 
 
+def uefi_32_machine() -> dict:
+    machine = profile()
+    machine["firmware"]["efi_bits"] = 32
+    return machine
+
+
 def cases() -> list[dict]:
     out = []
     for name in FIXTURE_NAMES:
@@ -73,9 +79,11 @@ def cases() -> list[dict]:
         "zram-systemd": (systemd(), profile(ram_gib=4)),
         "cron-less-trim": (manifest(options={"cron": False}), profile()),
         "portable-everything": (manifest(hardware={"target": "portable", "fwupd": True}), profile()),
+        "uefi-32": (manifest(), uefi_32_machine()),
     }
     for case_id, (m, machine) in extras.items():
         out.append(case_for(case_id, m, machine))
+    out[-1]["atoms"] = [*out[-1]["atoms"], "sys-boot/grub"]   # GRUB_PLATFORMS must switch the efi-32 flag on
     return out
 
 
@@ -108,6 +116,8 @@ def test_every_atom_use_flag_and_licence_resolves_against_the_pinned_tree(tmp_pa
     assert nvidia_580["visible"].startswith("nvidia-drivers-580.")        # the mask pins the long-term branch
     assert results["asus-desktop-rtx4090/nvidia-this"][hwplan.A_NVIDIA]["visible"].startswith("nvidia-drivers-595.")
     assert "kernel-open" in nvidia_580["enabled"]
+    grub = results["uefi-32"]["sys-boot/grub"]
+    assert grub["visible"] and {"grub_platforms_efi-32", "grub_platforms_efi-64"} <= set(grub["enabled"])
 
 
 @needs_tree

@@ -309,6 +309,9 @@ class Builder:
         for index, klass in enumerate(interfaces):
             self.file(f"{base}/{name}:1.{index}/bInterfaceClass", klass + "\n")
 
+    def tpm(self, major: str = "2") -> None:
+        self.file("/sys/class/tpm/tpm0/tpm_version_major", major + "\n")
+
     def bluetooth(self) -> None:
         self.link("/sys/class/bluetooth/hci0", "../../devices/pci0000:00/0000:00:14.0/usb1/1-10/1-10:1.0/bluetooth/hci0")
 
@@ -482,6 +485,7 @@ def thinkpad_intel_nvidia_hybrid() -> None:
     b.usb("1-9", "04f2", "b6ea", "ef", ("0e", "0e"))
     b.usb("1-10", "8087", "0033", "e0", ("e0", "e0"))
     b.bluetooth()
+    b.tpm()
     b.rtc(NOW + 7 * 3600)  # Windows keeps local time (UTC+7) in the hardware clock
     b.chrony()
     b.finish()
@@ -524,6 +528,7 @@ def amd_laptop_sof() -> None:
     b.usb("1-4", "0e8d", "0608", "ef", ("e0", "e0"))
     b.usb("1-5", "5986", "9102", "ef", ("0e", "0e"))
     b.bluetooth()
+    b.tpm()
     b.rtc(NOW)
     b.chrony(synced=False)
     b.finish()
@@ -584,6 +589,7 @@ def intel_rst_hidden_nvme() -> None:
     b.input_device("Lid Switch", "event1")
     b.sound_card(0, "snd_hda_intel", "pci")
     b.usb("1-3", "0951", "1666", "00", ("08",))
+    b.tpm("1")
     b.rtc(NOW)
     b.finish()
 

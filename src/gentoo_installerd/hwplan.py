@@ -242,7 +242,7 @@ def nvidia_decision(manifest: InstallManifest, hw: HardwareProfile) -> NvidiaDec
             supported = data.NVIDIA_BRANCHES.get(branch, {}).get("generations", ()) if branch else ()
             if gpu.generation not in supported:
                 errors.append(Issue("hw.nvidia_unsupported_gpu", "error",
-                                    f"{gpu.name or 'This NVIDIA card'} is not supported by"
+                                    f"{gpu_label(gpu) if gpu.name else 'This NVIDIA card'} is not supported by"
                                     + (f" driver branch {branch}" if branch else " any proprietary driver offered here")
                                     + ". " + ("Choose branch 580 (the last for Maxwell, Pascal and Volta cards) or the open driver."
                                               if branch == "595" and gpu.generation == "maxwell-volta" else "The open nouveau driver supports it.")))
@@ -436,15 +436,14 @@ class _Planner:
         self.prime()
 
     def nvk(self) -> bool:
+        """NVK (Mesa's Vulkan driver for NVIDIA GPUs) is part of a source build for Turing and newer, or on request."""
         choice = self.m.hardware.nvk
-        if self.proprietary or not self.nvidia_gpus and choice != "yes":
+        if self.proprietary or choice == "no":
             result = False
         elif choice == "yes":
-            result = True
-        elif choice == "no":
-            result = False
-        else:  # automatic: only where Mesa is compiled anyway
-            result = (not self.binhost and not self.portable and any(g.generation == "turing+" for g in self.nvidia_gpus))
+            result = bool(self.nvidia_gpus) or self.portable
+        else:
+            result = not self.binhost and not self.portable and any(g.generation == "turing+" for g in self.nvidia_gpus)
         if result:
             self.use(A_MESA, "vulkan")  # video_cards_nvk? ( vulkan video_cards_nouveau )
         self.p.scalars["nvk"] = "yes" if result else "no"
@@ -476,15 +475,16 @@ class _Planner:
             self.p.make_conf["VIDEO_CARDS"] = explicit
             return
         tokens: list[str] = []
-        if not self.binhost and not self.portable:
+        source_build = not self.binhost and not self.portable
+        if source_build:
             for gpu in self.gpus:
                 tokens.extend(self.gpu_tokens(gpu, nvk))
             for gpu in self.hw.gpus:
                 if gpu.vendor == "virtio" and gpu.virtual:
                     tokens.append("virgl")
         tokens = data.distinct(tokens)
-        if self.proprietary:
-            self.p.make_conf["VIDEO_CARDS"] = " ".join([*tokens, "nvidia"]) if tokens else "${VIDEO_CARDS} nvidia"
+        if self.proprietary:  # `nvidia` is no flag of Mesa or libdrm, so the profile list can stay for binary packages
+            self.p.make_conf["VIDEO_CARDS"] = " ".join([*tokens, "nvidia"]) if source_build else "${VIDEO_CARDS} nvidia"
         elif nvk and (self.binhost or self.portable):
             self.p.make_conf["VIDEO_CARDS"] = "${VIDEO_CARDS} nvk"
             self.note("NVK was requested: Mesa is compiled instead of downloaded.")
@@ -654,12 +654,18 @@ class _Planner:
 
     def boot(self) -> None:
         self.p.scalars["removable_fallback"] = resolve_removable_fallback(self.m, self.hw)
+        efi_bits = self.hw.firmware.efi_bits if self.m.storage.firmware == "uefi" else 0
+        self.p.scalars["grub_target"] = "i386-pc" if self.m.storage.firmware == "bios" else ("i386-efi" if efi_bits == 32 else "x86_64-efi")
+        if efi_bits == 32 and self.m.system.bootloader == "grub":
+            # A 64-bit CPU with 32-bit UEFI firmware (small tablets) can only run a 32-bit EFI image.
+            self.p.make_conf["GRUB_PLATFORMS"] = "pc efi-64 efi-32"
+            self.note("This PC has 32-bit UEFI firmware: GRUB is installed for i386-efi.")
 
     def display(self) -> None:
         choice = self.m.hardware.hidpi
         if choice == "off":
             dpi = 96
-        elif choice.startswith("dpi:"):
+        elif choice.startswith("dpi:") and choice[4:].isdigit():
             dpi = int(choice[4:])
         else:
             dpi = recommend.recommend_dpi(self.hw.displays)
@@ -731,8 +737,8 @@ class _Planner:
             lines.append(f"Virtual machine: {hw.machine.hypervisor}; " + ("guest tools installed" if tools else "no guest tools"))
         if s["removable_fallback"] != "never" and self.m.storage.firmware == "uefi":
             lines.append("Boot: " + {"always": "fallback boot path is always written", "if-missing": "fallback boot path is written only if missing"}[s["removable_fallback"]])
-        if s["hidpi"] != "off":
-            lines.append(f"Display: {s['hidpi'][4:]} dpi interface scale" + (" for Xfce" if self.desktop == "xfce" else " (set per screen by the desktop)"))
+        if s["hidpi"] != "off" and self.desktop == "xfce":
+            lines.append(f"Display: {s['hidpi'][4:]} dpi interface scale for Xfce")
         if self.p.warnings:
             lines.extend(issue.message for issue in self.p.warnings if issue.severity != "info")
         return lines
@@ -817,71 +823,98 @@ def validate_plan(manifest: InstallManifest, hardware: Mapping[str, Any] | Hardw
     """Cross-checks of the manifest against the probed machine (structure is checked by manifest.validate())."""
     hw = _profile(hardware)
     m = manifest
-    issues: list[Issue] = []
     decision = nvidia_decision(m, hw)
-    issues.extend(decision.errors)
-    issues.extend(decision.warnings)
+    issues: list[Issue] = [*decision.errors, *decision.warnings]
+    issues.extend(_memory_issues(m, hw))
+    issues.extend(_power_issues(m, hw))
+    if _detected(hw):  # an empty profile (no probe ran) says nothing about firmware or disks
+        issues.extend(_firmware_issues(m, hw))
+        issues.extend(_target_disk_issues(m, hw))
+    issues.extend(_network_issues(m, hw))
+    return issues
 
-    # Memory, hibernation
+
+def blocking_issues(manifest: InstallManifest, hardware: Mapping[str, Any] | HardwareProfile | None) -> list[Issue]:
+    """What stops an installation: errors of validate_plan plus the probe's own error warnings (no disk, RST mode, wrong clock ...)."""
+    hw = _profile(hardware)
+    found = {issue.code: issue for issue in validate_plan(manifest, hw) if issue.severity == "error"}
+    for warning in hw.warnings:
+        if warning.severity == "error":
+            found.setdefault(warning.code, Issue(warning.code, "error", warning.message))
+    return list(found.values())
+
+
+def _memory_issues(m: InstallManifest, hw: HardwareProfile) -> list[Issue]:
+    out: list[Issue] = []
     gib = hw.memory.total_kib / recommend.KIB_PER_GIB
     if hw.memory.total_kib and 2 <= gib < 4 and m.system.desktop in ("kde", "gnome"):
-        issues.append(Issue("hw.memory_tight", "info", f"This PC has {gib:.1f} GiB of memory. {m.system.desktop.upper()} will feel slow; Xfce needs less."))
+        out.append(Issue("hw.memory_tight", "info", f"This PC has {gib:.1f} GiB of memory. {m.system.desktop.upper()} will feel slow; Xfce needs less."))
     if m.hardware.hibernate:
         if m.storage.luks:
-            issues.append(Issue("hw.hibernate_luks", "error", "Hibernation would write memory, including encryption keys, into an unencrypted swap partition. "
-                                "Turn hibernation off or install without disk encryption."))
+            out.append(Issue("hw.hibernate_luks", "error", "Hibernation would write memory, including encryption keys, into an unencrypted swap partition. "
+                             "Turn hibernation off or install without disk encryption."))
         needed = recommend.nominal_ram_gib(hw.memory.total_kib) * 1024 if hw.memory.total_kib else 0
         if needed and m.storage.swap_mib < needed:
-            issues.append(Issue("hw.hibernate_swap_small", "error", f"Hibernation needs a swap partition of at least {needed} MiB (the size of memory); it is {m.storage.swap_mib} MiB."))
+            out.append(Issue("hw.hibernate_swap_small", "error", f"Hibernation needs a swap partition of at least {needed} MiB (the size of memory); it is {m.storage.swap_mib} MiB."))
         if hw.firmware.lockdown in ("integrity", "confidentiality"):
-            issues.append(Issue("hw.hibernate_lockdown", "warning", "The kernel is in lockdown mode, which blocks hibernation."))
+            out.append(Issue("hw.hibernate_lockdown", "warning", "The kernel is in lockdown mode, which blocks hibernation."))
+    return out
 
-    # Power: two daemons that provide the same D-Bus service cannot be installed together
-    extras = set(m.options.extra_packages)
+
+def _power_issues(m: InstallManifest, hw: HardwareProfile) -> list[Issue]:
+    out: list[Issue] = []
+    extras = set(m.options.extra_packages)  # two daemons that provide the same D-Bus service cannot be installed together
     if m.hardware.power == "ppd" and A_TLP in extras:
-        issues.append(Issue("hw.power_conflict", "error", "Power management is set to power-profiles-daemon, but sys-power/tlp is in the extra packages. Use only one."))
+        out.append(Issue("hw.power_conflict", "error", "Power management is set to power-profiles-daemon, but sys-power/tlp is in the extra packages. Use only one."))
     if m.hardware.power == "tlp" and A_PPD in extras:
-        issues.append(Issue("hw.power_conflict", "error", "Power management is set to TLP, but power-profiles-daemon is in the extra packages. Use only one."))
+        out.append(Issue("hw.power_conflict", "error", "Power management is set to TLP, but power-profiles-daemon is in the extra packages. Use only one."))
     if m.hardware.thermald == "yes" and hw.cpu.vendor not in ("intel", ""):
-        issues.append(Issue("hw.thermald_not_intel", "warning", "thermald is for Intel processors; it has no effect on this CPU."))
+        out.append(Issue("hw.thermald_not_intel", "warning", "thermald is for Intel processors; it has no effect on this CPU."))
+    return out
 
-    # Firmware type
+
+def _firmware_issues(m: InstallManifest, hw: HardwareProfile) -> list[Issue]:
+    out: list[Issue] = []
     live, requested = hw.firmware.mode, m.storage.firmware
-    if not _detected(hw):
-        return issues
     if live == "uefi" and requested == "bios":
-        issues.append(Issue("hw.fw_other_type", "warning", "This PC started in UEFI mode, but a legacy BIOS installation was selected. It will only start in legacy/CSM mode."))
+        out.append(Issue("hw.fw_other_type", "warning", "This PC started in UEFI mode, but a legacy BIOS installation was selected. It will only start in legacy/CSM mode."))
     elif live == "bios" and requested == "uefi":
         severity = "warning" if m.system.bootloader == "grub" else "error"
-        issues.append(Issue("hw.fw_uefi_from_bios", severity,
-                            "This session was started in legacy BIOS mode, so a UEFI install cannot register its boot entry. "
-                            + ("GRUB will be installed with the fallback boot path only; restart the installer in UEFI mode for a normal install."
-                               if severity == "warning" else "Choose GRUB, or restart the installer in UEFI mode.")))
+        out.append(Issue("hw.fw_uefi_from_bios", severity,
+                         "This session was started in legacy BIOS mode, so a UEFI install cannot register its boot entry. "
+                         + ("GRUB will be installed with the fallback boot path only; restart the installer in UEFI mode for a normal install."
+                            if severity == "warning" else "Choose GRUB, or restart the installer in UEFI mode.")))
     if requested == "uefi" and live == "uefi" and hw.firmware.efi_bits == 32:
-        issues.append(Issue("hw.fw_uefi32", "warning", "This PC has 32-bit UEFI firmware: the 32-bit boot files are needed. If it does not start, use legacy BIOS/CSM mode."))
+        out.append(Issue("hw.fw_uefi32", "warning", "This PC has 32-bit UEFI firmware: the 32-bit boot files are needed. If it does not start, use legacy BIOS/CSM mode."))
+    return out
 
-    # Target disk
+
+def _target_disk_issues(m: InstallManifest, hw: HardwareProfile) -> list[Issue]:
     disk = next((d for d in hw.disks if d.path == m.storage.device), None)
     if disk is not None:
-        issues.extend(_disk_issues(m, hw, disk))
-    elif hw.disks and re.fullmatch(r"/dev/[A-Za-z0-9._-]+", m.storage.device):
-        issues.append(Issue("hw.st_disk_missing", "error", f"{m.storage.device} was not found on this PC. "
-                            + ("Only the installer's own medium is visible: the internal disk may be hidden by the storage mode in the firmware settings."
-                               if not any(d.installable for d in hw.disks) else "Choose one of the detected disks.")))
+        return _disk_issues(m, hw, disk)
+    if hw.disks and re.fullmatch(r"/dev/[A-Za-z0-9._-]+", m.storage.device):
+        hidden = not any(d.installable for d in hw.disks)
+        return [Issue("hw.st_disk_missing", "error", f"{m.storage.device} was not found on this PC. "
+                      + ("Only the installer's own medium is visible: the internal disk may be hidden by the storage mode in the firmware settings."
+                         if hidden else "Choose one of the detected disks."))]
+    return []
 
-    # Network
+
+def _network_issues(m: InstallManifest, hw: HardwareProfile) -> list[Issue]:
+    out: list[Issue] = []
     wifi_only = bool(hw.nics) and all(nic.kind == "wifi" for nic in hw.nics if not nic.no_driver)
     if wifi_only and m.network.manager != "networkmanager":
-        issues.append(Issue("hw.net_wifi_needs_nm", "warning", "The only network adapter is Wi-Fi; only NetworkManager sets up Wi-Fi networks on the installed system."))
+        out.append(Issue("hw.net_wifi_needs_nm", "warning", "The only network adapter is Wi-Fi; only NetworkManager sets up Wi-Fi networks on the installed system."))
     if m.network.import_live_profiles and m.hardware.target == "portable":
-        issues.append(Issue("hw.import_profiles_portable", "warning", "Wi-Fi passwords from this session would be copied to a disk meant for other computers. Turn that option off."))
-    if m.hardware.target == "portable" and m.network.manager in ("netifrc",):
-        issues.append(Issue("hw.net_names_hardware_specific", "warning", "Network interface names differ between PCs; NetworkManager works better for a portable install."))
+        out.append(Issue("hw.import_profiles_portable", "warning", "Wi-Fi passwords from this session would be copied to a disk meant for other computers. Turn that option off."))
+    if m.hardware.target == "portable" and m.network.manager == "netifrc":
+        out.append(Issue("hw.net_names_hardware_specific", "warning", "Network interface names differ between PCs; NetworkManager works better for a portable install."))
     if m.hardware.cpu_flags_mode == "manual" and not m.portage.cpu_flags.strip():
-        issues.append(Issue("hw.cpu_flags_empty", "warning", "CPU flags are set to 'manual' but none were entered."))
+        out.append(Issue("hw.cpu_flags_empty", "warning", "CPU flags are set to 'manual' but none were entered."))
     if hw.machine.hypervisor == "virtualbox" and m.hardware.guest_tools != "none":
-        issues.append(Issue("hw.virtualbox_best_effort", "info", "VirtualBox guest additions are built against the installed kernel and may be skipped if that fails."))
-    return issues
+        out.append(Issue("hw.virtualbox_best_effort", "info", "VirtualBox guest additions are built against the installed kernel and may be skipped if that fails."))
+    return out
 
 
 def _disk_issues(m: InstallManifest, hw: HardwareProfile, disk: DiskInfo) -> list[Issue]:

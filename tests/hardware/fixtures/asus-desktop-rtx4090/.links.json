@@ -23,7 +23,7 @@
  "/dev/disk/by-path/pci-0000:00:17.0-ata-8.0": "../../sdc",
  "/dev/disk/by-path/pci-0000:00:17.0-ata-8.0-part1": "../../sdc1",
  "/proc/net": "self/net",
- "/proc/self": "951777",
+ "/proc/self": "1056979",
  "/sys/block/nvme0n1": "../devices/pci0000:00/0000:00:0e.0/pci10000:e0/10000:e0:06.0/10000:e1:00.0/nvme/nvme0/nvme0n1",
  "/sys/block/nvme0n1/device": "../../nvme0",
  "/sys/block/nvme1n1": "../devices/pci0000:00/0000:00:0e.0/pci10000:e0/10000:e0:1d.0/10000:e2:00.0/nvme/nvme1/nvme1n1",
@@ -302,5 +302,6 @@
  "/sys/class/sound/pcmC4D2p": "../../devices/pci0000:00/0000:00:14.0/usb1/1-6/1-6:1.0/sound/card4/pcmC4D2p",
  "/sys/class/sound/pcmC4D3p": "../../devices/pci0000:00/0000:00:14.0/usb1/1-6/1-6:1.0/sound/card4/pcmC4D3p",
  "/sys/class/sound/seq": "../../devices/virtual/sound/seq",
- "/sys/class/sound/timer": "../../devices/virtual/sound/timer"
+ "/sys/class/sound/timer": "../../devices/virtual/sound/timer",
+ "/sys/class/tpm/tpm0": "../../devices/platform/MSFT0101:00/tpm/tpm0"
 }

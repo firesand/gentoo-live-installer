@@ -117,6 +117,7 @@ class FirmwareInfo:
     can_reboot_to_firmware: bool = False
     efivars_writable: bool | None = None
     windows_boot_entry: bool | None = None
+    tpm: str = ""  # "" (none) | "2.0" | "1.2" | "present" (version unknown)
 
 
 @dataclass
@@ -1062,6 +1063,8 @@ class _Prober:
 
     def collect_firmware(self) -> None:
         f = self.profile.firmware
+        major = self.fs.line("/sys/class/tpm/tpm0/tpm_version_major")
+        f.tpm = {"2": "2.0", "1": "1.2"}.get(major, "present" if self.fs.exists("/sys/class/tpm/tpm0") else "")
         efi = "/sys/firmware/efi"
         if not (self.fs.isdir(efi) and (self.fs.exists(efi + "/fw_platform_size") or self.fs.exists(efi + "/systab") or self.fs.isdir(efi + "/efivars"))):
             f.mode, f.efi_bits, f.secure_boot = "bios", 0, "n/a"
@@ -1230,9 +1233,9 @@ class _Prober:
             disks[name] = disk
         lsblk = self.command(blockdev.lsblk_argv())
         if lsblk:
-            try:
-                self.roots = blockdev.parse_lsblk(lsblk)
-            except (ValueError, KeyError, TypeError):
+            try:  # a runner that merges stderr into stdout may put a warning in front of the JSON
+                self.roots = blockdev.parse_lsblk(lsblk[lsblk.index("{"):] if "{" in lsblk else lsblk)
+            except (ValueError, KeyError, TypeError, AttributeError):
                 self.profile.errors.append("disks: lsblk output could not be parsed")
         live_keys = set()
         if self.roots:

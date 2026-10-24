@@ -68,6 +68,7 @@
      "gpu_vendors": [
       "nvidia"
      ],
+     "grub_target": "x86_64-efi",
      "hidpi": "off",
      "hybrid": false,
      "hypervisor": "",
@@ -188,6 +189,7 @@
      "gpu_vendors": [
       "nvidia"
      ],
+     "grub_target": "x86_64-efi",
      "hidpi": "off",
      "hybrid": false,
      "hypervisor": "",
@@ -307,6 +309,7 @@
      "gpu_vendors": [
       "nvidia"
      ],
+     "grub_target": "x86_64-efi",
      "hidpi": "off",
      "hybrid": false,
      "hypervisor": "",
@@ -402,6 +405,7 @@
      "gpu_vendors": [
       "nvidia"
      ],
+     "grub_target": "x86_64-efi",
      "hidpi": "off",
      "hybrid": false,
      "hypervisor": "",

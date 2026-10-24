@@ -55,6 +55,7 @@ def test_this_host_asus_desktop_with_rtx_4090():
     assert codes("asus-desktop-rtx4090") == {"hw.fw_sb_disabled", "hw.st_vmd_active"}  # no st_rst_no_disks: the NVMe drives are visible
     assert d["bluetooth"]["present"] is True and d["audio"]["needs_sof"] is False
     assert d["clock"]["ntp_synced"] is True and d["clock"]["rtc_mode"] == "utc"
+    assert d["firmware"]["tpm"] == "2.0"
 
 
 def test_host_cpu_flags_match_cpuid2cpuflags_and_the_cpuinfo_fallback():
@@ -310,3 +311,25 @@ def test_fixtures_contain_no_serials_macs_or_uuids():
             walk(device)
         assert not (root / "etc/hostname").exists()
         assert not any(p.name in {"serial", "product_uuid", "product_serial", "board_serial", "chassis_serial"} for p in root.rglob("*"))
+
+
+def test_tpm_detection():
+    assert {name: fixture_dict(name)["firmware"]["tpm"] for name in FIXTURE_NAMES} == {
+        "asus-desktop-rtx4090": "2.0", "desktop-igpu-idle": "2.0", "qemu-q35-virtio": "", "old-bios-sata-radeon": "", "thinkpad-intel-nvidia-hybrid": "2.0",
+        "amd-laptop-sof": "2.0", "vmware-guest": "", "intel-rst-hidden-nvme": "1.2"}
+
+
+def test_lsblk_output_with_a_warning_in_front_of_the_json_is_still_used():
+    """The daemon's runner merges stderr into stdout, so lsblk warnings can precede the JSON."""
+    from types import SimpleNamespace
+
+    text = (FIXTURES / "old-bios-sata-radeon" / ".commands" / "lsblk.json").read_text()
+
+    class Noisy:
+        def run(self, argv, **kwargs):
+            if argv[0] == "lsblk":
+                return SimpleNamespace(returncode=0, stdout="lsblk: warning: something went sideways\n" + text)
+            raise OSError
+
+    profile = hw.probe(FIXTURES / "old-bios-sata-radeon", Noisy(), now=fixture_now("old-bios-sata-radeon"))
+    assert profile.errors == [] and next(disk for disk in profile.disks if disk.name == "sda").signatures == ["ntfs"]

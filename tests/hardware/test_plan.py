@@ -265,6 +265,8 @@ def test_wayland_flag_only_for_wayland_desktops():
 def test_proprietary_nvidia_with_source_builds_keeps_the_igpu_tokens():
     result = plan(nvidia_manifest(portage={"binhost": False}), profile(form="laptop", gpus=(gpu("intel", "gen8+", integrated=True), gpu("nvidia", "turing+"))))
     assert result.make_conf["VIDEO_CARDS"] == "intel nvidia"
+    only = plan(nvidia_manifest(portage={"binhost": False}), profile(gpus=(gpu("nvidia", "turing+"),)))
+    assert only.make_conf["VIDEO_CARDS"] == "nvidia"        # a source build of Mesa needs no other driver
 
 
 @pytest.mark.parametrize(("mutation", "code"), [
@@ -737,3 +739,21 @@ def test_summary_lines_are_short_human_sentences():
     assert "Graphics: NVIDIA RTX A5000 Mobile - proprietary driver 595" in result.summary
     assert "Graphics: Intel UHD Graphics - open Intel driver" in result.summary
     assert all(len(line) < 200 and not line.endswith("\n") for line in result.summary)
+
+
+# -- boot target, 32-bit UEFI --------------------------------------------------------------------------------
+
+def test_grub_target_follows_the_firmware():
+    assert plan(manifest(), profile()).scalars["grub_target"] == "x86_64-efi"
+    assert plan(manifest(storage={"firmware": "bios"}), profile(firmware="bios")).scalars["grub_target"] == "i386-pc"
+
+
+def test_32_bit_uefi_adds_the_efi_32_grub_platform():
+    machine = profile()
+    machine["firmware"]["efi_bits"] = 32
+    result = plan(manifest(), machine)
+    assert result.make_conf["GRUB_PLATFORMS"] == "pc efi-64 efi-32" and result.scalars["grub_target"] == "i386-efi"
+    assert any("32-bit UEFI" in note for note in result.notes)
+    assert "GRUB_PLATFORMS" not in plan(manifest(system={"bootloader": "systemd-boot"}), machine).make_conf    # only GRUB has the platform list
+    assert "GRUB_PLATFORMS" not in plan(manifest(), profile()).make_conf
+    assert "GRUB_PLATFORMS" not in plan(manifest(storage={"firmware": "bios"}), machine).make_conf

@@ -90,6 +90,7 @@
      "gpu_vendors": [
       "virtio"
      ],
+     "grub_target": "x86_64-efi",
      "hidpi": "off",
      "hybrid": false,
      "hypervisor": "qemu",
@@ -214,6 +215,7 @@
      "gpu_vendors": [
       "virtio"
      ],
+     "grub_target": "x86_64-efi",
      "hidpi": "off",
      "hybrid": false,
      "hypervisor": "qemu",
@@ -357,6 +359,7 @@
      "gpu_vendors": [
       "virtio"
      ],
+     "grub_target": "x86_64-efi",
      "hidpi": "off",
      "hybrid": false,
      "hypervisor": "qemu",
@@ -463,6 +466,7 @@
      "gpu_vendors": [
       "virtio"
      ],
+     "grub_target": "x86_64-efi",
      "hidpi": "off",
      "hybrid": false,
      "hypervisor": "qemu",

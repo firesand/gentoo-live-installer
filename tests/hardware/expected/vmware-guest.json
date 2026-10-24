@@ -75,6 +75,7 @@
      "gpu_vendors": [
       "vmware"
      ],
+     "grub_target": "x86_64-efi",
      "hidpi": "off",
      "hybrid": false,
      "hypervisor": "vmware",
@@ -184,6 +185,7 @@
      "gpu_vendors": [
       "vmware"
      ],
+     "grub_target": "x86_64-efi",
      "hidpi": "off",
      "hybrid": false,
      "hypervisor": "vmware",
@@ -312,6 +314,7 @@
      "gpu_vendors": [
       "vmware"
      ],
+     "grub_target": "x86_64-efi",
      "hidpi": "off",
      "hybrid": false,
      "hypervisor": "vmware",
@@ -416,6 +419,7 @@
      "gpu_vendors": [
       "vmware"
      ],
+     "grub_target": "x86_64-efi",
      "hidpi": "off",
      "hybrid": false,
      "hypervisor": "vmware",

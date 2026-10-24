@@ -70,6 +70,7 @@
       "intel",
       "nvidia"
      ],
+     "grub_target": "x86_64-efi",
      "hidpi": "off",
      "hybrid": false,
      "hypervisor": "",
@@ -193,6 +194,7 @@
       "intel",
       "nvidia"
      ],
+     "grub_target": "x86_64-efi",
      "hidpi": "off",
      "hybrid": false,
      "hypervisor": "",
@@ -315,6 +317,7 @@
       "intel",
       "nvidia"
      ],
+     "grub_target": "x86_64-efi",
      "hidpi": "off",
      "hybrid": false,
      "hypervisor": "",
@@ -413,6 +416,7 @@
       "intel",
       "nvidia"
      ],
+     "grub_target": "x86_64-efi",
      "hidpi": "off",
      "hybrid": false,
      "hypervisor": "",

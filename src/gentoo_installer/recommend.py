@@ -19,7 +19,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from . import hardware_data as data
-from .hardware import HardwareProfile, is_hybrid
+from .hardware import HardwareProfile, gpu_label, is_hybrid
 from .manifest import InstallManifest, Storage
 
 KIB_PER_GIB = 1024 * 1024
@@ -100,10 +100,8 @@ def recommend_dpi(displays: list[Any]) -> int:
     highest step that is at most 6 dpi above it, so a 111 dpi ultrawide stays
     at 96 and a 14-inch Full HD laptop (158 dpi) gets 144.
     """
-    measured = 0
-    for display in sorted((d for d in displays if getattr(d, "dpi", 0) > 0), key=lambda d: not getattr(d, "internal", False)):
-        measured = display.dpi
-        break
+    known = sorted((d for d in displays if getattr(d, "dpi", 0) > 0), key=lambda d: not getattr(d, "internal", False))
+    measured = known[0].dpi if known else 0
     if not measured:
         return 96
     return max([step for step in _SCALE_STEPS if step <= measured + 6] or [96])
@@ -203,7 +201,7 @@ def recommend(profile: HardwareProfile | Mapping[str, Any] | None, manifest: Ins
         branch = data.nvidia_branch_for(nvidia[0].generation)
         if branch:
             out.append(Recommendation("rec.nvidia_proprietary", "info",
-                                      f"The NVIDIA proprietary driver (version {branch}) is available for {nvidia[0].name or 'your NVIDIA card'}. "
+                                      f"The NVIDIA proprietary driver (version {branch}) is available for {gpu_label(nvidia[0]) if nvidia[0].name else 'your NVIDIA card'}. "
                                       "The open driver works everywhere; the proprietary one is faster for games and CUDA, but it is non-free and needs you to accept NVIDIA's licence.",
                                       "hardware.gpu_driver", "nvidia"))
         elif nvidia[0].generation in ("kepler", "fermi", "older"):
