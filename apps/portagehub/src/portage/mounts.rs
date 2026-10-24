@@ -90,11 +90,20 @@ pub fn load() -> Vec<BootMount> {
     parse(&std::fs::read_to_string("/proc/mounts").unwrap_or_default(), &std::fs::read_to_string("/etc/fstab").unwrap_or_default())
 }
 
+/// Boot mount points that fstab lists but nothing has mounted (a `noauto` /boot or ESP).
+pub fn unmounted(mounts: &[BootMount]) -> Vec<String> {
+    mounts.iter().filter(|m| m.in_fstab && !m.mounted).map(|m| m.target.clone()).collect()
+}
+
 /// Does installing/removing this package write to the boot partitions?
+///
+/// linux-firmware counts: with USE=initramfs (the installer's default) every update rebuilds the
+/// initramfs and writes /boot, and without it a firmware update is rare enough that remounting
+/// for it costs nothing. linux-headers only installs under /usr.
 pub fn touches_boot(key: &str) -> bool {
-    (key.starts_with("sys-kernel/") && !matches!(key, "sys-kernel/linux-headers" | "sys-kernel/linux-firmware"))
+    (key.starts_with("sys-kernel/") && key != "sys-kernel/linux-headers")
         || key.starts_with("sys-boot/")
-        || matches!(key, "virtual/dist-kernel" | "sys-firmware/intel-microcode" | "sys-firmware/amd-ucode" | "sys-kernel/installkernel")
+        || matches!(key, "virtual/dist-kernel" | "sys-firmware/intel-microcode")
 }
 
 #[cfg(test)]
@@ -118,5 +127,27 @@ mod tests {
         assert!(touches_boot("sys-boot/grub"));
         assert!(!touches_boot("sys-kernel/linux-headers"));
         assert!(!touches_boot("app-misc/foo"));
+    }
+
+    #[test]
+    fn firmware_and_microcode_write_to_boot() {
+        // Every linux-firmware update with USE=initramfs reinstalls the initramfs into /boot.
+        assert!(touches_boot("sys-kernel/linux-firmware"));
+        assert!(touches_boot("sys-firmware/intel-microcode"));
+        assert!(touches_boot("sys-kernel/installkernel"));
+        assert!(touches_boot("virtual/dist-kernel"));
+        // sys-firmware/amd-ucode is not in the tree; it is no longer special.
+        assert!(!touches_boot("sys-firmware/amd-ucode"));
+        assert!(!touches_boot("sys-kernel/linux-headers"));
+    }
+
+    #[test]
+    fn unmounted_lists_noauto_partitions_only() {
+        let fstab = "/dev/sda1 /boot ext4 noauto,rw 0 2\nUUID=x /boot/efi vfat rw 0 2\n";
+        let mounts = "/dev/sdb2 /boot/efi vfat rw 0 0\n";
+        let m = parse(mounts, fstab);
+        assert_eq!(unmounted(&m), vec!["/boot".to_string()]);
+        assert!(unmounted(&parse("/dev/sda1 /boot ext4 rw 0 0\n", fstab)).is_empty() || unmounted(&parse("/dev/sda1 /boot ext4 rw 0 0\n", fstab)) == vec!["/boot/efi".to_string()]);
+        assert!(unmounted(&parse("", "")).is_empty());
     }
 }

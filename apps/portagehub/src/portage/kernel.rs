@@ -100,6 +100,9 @@ pub struct KernelState {
     pub keep_set_exists: bool,
     pub keep_set_in_world: bool,
     pub local_tools: Vec<PathBuf>,
+    /// Boot mount points that fstab lists but nothing has mounted. While /boot is among them
+    /// there are no kernel images to see: every judgement about /boot would be wrong.
+    pub boot_unmounted: Vec<String>,
 }
 
 impl KernelState {
@@ -127,9 +130,17 @@ impl KernelState {
         })
     }
 
+    pub fn boot_is_unmounted(&self) -> bool {
+        self.boot_unmounted.iter().any(|t| t == "/boot")
+    }
+
     /// Kernels that may be removed while keeping `keep_newest` newest bootable ones
-    /// plus the running and known-good kernels.
+    /// plus the running and known-good kernels. Nothing is offered while /boot is not mounted:
+    /// every kernel then looks image-less and the newest would be offered first.
     pub fn removable(&self, keep_newest: usize) -> Vec<&KernelEntry> {
+        if self.boot_is_unmounted() {
+            return Vec::new();
+        }
         let mut kept = 0;
         let mut out = Vec::new();
         for k in &self.kernels {
@@ -284,6 +295,7 @@ pub fn load(vdb: &Vdb, keep_set: &str) -> KernelState {
     };
     st.last_good = Some(read_trim(&st.state_dir.join("last-good"))).filter(|s| !s.is_empty());
     st.previous_good = Some(read_trim(&st.state_dir.join("previous-good"))).filter(|s| !s.is_empty());
+    st.boot_unmounted = super::mounts::unmounted(&super::mounts::load());
     st.eselected = std::fs::read_link("/usr/src/linux").ok().map(|t| t.to_string_lossy().trim_start_matches("linux-").to_string());
 
     let mut map: BTreeMap<String, KernelEntry> = BTreeMap::new();
@@ -466,6 +478,8 @@ pub enum Fix {
     RemoveOld(String),
     RemoveLeftovers(String),
     Depclean(Vec<String>),
+    /// Mount a boot partition that fstab lists but nothing has mounted.
+    MountBoot(String),
 }
 
 #[derive(Debug, Clone)]
@@ -497,6 +511,16 @@ pub fn wanted_keep_atoms(st: &KernelState, last: Option<&str>, prev: Option<&str
 
 /// Inspect boot readiness. `scan` holds the root-only files (None = not read yet).
 pub fn check(st: &KernelState, scan: Option<&BootScan>, protect: bool, min_bootable: usize, nvidia_alerts: bool) -> Vec<Finding> {
+    // Without /boot there is nothing to judge: every kernel would look image-less, the known-good
+    // one "gone" and the newest one removable.
+    if st.boot_is_unmounted() {
+        return vec![find(
+            Severity::Info,
+            "The boot partition is not mounted",
+            "/boot is listed in /etc/fstab but is not mounted (a noauto entry), so the kernel images in it cannot be seen. Mount it to check the kernels and the boot menu; nothing is reported as missing or offered for removal until then.",
+            vec![Fix::MountBoot("/boot".into())],
+        )];
+    }
     let mut out = Vec::new();
     let bootable: Vec<&KernelEntry> = st.kernels.iter().filter(|k| k.bootable()).collect();
     let newest = bootable.first().map(|k| k.kver.clone());
@@ -672,22 +696,33 @@ pub fn check(st: &KernelState, scan: Option<&BootScan>, protect: bool, min_boota
         }
     }
     // Bootloader
-    match scan {
-        None => out.push(find(
+    if let Some(esp) = st.boot_unmounted.first() {
+        // The boot menu files sit on a partition that is not there: comparing them with the
+        // kernels would report entries as missing that merely cannot be seen.
+        out.push(find(
             Severity::Info,
-            "Boot menu not checked yet",
-            "Reading the bootloader configuration needs the admin session (it is root-only).",
-            vec![Fix::ScanBoot],
-        )),
-        Some(scan) if !scan.root => out.push(find(
-            Severity::Info,
-            "Boot menu could not be read",
-            "The admin helper is not running as root, so the root-only bootloader files were not readable.",
-            vec![Fix::ScanBoot],
-        )),
-        Some(scan) => out.extend(check_bootloader(st, scan, &bootable)),
+            format!("{esp} is not mounted"),
+            format!("{esp} is listed in /etc/fstab but is not mounted, so the boot menu files on it cannot be checked. Mount it first."),
+            vec![Fix::MountBoot(esp.clone())],
+        ));
+    } else {
+        match scan {
+            None => out.push(find(
+                Severity::Info,
+                "Boot menu not checked yet",
+                "Reading the bootloader configuration needs the admin session (it is root-only).",
+                vec![Fix::ScanBoot],
+            )),
+            Some(scan) if !scan.root => out.push(find(
+                Severity::Info,
+                "Boot menu could not be read",
+                "The admin helper is not running as root, so the root-only bootloader files were not readable.",
+                vec![Fix::ScanBoot],
+            )),
+            Some(scan) => out.extend(check_bootloader(st, scan, &bootable)),
+        }
     }
-    if scan.is_some_and(|s| s.root) && out.iter().all(|f| f.severity <= Severity::Info) {
+    if st.boot_unmounted.is_empty() && scan.is_some_and(|s| s.root) && out.iter().all(|f| f.severity <= Severity::Info) {
         out.insert(0, find(Severity::Ok, "Boot setup looks good", "Every bootable kernel has its files and a boot menu entry.", vec![]));
     }
     // Problems first, then the green summary, then notes.
@@ -903,6 +938,58 @@ mod tests {
         let f = check(&st, Some(&scan), true, 2, true);
         assert!(!f.iter().any(|x| x.title.contains("no longer exist")), "{f:#?}");
         assert!(f.iter().any(|x| x.title.contains("GRUB menu has all 4")), "{f:#?}");
+    }
+
+    /// A `noauto` /boot: the images are not visible, which says nothing about the kernels.
+    fn unmounted_boot() -> KernelState {
+        let mut st = state();
+        for kernel in &mut st.kernels {
+            kernel.image = None;
+            kernel.initramfs = None;
+        }
+        st.boot_unmounted = vec!["/boot".into()];
+        st
+    }
+
+    #[test]
+    fn an_unmounted_boot_is_one_note_not_a_broken_system() {
+        let st = unmounted_boot();
+        // Without the guard: the known-good kernel "is gone", there are "0 bootable kernels".
+        assert!(st.kernels.iter().all(|k| !k.bootable()));
+        let f = check(&st, None, true, 2, true);
+        assert_eq!(f.len(), 1, "{f:#?}");
+        assert_eq!(f[0].severity, Severity::Info);
+        assert_eq!(f[0].title, "The boot partition is not mounted");
+        assert_eq!(f[0].fixes, vec![Fix::MountBoot("/boot".into())]);
+        // The admin scan makes no difference: there is still nothing to compare it with.
+        let scan = BootScan { root: true, ..Default::default() };
+        assert_eq!(check(&st, Some(&scan), true, 2, true).len(), 1);
+        // And no kernel is offered for removal.
+        assert!(st.removable(0).is_empty() && st.removable(1).is_empty());
+    }
+
+    #[test]
+    fn with_boot_mounted_nothing_changes() {
+        let mut st = unmounted_boot();
+        st.boot_unmounted.clear();
+        let f = check(&st, None, true, 2, true);
+        assert!(f.iter().any(|x| x.severity == Severity::Error && x.title.contains("no longer bootable")), "{f:#?}");
+        assert!(f.iter().any(|x| x.title.contains("Only 0 bootable")), "{f:#?}");
+        assert!(!f.iter().any(|x| x.title.contains("not mounted")));
+        let ok = state();
+        assert_eq!(ok.removable(1).len(), 1);
+    }
+
+    #[test]
+    fn an_unmounted_esp_only_silences_the_boot_menu_check() {
+        let mut st = state();
+        st.boot_unmounted = vec!["/boot/efi".into()];
+        let scan = BootScan { root: true, ..Default::default() };
+        let f = check(&st, Some(&scan), true, 2, true);
+        assert!(f.iter().any(|x| x.title == "/boot/efi is not mounted" && x.fixes == vec![Fix::MountBoot("/boot/efi".into())]), "{f:#?}");
+        assert!(!f.iter().any(|x| x.title.contains("GRUB") || x.title == "Boot setup looks good"), "{f:#?}");
+        // The kernels in /boot are still judged.
+        assert!(st.removable(1).len() == 1);
     }
 
     #[test]

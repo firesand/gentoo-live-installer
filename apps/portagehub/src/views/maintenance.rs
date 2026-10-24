@@ -119,6 +119,16 @@ fn apply_fix(app: &mut App, ks: &KernelState, fix: &Fix) {
             kind: JobKind::BootFix,
             reload: vec![],
         }),
+        Fix::MountBoot(target) => {
+            // `mount -o ro <target>` from fstab: reading is all the check needs, and it is the safe
+            // way to look at a partition a kernel update has not asked to write to.
+            app.push(Action::RootOp {
+                title: format!("Mount {target}"),
+                op: Op::Remount { target: target.clone(), rw: false },
+                kind: JobKind::Remount,
+                reload: vec![Reload::Kernels],
+            });
+        }
         Fix::Depclean(atoms) => {
             let t: Vec<&str> = atoms.iter().map(|s| s.as_str()).collect();
             app.push(Action::Pretend(EmergeOptions { action: emerge::Action::Depclean, ..Default::default() }.targets(&t)));
@@ -139,6 +149,7 @@ fn fix_label(fix: &Fix) -> (&'static str, String) {
         Fix::RemoveOld(_) => (icon::TRASH, "Remove the .old copies".into()),
         Fix::RemoveLeftovers(_) => (icon::TRASH, "Remove leftover files".into()),
         Fix::Depclean(_) => (icon::BROOM, "Preview depclean".into()),
+        Fix::MountBoot(target) => (icon::HARD_DRIVES, format!("Mount {target}")),
     }
 }
 

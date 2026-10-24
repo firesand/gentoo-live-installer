@@ -962,6 +962,11 @@ impl App {
                 self.invalidate_mounts();
                 if ok {
                     self.toast(ToastKind::Success, format!("{}: done", job.title));
+                    // What /boot holds (kernels, boot menu) may only be visible now.
+                    self.spawn_load(Reload::Kernels);
+                    if self.exec.root_ready() {
+                        self.actions.push(Action::RootOp { title: "Read boot configuration".into(), op: Op::BootScan, kind: JobKind::BootScan, reload: vec![] });
+                    }
                 } else {
                     self.toast(ToastKind::Error, format!("{} failed: {}", job.title, job.error.clone().unwrap_or_else(|| job.output().lines().last().unwrap_or("").to_string())));
                 }

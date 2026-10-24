@@ -174,3 +174,29 @@ fn a_fifo_where_a_config_file_belongs_does_not_stall_the_helper() {
     assert!(matches!(events.lock().unwrap().last(), Some(portagehub::protocol::Event::Ok { id: 1 })));
     let _ = Path::new("");
 }
+
+// --- mounting a noauto /boot ----------------------------------------------------------------
+
+#[test]
+fn an_fstab_only_boot_partition_is_mounted_read_only_from_fstab() {
+    // Only the argv is built here; nothing is mounted.
+    let r = Root::new("mountboot");
+    std::fs::create_dir_all(r.0.join("etc")).unwrap();
+    std::fs::write(r.0.join("etc/fstab"), "# noauto /boot\nUUID=0000-0000 /efi vfat noauto,rw 0 2\n").unwrap();
+    let host = std::fs::read_to_string("/proc/mounts").unwrap_or_default();
+    if host.lines().any(|l| l.split_whitespace().nth(1) == Some("/efi")) {
+        eprintln!("SKIP: /efi is mounted on this machine");
+        return;
+    }
+    match rootops::remount_argv(&r.0, "/efi", false) {
+        Ok((program, args)) => {
+            assert!(program.ends_with("/mount"), "{program}");
+            assert_eq!(args, vec!["-o", "ro", "/efi"], "a fresh mount, not a remount");
+        }
+        Err(e) => assert_eq!(e, "mount not found"),
+    }
+    // Neither mounted nor in fstab: nothing to do.
+    assert!(rootops::remount_argv(&r.0, "/boot", false).is_err() || host.lines().any(|l| l.split_whitespace().nth(1) == Some("/boot")));
+    // Only boot mount points, whatever the fstab says.
+    assert!(rootops::remount_argv(&r.0, "/home", false).unwrap_err().contains("not a boot mount point"));
+}
