@@ -277,6 +277,15 @@ def test_type_mismatch_gets_a_keep_proposal() -> None:
     assert proposal.status == "type_mismatch" and proposal.default_action == "keep"
 
 
+@pytest.mark.parametrize("options,action", [("rw,noatime,nofail", "keep"), ("noauto,user", "keep"), ("noatime", "nofail"), ("defaults", "nofail")])
+def test_a_dead_entry_that_cannot_hold_up_the_boot_is_kept_not_commented_out(options: str, action: str) -> None:
+    """An external drive marked nofail is simply not plugged in: nothing needs to change, and its automount must not be switched off."""
+    graph = build_graph(lf.plain_sata_mbr())
+    fstab = Fstab.parse(f"UUID={fr.ROOT_UUID} / ext4 defaults 0 1\nUUID={fr.DEAD_UUID} /mnt/Extern2 ext4 {options} 0 2\n")
+    proposal = propose_fixes(fstab, resolve_all(fstab, graph), graph, root_node=graph.find("/dev/sda1"))[0]
+    assert proposal.selected == "" and proposal.default_action == action
+
+
 def test_apply_choices_validates_replacements() -> None:
     graph = build_graph(lf.plain_sata_mbr())
     fstab = Fstab.parse(f"UUID={fr.DEAD_UUID} / ext4 defaults 0 1\nUUID={fr.DEAD_UUID} /data ext4 defaults 0 2\nUUID={fr.DEAD_UUID} /old ext4 defaults 0 2\n/dev/sda6 /home ext4 defaults 0 2\n")

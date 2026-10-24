@@ -461,8 +461,8 @@ def propose_fixes(
         candidates.sort(key=lambda c: (-c.score, c.device))
         proposal.candidates = candidates[:8]
         _maybe_select(proposal, entry, pool, graph, root_disks, probe)
-        if not proposal.selected:
-            proposal.default_action = "nofail" if not entry.has_option("nofail") else "comment"
+        if not proposal.selected:  # a drive marked nofail or noauto is just not plugged in: nothing needs to change, and its automount is not ours to switch off
+            proposal.default_action = "keep" if entry.has_option("nofail") or entry.has_option("noauto") else "nofail"
         proposals.append(proposal)
     return proposals
 

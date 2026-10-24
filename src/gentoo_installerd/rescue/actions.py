@@ -395,6 +395,9 @@ def _plan_fstab_fix(b: PlanBuilder, manager: RescueManager) -> None:
     except ValueError as exc:
         raise RescueError("bad_request", str(exc), param="choices") from exc
     new_text = updated.render()
+    if new_text == text:
+        raise Unsupported("No line of /etc/fstab needs to change. The entries that point at disks which are not here already have 'nofail' or 'noauto', so booting does not wait for them, "
+                          "or they have a file system type that you have to correct by hand.")
     b.title, b.risk = "Fix the disk list (fstab)", "high"
     b.summary = "Replaces or relaxes the entries of /etc/fstab that point at disks that are not there. A copy of the old file is kept."
     b.diff = unified_diff(text, new_text)
@@ -403,8 +406,14 @@ def _plan_fstab_fix(b: PlanBuilder, manager: RescueManager) -> None:
     b.needs["write"] = True
     b.check("fstab_resolves", ignore=[int(k) for k, v in chosen.items() if v.get("action") in {"nofail", "comment", "keep"}])
     for proposal in proposals:
-        if not proposal.selected and not given.get(str(proposal.lineno)) and proposal.default_action != "keep":
+        if proposal.selected or given.get(str(proposal.lineno)):
+            continue
+        action = chosen[proposal.lineno]["action"]
+        if action == "nofail":
             b.warn(f"{proposal.mountpoint}: no safe replacement was chosen automatically; the entry is marked 'nofail' so booting does not wait for it.")
+        elif action == "keep":
+            b.notes.append(f"{proposal.mountpoint}: left as it is. " + ("The file system type is wrong; correct it by hand." if proposal.status == "type_mismatch"
+                                                                     else "It already has 'nofail' or 'noauto', so a disk that is not plugged in does not stop the boot."))
     verify = _verify_fstab(b, new_text)
     if verify:
         b.warn("findmnt --verify on the result: " + verify)

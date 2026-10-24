@@ -39,6 +39,51 @@ def test_fstab_fix_preselects_only_what_is_safe_and_shows_a_diff(lab_factory) ->
     assert len(backups) == 1 and backups[0].read_text() == DEAD_FSTAB and oct(backups[0].stat().st_mode & 0o777) == "0o600"
 
 
+AUTHOR_FSTAB = (f"UUID={fr.ROOT_UUID}\t/\text4\tnoatime\t0 1\nUUID={fr.DEAD_UUID}\t/efi\tvfat\tumask=0077\t0 2\n"
+                "UUID=97af3e70-654c-4d96-8f88-32b2e9753e75\t/mnt/Extern2\text4\trw,noatime,nofail\t0 2\nUUID=0d8acaaf-9bd7-4bac-8dd1-cad07ff15f48\t/mnt/Extern3\text4\trw,noatime,nofail\t0 2\n"
+                "UUID=11111111-aaaa-4bbb-8ccc-222222222222\t/mnt/Old\text4\tnoatime\t0 2\n")
+
+
+def test_fstab_fix_leaves_unplugged_nofail_drives_alone(lab_factory) -> None:
+    """A wrong ESP UUID puts fstab.fix into 'Fix everything', which processes every dead line: the external drives that are only not plugged in must keep their lines."""
+    lab, tree = uefi_gentoo_lab(lab_factory, fstab=AUTHOR_FSTAB)
+    (tree / "efi").mkdir(exist_ok=True)
+    manager, sid, info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    assert "fstab.fix" in info["recommended"]
+    plan = manager.plan({"session_id": sid, "action_id": "fstab.fix"})
+    changed = [line for line in plan["diff"].splitlines() if line[:1] in "+-" and not line.startswith(("+++", "---"))]
+    assert f"+UUID={fr.ESP_UUID}\t/efi\tvfat\tumask=0077\t0 2" in changed
+    assert not any("Extern" in line for line in changed)  # not touched (they only show as context around the lines that are)
+    assert "+UUID=11111111-aaaa-4bbb-8ccc-222222222222\t/mnt/Old\text4\tnoatime,nofail\t0 2" in changed  # a drive without nofail is relaxed, as before
+    assert any("/mnt/Old" in warning and "'nofail'" in warning for warning in plan["warnings"])
+    assert not any("Extern" in warning for warning in plan["warnings"])
+    kept = [note for note in plan["notes"] if "left as it is" in note]
+    assert len(kept) == 2 and "/mnt/Extern2" in kept[0] and "/mnt/Extern3" in kept[1] and all("nofail" in note for note in kept)  # the person is told what was not touched
+    assert {line: choice["action"] for line, choice in plan["params"]["choices"].items()} == {"2": "replace", "3": "keep", "4": "keep", "5": "nofail"}
+    plan, result, _ = plan_and_run(manager, sid, "fstab.fix")
+    assert result["outcome"] == "success" and all(check["ok"] for check in result["post_checks"])
+    unmount(manager, sid)
+    text = (tree / "etc/fstab").read_text()
+    assert "/mnt/Extern2\text4\trw,noatime,nofail\t0 2" in text and "/mnt/Extern3\text4\trw,noatime,nofail\t0 2" in text and "# disabled" not in text
+
+
+def test_fstab_fix_says_so_when_every_dead_entry_is_already_harmless(lab_factory) -> None:
+    fstab = (f"UUID={fr.ROOT_UUID}\t/\text4\tnoatime\t0 1\nUUID=97af3e70-654c-4d96-8f88-32b2e9753e75\t/mnt/Extern2\text4\trw,noatime,nofail\t0 2\n"
+             f"UUID=0d8acaaf-9bd7-4bac-8dd1-cad07ff15f48\t/mnt/Extern3\text4\tnoauto\t0 2\n")
+    lab, _tree = uefi_gentoo_lab(lab_factory, fstab=fstab)
+    manager, sid, info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    spec = {a["id"]: a for a in info["actions"]}["fstab.fix"]
+    assert spec["available"] is False and "nofail" in spec["reason"]
+    with pytest.raises(RescueError) as failed:
+        manager.plan({"session_id": sid, "action_id": "fstab.fix"})
+    assert failed.value.short == "unsupported_action"
+    # the person may still choose a line on purpose
+    plan = manager.plan({"session_id": sid, "action_id": "fstab.fix", "params": {"choices": {"2": {"action": "comment"}}}})
+    changed = [line for line in plan["diff"].splitlines() if line[:1] in "+-" and not line.startswith(("+++", "---"))]
+    assert "+# disabled by gentoo-rescue: device not found" in changed and not any("Extern3" in line for line in changed if not line.startswith("-"))
+    unmount(manager, sid)
+
+
 def test_fstab_fix_refuses_when_the_file_was_edited_after_the_plan(lab_factory) -> None:
     lab, tree = uefi_gentoo_lab(lab_factory, fstab=DEAD_FSTAB)
     manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
