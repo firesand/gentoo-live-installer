@@ -274,6 +274,36 @@ def test_a_broken_sudo_makes_the_fallback_check_a_finding_that_only_a_strict_run
     assert "efi-fallback" in findings(lab) and "cannot use sudo" in findings(lab)["efi-fallback"]["error"]
 
 
+def test_a_bios_install_has_the_boot_flag_of_its_disk_read_in_the_installed_system(lab):
+    lab.rules = guest_rules(vm, "bios")
+    assert lab.run("--scenario", "bios") == 0
+    probe = {p["name"]: p for p in lab.result()["probes"]}["boot-flag"]
+    assert probe["success"] and not probe["advisory"] and json.loads(probe["output"])["partition"] == 2
+    calls = [call for call in lab.ssh_calls() if vm.vm_probes.BOOT_FLAG_MARK in call["remote"]]
+    assert len(calls) == 1 and calls[0]["user"] == vm.TEST_USERNAME and calls[0]["remote"].startswith("sudo -S -p '' python3 -c ")
+
+
+@pytest.mark.parametrize(("name", "words"), [("bios", "no partition of the DOS disk"), ("bios-gpt", "protective MBR of the GPT disk")])
+def test_a_bios_install_whose_disk_has_no_boot_flag_fails_the_run(lab, name, words):
+    lab.rules = guest_rules(vm, name, boot_flag=False)
+    assert lab.run("--scenario", name) == 1
+    error = lab.result()["error"]
+    assert "boot-flag: " in error and words in error and "no bootable device" in error
+
+
+def test_the_boot_flag_of_a_uefi_install_is_not_looked_at(lab):
+    lab.rules = guest_rules(vm, "openrc")
+    assert lab.run("--scenario", "openrc") == 0
+    assert "boot-flag" not in {probe["name"] for probe in lab.result()["probes"]}
+    assert not any(vm.vm_probes.BOOT_FLAG_MARK in call["remote"] for call in lab.ssh_calls())
+
+
+def test_a_boot_flag_that_cannot_be_read_because_sudo_is_broken_is_a_finding(lab):
+    lab.rules = [{"user": "^vmtest$", "match": vm.vm_probes.BOOT_FLAG_MARK, "rc": 1, "stdout": "sudo: a password is required\n"}] + guest_rules(vm, "bios")
+    assert lab.run("--scenario", "bios") == 0
+    assert "cannot use sudo" in findings(lab)["boot-flag"]["error"]
+
+
 def test_a_bios_install_has_no_fallback_probe(lab):
     lab.rules = guest_rules(vm, "bios")
     assert lab.run("--scenario", "bios") == 0

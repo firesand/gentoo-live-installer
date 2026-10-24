@@ -5,10 +5,11 @@ the output and returns a ``ProbeResult``. Nothing here starts a process or touch
 rule is tested on sample output without a VM. ``scripts/test-vm.py`` owns the list of probes and
 runs them; this module owns what "correct" means for the checks added for the hardware-aware
 installer: the install receipt, the hardware plan, the swap of an encrypted install, the removable
-EFI fallback, the layout of a manual install and the state of the Portage world.
+EFI fallback, the boot flag of a BIOS install, the layout of a manual install and the state of the Portage world.
 """
 from __future__ import annotations
 
+import inspect
 import json
 import re
 import shlex
@@ -249,6 +250,117 @@ def booted_through_fallback(serial_text: str) -> bool:
     """Whether the last boot option OVMF started was the removable-media path."""
     choices = firmware_boot_choices(serial_text)
     return bool(choices) and choices[-1]["path"].upper().endswith("\\EFI\\BOOT\\BOOTX64.EFI")
+
+
+# --- the boot flag of a BIOS install ----------------------------------------------------------------------------------------------
+
+def decode_mbr(sector: bytes) -> dict:
+    # This function also runs in the guest (BOOT_FLAG_SNIPPET is built from its source): keep it standalone and its annotations builtin.
+    """The boot signature and the four partition entries of a first sector: status byte (0x80 = active), type, first sector and length."""
+    entries = []
+    for number in range(1, 5):
+        base = 446 + 16 * (number - 1)
+        entries.append({"number": number, "status": sector[base], "type": sector[base + 4],
+                        "start": int.from_bytes(sector[base + 8:base + 12], "little"), "sectors": int.from_bytes(sector[base + 12:base + 16], "little")})
+    return {"signature": sector[510:512].hex(), "entries": entries}
+
+
+BOOT_FLAG_MARK = "gentoo-vm boot-flag probe"
+BOOT_FLAG_SNIPPET = f"# {BOOT_FLAG_MARK}\n" + inspect.getsource(decode_mbr) + r"""
+import json, os, re, subprocess, sys
+
+sysfs = sys.argv[1] if len(sys.argv) > 1 else '/sys/class/block'
+devices = sys.argv[2] if len(sys.argv) > 2 else '/dev'
+
+
+def source(mountpoint):
+    done = subprocess.run(['findmnt', '-no', 'SOURCE', mountpoint], capture_output=True, text=True)
+    return re.sub(r'\[.*\]$', '', done.stdout.strip()) if done.returncode == 0 else ''
+
+
+def partition_of(name, depth=0):
+    base = os.path.join(sysfs, name)
+    if os.path.exists(os.path.join(base, 'partition')):
+        return name
+    slaves = os.path.join(base, 'slaves')
+    if depth < 4 and os.path.isdir(slaves):
+        for slave in sorted(os.listdir(slaves)):
+            found = partition_of(slave, depth + 1)
+            if found:
+                return found
+    return ''
+
+
+report = {}
+try:
+    for mountpoint in ('/boot', '/'):
+        device = source(mountpoint)
+        if device:
+            report.update(holder=mountpoint, source=device)
+            break
+    if not report:
+        raise RuntimeError('neither /boot nor / is a mount point')
+    name = partition_of(os.path.basename(os.path.realpath(report['source'])))
+    if not name:
+        raise RuntimeError(report['source'] + ' is not on a partition')
+    base = os.path.realpath(os.path.join(sysfs, name))
+    disk = os.path.basename(os.path.dirname(base))
+    with open(os.path.join(base, 'partition')) as stream:
+        report['partition'] = int(stream.read())
+    with open(os.path.join(devices, disk), 'rb') as stream:
+        sector = stream.read(512)
+    report.update(disk='/dev/' + disk, **decode_mbr(sector))
+except (OSError, RuntimeError, ValueError) as exc:
+    report['error'] = str(exc)
+print(json.dumps(report))
+sys.exit(1 if 'error' in report else 0)
+"""
+
+
+def boot_flag_command() -> str:
+    """Reads the first sector of the disk that holds /boot (else /); the disk can only be read by root."""
+    return "sudo -S -p '' " + shlex.join(("python3", "-c", BOOT_FLAG_SNIPPET))
+
+
+def boot_flag_problems(report: Mapping[str, Any]) -> list[str]:
+    """Why strict BIOS firmware would not start this disk: a GPT disk needs the boot flag in its protective MBR, a DOS disk one active partition, the one that holds /boot (else /)."""
+    disk = report.get("disk", "the disk")
+    if report.get("signature") != "55aa":
+        return [f"the first sector of {disk} has no boot signature (55aa), so no firmware starts it"]
+    entries = report["entries"]
+    problems = [f"partition entry {entry['number']} has the status byte 0x{entry['status']:02x}, which a BIOS refuses (only 0x00 and 0x80 are valid)"
+                for entry in entries if entry["status"] not in (0, 0x80)]
+    if entries[0]["type"] == 0xEE:  # GPT: the protective MBR is what a BIOS looks at
+        if entries[0]["status"] != 0x80:
+            problems.append(f"the protective MBR of the GPT disk {disk} has no boot flag (byte 446 is 0x{entries[0]['status']:02x}): "
+                            "strict BIOS firmware says 'no bootable device'")
+        return problems
+    active = [entry["number"] for entry in entries if entry["status"] == 0x80]
+    wanted, holder = report.get("partition"), report.get("holder", "/")
+    if isinstance(wanted, int) and wanted > 4:
+        problems.append(f"{holder} is on logical partition {wanted}, which cannot be active")
+    elif not active:
+        problems.append(f"no partition of the DOS disk {disk} is active (0x80): strict BIOS firmware says 'no bootable device'")
+    elif len(active) > 1:
+        problems.append(f"{len(active)} partitions are active ({', '.join(map(str, active))}): a BIOS expects one")
+    elif isinstance(wanted, int) and active != [wanted]:
+        problems.append(f"partition {active[0]} is active, but {holder} is on partition {wanted}")
+    return problems
+
+
+def parse_boot_flag_probe(returncode: int, output: str) -> ProbeResult:
+    problem = _sudo_problem("boot-flag", returncode, output)
+    if problem:
+        return problem
+    clean = ANSI_RE.sub("", output).strip()
+    try:
+        report = json.loads(clean.splitlines()[-1])
+    except (IndexError, json.JSONDecodeError):
+        return ProbeResult("boot-flag", False, clean[-400:], "the check returned no JSON evidence")
+    if "error" in report:
+        return ProbeResult("boot-flag", False, clean, f"the boot flag of the installed disk could not be read: {report['error']}")
+    problems = boot_flag_problems(report)
+    return ProbeResult("boot-flag", not problems, clean, "; ".join(problems))
 
 
 # --- manual layouts -----------------------------------------------------------------------------------------------------------

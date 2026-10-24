@@ -14,6 +14,7 @@ import sys
 import types
 from pathlib import Path
 
+import vm_probes
 from gentoo_installer.layout import luks_mapper_name
 from tests.vm.helpers import PUBLIC_KEY
 
@@ -105,6 +106,15 @@ def plan_record(plan: dict) -> dict:
             "created": "2026-10-24T11:09:05.376Z", "plan": plan}
 
 
+def boot_flag_report(vm, scenario_name: str, firmware: str | None = None, *, flagged: bool = True) -> dict:
+    """What the boot-flag probe's program prints in a guest whose disk is (or is not) flagged: the first sector is one parted and sgdisk really wrote."""
+    gpt = scenario_manifest(vm, scenario_name, firmware).storage.table == "gpt"
+    image = ("gpt-pmbr-boot" if flagged else "gpt-no-flag") if gpt else ("dos-root-active" if flagged else "dos-no-flag")
+    partition = 3 if gpt else 2  # BIOS boot, swap, root on GPT; swap, root on DOS
+    sector = (Path(__file__).resolve().parent / "data" / f"mbr-{image}.bin").read_bytes()
+    return {"holder": "/", "source": f"/dev/vda{partition}", "partition": partition, "disk": "/dev/vda", **vm_probes.decode_mbr(sector)}
+
+
 def package_database(plan: dict) -> str:
     """What the package check prints on a machine where every package of the plan was installed (and nothing else)."""
     wanted = {atom for field in ("early_atoms", "driver_atoms", "required_atoms", "optional_atoms") for atom in plan.get(field, [])}
@@ -122,11 +132,11 @@ def layout_output(vm, scenario_name: str) -> str:
 
 def guest_rules(vm, scenario_name: str, *, guard: str = "vm_disk_guard", install: list | None = None,
                 companions: bool = True, extra: list | None = None, guard_options: dict | bool = True,
-                swap_mib: int = 512, firmware: str | None = None, sudo: bool = False) -> list[dict]:
+                swap_mib: int = 512, firmware: str | None = None, sudo: bool = False, boot_flag: bool = True) -> list[dict]:
     """Rules for a guest that installs and boots successfully, in the order the harness needs them.
 
     ``sudo`` gives the test user a working sudo: the probes that need it answer instead of ending up as findings,
-    so a ``--strict-probes`` run of a good guest can pass.
+    so a ``--strict-probes`` run of a good guest can pass. ``boot_flag`` says whether the BIOS disk carries its boot flag.
     """
     scenario = vm.SCENARIO_MAP[scenario_name]
     plan = hardware_plan_for(vm, scenario_name, firmware)
@@ -177,6 +187,9 @@ def guest_rules(vm, scenario_name: str, *, guard: str = "vm_disk_guard", install
         {"user": "^vmtest$", "match": r"^sh -c .* sh sys-firmware/intel-microcode", "stdout": package_database(plan)},
     ]
     rules.append({"user": "^vmtest$", "match": r"/var/db/pkg/", "stdout": "plasma-meta\n"})
+    guided = scenario_manifest(vm, scenario_name, firmware).storage
+    if guided.firmware == "bios" and guided.mode == "erase":
+        rules.append({"user": "^vmtest$", "match": vm_probes.BOOT_FLAG_MARK, "stdout": json.dumps(boot_flag_report(vm, scenario_name, firmware, flagged=boot_flag)) + "\n"})
     if sudo:
         locked = scenario_manifest(vm, scenario_name, firmware).accounts.disable_root_login
         rules += [

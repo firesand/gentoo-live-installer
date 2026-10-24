@@ -1324,6 +1324,9 @@ def installed_system_probes(manifest: InstallManifest, scenario: Scenario, *, wo
     ]
     if vm_probes.expects_efi_fallback(manifest):
         probes.append(("efi-fallback", vm_probes.efi_fallback_command(manifest), vm_probes.parse_efi_fallback_probe, password))
+    if manifest.storage.firmware == "bios" and manifest.storage.mode == "erase":
+        # SeaBIOS never asks for the boot flag, so only the disk can show that strict BIOS firmware would start it.
+        probes.append(("boot-flag", vm_probes.boot_flag_command(), vm_probes.parse_boot_flag_probe, password))
     if manifest.storage.mode == "manual" and manifest.storage.partitions:
         rows = list(manifest.storage.partitions)
         probes.append(("layout", vm_probes.LAYOUT_COMMAND, lambda c, o: vm_probes.parse_layout_probe(c, o, rows)))
