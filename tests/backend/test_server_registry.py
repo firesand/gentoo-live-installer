@@ -61,6 +61,18 @@ class RegistryTests(unittest.TestCase):
         registry.register_action("x.one", second, replace=True)
         self.assertIs(registry.lookup("x.one"), second)
 
+    def test_a_bound_method_may_be_registered_again(self) -> None:
+        # rescue.api.register(registry) can run twice in one process (tests, a restarted daemon object)
+        class Api:
+            def scan(self, request, channel): ...
+
+        api = Api()
+        registry = ActionRegistry()
+        registry.register_action("rescue.scan", api.scan)
+        registry.register_action("rescue.scan", api.scan)  # a new bound-method object, equal to the first
+        with self.assertRaises(ValueError):
+            registry.register_action("rescue.scan", Api().scan)
+
     def test_bad_names_and_handlers_are_rejected(self) -> None:
         registry = ActionRegistry()
         for name in ("", "has space", "9lead", "semi;colon", None):

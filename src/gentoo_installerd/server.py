@@ -216,7 +216,7 @@ class ActionRegistry:
         if not callable(handler):
             raise TypeError("An action handler must be callable")
         with self._lock:
-            if name in self._actions and self._actions[name] is not handler and not replace:
+            if name in self._actions and self._actions[name] != handler and not replace:
                 raise ValueError(f"Action {name!r} is already registered")
             self._actions[name] = handler
             if feature:
