@@ -329,3 +329,10 @@ def test_build_output_cannot_drive_the_terminal(installer, host: FakeHost) -> No
     outcome = follower.run(start_request())
     assert "\x1b" not in script.text and "50% done" in script.text and "Emerging (1 of 1)" not in script.text  # the \r kept only what follows it
     assert "Error: bad thing" in script.text and outcome.message == "\x1b[31mbad\x1b[0m thing"  # the Outcome keeps the raw text; printing cleans it
+
+
+def test_a_progress_message_with_a_big_payload_is_shown_without_it(installer, host: FakeHost) -> None:
+    fake = installer(jobs=[[progress("preflight", 5, "System readiness checked", inspection={"disks": ["a" * 5000]}), completed(True)]])
+    follower, script = follower_for(fake, host)
+    follower.run(start_request())
+    assert "[  5%]   System readiness checked" in script.text and "aaaa" not in script.text

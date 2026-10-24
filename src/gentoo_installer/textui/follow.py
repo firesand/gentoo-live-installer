@@ -171,7 +171,7 @@ class TextSink:
                 self._last_download = percent
                 self.console.say(f"{self._prefix()}   Downloaded {human_size(int(downloaded))} of {human_size(int(total))}")
             return
-        if message and message != self._last_message and "inspection" not in data:
+        if message and message != self._last_message:
             self._last_message = message
             self.console.say(f"{self._prefix()}   {clip(message, self.console.width - 9)}")
 
