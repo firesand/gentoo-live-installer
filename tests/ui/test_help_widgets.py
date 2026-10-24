@@ -35,7 +35,7 @@ def test_help_note_shows_the_sentence_and_a_handbook_link(qapp, monkeypatch):
     assert note.popup.link is not None and HANDBOOK_LINKS["Kernel"] in note.popup.link.text()
     note.popup.link.linkActivated.emit(HANDBOOK_LINKS["Kernel"])
     assert opened == [HANDBOOK_LINKS["Kernel"]]
-    assert note.accessibleName() and note.text == note.accessibleDescription()
+    assert note.accessibleName() and note.note_text == note.accessibleDescription()
     note.popup.close()
 
 

@@ -92,7 +92,7 @@ class HelpNote(QToolButton):
 
     def __init__(self, text: str, handbook_anchor: str | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.text = text
+        self.note_text = text
         self.url = handbook_url(handbook_anchor) if handbook_anchor else ""
         self.setText("i")
         self.setObjectName("helpNote")
@@ -114,7 +114,7 @@ class HelpNote(QToolButton):
         """Open the note below the button (also what a click does)."""
         if self.popup is not None:
             self.popup.close()
-        self.popup = _Popup(self.text, self.url, self)
+        self.popup = _Popup(self.note_text, self.url, self)
         self.popup.adjustSize()
         self.popup.move(self.mapToGlobal(self.rect().bottomLeft()))
         self.popup.show()
