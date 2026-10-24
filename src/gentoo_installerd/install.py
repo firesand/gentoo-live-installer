@@ -997,17 +997,25 @@ class Installer:
 
     def _validate(self) -> None:
         cfg = self.configurer
-        for path in ("etc/fstab", "etc/portage/make.conf"):
-            cfg.chroot(("test", "-s", f"/{path}"))
-        cfg.chroot(("getent", "passwd", self.manifest.accounts.username))
-        problems = cfg.verify_boot_setup(self.manifest, self._root_device(), root_uuid=self._uuid_of(self._root_device()), plan=self._plan())
-        modules = cfg.initramfs_modules()
-        if modules is not None:
-            for wanted, needed in (("crypt", self.manifest.storage.luks), ("lvm", self.manifest.storage.lvm)):
-                if needed and wanted not in modules:
-                    problems.append(f"The initramfs lacks the {wanted} module, so the root filesystem could not be opened at boot")
-        if problems:
-            raise InstallError("The installed system failed its final checks: " + "; ".join(problems))
+        try:
+            for path in ("etc/fstab", "etc/portage/make.conf"):
+                cfg.chroot(("test", "-s", f"/{path}"))
+            cfg.chroot(("getent", "passwd", self.manifest.accounts.username))
+            problems = cfg.verify_boot_setup(self.manifest, self._root_device(), root_uuid=self._uuid_of(self._root_device()), plan=self._plan())
+            modules = cfg.initramfs_modules()
+            if modules is not None:
+                for wanted, needed in (("crypt", self.manifest.storage.luks), ("lvm", self.manifest.storage.lvm)):
+                    if needed and wanted not in modules:
+                        problems.append(f"The initramfs lacks the {wanted} module, so the root filesystem could not be opened at boot")
+            if problems:
+                raise InstallError("The installed system failed its final checks: " + "; ".join(problems))
+        except InstallCancelled:
+            raise
+        except Exception:
+            # The bootloader stage set this flag. A system that does not pass its final checks is not one the
+            # clients may call bootable: they would offer "Restart" and hide "Start over".
+            self._bootable = False
+            raise
         if self.manifest.system.desktop != "minimal":
             self.log("Desktop packages installed; graphical session will be available after reboot")
         # Last: nothing after this point needs name resolution inside the target.
