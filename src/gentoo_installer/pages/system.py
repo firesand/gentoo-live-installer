@@ -246,9 +246,11 @@ class SystemPage(Page):
                 self.profile.addItem(f"{keep} (not a published profile)", keep)
             self.profile.setCurrentIndex(self.profile.count() - 1)
 
-    def _apply_family_constraints(self) -> None:
+    def _apply_family_constraints(self, user_change: bool = True) -> None:
         """Disable the desktops the chosen stage3 cannot build; when the user's
-        own change made the current desktop impossible, fall back to Minimal."""
+        own change made the current desktop impossible, fall back to Minimal.
+        A manifest that is merely loaded is never changed here (the page then
+        refuses it instead)."""
         if not hasattr(self, "desktop_group"):
             return
         family = stage_family(self.stage.currentData() or "")
@@ -257,7 +259,7 @@ class SystemPage(Page):
             reason = "" if key in supported else desktop_problem(f"amd64-{family}", key)
             self.desktop_group.set_card_enabled(key, key in supported, reason)
         chosen = self.desktop_group.value()
-        if chosen and chosen != "minimal" and chosen not in supported and not self._loading:
+        if chosen and chosen != "minimal" and chosen not in supported and user_change and not self._loading:
             name = {"kde": "KDE Plasma", "gnome": "GNOME", "xfce": "Xfce"}[chosen]
             self.desktop_group.set_value("minimal")
             self.family_note.setText(f"{name} needs a Standard or Desktop stage3, so the selection was changed to the Minimal system. Choose a Standard stage3 to use {name}.")
@@ -325,7 +327,7 @@ class SystemPage(Page):
             self._bootloader_changed()
         finally:
             self._loading -= 1
-        self._apply_family_constraints()
+        self._apply_family_constraints(user_change=False)
 
     def save_manifest(self) -> None:
         system = self.manifest.system

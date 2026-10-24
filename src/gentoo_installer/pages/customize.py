@@ -199,6 +199,7 @@ class CustomizePage(Page):
         display for the graphical companion apps, so they start unticked (and are
         restored when a desktop is chosen again); the user can tick them anyway."""
         options = self.manifest.options
+        self.manifest.system.desktop = desktop
         if desktop == "minimal":
             if options.install_hwmonux or options.install_portagehub:
                 self._cleared_companions = (options.install_hwmonux, options.install_portagehub)
