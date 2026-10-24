@@ -4,7 +4,10 @@ target: livecd-stage2
 rel_type: 23.0-default
 profile: default/linux/amd64/23.0/desktop
 snapshot_treeish: @TREEISH@
-source_subpath: 23.0-default/livecd-stage1-amd64-@VERSION_STAMP@
+# The extension is part of the path: Catalyst's file_check otherwise globs '<path>.*' and, besides the
+# archive, finds the reuse receipt (<archive>.receipt.json) next to it - an 'Ambiguous Filename' error.
+# It follows stage1's compression_mode (gzip).
+source_subpath: 23.0-default/livecd-stage1-amd64-@VERSION_STAMP@.tar.gz
 compression_mode: gzip
 portage_confdir: @BUILD_DIR@/portage
 repos: @BUILD_DIR@/overlay
