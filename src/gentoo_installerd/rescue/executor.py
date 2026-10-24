@@ -41,6 +41,7 @@ class PlanExecutor:
         self.chroot_state = ""  # "" until the smoke test ran, then "ok" or "broken"
         self.killed = False  # a forced cancel stopped a command
         self.results: list[dict[str, Any]] = []
+        self._streamed = 0
         self._window = 0.0
         self._count = 0
         self._dropped = 0
@@ -59,6 +60,10 @@ class PlanExecutor:
                 continue
             self._count += 1
             self.op.log(line)
+
+    def _stream(self, line: str) -> None:
+        self._streamed += 1
+        self._log(line)
 
     def _should_run(self, step: Step) -> bool:
         if step.when == "chroot_ok":
@@ -79,6 +84,7 @@ class PlanExecutor:
         self.op.stage("step", step.display, progress, step=step.id, status="running", index=index + 1, total=total, atomic=step.atomic)
         started = time.monotonic()
         rc, output, error = 0, "", ""
+        self._streamed = 0
         try:
             if step.id == SMOKE_ID:
                 rc, output = self._smoke(step)
@@ -92,7 +98,7 @@ class PlanExecutor:
             rc, error = 1, f"{exc.strerror or exc}"
             output = error
         duration = round(time.monotonic() - started, 2)
-        if output:
+        if output and not self._streamed:  # a runner that cannot stream (or a step that is not a command) reports its output at the end
             self._log(tail(output, 4000))
         ok = rc in step.ok_rc and not error
         if step.id == SMOKE_ID:
@@ -120,6 +126,13 @@ class PlanExecutor:
 
     # ---- the plan ----------------------------------------------------------------------------------------------------------------------------
     def execute(self) -> dict[str, Any]:
+        self.session.live_output = self._stream
+        try:
+            return self._execute()
+        finally:
+            self.session.live_output = None
+
+    def _execute(self) -> dict[str, Any]:
         steps = self.plan.steps
         total = len(steps) + len(self.plan.cleanup)
         outcome = "success"

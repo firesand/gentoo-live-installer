@@ -77,6 +77,8 @@ class RescueRunner:
         except InstallCancelled as exc:  # a forced cancel killed the command (or was already pending)
             self.audit.record("cancel", argv=self._shown(args, secret), plan=self.scope.plan, step=self.scope.step, sync=True)
             raise RescueError("cancelled", "The command was stopped. Programs such as dracut or grub-install may have left files half-written.") from exc
+        if secret:
+            output = ""  # whatever the base runner returned: a command that was given a secret shows no output anywhere
         record = {"scope": label, "class": kind, "argv": self._shown(args, secret), "rc": code, "duration": round(time.monotonic() - started, 2),
                   "plan": self.scope.plan, "step": self.scope.step, "output_tail": "" if secret else tail(output)}
         if stdin is not None:

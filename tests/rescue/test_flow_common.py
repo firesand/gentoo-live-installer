@@ -459,3 +459,30 @@ def test_a_missing_mount_point_directory_is_explained_and_repairs_create_it(lab_
     assert plan["action"] == "boot.bootloader" and any("grub-install" in step["display"] for step in plan["steps"])
     unmount(manager, sid)
     assert (tree / "efi").is_dir()  # the directory was created in the repaired system
+
+
+def test_the_output_of_a_command_reaches_the_client_once_while_the_plan_runs(lab_factory) -> None:
+    lab, tree = uefi_gentoo_lab(lab_factory, initramfs=False)
+    lab.system.chroot_effects["dracut"] = lambda system, root, command, extra: (0, "dracut: Executing: dracut --force\ndracut: *** Creating image file ***\ndracut: *** Creating initramfs image file done ***\n")
+    manager, sid, _info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    plan = manager.plan({"session_id": sid, "action_id": "boot.initramfs"})
+    op = manager.new_op("run", sid)
+    manager.run_plan(op, {"session_id": sid, "plan_id": plan["plan_id"], "digest": plan["digest"], "confirm": True})
+    events = op.buffer.since(0)
+    lines = [event.message for event in events if event.type == "log"]
+    assert lines.count("dracut: *** Creating image file ***") == 1 and not any(line.startswith("$ ") for line in lines)  # streamed, not repeated at the end of the step; the command line is in the plan
+    running = next(i for i, e in enumerate(events) if e.type == "stage" and e.data.get("step", "").startswith("c") and e.data.get("status") == "running" and "dracut" in e.message)
+    done = next(i for i, e in enumerate(events) if e.type == "stage" and e.data.get("status") == "completed" and "dracut" in e.message)
+    assert running < next(i for i, e in enumerate(events) if e.message == "dracut: *** Creating image file ***") < done
+    unmount(manager, sid)
+
+
+def test_secret_output_is_never_streamed(lab_factory) -> None:
+    lab, _tree = uefi_gentoo_lab(lab_factory)
+    lab.system.chroot_effects["chpasswd"] = lambda system, root, command, extra: (0, "chpasswd: password for 'root' changed to hunter2\n")
+    manager, sid, _info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    plan, result, op = plan_and_run(manager, sid, "acct.password", {"username": "root"}, secrets={"password": "hunter2"})
+    assert result["outcome"] == "success"
+    assert "hunter2" not in " ".join(event.message for event in op.buffer.since(0)) + str(result)
+    assert "hunter2" not in manager.audit_text({"session_id": sid})["text"] + manager.audit.text("jsonl")
+    unmount(manager, sid)

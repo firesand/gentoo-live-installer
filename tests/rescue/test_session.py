@@ -406,3 +406,38 @@ def test_parse_fuser_reads_a_real_capture() -> None:
             "                     root       10231 ..c.m my script\n")
     assert [(item["user"], item["pid"], item["access"], item["command"]) for item in parse_fuser(text)] == [
         ("user", 3137, ".rce.", "python3"), ("user", 4149, ".rce.", "dbus-run-sessio"), ("user", 4219, "Frce.", "dbus-daemon"), ("root", 10231, "..c.m", "my script")]
+
+
+def test_the_lines_of_a_running_command_are_forwarded_while_it_runs(lab_factory) -> None:
+    import dataclasses
+
+    from gentoo_installerd.rescue.session import RescueSession
+    from gentoo_installerd.runner import CommandResult
+
+    forwarded: list[str] = []
+    snapshots: list[list[str]] = []
+
+    class Chatty:
+        """A SubprocessRunner: its log sink gets the command line, then every line of output as it appears."""
+
+        def __init__(self) -> None:
+            self.log = lambda _line: None
+
+        def run(self, argv, **kwargs):
+            self.log("$ " + " ".join(argv))
+            self.log("first line")
+            self.log("<redacted output>")
+            self.log("second line")
+            snapshots.append(list(forwarded))  # what the client had received before the command finished
+            return CommandResult(tuple(argv), 0, "first line\nsecond line")
+
+    lab = gentoo_lab(lab_factory)
+    session = lab.session("/dev/nvme0n1p5")
+    chatty = Chatty()
+    env = dataclasses.replace(lab.session_env(), make_runner=lambda cancel: chatty)
+    streaming = RescueSession(env, "r9a8b7c", lab.plan, session.candidate, lab.graph_obj)
+    streaming.runner.execute(("udevadm", "settle"))
+    assert forwarded == [] and snapshots == [[]]  # nothing is forwarded while no plan runs
+    streaming.live_output = forwarded.append
+    streaming.runner.execute(("udevadm", "settle"))
+    assert snapshots[-1] == ["first line", "second line"] and forwarded == ["first line", "second line"]  # before the command returned; the command echo and redacted lines are dropped

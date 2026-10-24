@@ -110,7 +110,16 @@ class RescueSession:
         self.audit = AuditLog(env.audit_dir / "audit" / f"{stamp}-{sid}.jsonl", sid, clock=env.clock)
         self.ctx = self._make_context(graph, pool_devices)
         self.esp_mountpoints = tuple(item.mountpoint for item in plan.selected if item.tier == TIER_BOOT)
-        self.runner = RescueRunner(env.make_runner(self.cancel), self.ctx, self.audit, esp_mountpoints=self.esp_mountpoints)
+        self.live_output: Callable[[str], None] | None = None  # set by the plan executor while a plan runs: the lines of a long command reach the client as they appear
+        base = env.make_runner(self.cancel)
+        if hasattr(base, "log"):
+            base.log = self._forward_output  # type: ignore[attr-defined]
+        self.runner = RescueRunner(base, self.ctx, self.audit, esp_mountpoints=self.esp_mountpoints)
+
+    def _forward_output(self, line: str) -> None:
+        sink = self.live_output
+        if sink is not None and not line.startswith("$ ") and line != "<redacted output>":  # the command line itself is in the plan and the audit log
+            sink(line)
 
     # ---- construction helpers --------------------------------------------------------------------
     def _make_context(self, graph: DeviceGraph | None, pool_devices: Iterable[str]) -> PolicyContext:

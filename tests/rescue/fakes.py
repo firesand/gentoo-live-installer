@@ -688,18 +688,29 @@ FakeSystem.__init_effects__ = DEFAULT_EFFECTS  # type: ignore[attr-defined]
 
 
 class CancelAware:
-    """What SubprocessRunner does with its cancel Event: refuse to start, or abort, once the flag is set."""
+    """What SubprocessRunner does with its cancel Event (refuse to start, or abort, once the flag is set) and with its log sink (the command, then each output line)."""
 
     def __init__(self, system: FakeSystem, cancel: Any) -> None:
         self.system = system
         self.cancel = cancel
+        self.log: Callable[[str], None] = lambda _line: None
+
+    def _emit(self, argv: Sequence[str], output: str, secret: bool) -> None:
+        self.log("$ " + ("<redacted command>" if secret else " ".join(argv)))
+        for line in output.splitlines():
+            self.log("<redacted output>" if secret else line)
 
     def run(self, argv: Sequence[str], **kwargs: Any) -> CommandResult:
         from gentoo_installerd.runner import InstallCancelled
 
         if self.cancel is not None and self.cancel.is_set():
             raise InstallCancelled("Installation cancelled")
-        result = self.system.run(argv, **kwargs)
+        try:
+            result = self.system.run(argv, **kwargs)
+        except RunnerError as exc:
+            self._emit(argv, exc.output, bool(kwargs.get("secret")))
+            raise
+        self._emit(argv, result.stdout, bool(kwargs.get("secret")))
         if self.cancel is not None and self.cancel.is_set():  # set while the command ran: SubprocessRunner kills the process group
             raise InstallCancelled("Installation cancelled")
         return result
