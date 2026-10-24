@@ -185,7 +185,7 @@ def test_vm_harness_manifests_survive_real_wizard_roundtrip(qtbot, monkeypatch, 
     for expected_page in range(1, 7):
         widget.next.click()
         assert widget.current == expected_page, (scenario_name, expected_page)
-    if scenario_name == "defaults":  # KDE preselects the Desktop stage3 (the harness builds the Standard one)
+    if scenario_name == "defaults":  # KDE preselects the Desktop stage3 (the harness plan records the field as wizard-seeded)
         expected_manifest["system"]["stage_variant"] = "amd64-desktop-openrc"
     assert widget.manifest.to_dict(redact=False) == expected_manifest
     assert widget.manifest.accounts.disable_root_login is (not scenario.defaults)  # the defaults scenario keeps root login

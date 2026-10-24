@@ -137,12 +137,13 @@ def test_everything_that_is_not_detected_is_still_compared_exactly():
 def test_fields_the_wizard_seeds_from_the_hardware_are_recorded_never_compared():
     """The plan of a detect-mode run names them with None: a small machine may get other swap, no Bluetooth, no microcode and fewer companions."""
     expected = expected_for("defaults")
-    recorded = {"storage.swap_mib": None, "options.bluetooth": None, "options.microcode": None, "options.install_hwmonux": None, "options.install_portagehub": None}
+    recorded = {"storage.swap_mib": None, "options.bluetooth": None, "options.microcode": None, "options.install_hwmonux": None, "options.install_portagehub": None, "system.stage_variant": None}
     actual = json.loads(json.dumps(expected))
     actual["storage"]["swap_mib"] = 8192
     actual["options"].update(bluetooth=False, microcode=False, install_hwmonux=False, install_portagehub=False)
+    actual["system"]["stage_variant"] = "amd64-desktop-openrc"  # a desktop preselects the Desktop stage3
     assert driver.compare_manifests(expected, actual, recorded) == []
-    assert len(driver.compare_manifests(expected, actual, {})) == 5  # without the plan every one of them is a difference
+    assert len(driver.compare_manifests(expected, actual, {})) == 6  # without the plan every one of them is a difference
     actual["system"]["desktop"] = "xfce"  # but nothing else may move
     assert driver.compare_manifests(expected, actual, recorded) == ["system.desktop: expected 'kde', the wizard has 'xfce'"]
 

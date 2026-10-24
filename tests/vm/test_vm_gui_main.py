@@ -149,7 +149,7 @@ def test_detect_mode_lets_the_gui_choose_and_writes_down_what_it_chose(lab, caps
     overrides = vm.manifest_overrides(expected, __import__("gentoo_installer.manifest", fromlist=["InstallManifest"]).InstallManifest().to_dict(redact=False))
     plan = lab.plan(guard={"disks": []}, detect=True, overrides=overrides, target={"path": "/dev/vda", "by_path": []},
                     detected={"storage.device": "/dev/vda", "storage.device_id": vm.TARGET_SERIAL, "storage.device_id_kind": "",
-                              "storage.firmware": "uefi", "storage.table": "gpt"})
+                              "storage.firmware": "uefi", "storage.table": "gpt", "system.stage_variant": None})
     lab.serve(FakeDaemon())
     assert lab.run("--plan", str(plan)) == 0
     detected = json.loads((lab.output / "detected.json").read_text())
@@ -166,7 +166,7 @@ def test_detect_mode_approves_a_disk_without_a_serial_number_like_a_user(lab, ca
     overrides = vm.manifest_overrides(expected, __import__("gentoo_installer.manifest", fromlist=["InstallManifest"]).InstallManifest().to_dict(redact=False))
     plan = lab.plan(guard={"disks": []}, detect=True, overrides=overrides, target={"path": "/dev/vda", "by_path": ["pci-0000:00:04.0"]},
                     detected={"storage.device": "/dev/vda", "storage.device_id": None, "storage.device_id_kind": "path",
-                              "storage.firmware": "uefi", "storage.table": "gpt"})
+                              "storage.firmware": "uefi", "storage.table": "gpt", "system.stage_variant": None})
     daemon = FakeDaemon()
     lab.serve(daemon)
     assert lab.run("--plan", str(plan)) == 0, [event for event in events_of(capsys) if event["type"] == "error"]
