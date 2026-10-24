@@ -168,12 +168,14 @@ def _node_unusable_reason(node: DeviceNode) -> str:
     return ""
 
 
-KERNEL_NAME_KINDS = frozenset({"kernel", "md"})  # /dev/sda1, /dev/nvme0n1p2, /dev/dm-0, /dev/md0: numbered in the order the kernel finds the devices
+# Names that do not identify one disk: kernel names (/dev/sda1, /dev/nvme0n1p2, /dev/dm-0, /dev/md0) are numbered in the order the kernel finds the devices,
+# /dev/disk/by-path names the port a disk is plugged into. UUIDs, labels, by-id (model and serial) and mapper names do identify a disk.
+POSITIONAL_KINDS = frozenset({"kernel", "md", "by_path"})
 
 
 def _trusted_disks(root_node: DeviceNode, resolved: list[Resolved], graph: DeviceGraph) -> set[str]:
     """The disks that are certainly part of this system: the root's, and those of every fstab entry that names its device by an ID (UUID, label, by-id, mapper name)."""
-    nodes = [root_node] + [node for item in resolved if item.status == "resolved" and item.kind not in KERNEL_NAME_KINDS for node in item.devices]
+    nodes = [root_node] + [node for item in resolved if item.status == "resolved" and item.kind not in POSITIONAL_KINDS for node in item.devices]
     return {disk.key for node in nodes for disk in graph.parent_disks(node)}
 
 
@@ -186,13 +188,15 @@ def _describe_device(node: DeviceNode, graph: DeviceGraph) -> str:
     return f"{human_size(node.size)} {node.fstype or 'unformatted'} {kind}{label}" + (f" on {where}" if where else "")
 
 
-def _kernel_name_doubt(entry: Entry, item: Resolved, node: DeviceNode, graph: DeviceGraph, trusted: set[str]) -> str:
-    """Why a device that fstab names by a kernel name (/dev/sda1) cannot be taken for the one the system meant, or ''.
+def _positional_name_doubt(entry: Entry, item: Resolved, node: DeviceNode, graph: DeviceGraph, trusted: set[str]) -> str:
+    """Why a device that fstab names by a kernel name (/dev/sda1) or a port (by-path) cannot be taken for the one the system meant, or ''.
 
     The names belong to the live session: a USB drive, another installation or a data disk can be /dev/sda here while the system was installed when its own disk was.
     The device is believed when it shares a disk with the system and holds the file system type fstab expects.
     """
-    start = f"{entry.spec} is only a kernel name, and kernel names change between computers and between starts. Here it is a {_describe_device(node, graph)}"
+    what = (f"{entry.spec} only names the port a disk is plugged into, not the disk" if item.kind == "by_path"
+            else f"{entry.spec} is only a kernel name, and kernel names change between computers and between starts")
+    start = f"{what}. Here it is a {_describe_device(node, graph)}"
     if item.type_mismatch:
         return f"{start}, but {item.type_mismatch}. It is not opened automatically; choose the right partition yourself."
     if not {disk.key for disk in graph.parent_disks(node)} & trusted:
@@ -308,7 +312,7 @@ def plan_mounts(
         if reason:
             plan.unresolved.append({"mountpoint": mountpoint, "spec": entry.spec, "status": "unusable", "reason": reason, "tier": tier})
             continue
-        doubt = _kernel_name_doubt(entry, item, node, graph, trusted) if item.kind in KERNEL_NAME_KINDS and tier in {TIER_BOOT, TIER_SYSTEM} else ""  # these are mounted without asking
+        doubt = _positional_name_doubt(entry, item, node, graph, trusted) if item.kind in POSITIONAL_KINDS and tier in {TIER_BOOT, TIER_SYSTEM} else ""  # these are mounted without asking
         if doubt:
             plan.unresolved.append({"mountpoint": mountpoint, "spec": entry.spec, "status": "unstable", "reason": doubt, "tier": tier, "device": node.path})
             continue
@@ -333,7 +337,7 @@ def plan_mounts(
     plan.suggestions.extend({"mountpoint": entry["mountpoint"], "device": entry["device"],
                              "reason": f"fstab calls it {entry['spec']}, which here is not on this system's disk; add it only if it is the right one"} for entry in doubtful)
     if not fstab.entries or (plan.unresolved and not plan.selected) or doubtful:
-        plan.suggestions.extend(suggest_boot_mounts(graph, root_node, esp_default_mountpoint, {item.mountpoint for item in plan.items}))
+        plan.suggestions.extend(suggest_boot_mounts(graph, root_node, esp_default_mountpoint, {item.mountpoint for item in plan.items}, {item.device for item in plan.items}))
     if fs.is_dir("/boot") and not any(item.tier == TIER_BOOT for item in plan.selected) and not fs.listdir_or("/boot"):
         plan.warnings.append("/boot is empty on the root file system and no separate /boot was mounted; the kernel may be on a partition that is not listed in fstab")
     return plan
@@ -385,12 +389,13 @@ def _check_busy(plan: MountPlan, graph: DeviceGraph, root_node: DeviceNode, own_
                               device=node.path, mountpoint=mountpoint)
 
 
-def suggest_boot_mounts(graph: DeviceGraph, root_node: DeviceNode, esp_mountpoint: str, taken: set[str]) -> list[dict[str, Any]]:
-    """When fstab says nothing useful: offer (never auto-mount) EFI/boot partitions on the root's own disks."""
+def suggest_boot_mounts(graph: DeviceGraph, root_node: DeviceNode, esp_mountpoint: str, taken: set[str], mounted: Iterable[str] = ()) -> list[dict[str, Any]]:
+    """When fstab says nothing useful: offer (never auto-mount) EFI/boot partitions on the root's own disks, except those that are already part of the plan."""
     disks = {disk.key for disk in graph.parent_disks(root_node)}
+    used = set(mounted)
     found: list[dict[str, Any]] = []
     for node in graph:
-        if node.key == root_node.key or node.live_medium or not ({disk.key for disk in graph.parent_disks(node)} & disks):
+        if node.key == root_node.key or node.live_medium or node.path in used or not ({disk.key for disk in graph.parent_disks(node)} & disks):
             continue
         if node.parttype in {GPT_ESP, MBR_ESP} and node.fstype == "vfat" and esp_mountpoint not in taken:
             found.append({"mountpoint": esp_mountpoint, "device": node.path, "reason": "EFI system partition on the same disk"})

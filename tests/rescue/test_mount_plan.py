@@ -131,6 +131,28 @@ def test_a_numbered_md_array_is_not_trusted_on_its_own_either(tmp_path: Path) ->
     assert [(item.mountpoint, item.device) for item in root_on_md.selected] == [("/efi", "/dev/sda1")] and root_on_md.unresolved == []
 
 
+def test_a_by_path_name_is_trusted_only_on_a_disk_of_the_system(tmp_path: Path, monkeypatch) -> None:
+    """/dev/disk/by-path names the port a disk is plugged into, not the disk: after a disk swap (or on another computer) it can be any disk."""
+    from gentoo_installerd.rescue import fstab as fstab_module
+
+    links = {"/dev/disk/by-path/pci-0000:00:14.0-usb-0:2:1.0-scsi-0:0:0:0-part1": "/dev/sda1", "/dev/disk/by-path/pci-0000:3b:00.0-nvme-1-part1": "/dev/nvme0n1p1"}
+    monkeypatch.setattr(fstab_module, "default_dev_link_resolver", links.get)
+    fstab = (f"UUID={fr.ROOT_UUID} / ext4 defaults 0 1\n/dev/disk/by-path/pci-0000:00:14.0-usb-0:2:1.0-scsi-0:0:0:0-part1 /boot ext4 defaults 0 2\n"
+             "/dev/disk/by-path/pci-0000:3b:00.0-nvme-1-part1 /boot/efi vfat umask=0077 0 2\n")
+    plan, _ = make_plan(tmp_path, "gentoo", internal_nvme_and_usb_sda(), "/dev/nvme0n1p2", fstab=fstab, mounts=["/boot", "/boot/efi"])
+    assert [(item.mountpoint, item.device) for item in plan.selected] == [("/boot/efi", "/dev/nvme0n1p1")]
+    [entry] = plan.unresolved
+    assert (entry["mountpoint"], entry["status"], entry["device"]) == ("/boot", "unstable", "/dev/sda1") and "names the port" in entry["reason"] and "Ultra Backup" in entry["reason"]
+
+
+def test_a_suggestion_never_offers_a_partition_that_is_already_mounted(tmp_path: Path) -> None:
+    """The system's own ESP is mounted from fstab (here at /efi); next to a doubtful /boot it must not be suggested a second time under another name."""
+    fstab = f"UUID={fr.ROOT_UUID} / ext4 defaults 0 1\nUUID=AAAA-1111 /efi vfat umask=0077 0 2\n/dev/sda1 /boot ext4 defaults 0 2\n"
+    plan, _ = make_plan(tmp_path, "gentoo", internal_nvme_and_usb_sda(), "/dev/nvme0n1p2", fstab=fstab, mounts=["/boot", "/efi"])
+    assert [(item.mountpoint, item.device) for item in plan.selected] == [("/efi", "/dev/nvme0n1p1")]
+    assert [(item["mountpoint"], item["device"]) for item in plan.suggestions] == [("/boot", "/dev/sda1")]
+
+
 def test_data_mounts_are_only_offered_so_a_kernel_name_there_is_listed_not_refused(tmp_path: Path) -> None:
     """Tier 4 is never mounted on its own and always read-only; the person sees the device and ticks it."""
     fstab = f"UUID={fr.ROOT_UUID} / ext4 defaults 0 1\n/dev/sda1 /backups ext4 defaults 0 2\n"
