@@ -1,3 +1,5 @@
+from typing import Any
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
@@ -69,7 +71,7 @@ def status_color(status: str) -> str:
     return STATUS_COLORS.get(status, MUTED)
 
 
-SCHEMES = {
+SCHEMES: dict[bool, dict[str, Any]] = {
     False: {"TEXT": "#24222c", "MUTED": "#6d6979", "SURFACE": "#ffffff", "BACKGROUND": "#f5f4f8", "BORDER": "#dfdce7", "ACCENT_ON_SURFACE": "#6554c0",
             "PROBLEM": ("#8d2636", "#fff1f2", "#f0c5cb"), "SEVERITY": {"ok": "#14573a", "warning": "#8a5a00", "error": "#a82a3c"}},
     True: {"TEXT": "#ece9f2", "MUTED": "#aaa4b5", "SURFACE": "#292631", "BACKGROUND": "#1d1b23", "BORDER": "#45404f", "ACCENT_ON_SURFACE": "#b9aefc",
@@ -85,7 +87,7 @@ def apply_theme(app: QApplication, dark: bool | None = None) -> None:
     TEXT, MUTED, SURFACE, BACKGROUND, BORDER = (colours[name] for name in ("TEXT", "MUTED", "SURFACE", "BACKGROUND", "BORDER"))
     ACCENT_ON_SURFACE = colours["ACCENT_ON_SURFACE"]
     PROBLEM_TEXT, PROBLEM_BG, PROBLEM_BORDER = colours["PROBLEM"]
-    SEVERITY.update(colours["SEVERITY"])
+    SEVERITY.update(dict(colours["SEVERITY"]))
     app.setStyle("Fusion")
     palette = QPalette()
     palette.setColor(QPalette.ColorRole.Window, QColor(BACKGROUND))

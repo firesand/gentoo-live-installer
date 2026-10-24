@@ -35,7 +35,7 @@ def test_a_failing_page_shows_an_inline_message_and_a_sidebar_marker(make_window
 def test_the_marker_and_message_clear_when_the_page_passes(make_window, no_dialogs):
     window = make_window()
     page = window.pages[0]
-    page.show_problem("KDE needs the Desktop kind of base system. Details: ...")
+    page.set_problem("KDE needs the Desktop kind of base system. Details: ...")
     assert window.step_buttons[0].property("problem") is True
     window.next.click()  # the welcome page is always valid
     assert not page.has_problem()

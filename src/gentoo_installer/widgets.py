@@ -286,7 +286,7 @@ class Page(QWidget):
         self.problem_label.hide()
         self.content.addWidget(self.problem_label)
 
-    def show_problem(self, text: str) -> None:
+    def set_problem(self, text: str) -> None:
         """Show (or, with "", clear) the page's inline problem message: a plain sentence, then the technical detail."""
         shown = bool(text)
         was_shown = not self.problem_label.isHidden()

@@ -467,7 +467,7 @@ class ReviewPage(Page):
         collected: list[tuple[str, str, str]] = []
         seen: set[str] = set()
         for source in self.sources:
-            own = list(source.page.summary_rows()) if source.page is not None else []
+            own = list(source.page.summary_rows()) if isinstance(source.page, Page) else []
             overridden = {label for label, _ in own}
             merged = [(label, value) for label, value in core.get(source.key, []) if label not in overridden] + own
             for label, value in merged:
@@ -481,7 +481,7 @@ class ReviewPage(Page):
     def _rebuild_groups(self) -> None:
         while self.groups.count():
             item = self.groups.takeAt(0)
-            widget = item.widget()
+            widget = item.widget() if item is not None else None
             if widget is not None:
                 widget.hide()
                 widget.setParent(None)

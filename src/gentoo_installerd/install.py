@@ -721,12 +721,12 @@ class Installer(Stage3Stage, RepositoryStage, PortageStage, KernelStage, Bootloa
         cfg.finalize_network(self.manifest)
         finish_stage.finish(self)  # non-fatal warnings and the first-steps file
 
-    def _finish_data(self, success: bool) -> dict[str, object]:
+    def _finish_data(self, success: bool) -> dict[str, Any]:
         """What the finish page shows beyond the outcome: the boot check, unread news and the hardware first steps."""
         if not success:
             return {}
         steps = first_steps.from_manifest(self.manifest)
-        data: dict[str, object] = {
+        data: dict[str, Any] = {
             "first_steps": list(self.hardware_plan.first_steps) if self.hardware_plan is not None else [],
             # What the finish page needs to build its card without a manifest (a GUI that attached to the job has none).
             "login": {"username": steps.username, "hostname": steps.hostname, "privilege": steps.privilege, "ssh": steps.ssh,

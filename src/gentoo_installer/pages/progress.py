@@ -611,12 +611,8 @@ class ProgressPage(Page):
         else:
             primary = candidates[0] if candidates else None
         for command in self.commands:
-            if command is primary:
-                command.present("primary")
-            elif command is secondary or (command.quiet and command.available):
-                command.present("secondary")
-            else:
-                command.present("menu")
+            quiet_button = command is secondary or (command.quiet and command.available)
+            command.present("primary" if command is primary else "secondary" if quiet_button else "menu")
         self.more_button.setVisible(any(command.presentation == "menu" for command in self.commands))
 
     def set_restart_offered(self, offered: bool) -> None:
@@ -1067,7 +1063,8 @@ class ProgressPage(Page):
 
     def first_steps_model(self) -> first_steps.FirstSteps:
         """What the finish page tells the user: from the completed event (it also works after an attach), else from the settings."""
-        login = self._finish.get("login") if isinstance(self._finish.get("login"), dict) else {}
+        raw_login = self._finish.get("login")
+        login: dict = raw_login if isinstance(raw_login, dict) else {}
         manifest = self._manifest
         base = first_steps.from_manifest(manifest) if manifest is not None else first_steps.FirstSteps()
         news = self._finish.get("news_unread")

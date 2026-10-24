@@ -81,11 +81,11 @@ it: each `"<redacted>"` value becomes empty and the proxy keeps its placeholder.
   and gives every group an "Edit" link that goes back to that step. A page that owns a new Wave 5
   setting only adds its rows to its own `summary_rows()`; it never edits `review.py`.
   `ReviewPage.rows()` is the pure list `[(step_title, label, value)]` that tests read.
-* `Page.show_problem(text)` shows a red message at the top of the page (`""` clears it) and
+* `Page.set_problem(text)` shows a red message at the top of the page (`""` clears it) and
   emits `problemChanged(bool)`; the window marks the step in the sidebar with a red dot. `validate_page()`
-  returns `(False, message)`; the window shows the message with `show_problem` and never opens a dialog
+  returns `(False, message)`; the window shows the message with `set_problem` and never opens a dialog
   for it. A message starts with a plain sentence and puts the technical detail after it.
-  A page may call `show_problem` itself for a problem it can place beside a control.
+  A page may call `set_problem` itself for a problem it can place beside a control.
 * `Page.set_advanced(bool)` as before. `ReviewPage` shows its file previews open in Advanced.
 * File previews: `gentoo_installerd.configure.preview_files(manifest, plan=None, ...)` returns
   `{"partition plan": ..., "/etc/fstab": ..., "make.conf": ..., "package.use": ..., "binrepos.conf": ...}`,

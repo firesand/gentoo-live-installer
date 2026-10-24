@@ -516,9 +516,9 @@ class InstallerWindow(QMainWindow):
         page = self.pages[self.current]
         valid, message = page.validate_page()
         if not valid:
-            page.show_problem(message)  # inline, beside the step; the sidebar marks it (CORE-09)
+            page.set_problem(message)  # inline, beside the step; the sidebar marks it (CORE-09)
             return
-        page.show_problem("")
+        page.set_problem("")
         page.save_manifest()
         if self.current == REVIEW:
             self.start_installation()
@@ -534,7 +534,7 @@ class InstallerWindow(QMainWindow):
                     reveal = getattr(self.pages[owner], "reveal_section", None)
                     if callable(reveal):
                         reveal(section)
-                self.pages[owner].show_problem(error)
+                self.pages[owner].set_problem(error)
                 return
         self._show_page(self.current + 1)
 
@@ -741,7 +741,7 @@ class InstallerWindow(QMainWindow):
             return
         problems = blocking_problems(self.manifest, self.info)
         if problems:
-            self.pages[self._page_for_section(problems[0][0])].show_problem(problems[0][1])
+            self.pages[self._page_for_section(problems[0][0])].set_problem(problems[0][1])
             return
         resume = self.review.resume_requested() and self.current == REVIEW
         if not resume and storage.mode == "erase":
