@@ -73,7 +73,7 @@ temporary directory, and exits instead of waiting for a test thread that never f
 ### Preparing a test ISO
 
 The harness logs in over SSH, so it needs an ISO built with a throw-away key (the README
-describes the build). A production ISO has no SSH access and is refused.
+describes the build). A production ISO has no SSH access, so the harness would only time out waiting for it.
 
 ```sh
 install -d -m 0700 build/vm-control
