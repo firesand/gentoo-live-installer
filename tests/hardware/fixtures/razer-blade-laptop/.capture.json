@@ -1,0 +1,9 @@
+{
+ "now": 1792800000,
+ "redacted": true,
+ "schema": 1,
+ "summary": "Intel Core i7-10750H CPU @ 2.60GHz - 12 threads - 15 GiB - Intel UHD Graphics + NVIDIA GeForce RTX 3070 Mobile / Max-Q - NVMe SSD - UEFI 64-bit",
+ "synthetic": true,
+ "tool": "synthetic",
+ "tool_version": 1
+}

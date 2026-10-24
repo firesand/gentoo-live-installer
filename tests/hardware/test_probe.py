@@ -44,7 +44,7 @@ def test_this_host_asus_desktop_with_rtx_4090():
     assert d["input"]["touchpad"] is False  # the DualSense touchpad is not a laptop touchpad
     assert [g["vendor"] for g in d["gpus"]] == ["nvidia"]
     gpu = d["gpus"][0]
-    assert (gpu["generation"], gpu["generation_guess"], gpu["driver"], gpu["boot_vga"], gpu["integrated"]) == ("turing+", False, "nvidia", True, False)
+    assert (gpu["generation"], gpu["generation_guess"], gpu["driver"], gpu["boot_vga"], gpu["integrated"]) == ("ampere_plus", False, "nvidia", True, False)
     assert gpu["name"] == "AD102 [GeForce RTX 4090]" and gpu["connected_outputs"] == 2
     assert d["firmware"]["mode"] == "uefi" and d["firmware"]["efi_bits"] == 64 and d["firmware"]["secure_boot"] == "disabled"
     assert d["firmware"]["can_reboot_to_firmware"] and d["firmware"]["efivars_writable"] is True and d["firmware"]["windows_boot_entry"] is False
@@ -112,7 +112,7 @@ def test_intel_laptop_with_hybrid_nvidia_graphics_and_sof_audio():
     assert d["power"]["battery_percent"] == 82 and d["power"]["has_lid"] and d["power"]["has_backlight"]
     igpu, dgpu = d["gpus"]
     assert (igpu["vendor"], igpu["integrated"], igpu["boot_vga"], igpu["connected_outputs"]) == ("intel", True, True, 1)
-    assert (dgpu["vendor"], dgpu["generation"], dgpu["driver"], dgpu["connected_outputs"]) == ("nvidia", "turing+", "nouveau", None)
+    assert (dgpu["vendor"], dgpu["generation"], dgpu["driver"], dgpu["connected_outputs"]) == ("nvidia", "ampere_plus", "nouveau", None)
     # the suspended discrete GPU's connector (card1) must not be read: reading it would wake the card
     assert [x["connector"] for x in d["displays"]] == ["card0-eDP-1"]
     assert d["displays"][0]["internal"] and d["displays"][0]["dpi"] == 284
@@ -316,7 +316,8 @@ def test_fixtures_contain_no_serials_macs_or_uuids():
 def test_tpm_detection():
     assert {name: fixture_dict(name)["firmware"]["tpm"] for name in FIXTURE_NAMES} == {
         "asus-desktop-rtx4090": "2.0", "desktop-igpu-idle": "2.0", "qemu-q35-virtio": "", "old-bios-sata-radeon": "", "thinkpad-intel-nvidia-hybrid": "2.0",
-        "amd-laptop-sof": "2.0", "vmware-guest": "", "intel-rst-hidden-nvme": "1.2"}
+        "amd-laptop-sof": "2.0", "vmware-guest": "", "intel-rst-hidden-nvme": "1.2", "asus-rog-laptop": "2.0", "razer-blade-laptop": "2.0",
+            "arc-ultra-convertible": "2.0", "thinkpad-amd-laptop": "2.0"}
 
 
 def test_lsblk_output_with_a_warning_in_front_of_the_json_is_still_used():

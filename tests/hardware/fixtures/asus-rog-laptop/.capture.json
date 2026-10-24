@@ -1,0 +1,9 @@
+{
+ "now": 1792800000,
+ "redacted": true,
+ "schema": 1,
+ "summary": "AMD Ryzen 9 7940HS w/ Radeon 780M Graphics - 16 threads - 15 GiB - NVIDIA GeForce RTX 4060 Max-Q / Mobile + AMD Phoenix1 - NVMe SSD - UEFI 64-bit",
+ "synthetic": true,
+ "tool": "synthetic",
+ "tool_version": 1
+}

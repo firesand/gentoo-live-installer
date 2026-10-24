@@ -283,7 +283,7 @@ def nvidia_decision(manifest: InstallManifest, hw: HardwareProfile) -> NvidiaDec
         errors.append(Issue("hw.nvidia_branch_unavailable", "error", f"NVIDIA driver branch {explicit} is not available in this installer. Choose one of: "
                             + ", ".join(sorted(data.NVIDIA_BRANCHES)) + "."))
     generations = [gpu.generation for gpu in gpus]
-    supported = [generation for generation in generations if generation in ("turing+", "maxwell-volta")]
+    supported = [generation for generation in generations if generation in data.PROPRIETARY_GENERATIONS]
     if explicit in data.NVIDIA_BRANCHES:
         branch = explicit
     elif "maxwell-volta" in supported:
@@ -454,7 +454,7 @@ class _Planner:
             return reasons
         if any(gpu.vendor == "amd" for gpu in self.gpus):
             reasons.append("AMD graphics")
-        if self.nvidia_gpus and not self.proprietary and any(gpu.generation == "turing+" for gpu in self.nvidia_gpus):
+        if self.nvidia_gpus and not self.proprietary and any(data.is_turing_plus(gpu.generation) for gpu in self.nvidia_gpus):
             reasons.append("NVIDIA GPU system processor firmware")
         if any(gpu.vendor == "intel" and gpu.generation == "gen8+" for gpu in self.gpus):
             reasons.append("Intel graphics")
@@ -505,7 +505,7 @@ class _Planner:
         elif choice == "on":
             result = bool(self.nvidia_gpus) or self.portable
         else:
-            result = not self.binhost and not self.portable and any(g.generation == "turing+" for g in self.nvidia_gpus)
+            result = not self.binhost and not self.portable and any(data.is_turing_plus(g.generation) for g in self.nvidia_gpus)
         if result:
             self.use(A_MESA, "vulkan")  # video_cards_nvk? ( vulkan video_cards_nouveau )
         self.p.scalars["nvk"] = "yes" if result else "no"
@@ -518,7 +518,7 @@ class _Planner:
         flags = ["dist-kernel"]  # modules follow kernel updates
         if self.desktop in ("kde", "gnome"):
             flags.append("wayland")
-        if branch == "580" and self.nvidia_gpus and all(g.generation == "turing+" for g in self.nvidia_gpus):
+        if branch == "580" and self.nvidia_gpus and all(data.is_turing_plus(g.generation) for g in self.nvidia_gpus):
             flags.append("kernel-open")  # open modules on Turing and newer; Maxwell to Volta need the closed ones
         self.use(A_NVIDIA, *flags)
         if info["mask"]:

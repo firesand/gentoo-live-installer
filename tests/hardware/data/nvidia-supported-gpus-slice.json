@@ -1,0 +1,3340 @@
+{
+"source": "NVIDIA 615.78.08 supported-gpus.json (branch = legacybranch, empty = current), names from pci.ids",
+"gpus": [
+{
+"id": "0fc6",
+"name": "GK107 [GeForce GTX 650]",
+"branch": "470"
+},
+{
+"id": "0fc8",
+"name": "GK107 [GeForce GT 740]",
+"branch": "470"
+},
+{
+"id": "0fc9",
+"name": "GK107 [GeForce GT 730]",
+"branch": "470"
+},
+{
+"id": "0fcd",
+"name": "GK107M [GeForce GT 755M]",
+"branch": "470"
+},
+{
+"id": "0fce",
+"name": "GK107M [GeForce GT 640M LE]",
+"branch": "470"
+},
+{
+"id": "0fd1",
+"name": "GK107M [GeForce GT 650M]",
+"branch": "470"
+},
+{
+"id": "0fd2",
+"name": "GK107M [GeForce GT 640M]",
+"branch": "470"
+},
+{
+"id": "0fd3",
+"name": "GK107M [GeForce GT 640M LE]",
+"branch": "470"
+},
+{
+"id": "0fd4",
+"name": "GK107M [GeForce GTX 660M]",
+"branch": "470"
+},
+{
+"id": "0fd5",
+"name": "GK107M [GeForce GT 650M Mac Edition]",
+"branch": "470"
+},
+{
+"id": "0fd8",
+"name": "GK107M [GeForce GT 640M Mac Edition]",
+"branch": "470"
+},
+{
+"id": "0fd9",
+"name": "GK107M [GeForce GT 645M]",
+"branch": "470"
+},
+{
+"id": "0fdf",
+"name": "GK107M [GeForce GT 740M]",
+"branch": "470"
+},
+{
+"id": "0fe0",
+"name": "GK107M [GeForce GTX 660M Mac Edition]",
+"branch": "470"
+},
+{
+"id": "0fe1",
+"name": "GK107M [GeForce GT 730M]",
+"branch": "470"
+},
+{
+"id": "0fe2",
+"name": "GK107M [GeForce GT 745M]",
+"branch": "470"
+},
+{
+"id": "0fe3",
+"name": "GK107M [GeForce GT 745M]",
+"branch": "470"
+},
+{
+"id": "0fe4",
+"name": "GK107M [GeForce GT 750M]",
+"branch": "470"
+},
+{
+"id": "0fe9",
+"name": "GK107M [GeForce GT 750M Mac Edition]",
+"branch": "470"
+},
+{
+"id": "0fea",
+"name": "GK107M [GeForce GT 755M Mac Edition]",
+"branch": "470"
+},
+{
+"id": "0fec",
+"name": "GK107M [GeForce 710A]",
+"branch": "470"
+},
+{
+"id": "0fed",
+"name": "GK107M [GeForce 820M]",
+"branch": "470"
+},
+{
+"id": "0fee",
+"name": "GK107M [GeForce 810M]",
+"branch": "470"
+},
+{
+"id": "0fef",
+"name": "GK107GL [GRID K340]",
+"branch": "367"
+},
+{
+"id": "0ff2",
+"name": "GK107GL [GRID K1]",
+"branch": "367"
+},
+{
+"id": "0ff6",
+"name": "GK107GLM [Quadro K1100M]",
+"branch": "470"
+},
+{
+"id": "0ff8",
+"name": "GK107GLM [Quadro K500M]",
+"branch": "470"
+},
+{
+"id": "0ff9",
+"name": "GK107GL [Quadro K2000D]",
+"branch": "470"
+},
+{
+"id": "0ffa",
+"name": "GK107GL [Quadro K600]",
+"branch": "470"
+},
+{
+"id": "0ffb",
+"name": "GK107GLM [Quadro K2000M]",
+"branch": "470"
+},
+{
+"id": "0ffc",
+"name": "GK107GLM [Quadro K1000M]",
+"branch": "470"
+},
+{
+"id": "0ffd",
+"name": "GK107 [NVS 510]",
+"branch": "470"
+},
+{
+"id": "0ffe",
+"name": "GK107GL [Quadro K2000]",
+"branch": "470"
+},
+{
+"id": "0fff",
+"name": "GK107GL [Quadro 410]",
+"branch": "470"
+},
+{
+"id": "1001",
+"name": "GK110B [GeForce GTX TITAN Z]",
+"branch": "470"
+},
+{
+"id": "1004",
+"name": "GK110 [GeForce GTX 780]",
+"branch": "470"
+},
+{
+"id": "1005",
+"name": "GK110 [GeForce GTX TITAN]",
+"branch": "470"
+},
+{
+"id": "1007",
+"name": "GK110 [GeForce GTX 780 Rev. 2]",
+"branch": "470"
+},
+{
+"id": "1008",
+"name": "GK110 [GeForce GTX 780 Ti 6GB]",
+"branch": "470"
+},
+{
+"id": "100a",
+"name": "GK110B [GeForce GTX 780 Ti]",
+"branch": "470"
+},
+{
+"id": "100c",
+"name": "GK110B [GeForce GTX TITAN Black]",
+"branch": "470"
+},
+{
+"id": "1021",
+"name": "GK110GL [Tesla K20Xm]",
+"branch": "470"
+},
+{
+"id": "1022",
+"name": "GK110GL [Tesla K20c]",
+"branch": "470"
+},
+{
+"id": "1023",
+"name": "GK110BGL [Tesla K40m]",
+"branch": "470"
+},
+{
+"id": "1024",
+"name": "GK180GL [Tesla K40c]",
+"branch": "470"
+},
+{
+"id": "1026",
+"name": "GK110GL [Tesla K20s]",
+"branch": "470"
+},
+{
+"id": "1027",
+"name": "GK110BGL [Tesla K40st]",
+"branch": "470"
+},
+{
+"id": "1028",
+"name": "GK110GL [Tesla K20m]",
+"branch": "470"
+},
+{
+"id": "1029",
+"name": "GK110BGL [Tesla K40s]",
+"branch": "470"
+},
+{
+"id": "102a",
+"name": "GK110BGL [Tesla K40t]",
+"branch": "470"
+},
+{
+"id": "102d",
+"name": "GK210GL [Tesla K80]",
+"branch": "470"
+},
+{
+"id": "103a",
+"name": "GK110GL [Quadro K6000]",
+"branch": "470"
+},
+{
+"id": "103c",
+"name": "GK110GL [Quadro K5200]",
+"branch": "470"
+},
+{
+"id": "1040",
+"name": "GF119 [GeForce GT 520]",
+"branch": "390"
+},
+{
+"id": "1042",
+"name": "GF119 [GeForce 510]",
+"branch": "390"
+},
+{
+"id": "1048",
+"name": "GF119 [GeForce 605]",
+"branch": "390"
+},
+{
+"id": "1049",
+"name": "GF119 [GeForce GT 620 OEM]",
+"branch": "390"
+},
+{
+"id": "104a",
+"name": "GF119 [GeForce GT 610]",
+"branch": "390"
+},
+{
+"id": "104b",
+"name": "GF119 [GeForce GT 625 OEM]",
+"branch": "390"
+},
+{
+"id": "104c",
+"name": "GF119 [GeForce GT 705]",
+"branch": "390"
+},
+{
+"id": "1050",
+"name": "GF119M [GeForce GT 520M]",
+"branch": "390"
+},
+{
+"id": "1051",
+"name": "GF119M [GeForce GT 520MX]",
+"branch": "390"
+},
+{
+"id": "1052",
+"name": "GF119M [GeForce GT 520M]",
+"branch": "390"
+},
+{
+"id": "1054",
+"name": "GF119M [GeForce 410M]",
+"branch": "390"
+},
+{
+"id": "1055",
+"name": "GF119M [GeForce 410M]",
+"branch": "390"
+},
+{
+"id": "1056",
+"name": "GF119M [NVS 4200M]",
+"branch": "390"
+},
+{
+"id": "1057",
+"name": "GF119M [Quadro NVS 4200M]",
+"branch": "390"
+},
+{
+"id": "1058",
+"name": "GF119M [GeForce 610M]",
+"branch": "390"
+},
+{
+"id": "1059",
+"name": "GF119M [GeForce 610M]",
+"branch": "390"
+},
+{
+"id": "105a",
+"name": "GF119M [GeForce 610M]",
+"branch": "390"
+},
+{
+"id": "105b",
+"name": "GF119M [GeForce 705M]",
+"branch": "390"
+},
+{
+"id": "107c",
+"name": "GF119 [NVS 315]",
+"branch": "390"
+},
+{
+"id": "107d",
+"name": "GF119 [NVS 310]",
+"branch": "390"
+},
+{
+"id": "1080",
+"name": "GF110 [GeForce GTX 580]",
+"branch": "390"
+},
+{
+"id": "1081",
+"name": "GF110 [GeForce GTX 570]",
+"branch": "390"
+},
+{
+"id": "1082",
+"name": "GF110 [GeForce GTX 560 Ti OEM]",
+"branch": "390"
+},
+{
+"id": "1084",
+"name": "GF110 [GeForce GTX 560 OEM]",
+"branch": "390"
+},
+{
+"id": "1086",
+"name": "GF110 [GeForce GTX 570 Rev. 2]",
+"branch": "390"
+},
+{
+"id": "1087",
+"name": "GF110 [GeForce GTX 560 Ti 448 Cores]",
+"branch": "390"
+},
+{
+"id": "1088",
+"name": "GF110 [GeForce GTX 590]",
+"branch": "390"
+},
+{
+"id": "1089",
+"name": "GF110 [GeForce GTX 580 Rev. 2]",
+"branch": "390"
+},
+{
+"id": "108b",
+"name": "GF110 [GeForce GTX 580]",
+"branch": "390"
+},
+{
+"id": "1091",
+"name": "GF110GL [Tesla M2090]",
+"branch": "390"
+},
+{
+"id": "1094",
+"name": "GF110GL [Tesla M2075]",
+"branch": "390"
+},
+{
+"id": "1096",
+"name": "GF110GL [Tesla C2050 / C2075]",
+"branch": "390"
+},
+{
+"id": "109a",
+"name": "GF100GLM [Quadro 5010M]",
+"branch": "390"
+},
+{
+"id": "109b",
+"name": "GF100GL [Quadro 7000]",
+"branch": "390"
+},
+{
+"id": "10c0",
+"name": "GT218 [GeForce 9300 GS Rev. 2]",
+"branch": "340"
+},
+{
+"id": "10c3",
+"name": "GT218 [GeForce 8400 GS Rev. 3]",
+"branch": "340"
+},
+{
+"id": "10c5",
+"name": "GT218 [GeForce 405]",
+"branch": "340"
+},
+{
+"id": "10d8",
+"name": "GT218 [NVS 300]",
+"branch": "340"
+},
+{
+"id": "1140",
+"name": "GF117M [GeForce 610M/710M/810M/820M / GT 620M/625M/630M/720M]",
+"branch": "390"
+},
+{
+"id": "1180",
+"name": "GK104 [GeForce GTX 680]",
+"branch": "470"
+},
+{
+"id": "1183",
+"name": "GK104 [GeForce GTX 660 Ti]",
+"branch": "470"
+},
+{
+"id": "1184",
+"name": "GK104 [GeForce GTX 770]",
+"branch": "470"
+},
+{
+"id": "1185",
+"name": "GK104 [GeForce GTX 660 OEM]",
+"branch": "470"
+},
+{
+"id": "1187",
+"name": "GK104 [GeForce GTX 760]",
+"branch": "470"
+},
+{
+"id": "1188",
+"name": "GK104 [GeForce GTX 690]",
+"branch": "470"
+},
+{
+"id": "1189",
+"name": "GK104 [GeForce GTX 670]",
+"branch": "470"
+},
+{
+"id": "118a",
+"name": "GK104GL [GRID K520]",
+"branch": "470"
+},
+{
+"id": "118e",
+"name": "GK104 [GeForce GTX 760 OEM]",
+"branch": "470"
+},
+{
+"id": "118f",
+"name": "GK104GL [Tesla K10]",
+"branch": "470"
+},
+{
+"id": "1193",
+"name": "GK104 [GeForce GTX 760 Ti OEM]",
+"branch": "470"
+},
+{
+"id": "1194",
+"name": "GK104GL [Tesla K8]",
+"branch": "470"
+},
+{
+"id": "1195",
+"name": "GK104 [GeForce GTX 660 Rev. 2]",
+"branch": "470"
+},
+{
+"id": "1198",
+"name": "GK104M [GeForce GTX 880M]",
+"branch": "470"
+},
+{
+"id": "1199",
+"name": "GK104M [GeForce GTX 870M]",
+"branch": "470"
+},
+{
+"id": "119a",
+"name": "GK104M [GeForce GTX 860M]",
+"branch": "470"
+},
+{
+"id": "119d",
+"name": "GK104M [GeForce GTX 775M Mac Edition]",
+"branch": "470"
+},
+{
+"id": "119e",
+"name": "GK104M [GeForce GTX 780M Mac Edition]",
+"branch": "470"
+},
+{
+"id": "119f",
+"name": "GK104M [GeForce GTX 780M]",
+"branch": "470"
+},
+{
+"id": "11a0",
+"name": "GK104M [GeForce GTX 680M]",
+"branch": "470"
+},
+{
+"id": "11a1",
+"name": "GK104M [GeForce GTX 670MX]",
+"branch": "470"
+},
+{
+"id": "11a2",
+"name": "GK104M [GeForce GTX 675MX Mac Edition]",
+"branch": "470"
+},
+{
+"id": "11a3",
+"name": "GK104M [GeForce GTX 680MX]",
+"branch": "470"
+},
+{
+"id": "11a7",
+"name": "GK104M [GeForce GTX 675MX]",
+"branch": "470"
+},
+{
+"id": "11b4",
+"name": "GK104GL [Quadro K4200]",
+"branch": "470"
+},
+{
+"id": "11b6",
+"name": "GK104GLM [Quadro K3100M]",
+"branch": "470"
+},
+{
+"id": "11b7",
+"name": "GK104GLM [Quadro K4100M]",
+"branch": "470"
+},
+{
+"id": "11b8",
+"name": "GK104GLM [Quadro K5100M]",
+"branch": "470"
+},
+{
+"id": "11ba",
+"name": "GK104GL [Quadro K5000]",
+"branch": "470"
+},
+{
+"id": "11bc",
+"name": "GK104GLM [Quadro K5000M]",
+"branch": "470"
+},
+{
+"id": "11bd",
+"name": "GK104GLM [Quadro K4000M]",
+"branch": "470"
+},
+{
+"id": "11be",
+"name": "GK104GLM [Quadro K3000M]",
+"branch": "470"
+},
+{
+"id": "11bf",
+"name": "GK104GL [GRID K2]",
+"branch": "367"
+},
+{
+"id": "11c0",
+"name": "GK106 [GeForce GTX 660]",
+"branch": "470"
+},
+{
+"id": "11c2",
+"name": "GK106 [GeForce GTX 650 Ti Boost]",
+"branch": "470"
+},
+{
+"id": "11c3",
+"name": "GK106 [GeForce GTX 650 Ti OEM]",
+"branch": "470"
+},
+{
+"id": "11c4",
+"name": "GK106 [GeForce GTX 645 OEM]",
+"branch": "470"
+},
+{
+"id": "11c5",
+"name": "GK106 [GeForce GT 740]",
+"branch": "470"
+},
+{
+"id": "11c6",
+"name": "GK106 [GeForce GTX 650 Ti]",
+"branch": "470"
+},
+{
+"id": "11c8",
+"name": "GK106 [GeForce GTX 650 OEM]",
+"branch": "470"
+},
+{
+"id": "11cb",
+"name": "GK106 [GeForce GT 740]",
+"branch": "470"
+},
+{
+"id": "11e0",
+"name": "GK106M [GeForce GTX 770M]",
+"branch": "470"
+},
+{
+"id": "11e1",
+"name": "GK106M [GeForce GTX 765M]",
+"branch": "470"
+},
+{
+"id": "11e2",
+"name": "GK106M [GeForce GTX 765M]",
+"branch": "470"
+},
+{
+"id": "11e3",
+"name": "GK106M [GeForce GTX 760M]",
+"branch": "470"
+},
+{
+"id": "11fa",
+"name": "GK106GL [Quadro K4000]",
+"branch": "470"
+},
+{
+"id": "11fc",
+"name": "GK106GLM [Quadro K2100M]",
+"branch": "470"
+},
+{
+"id": "1200",
+"name": "GF114 [GeForce GTX 560 Ti]",
+"branch": "390"
+},
+{
+"id": "1201",
+"name": "GF114 [GeForce GTX 560]",
+"branch": "390"
+},
+{
+"id": "1203",
+"name": "GF114 [GeForce GTX 460 SE v2]",
+"branch": "390"
+},
+{
+"id": "1205",
+"name": "GF114 [GeForce GTX 460 v2]",
+"branch": "390"
+},
+{
+"id": "1206",
+"name": "GF114 [GeForce GTX 555]",
+"branch": "390"
+},
+{
+"id": "1207",
+"name": "GF114 [GeForce GT 645 OEM]",
+"branch": "390"
+},
+{
+"id": "1208",
+"name": "GF114 [GeForce GTX 560 SE]",
+"branch": "390"
+},
+{
+"id": "1210",
+"name": "GF114M [GeForce GTX 570M]",
+"branch": "390"
+},
+{
+"id": "1211",
+"name": "GF114M [GeForce GTX 580M]",
+"branch": "390"
+},
+{
+"id": "1212",
+"name": "GF114M [GeForce GTX 675M]",
+"branch": "390"
+},
+{
+"id": "1213",
+"name": "GF114M [GeForce GTX 670M]",
+"branch": "390"
+},
+{
+"id": "1241",
+"name": "GF116 [GeForce GT 545 OEM]",
+"branch": "390"
+},
+{
+"id": "1243",
+"name": "GF116 [GeForce GT 545]",
+"branch": "390"
+},
+{
+"id": "1244",
+"name": "GF116 [GeForce GTX 550 Ti]",
+"branch": "390"
+},
+{
+"id": "1245",
+"name": "GF116 [GeForce GTS 450 Rev. 2]",
+"branch": "390"
+},
+{
+"id": "1246",
+"name": "GF116M [GeForce GT 550M]",
+"branch": "390"
+},
+{
+"id": "1247",
+"name": "GF116M [GeForce GT 555M/635M]",
+"branch": "390"
+},
+{
+"id": "1248",
+"name": "GF116M [GeForce GT 555M/635M]",
+"branch": "390"
+},
+{
+"id": "1249",
+"name": "GF116 [GeForce GTS 450 Rev. 3]",
+"branch": "390"
+},
+{
+"id": "124b",
+"name": "GF116 [GeForce GT 640 OEM]",
+"branch": "390"
+},
+{
+"id": "124d",
+"name": "GF116M [GeForce GT 555M/635M]",
+"branch": "390"
+},
+{
+"id": "1251",
+"name": "GF116M [GeForce GT 560M]",
+"branch": "390"
+},
+{
+"id": "1280",
+"name": "GK208 [GeForce GT 635]",
+"branch": "470"
+},
+{
+"id": "1281",
+"name": "GK208 [GeForce GT 710]",
+"branch": "470"
+},
+{
+"id": "1282",
+"name": "GK208 [GeForce GT 640 Rev. 2]",
+"branch": "470"
+},
+{
+"id": "1284",
+"name": "GK208 [GeForce GT 630 Rev. 2]",
+"branch": "470"
+},
+{
+"id": "1286",
+"name": "GK208 [GeForce GT 720]",
+"branch": "470"
+},
+{
+"id": "1287",
+"name": "GK208B [GeForce GT 730]",
+"branch": "470"
+},
+{
+"id": "1288",
+"name": "GK208B [GeForce GT 720]",
+"branch": "470"
+},
+{
+"id": "1289",
+"name": "GK208 [GeForce GT 710]",
+"branch": "470"
+},
+{
+"id": "128b",
+"name": "GK208B [GeForce GT 710]",
+"branch": "470"
+},
+{
+"id": "1290",
+"name": "GK208M [GeForce GT 730M]",
+"branch": "470"
+},
+{
+"id": "1291",
+"name": "GK208M [GeForce GT 735M]",
+"branch": "470"
+},
+{
+"id": "1292",
+"name": "GK208M [GeForce GT 740M]",
+"branch": "470"
+},
+{
+"id": "1293",
+"name": "GK208M [GeForce GT 730M]",
+"branch": "470"
+},
+{
+"id": "1295",
+"name": "GK208M [GeForce 710M]",
+"branch": "470"
+},
+{
+"id": "1296",
+"name": "GK208M [GeForce 825M]",
+"branch": "470"
+},
+{
+"id": "1298",
+"name": "GK208M [GeForce GT 720M]",
+"branch": "470"
+},
+{
+"id": "1299",
+"name": "GK208BM [GeForce 920M]",
+"branch": "470"
+},
+{
+"id": "129a",
+"name": "GK208BM [GeForce 910M]",
+"branch": "470"
+},
+{
+"id": "12b9",
+"name": "GK208GLM [Quadro K610M]",
+"branch": "470"
+},
+{
+"id": "12ba",
+"name": "GK208GLM [Quadro K510M]",
+"branch": "470"
+},
+{
+"id": "1340",
+"name": "GM108M [GeForce 830M]",
+"branch": "580"
+},
+{
+"id": "1341",
+"name": "GM108M [GeForce 840M]",
+"branch": "580"
+},
+{
+"id": "1344",
+"name": "GM108M [GeForce 845M]",
+"branch": "580"
+},
+{
+"id": "1346",
+"name": "GM108M [GeForce 930M]",
+"branch": "580"
+},
+{
+"id": "1347",
+"name": "GM108M [GeForce 940M]",
+"branch": "580"
+},
+{
+"id": "1348",
+"name": "GM108M [GeForce 945M / 945A]",
+"branch": "580"
+},
+{
+"id": "1349",
+"name": "GM108M [GeForce 930M]",
+"branch": "580"
+},
+{
+"id": "134b",
+"name": "GM108M [GeForce 940MX]",
+"branch": "580"
+},
+{
+"id": "134d",
+"name": "GM108M [GeForce 940MX]",
+"branch": "580"
+},
+{
+"id": "134e",
+"name": "GM108M [GeForce 930MX]",
+"branch": "580"
+},
+{
+"id": "134f",
+"name": "GM108M [GeForce 920MX]",
+"branch": "580"
+},
+{
+"id": "137a",
+"name": "GM108GLM [Quadro K620M / Quadro M500M]",
+"branch": "580"
+},
+{
+"id": "137b",
+"name": "GM108GLM [Quadro M520 Mobile]",
+"branch": "580"
+},
+{
+"id": "137d",
+"name": "GM108M [GeForce 940A]",
+"branch": "580"
+},
+{
+"id": "1380",
+"name": "GM107 [GeForce GTX 750 Ti]",
+"branch": "580"
+},
+{
+"id": "1381",
+"name": "GM107 [GeForce GTX 750]",
+"branch": "580"
+},
+{
+"id": "1382",
+"name": "GM107 [GeForce GTX 745]",
+"branch": "580"
+},
+{
+"id": "1390",
+"name": "GM107M [GeForce 845M]",
+"branch": "580"
+},
+{
+"id": "1391",
+"name": "GM107M [GeForce GTX 850M]",
+"branch": "580"
+},
+{
+"id": "1392",
+"name": "GM107M [GeForce GTX 860M]",
+"branch": "580"
+},
+{
+"id": "1393",
+"name": "GM107M [GeForce 840M]",
+"branch": "580"
+},
+{
+"id": "1398",
+"name": "GM107M [GeForce 845M]",
+"branch": "580"
+},
+{
+"id": "1399",
+"name": "GM107M [GeForce 945M]",
+"branch": "580"
+},
+{
+"id": "139a",
+"name": "GM107M [GeForce GTX 950M]",
+"branch": "580"
+},
+{
+"id": "139b",
+"name": "GM107M [GeForce GTX 960M]",
+"branch": "580"
+},
+{
+"id": "139c",
+"name": "GM107M [GeForce 940M]",
+"branch": "580"
+},
+{
+"id": "139d",
+"name": "GM107M [GeForce GTX 750 Ti]",
+"branch": "580"
+},
+{
+"id": "13b0",
+"name": "GM107GLM [Quadro M2000M]",
+"branch": "580"
+},
+{
+"id": "13b1",
+"name": "GM107GLM [Quadro M1000M]",
+"branch": "580"
+},
+{
+"id": "13b2",
+"name": "GM107GLM [Quadro M600M]",
+"branch": "580"
+},
+{
+"id": "13b3",
+"name": "GM107GLM [Quadro K2200M]",
+"branch": "580"
+},
+{
+"id": "13b4",
+"name": "GM107GLM [Quadro M620 Mobile]",
+"branch": "580"
+},
+{
+"id": "13b6",
+"name": "GM107GLM [Quadro M1200 Mobile]",
+"branch": "580"
+},
+{
+"id": "13b9",
+"name": "GM107GL [NVS 810]",
+"branch": "580"
+},
+{
+"id": "13ba",
+"name": "GM107GL [Quadro K2200]",
+"branch": "580"
+},
+{
+"id": "13bb",
+"name": "GM107GL [Quadro K620]",
+"branch": "580"
+},
+{
+"id": "13bc",
+"name": "GM107GL [Quadro K1200]",
+"branch": "580"
+},
+{
+"id": "13c0",
+"name": "GM204 [GeForce GTX 980]",
+"branch": "580"
+},
+{
+"id": "13c2",
+"name": "GM204 [GeForce GTX 970]",
+"branch": "580"
+},
+{
+"id": "13d7",
+"name": "GM204M [GeForce GTX 980M]",
+"branch": "580"
+},
+{
+"id": "13d8",
+"name": "GM204M [GeForce GTX 960 OEM / 970M]",
+"branch": "580"
+},
+{
+"id": "13d9",
+"name": "GM204M [GeForce GTX 965M]",
+"branch": "580"
+},
+{
+"id": "13da",
+"name": "GM204M [GeForce GTX 980 Mobile]",
+"branch": "580"
+},
+{
+"id": "13f0",
+"name": "GM204GL [Quadro M5000]",
+"branch": "580"
+},
+{
+"id": "13f1",
+"name": "GM204GL [Quadro M4000]",
+"branch": "580"
+},
+{
+"id": "13f2",
+"name": "GM204GL [Tesla M60]",
+"branch": "580"
+},
+{
+"id": "13f3",
+"name": "GM204GL [Tesla M6]",
+"branch": "580"
+},
+{
+"id": "13f8",
+"name": "GM204GLM [Quadro M5000M / M5000 SE]",
+"branch": "580"
+},
+{
+"id": "13f9",
+"name": "GM204GLM [Quadro M4000M]",
+"branch": "580"
+},
+{
+"id": "13fa",
+"name": "GM204GLM [Quadro M3000M]",
+"branch": "580"
+},
+{
+"id": "13fb",
+"name": "GM204GLM [Quadro M5500]",
+"branch": "580"
+},
+{
+"id": "1401",
+"name": "GM206 [GeForce GTX 960]",
+"branch": "580"
+},
+{
+"id": "1402",
+"name": "GM206 [GeForce GTX 950]",
+"branch": "580"
+},
+{
+"id": "1406",
+"name": "GM206 [GeForce GTX 960 OEM]",
+"branch": "580"
+},
+{
+"id": "1407",
+"name": "GM206 [GeForce GTX 750 v2]",
+"branch": "580"
+},
+{
+"id": "1427",
+"name": "GM206M [GeForce GTX 965M]",
+"branch": "580"
+},
+{
+"id": "1430",
+"name": "GM206GL [Quadro M2000]",
+"branch": "580"
+},
+{
+"id": "1431",
+"name": "GM206GL [Tesla M4]",
+"branch": "580"
+},
+{
+"id": "1436",
+"name": "GM206GLM [Quadro M2200 Mobile]",
+"branch": "580"
+},
+{
+"id": "15f0",
+"name": "GP100GL [Quadro GP100]",
+"branch": "580"
+},
+{
+"id": "15f7",
+"name": "GP100GL [Tesla P100 PCIe 12GB]",
+"branch": "580"
+},
+{
+"id": "15f8",
+"name": "GP100GL [Tesla P100 PCIe 16GB]",
+"branch": "580"
+},
+{
+"id": "15f9",
+"name": "GP100GL [Tesla P100 SXM2 16GB]",
+"branch": "580"
+},
+{
+"id": "1617",
+"name": "GM204M [GeForce GTX 980M]",
+"branch": "580"
+},
+{
+"id": "1618",
+"name": "GM204M [GeForce GTX 970M]",
+"branch": "580"
+},
+{
+"id": "1619",
+"name": "GM204M [GeForce GTX 965M]",
+"branch": "580"
+},
+{
+"id": "161a",
+"name": "GM204M [GeForce GTX 980 Mobile]",
+"branch": "580"
+},
+{
+"id": "1667",
+"name": "GM204M [GeForce GTX 965M]",
+"branch": "580"
+},
+{
+"id": "174d",
+"name": "GM108M [GeForce MX130]",
+"branch": "580"
+},
+{
+"id": "174e",
+"name": "GM108M [GeForce MX110]",
+"branch": "580"
+},
+{
+"id": "179c",
+"name": "GM107 [GeForce 940MX]",
+"branch": "580"
+},
+{
+"id": "17c2",
+"name": "GM200 [GeForce GTX TITAN X]",
+"branch": "580"
+},
+{
+"id": "17c8",
+"name": "GM200 [GeForce GTX 980 Ti]",
+"branch": "580"
+},
+{
+"id": "17f0",
+"name": "GM200GL [Quadro M6000]",
+"branch": "580"
+},
+{
+"id": "17f1",
+"name": "GM200GL [Quadro M6000 24GB]",
+"branch": "580"
+},
+{
+"id": "17fd",
+"name": "GM200GL [Tesla M40]",
+"branch": "580"
+},
+{
+"id": "1b00",
+"name": "GP102 [TITAN X Pascal]",
+"branch": "580"
+},
+{
+"id": "1b02",
+"name": "GP102 [TITAN Xp]",
+"branch": "580"
+},
+{
+"id": "1b06",
+"name": "GP102 [GeForce GTX 1080 Ti]",
+"branch": "580"
+},
+{
+"id": "1b30",
+"name": "GP102GL [Quadro P6000]",
+"branch": "580"
+},
+{
+"id": "1b38",
+"name": "GP102GL [Tesla P40]",
+"branch": "580"
+},
+{
+"id": "1b80",
+"name": "GP104 [GeForce GTX 1080]",
+"branch": "580"
+},
+{
+"id": "1b81",
+"name": "GP104 [GeForce GTX 1070]",
+"branch": "580"
+},
+{
+"id": "1b82",
+"name": "GP104 [GeForce GTX 1070 Ti]",
+"branch": "580"
+},
+{
+"id": "1b83",
+"name": "GP104 [GeForce GTX 1060 6GB]",
+"branch": "580"
+},
+{
+"id": "1b84",
+"name": "GP104 [GeForce GTX 1060 3GB]",
+"branch": "580"
+},
+{
+"id": "1b87",
+"name": "GP104 [P104-100]",
+"branch": "580"
+},
+{
+"id": "1ba0",
+"name": "GP104M [GeForce GTX 1080 Mobile]",
+"branch": "580"
+},
+{
+"id": "1ba1",
+"name": "GP104M [GeForce GTX 1070 Mobile]",
+"branch": "580"
+},
+{
+"id": "1ba2",
+"name": "GP104M [GeForce GTX 1070 Mobile]",
+"branch": "580"
+},
+{
+"id": "1bb0",
+"name": "GP104GL [Quadro P5000]",
+"branch": "580"
+},
+{
+"id": "1bb1",
+"name": "GP104GL [Quadro P4000]",
+"branch": "580"
+},
+{
+"id": "1bb3",
+"name": "GP104GL [Tesla P4]",
+"branch": "580"
+},
+{
+"id": "1bb4",
+"name": "GP104GL [Tesla P6]",
+"branch": "580"
+},
+{
+"id": "1bb5",
+"name": "GP104GLM [Quadro P5200 Mobile]",
+"branch": "580"
+},
+{
+"id": "1bb6",
+"name": "GP104GLM [Quadro P5000 Mobile]",
+"branch": "580"
+},
+{
+"id": "1bb7",
+"name": "GP104GLM [Quadro P4000 Mobile]",
+"branch": "580"
+},
+{
+"id": "1bb8",
+"name": "GP104GLM [Quadro P3000 Mobile]",
+"branch": "580"
+},
+{
+"id": "1bb9",
+"name": "GP104GLM [Quadro P4200 Mobile]",
+"branch": "580"
+},
+{
+"id": "1bbb",
+"name": "GP104GLM [Quadro P3200 Mobile]",
+"branch": "580"
+},
+{
+"id": "1bc7",
+"name": "GP104 [P104-101]",
+"branch": "580"
+},
+{
+"id": "1be0",
+"name": "GP104BM [GeForce GTX 1080 Mobile]",
+"branch": "580"
+},
+{
+"id": "1be1",
+"name": "GP104BM [GeForce GTX 1070 Mobile]",
+"branch": "580"
+},
+{
+"id": "1c02",
+"name": "GP106 [GeForce GTX 1060 3GB]",
+"branch": "580"
+},
+{
+"id": "1c03",
+"name": "GP106 [GeForce GTX 1060 6GB]",
+"branch": "580"
+},
+{
+"id": "1c04",
+"name": "GP106 [GeForce GTX 1060 5GB]",
+"branch": "580"
+},
+{
+"id": "1c06",
+"name": "GP106 [GeForce GTX 1060 6GB Rev. 2]",
+"branch": "580"
+},
+{
+"id": "1c07",
+"name": "GP106 [P106-100]",
+"branch": "580"
+},
+{
+"id": "1c09",
+"name": "GP106 [P106-090]",
+"branch": "580"
+},
+{
+"id": "1c20",
+"name": "GP106M [GeForce GTX 1060 Mobile]",
+"branch": "580"
+},
+{
+"id": "1c21",
+"name": "GP106M [GeForce GTX 1050 Ti Mobile]",
+"branch": "580"
+},
+{
+"id": "1c22",
+"name": "GP106M [GeForce GTX 1050 Mobile]",
+"branch": "580"
+},
+{
+"id": "1c23",
+"name": "GP106M [GeForce GTX 1060 Mobile Rev. 2]",
+"branch": "580"
+},
+{
+"id": "1c30",
+"name": "GP106GL [Quadro P2000]",
+"branch": "580"
+},
+{
+"id": "1c31",
+"name": "GP106GL [Quadro P2200]",
+"branch": "580"
+},
+{
+"id": "1c60",
+"name": "GP106BM [GeForce GTX 1060 Mobile 6GB]",
+"branch": "580"
+},
+{
+"id": "1c61",
+"name": "GP106BM [GeForce GTX 1050 Ti Mobile]",
+"branch": "580"
+},
+{
+"id": "1c62",
+"name": "GP106BM [GeForce GTX 1050 Mobile]",
+"branch": "580"
+},
+{
+"id": "1c81",
+"name": "GP107 [GeForce GTX 1050]",
+"branch": "580"
+},
+{
+"id": "1c82",
+"name": "GP107 [GeForce GTX 1050 Ti]",
+"branch": "580"
+},
+{
+"id": "1c83",
+"name": "GP107 [GeForce GTX 1050 3GB]",
+"branch": "580"
+},
+{
+"id": "1c8c",
+"name": "GP107M [GeForce GTX 1050 Ti Mobile]",
+"branch": "580"
+},
+{
+"id": "1c8d",
+"name": "GP107M [GeForce GTX 1050 Mobile]",
+"branch": "580"
+},
+{
+"id": "1c8f",
+"name": "GP107M [GeForce GTX 1050 Ti Max-Q]",
+"branch": "580"
+},
+{
+"id": "1c90",
+"name": "GP107M [GeForce MX150]",
+"branch": "580"
+},
+{
+"id": "1c91",
+"name": "GP107M [GeForce GTX 1050 3 GB Max-Q]",
+"branch": "580"
+},
+{
+"id": "1c92",
+"name": "GP107M [GeForce GTX 1050 Mobile]",
+"branch": "580"
+},
+{
+"id": "1c94",
+"name": "GP107M [GeForce MX350]",
+"branch": "580"
+},
+{
+"id": "1c96",
+"name": "GP107M [GeForce MX350]",
+"branch": "580"
+},
+{
+"id": "1cb1",
+"name": "GP107GL [Quadro P1000]",
+"branch": "580"
+},
+{
+"id": "1cb2",
+"name": "GP107GL [Quadro P600]",
+"branch": "580"
+},
+{
+"id": "1cb3",
+"name": "GP107GL [Quadro P400]",
+"branch": "580"
+},
+{
+"id": "1cb6",
+"name": "GP107GL [Quadro P620]",
+"branch": "580"
+},
+{
+"id": "1cba",
+"name": "GP107GLM [Quadro P2000 Mobile]",
+"branch": "580"
+},
+{
+"id": "1cbb",
+"name": "GP107GLM [Quadro P1000 Mobile]",
+"branch": "580"
+},
+{
+"id": "1cbc",
+"name": "GP107GLM [Quadro P600 Mobile]",
+"branch": "580"
+},
+{
+"id": "1cbd",
+"name": "GP107GLM [Quadro P620]",
+"branch": "580"
+},
+{
+"id": "1cfa",
+"name": "GP107GL [Quadro P2000]",
+"branch": "580"
+},
+{
+"id": "1cfb",
+"name": "GP107GL [Quadro P1000]",
+"branch": "580"
+},
+{
+"id": "1d01",
+"name": "GP108 [GeForce GT 1030]",
+"branch": "580"
+},
+{
+"id": "1d02",
+"name": "GP108 [GeForce GT 1010]",
+"branch": "580"
+},
+{
+"id": "1d10",
+"name": "GP108M [GeForce MX150]",
+"branch": "580"
+},
+{
+"id": "1d11",
+"name": "GP108M [GeForce MX230]",
+"branch": "580"
+},
+{
+"id": "1d12",
+"name": "GP108M [GeForce MX150]",
+"branch": "580"
+},
+{
+"id": "1d13",
+"name": "GP108M [GeForce MX250]",
+"branch": "580"
+},
+{
+"id": "1d16",
+"name": "GP108M [GeForce MX330]",
+"branch": "580"
+},
+{
+"id": "1d33",
+"name": "GP108GLM [Quadro P500 Mobile]",
+"branch": "580"
+},
+{
+"id": "1d34",
+"name": "GP108GLM [Quadro P520]",
+"branch": "580"
+},
+{
+"id": "1d52",
+"name": "GP108BM [GeForce MX250]",
+"branch": "580"
+},
+{
+"id": "1d81",
+"name": "GV100 [TITAN V]",
+"branch": "580"
+},
+{
+"id": "1db1",
+"name": "GV100GL [Tesla V100 SXM2 16GB]",
+"branch": "580"
+},
+{
+"id": "1db3",
+"name": "GV100GL [Tesla V100 FHHL 16GB]",
+"branch": "580"
+},
+{
+"id": "1db4",
+"name": "GV100GL [Tesla V100 PCIe 16GB]",
+"branch": "580"
+},
+{
+"id": "1db5",
+"name": "GV100GL [Tesla V100 SXM2 32GB]",
+"branch": "580"
+},
+{
+"id": "1db6",
+"name": "GV100GL [Tesla V100 PCIe 32GB]",
+"branch": "580"
+},
+{
+"id": "1db7",
+"name": "GV100GL [Tesla V100 DGXS 32GB]",
+"branch": "580"
+},
+{
+"id": "1db8",
+"name": "GV100GL [Tesla V100 SXM3 32GB]",
+"branch": "580"
+},
+{
+"id": "1dba",
+"name": "GV100GL [Quadro GV100]",
+"branch": "580"
+},
+{
+"id": "1df0",
+"name": "GV100GL [Tesla PG500-216]",
+"branch": "580"
+},
+{
+"id": "1df2",
+"name": "GV100GL [Tesla PG503-216]",
+"branch": "580"
+},
+{
+"id": "1df5",
+"name": "GV100GL [Tesla V100 SXM2 16GB]",
+"branch": "580"
+},
+{
+"id": "1df6",
+"name": "GV100GL [Tesla V100S PCIe 32GB]",
+"branch": "580"
+},
+{
+"id": "1e02",
+"name": "TU102 [TITAN RTX]",
+"branch": ""
+},
+{
+"id": "1e04",
+"name": "TU102 [GeForce RTX 2080 Ti]",
+"branch": ""
+},
+{
+"id": "1e07",
+"name": "TU102 [GeForce RTX 2080 Ti Rev. A]",
+"branch": ""
+},
+{
+"id": "1e09",
+"name": "TU102 [CMP 50HX]",
+"branch": ""
+},
+{
+"id": "1e30",
+"name": "TU102GL [Quadro RTX 6000/8000]",
+"branch": ""
+},
+{
+"id": "1e36",
+"name": "TU102GL [Quadro RTX 6000]",
+"branch": ""
+},
+{
+"id": "1e78",
+"name": "TU102GL [Quadro RTX 6000/8000]",
+"branch": ""
+},
+{
+"id": "1e81",
+"name": "TU104 [GeForce RTX 2080 SUPER]",
+"branch": ""
+},
+{
+"id": "1e82",
+"name": "TU104 [GeForce RTX 2080]",
+"branch": ""
+},
+{
+"id": "1e84",
+"name": "TU104 [GeForce RTX 2070 SUPER]",
+"branch": ""
+},
+{
+"id": "1e87",
+"name": "TU104 [GeForce RTX 2080 Rev. A]",
+"branch": ""
+},
+{
+"id": "1e89",
+"name": "TU104 [GeForce RTX 2060]",
+"branch": ""
+},
+{
+"id": "1e90",
+"name": "TU104M [GeForce RTX 2080 Mobile]",
+"branch": ""
+},
+{
+"id": "1e91",
+"name": "TU104M [GeForce RTX 2070 SUPER Mobile / Max-Q]",
+"branch": ""
+},
+{
+"id": "1e93",
+"name": "TU104M [GeForce RTX 2080 SUPER Mobile / Max-Q]",
+"branch": ""
+},
+{
+"id": "1eb0",
+"name": "TU104GL [Quadro RTX 5000]",
+"branch": ""
+},
+{
+"id": "1eb1",
+"name": "TU104GL [Quadro RTX 4000]",
+"branch": ""
+},
+{
+"id": "1eb5",
+"name": "TU104GLM [Quadro RTX 5000 Mobile / Max-Q]",
+"branch": ""
+},
+{
+"id": "1eb6",
+"name": "TU104GLM [Quadro RTX 4000 Mobile / Max-Q]",
+"branch": ""
+},
+{
+"id": "1eb8",
+"name": "TU104GL [Tesla T4]",
+"branch": ""
+},
+{
+"id": "1ec2",
+"name": "TU104 [GeForce RTX 2070 SUPER]",
+"branch": ""
+},
+{
+"id": "1ec7",
+"name": "TU104 [GeForce RTX 2070 SUPER]",
+"branch": ""
+},
+{
+"id": "1ed0",
+"name": "TU104BM [GeForce RTX 2080 Mobile]",
+"branch": ""
+},
+{
+"id": "1ed1",
+"name": "TU104BM [GeForce RTX 2070 SUPER Mobile / Max-Q]",
+"branch": ""
+},
+{
+"id": "1ed3",
+"name": "TU104BM [GeForce RTX 2080 SUPER Mobile / Max-Q]",
+"branch": ""
+},
+{
+"id": "1ef5",
+"name": "TU104GLM [Quadro RTX 5000 Mobile Refresh]",
+"branch": ""
+},
+{
+"id": "1f02",
+"name": "TU106 [GeForce RTX 2070]",
+"branch": ""
+},
+{
+"id": "1f03",
+"name": "TU106 [GeForce RTX 2060 12GB]",
+"branch": ""
+},
+{
+"id": "1f06",
+"name": "TU106 [GeForce RTX 2060 SUPER]",
+"branch": ""
+},
+{
+"id": "1f07",
+"name": "TU106 [GeForce RTX 2070 Rev. A]",
+"branch": ""
+},
+{
+"id": "1f08",
+"name": "TU106 [GeForce RTX 2060 Rev. A]",
+"branch": ""
+},
+{
+"id": "1f0a",
+"name": "TU106 [GeForce GTX 1650]",
+"branch": ""
+},
+{
+"id": "1f0b",
+"name": "TU106 [CMP 40HX]",
+"branch": ""
+},
+{
+"id": "1f10",
+"name": "TU106M [GeForce RTX 2070 Mobile]",
+"branch": ""
+},
+{
+"id": "1f11",
+"name": "TU106M [GeForce RTX 2060 Mobile]",
+"branch": ""
+},
+{
+"id": "1f12",
+"name": "TU106M [GeForce RTX 2060 Max-Q]",
+"branch": ""
+},
+{
+"id": "1f14",
+"name": "TU106M [GeForce RTX 2070 Mobile / Max-Q Refresh]",
+"branch": ""
+},
+{
+"id": "1f15",
+"name": "TU106M [GeForce RTX 2060 Mobile]",
+"branch": ""
+},
+{
+"id": "1f36",
+"name": "TU106GLM [Quadro RTX 3000 Mobile / Max-Q]",
+"branch": ""
+},
+{
+"id": "1f42",
+"name": "TU106 [GeForce RTX 2060 SUPER]",
+"branch": ""
+},
+{
+"id": "1f47",
+"name": "TU106 [GeForce RTX 2060 SUPER]",
+"branch": ""
+},
+{
+"id": "1f50",
+"name": "TU106BM [GeForce RTX 2070 Mobile / Max-Q]",
+"branch": ""
+},
+{
+"id": "1f51",
+"name": "TU106BM [GeForce RTX 2060 Mobile]",
+"branch": ""
+},
+{
+"id": "1f54",
+"name": "TU106BM [GeForce RTX 2070 Mobile]",
+"branch": ""
+},
+{
+"id": "1f55",
+"name": "TU106BM [GeForce RTX 2060 Mobile]",
+"branch": ""
+},
+{
+"id": "1f76",
+"name": "TU106GLM [Quadro RTX 3000 Mobile Refresh]",
+"branch": ""
+},
+{
+"id": "1f82",
+"name": "TU117 [GeForce GTX 1650]",
+"branch": ""
+},
+{
+"id": "1f83",
+"name": "TU117 [GeForce GTX 1630]",
+"branch": ""
+},
+{
+"id": "1f91",
+"name": "TU117M [GeForce GTX 1650 Mobile / Max-Q]",
+"branch": ""
+},
+{
+"id": "1f95",
+"name": "TU117M [GeForce GTX 1650 Ti Mobile]",
+"branch": ""
+},
+{
+"id": "1f96",
+"name": "TU117M [GeForce GTX 1650 Mobile / Max-Q]",
+"branch": ""
+},
+{
+"id": "1f97",
+"name": "TU117M [GeForce MX450]",
+"branch": ""
+},
+{
+"id": "1f98",
+"name": "TU117M [GeForce MX450]",
+"branch": ""
+},
+{
+"id": "1f99",
+"name": "TU117M [GeForce GTX 1650 Mobile / Max-Q]",
+"branch": ""
+},
+{
+"id": "1f9c",
+"name": "TU117M [GeForce MX450]",
+"branch": ""
+},
+{
+"id": "1f9d",
+"name": "TU117M [GeForce GTX 1650 Mobile / Max-Q]",
+"branch": ""
+},
+{
+"id": "1f9f",
+"name": "TU117M [GeForce MX550]",
+"branch": ""
+},
+{
+"id": "1fa0",
+"name": "TU117M [GeForce MX550]",
+"branch": ""
+},
+{
+"id": "1fb0",
+"name": "TU117GLM [Quadro T1000 Mobile]",
+"branch": ""
+},
+{
+"id": "1fb1",
+"name": "TU117GL [T600]",
+"branch": ""
+},
+{
+"id": "1fb2",
+"name": "TU117GLM [Quadro T400 Mobile]",
+"branch": ""
+},
+{
+"id": "1fb6",
+"name": "TU117GLM [T600 Laptop GPU]",
+"branch": ""
+},
+{
+"id": "1fb7",
+"name": "TU117GLM [T550 Laptop GPU]",
+"branch": ""
+},
+{
+"id": "1fb8",
+"name": "TU117GLM [Quadro T2000 Mobile / Max-Q]",
+"branch": ""
+},
+{
+"id": "1fb9",
+"name": "TU117GLM [Quadro T1000 Mobile]",
+"branch": ""
+},
+{
+"id": "1fba",
+"name": "TU117GLM [T600 Mobile]",
+"branch": ""
+},
+{
+"id": "1fbb",
+"name": "TU117GLM [Quadro T500 Mobile]",
+"branch": ""
+},
+{
+"id": "1fbc",
+"name": "TU117GLM [T1200 Laptop GPU]",
+"branch": ""
+},
+{
+"id": "1fdd",
+"name": "TU117BM [GeForce GTX 1650 Mobile Refresh]",
+"branch": ""
+},
+{
+"id": "1ff0",
+"name": "TU117GL [T1000 8GB]",
+"branch": ""
+},
+{
+"id": "1ff2",
+"name": "TU117GL [T400 4GB / T400E]",
+"branch": ""
+},
+{
+"id": "1ff9",
+"name": "TU117GLM [Quadro T1000 Mobile]",
+"branch": ""
+},
+{
+"id": "20b0",
+"name": "GA100 [A100 SXM4 40GB]",
+"branch": ""
+},
+{
+"id": "20b2",
+"name": "GA100 [A100 SXM4 80GB]",
+"branch": ""
+},
+{
+"id": "20b3",
+"name": "GA100 [A100-SXM-64GB]",
+"branch": ""
+},
+{
+"id": "20b5",
+"name": "GA100 [A100 PCIe 80GB]",
+"branch": ""
+},
+{
+"id": "20b6",
+"name": "GA100GL [PG506-232]",
+"branch": ""
+},
+{
+"id": "20b7",
+"name": "GA100GL [A30 PCIe]",
+"branch": ""
+},
+{
+"id": "20bd",
+"name": "GA100 [A800 SXM4 40GB]",
+"branch": ""
+},
+{
+"id": "20f1",
+"name": "GA100 [A100 PCIe 40GB]",
+"branch": ""
+},
+{
+"id": "20f3",
+"name": "GA100 [A800-SXM4-80GB]",
+"branch": ""
+},
+{
+"id": "20f5",
+"name": "GA100 [A800 80GB PCIe]",
+"branch": ""
+},
+{
+"id": "20f6",
+"name": "GA100 [A800 40GB PCIe]",
+"branch": ""
+},
+{
+"id": "20fd",
+"name": "GA100 [AX800 Converged Accelerator]",
+"branch": ""
+},
+{
+"id": "2182",
+"name": "TU116 [GeForce GTX 1660 Ti]",
+"branch": ""
+},
+{
+"id": "2184",
+"name": "TU116 [GeForce GTX 1660]",
+"branch": ""
+},
+{
+"id": "2187",
+"name": "TU116 [GeForce GTX 1650 SUPER]",
+"branch": ""
+},
+{
+"id": "2188",
+"name": "TU116 [GeForce GTX 1650]",
+"branch": ""
+},
+{
+"id": "2189",
+"name": "TU116 [CMP 30HX]",
+"branch": ""
+},
+{
+"id": "2191",
+"name": "TU116M [GeForce GTX 1660 Ti Mobile]",
+"branch": ""
+},
+{
+"id": "2192",
+"name": "TU116M [GeForce GTX 1650 Ti Mobile]",
+"branch": ""
+},
+{
+"id": "21c4",
+"name": "TU116 [GeForce GTX 1660 SUPER]",
+"branch": ""
+},
+{
+"id": "21d1",
+"name": "TU116BM [GeForce GTX 1660 Ti Mobile]",
+"branch": ""
+},
+{
+"id": "2203",
+"name": "GA102 [GeForce RTX 3090 Ti]",
+"branch": ""
+},
+{
+"id": "2204",
+"name": "GA102 [GeForce RTX 3090]",
+"branch": ""
+},
+{
+"id": "2206",
+"name": "GA102 [GeForce RTX 3080]",
+"branch": ""
+},
+{
+"id": "2207",
+"name": "GA102 [GeForce RTX 3070 Ti]",
+"branch": ""
+},
+{
+"id": "2208",
+"name": "GA102 [GeForce RTX 3080 Ti]",
+"branch": ""
+},
+{
+"id": "220a",
+"name": "GA102 [GeForce RTX 3080 12GB]",
+"branch": ""
+},
+{
+"id": "220d",
+"name": "GA102 [CMP 90HX]",
+"branch": ""
+},
+{
+"id": "2216",
+"name": "GA102 [GeForce RTX 3080 Lite Hash Rate]",
+"branch": ""
+},
+{
+"id": "2230",
+"name": "GA102GL [RTX A6000]",
+"branch": ""
+},
+{
+"id": "2231",
+"name": "GA102GL [RTX A5000]",
+"branch": ""
+},
+{
+"id": "2232",
+"name": "GA102GL [RTX A4500]",
+"branch": ""
+},
+{
+"id": "2233",
+"name": "GA102GL [RTX A5500]",
+"branch": ""
+},
+{
+"id": "2235",
+"name": "GA102GL [A40]",
+"branch": ""
+},
+{
+"id": "2236",
+"name": "GA102GL [A10]",
+"branch": ""
+},
+{
+"id": "2237",
+"name": "GA102GL [A10G]",
+"branch": ""
+},
+{
+"id": "2238",
+"name": "GA102GL [A10M]",
+"branch": ""
+},
+{
+"id": "230e",
+"name": "GH100 [H20 NVL16]",
+"branch": ""
+},
+{
+"id": "2321",
+"name": "GH100 [H100L 94GB]",
+"branch": ""
+},
+{
+"id": "2322",
+"name": "GH100 [H800 PCIe]",
+"branch": ""
+},
+{
+"id": "2324",
+"name": "GH100 [H800]",
+"branch": ""
+},
+{
+"id": "2329",
+"name": "GH100 [H20]",
+"branch": ""
+},
+{
+"id": "232c",
+"name": "GH100 [H20 HBM3e]",
+"branch": ""
+},
+{
+"id": "2330",
+"name": "GH100 [H100 SXM5 80GB]",
+"branch": ""
+},
+{
+"id": "2331",
+"name": "GH100 [H100 PCIe]",
+"branch": ""
+},
+{
+"id": "2335",
+"name": "GH100 [H200 SXM 141GB]",
+"branch": ""
+},
+{
+"id": "2339",
+"name": "GH100 [H100 SXM5 94GB]",
+"branch": ""
+},
+{
+"id": "233a",
+"name": "GH100 [H800L 94GB]",
+"branch": ""
+},
+{
+"id": "233b",
+"name": "GH100 [H200 NVL]",
+"branch": ""
+},
+{
+"id": "2342",
+"name": "GH100 [GH200 120GB / 480GB]",
+"branch": ""
+},
+{
+"id": "2348",
+"name": "GH100 [GH200 144G HBM3e]",
+"branch": ""
+},
+{
+"id": "2414",
+"name": "GA103 [GeForce RTX 3060 Ti]",
+"branch": ""
+},
+{
+"id": "2420",
+"name": "GA103M [GeForce RTX 3080 Ti Mobile]",
+"branch": ""
+},
+{
+"id": "2438",
+"name": "GA103GLM [RTX A5500 Laptop GPU]",
+"branch": ""
+},
+{
+"id": "2460",
+"name": "GA103M [GeForce RTX 3080 Ti Laptop GPU]",
+"branch": ""
+},
+{
+"id": "2482",
+"name": "GA104 [GeForce RTX 3070 Ti]",
+"branch": ""
+},
+{
+"id": "2484",
+"name": "GA104 [GeForce RTX 3070]",
+"branch": ""
+},
+{
+"id": "2486",
+"name": "GA104 [GeForce RTX 3060 Ti]",
+"branch": ""
+},
+{
+"id": "2487",
+"name": "GA104 [GeForce RTX 3060]",
+"branch": ""
+},
+{
+"id": "2488",
+"name": "GA104 [GeForce RTX 3070 Lite Hash Rate]",
+"branch": ""
+},
+{
+"id": "2489",
+"name": "GA104 [GeForce RTX 3060 Ti Lite Hash Rate]",
+"branch": ""
+},
+{
+"id": "248a",
+"name": "GA104 [CMP 70HX]",
+"branch": ""
+},
+{
+"id": "249c",
+"name": "GA104M [GeForce RTX 3080 Mobile / Max-Q 8GB/16GB]",
+"branch": ""
+},
+{
+"id": "249d",
+"name": "GA104M [GeForce RTX 3070 Mobile / Max-Q]",
+"branch": ""
+},
+{
+"id": "24a0",
+"name": "GA104 [Geforce RTX 3070 Ti Laptop GPU]",
+"branch": ""
+},
+{
+"id": "24b0",
+"name": "GA104GL [RTX A4000]",
+"branch": ""
+},
+{
+"id": "24b1",
+"name": "GA104GL [RTX A4000H]",
+"branch": ""
+},
+{
+"id": "24b6",
+"name": "GA104GLM [RTX A5000 Mobile]",
+"branch": ""
+},
+{
+"id": "24b7",
+"name": "GA104GLM [RTX A4000 Mobile]",
+"branch": ""
+},
+{
+"id": "24b8",
+"name": "GA104GLM [RTX A3000 Mobile]",
+"branch": ""
+},
+{
+"id": "24b9",
+"name": "GA104GLM [RTX A3000 12GB Laptop GPU]",
+"branch": ""
+},
+{
+"id": "24ba",
+"name": "GA104GLM [RTX A4500 Laptop GPU]",
+"branch": ""
+},
+{
+"id": "24bb",
+"name": "GA104GLM [RTX A3000 Laptop GPU]",
+"branch": ""
+},
+{
+"id": "24c7",
+"name": "GA104 [GeForce RTX 3060 8GB]",
+"branch": ""
+},
+{
+"id": "24c9",
+"name": "GA104 [GeForce RTX 3060 Ti GDDR6X]",
+"branch": ""
+},
+{
+"id": "24dc",
+"name": "GA104M [GeForce RTX 3080 Mobile / Max-Q 8GB/16GB]",
+"branch": ""
+},
+{
+"id": "24dd",
+"name": "GA104M [GeForce RTX 3070 Mobile / Max-Q]",
+"branch": ""
+},
+{
+"id": "24e0",
+"name": "GA104M [Geforce RTX 3070 Ti Laptop GPU]",
+"branch": ""
+},
+{
+"id": "24fa",
+"name": "GA104 [RTX A4500 Embedded GPU ]",
+"branch": ""
+},
+{
+"id": "2503",
+"name": "GA106 [GeForce RTX 3060]",
+"branch": ""
+},
+{
+"id": "2504",
+"name": "GA106 [GeForce RTX 3060 Lite Hash Rate]",
+"branch": ""
+},
+{
+"id": "2507",
+"name": "GA106 [Geforce RTX 3050]",
+"branch": ""
+},
+{
+"id": "2508",
+"name": "GA106 [GeForce RTX 3050 OEM]",
+"branch": ""
+},
+{
+"id": "2520",
+"name": "GA106M [GeForce RTX 3060 Mobile / Max-Q]",
+"branch": ""
+},
+{
+"id": "2521",
+"name": "GA106M [GeForce RTX 3060 Laptop GPU]",
+"branch": ""
+},
+{
+"id": "2523",
+"name": "GA106M [GeForce RTX 3050 Ti Mobile / Max-Q]",
+"branch": ""
+},
+{
+"id": "2531",
+"name": "GA106 [RTX A2000]",
+"branch": ""
+},
+{
+"id": "2544",
+"name": "GA106 [GeForce RTX 3060]",
+"branch": ""
+},
+{
+"id": "2560",
+"name": "GA106M [GeForce RTX 3060 Mobile / Max-Q]",
+"branch": ""
+},
+{
+"id": "2563",
+"name": "GA106M [GeForce RTX 3050 Ti Mobile / Max-Q]",
+"branch": ""
+},
+{
+"id": "2571",
+"name": "GA106 [RTX A2000 12GB]",
+"branch": ""
+},
+{
+"id": "2582",
+"name": "GA107 [GeForce RTX 3050 8GB]",
+"branch": ""
+},
+{
+"id": "2584",
+"name": "GA107 [GeForce RTX 3050 6GB]",
+"branch": ""
+},
+{
+"id": "25a0",
+"name": "GA107M [GeForce RTX 3050 Ti Mobile]",
+"branch": ""
+},
+{
+"id": "25a2",
+"name": "GA107M [GeForce RTX 3050 Mobile]",
+"branch": ""
+},
+{
+"id": "25a5",
+"name": "GA107M [GeForce RTX 3050 Mobile]",
+"branch": ""
+},
+{
+"id": "25a6",
+"name": "GA107M [GeForce MX570]",
+"branch": ""
+},
+{
+"id": "25a7",
+"name": "GA107M [GeForce MX570]",
+"branch": ""
+},
+{
+"id": "25a9",
+"name": "GA107M [GeForce RTX 2050]",
+"branch": ""
+},
+{
+"id": "25aa",
+"name": "GA107M [GeForce MX570 A]",
+"branch": ""
+},
+{
+"id": "25ab",
+"name": "GA107M [GeForce RTX 3050 4GB Laptop GPU]",
+"branch": ""
+},
+{
+"id": "25ac",
+"name": "GA107BM / GN20-P0-R-K2 [GeForce RTX 3050 6GB Laptop GPU]",
+"branch": ""
+},
+{
+"id": "25ad",
+"name": "GA107 [GeForce RTX 2050]",
+"branch": ""
+},
+{
+"id": "25b0",
+"name": "GA107GL [RTX A1000]",
+"branch": ""
+},
+{
+"id": "25b2",
+"name": "GA107GL [RTX A400]",
+"branch": ""
+},
+{
+"id": "25b6",
+"name": "GA107GL [A2 / A16]",
+"branch": ""
+},
+{
+"id": "25b8",
+"name": "GA107GLM [RTX A2000 Mobile]",
+"branch": ""
+},
+{
+"id": "25b9",
+"name": "GA107GLM [RTX A1000 Laptop GPU]",
+"branch": ""
+},
+{
+"id": "25ba",
+"name": "GA107GLM [RTX A2000 8GB Laptop GPU]",
+"branch": ""
+},
+{
+"id": "25bb",
+"name": "GA107GLM [RTX A500 Laptop GPU]",
+"branch": ""
+},
+{
+"id": "25bc",
+"name": "GA107GLM [RTX A1000 6GB Laptop GPU]",
+"branch": ""
+},
+{
+"id": "25bd",
+"name": "GA107GLM [RTX A500 Laptop GPU]",
+"branch": ""
+},
+{
+"id": "25e0",
+"name": "GA107BM [GeForce RTX 3050 Ti Mobile]",
+"branch": ""
+},
+{
+"id": "25e2",
+"name": "GA107BM [GeForce RTX 3050 Mobile]",
+"branch": ""
+},
+{
+"id": "25e5",
+"name": "GA107BM [GeForce RTX 3050 Mobile]",
+"branch": ""
+},
+{
+"id": "25ec",
+"name": "GA107BM / GN20-P0-R-K2 [GeForce RTX 3050 6GB Laptop GPU]",
+"branch": ""
+},
+{
+"id": "25ed",
+"name": "GA107 [GeForce RTX 2050]",
+"branch": ""
+},
+{
+"id": "25f9",
+"name": "GA107 [RTX A1000 Embedded GPU ]",
+"branch": ""
+},
+{
+"id": "25fa",
+"name": "GA107 [RTX A2000 Embedded GPU]",
+"branch": ""
+},
+{
+"id": "25fb",
+"name": "GA107 [RTX A500 Embedded GPU]",
+"branch": ""
+},
+{
+"id": "2684",
+"name": "AD102 [GeForce RTX 4090]",
+"branch": ""
+},
+{
+"id": "2685",
+"name": "AD102 [GeForce RTX 4090 D]",
+"branch": ""
+},
+{
+"id": "2689",
+"name": "AD102 [GeForce RTX 4070 Ti SUPER]",
+"branch": ""
+},
+{
+"id": "26b1",
+"name": "AD102GL [RTX 6000 Ada Generation]",
+"branch": ""
+},
+{
+"id": "26b2",
+"name": "AD102GL [RTX 5000 Ada Generation]",
+"branch": ""
+},
+{
+"id": "26b3",
+"name": "AD102GL [RTX 5880 Ada Generation]",
+"branch": ""
+},
+{
+"id": "26b5",
+"name": "AD102GL [L40]",
+"branch": ""
+},
+{
+"id": "26b9",
+"name": "AD102GL [L40S]",
+"branch": ""
+},
+{
+"id": "26ba",
+"name": "AD102GL [L20]",
+"branch": ""
+},
+{
+"id": "2702",
+"name": "AD103 [GeForce RTX 4080 SUPER]",
+"branch": ""
+},
+{
+"id": "2704",
+"name": "AD103 [GeForce RTX 4080]",
+"branch": ""
+},
+{
+"id": "2705",
+"name": "AD103 [GeForce RTX 4070 Ti SUPER]",
+"branch": ""
+},
+{
+"id": "2709",
+"name": "AD103 [GeForce RTX 4070]",
+"branch": ""
+},
+{
+"id": "2717",
+"name": "AD103M / GN21-X11 [GeForce RTX 4090 Laptop GPU]",
+"branch": ""
+},
+{
+"id": "2730",
+"name": "AD103GLM [RTX 5000 Ada Generation Laptop GPU]",
+"branch": ""
+},
+{
+"id": "2757",
+"name": "AD103M / GN21-X11 [GeForce RTX 4090 Laptop GPU]",
+"branch": ""
+},
+{
+"id": "2770",
+"name": "AD103GLM [RTX 5000 Ada Generation Embedded GPU]",
+"branch": ""
+},
+{
+"id": "2782",
+"name": "AD104 [GeForce RTX 4070 Ti]",
+"branch": ""
+},
+{
+"id": "2783",
+"name": "AD104 [GeForce RTX 4070 SUPER]",
+"branch": ""
+},
+{
+"id": "2786",
+"name": "AD104 [GeForce RTX 4070]",
+"branch": ""
+},
+{
+"id": "2788",
+"name": "AD104 [GeForce RTX 4060 Ti]",
+"branch": ""
+},
+{
+"id": "27a0",
+"name": "AD104M [GeForce RTX 4080 Max-Q / Mobile]",
+"branch": ""
+},
+{
+"id": "27b0",
+"name": "AD104GL [RTX 4000 SFF Ada Generation]",
+"branch": ""
+},
+{
+"id": "27b1",
+"name": "AD104GL [RTX 4500 Ada Generation]",
+"branch": ""
+},
+{
+"id": "27b2",
+"name": "AD104GL [RTX 4000 Ada Generation]",
+"branch": ""
+},
+{
+"id": "27b6",
+"name": "AD104GL [L2]",
+"branch": ""
+},
+{
+"id": "27b8",
+"name": "AD104GL [L4]",
+"branch": ""
+},
+{
+"id": "27ba",
+"name": "AD104GLM [RTX 4000 Ada Generation Laptop GPU]",
+"branch": ""
+},
+{
+"id": "27bb",
+"name": "AD104GLM [RTX 3500 Ada Generation Laptop GPU]",
+"branch": ""
+},
+{
+"id": "27e0",
+"name": "AD104M [GeForce RTX 4080 Max-Q / Mobile]",
+"branch": ""
+},
+{
+"id": "27fb",
+"name": "AD104GLM [RTX 3500 Ada Generation Embedded GPU]",
+"branch": ""
+},
+{
+"id": "2803",
+"name": "AD106 [GeForce RTX 4060 Ti]",
+"branch": ""
+},
+{
+"id": "2805",
+"name": "AD106 [GeForce RTX 4060 Ti 16GB]",
+"branch": ""
+},
+{
+"id": "2808",
+"name": "AD106 [GeForce RTX 4060]",
+"branch": ""
+},
+{
+"id": "2820",
+"name": "AD106M [GeForce RTX 4070 Max-Q / Mobile]",
+"branch": ""
+},
+{
+"id": "2822",
+"name": "AD106M [GeForce RTX 3050 A Laptop GPU]",
+"branch": ""
+},
+{
+"id": "2838",
+"name": "AD106GLM [RTX 3000 Ada Generation Laptop GPU]",
+"branch": ""
+},
+{
+"id": "2860",
+"name": "AD106M [GeForce RTX 4070 Max-Q / Mobile]",
+"branch": ""
+},
+{
+"id": "2882",
+"name": "AD107 [GeForce RTX 4060]",
+"branch": ""
+},
+{
+"id": "28a0",
+"name": "AD107M [GeForce RTX 4060 Max-Q / Mobile]",
+"branch": ""
+},
+{
+"id": "28a1",
+"name": "AD107M [GeForce RTX 4050 Max-Q / Mobile]",
+"branch": ""
+},
+{
+"id": "28a3",
+"name": "AD107M [GeForce RTX 3050 A Laptop GPU]",
+"branch": ""
+},
+{
+"id": "28b0",
+"name": "AD107GL [RTX 2000 / 2000E Ada Generation]",
+"branch": ""
+},
+{
+"id": "28b8",
+"name": "AD107GLM [RTX 2000 Ada Generation Laptop GPU]",
+"branch": ""
+},
+{
+"id": "28b9",
+"name": "AD107GLM [RTX 1000 Ada Generation Laptop GPU]",
+"branch": ""
+},
+{
+"id": "28ba",
+"name": "AD107GLM [RTX 500 Ada Generation Laptop GPU]",
+"branch": ""
+},
+{
+"id": "28bb",
+"name": "AD107GLM [RTX 500 Ada Generation Laptop GPU]",
+"branch": ""
+},
+{
+"id": "28e0",
+"name": "AD107M [GeForce RTX 4060 Max-Q / Mobile]",
+"branch": ""
+},
+{
+"id": "28e1",
+"name": "AD107M [GeForce RTX 4050 Max-Q / Mobile]",
+"branch": ""
+},
+{
+"id": "28e3",
+"name": "AD107M [GeForce RTX 3050 A Laptop GPU]",
+"branch": ""
+},
+{
+"id": "28f8",
+"name": "AD107GLM [RTX 2000 Ada Generation Embedded GPU]",
+"branch": ""
+},
+{
+"id": "2901",
+"name": "GB100 [B200]",
+"branch": ""
+},
+{
+"id": "2909",
+"name": "",
+"branch": ""
+},
+{
+"id": "2941",
+"name": "GB100 [HGX GB200]",
+"branch": ""
+},
+{
+"id": "29bb",
+"name": "GB102 [DRIVE P2021]",
+"branch": ""
+},
+{
+"id": "2b85",
+"name": "GB202 [GeForce RTX 5090]",
+"branch": ""
+},
+{
+"id": "2b87",
+"name": "GB202 [GeForce RTX 5090 D]",
+"branch": ""
+},
+{
+"id": "2b8c",
+"name": "GB202 [GeForce RTX 5090 D V2]",
+"branch": ""
+},
+{
+"id": "2bb1",
+"name": "GB202GL [RTX PRO 6000 Blackwell Workstation Edition]",
+"branch": ""
+},
+{
+"id": "2bb3",
+"name": "GB202GL [RTX PRO 5000 Blackwell]",
+"branch": ""
+},
+{
+"id": "2bb4",
+"name": "GB202GL [RTX PRO 6000 Blackwell Max-Q Workstation Edition]",
+"branch": ""
+},
+{
+"id": "2bb5",
+"name": "GB202GL [RTX PRO 6000 Blackwell Server Edition]",
+"branch": ""
+},
+{
+"id": "2bb9",
+"name": "GB202GL [RTX 6000D]",
+"branch": ""
+},
+{
+"id": "2c02",
+"name": "GB203 [GeForce RTX 5080]",
+"branch": ""
+},
+{
+"id": "2c05",
+"name": "GB203 [GeForce RTX 5070 Ti]",
+"branch": ""
+},
+{
+"id": "2c09",
+"name": "",
+"branch": ""
+},
+{
+"id": "2c18",
+"name": "GB203M / GN22 [GeForce RTX 5090 Max-Q / Mobile]",
+"branch": ""
+},
+{
+"id": "2c19",
+"name": "GB203M / GN22 [GeForce RTX 5080 Max-Q / Mobile]",
+"branch": ""
+},
+{
+"id": "2c31",
+"name": "GB203GL [RTX PRO 4500 Blackwell]",
+"branch": ""
+},
+{
+"id": "2c33",
+"name": "GB203GL [RTX PRO 4000 Blackwell SFF Edition]",
+"branch": ""
+},
+{
+"id": "2c34",
+"name": "GB203GL [RTX PRO 4000 Blackwell]",
+"branch": ""
+},
+{
+"id": "2c38",
+"name": "GB203GLM [RTX PRO 5000 Blackwell Generation Laptop GPU]",
+"branch": ""
+},
+{
+"id": "2c39",
+"name": "GB203GLM [RTX PRO 4000 Blackwell Generation Laptop GPU]",
+"branch": ""
+},
+{
+"id": "2c3a",
+"name": "",
+"branch": ""
+},
+{
+"id": "2c58",
+"name": "GB203M / GN22-X11 [GeForce RTX 5090 Max-Q / Mobile]",
+"branch": ""
+},
+{
+"id": "2c59",
+"name": "GB203M / GN22-X9 [GeForce RTX 5080 Max-Q / Mobile]",
+"branch": ""
+},
+{
+"id": "2c77",
+"name": "",
+"branch": ""
+},
+{
+"id": "2c79",
+"name": "",
+"branch": ""
+},
+{
+"id": "2d04",
+"name": "GB206 [GeForce RTX 5060 Ti]",
+"branch": ""
+},
+{
+"id": "2d05",
+"name": "GB206 [GeForce RTX 5060]",
+"branch": ""
+},
+{
+"id": "2d18",
+"name": "GB206M [GeForce RTX 5070 Max-Q / Mobile]",
+"branch": ""
+},
+{
+"id": "2d19",
+"name": "GB206M [GeForce RTX 5060 Max-Q / Mobile]",
+"branch": ""
+},
+{
+"id": "2d30",
+"name": "GB206GL [RTX PRO 2000 Blackwell]",
+"branch": ""
+},
+{
+"id": "2d39",
+"name": "GB206GLM [RTX PRO 2000 Blackwell Generation Laptop GPU]",
+"branch": ""
+},
+{
+"id": "2d58",
+"name": "GB206M [GeForce RTX 5070 Max-Q / Mobile]",
+"branch": ""
+},
+{
+"id": "2d59",
+"name": "GB206M [GeForce RTX 5060 Max-Q / Mobile]",
+"branch": ""
+},
+{
+"id": "2d79",
+"name": "",
+"branch": ""
+},
+{
+"id": "2d83",
+"name": "GB207 [GeForce RTX 5050]",
+"branch": ""
+},
+{
+"id": "2d98",
+"name": "GB207M [GeForce RTX 5050 Max-Q / Mobile]",
+"branch": ""
+},
+{
+"id": "2db8",
+"name": "GB207GLM [RTX PRO 1000 Blackwell Generation Laptop GPU]",
+"branch": ""
+},
+{
+"id": "2db9",
+"name": "GB207GLM [RTX PRO 500 Blackwell Generation Laptop GPU]",
+"branch": ""
+},
+{
+"id": "2dd8",
+"name": "GB207M [GeForce RTX 5050 Max-Q / Mobile]",
+"branch": ""
+},
+{
+"id": "2df9",
+"name": "",
+"branch": ""
+},
+{
+"id": "2e12",
+"name": "GB20B [GB10]",
+"branch": ""
+},
+{
+"id": "2f04",
+"name": "GB205 [GeForce RTX 5070]",
+"branch": ""
+},
+{
+"id": "2f06",
+"name": "",
+"branch": ""
+},
+{
+"id": "2f18",
+"name": "GB205M [GeForce RTX 5070 Ti Mobile]",
+"branch": ""
+},
+{
+"id": "2f38",
+"name": "GB205GLM [RTX PRO 3000 Blackwell Generation Laptop GPU]",
+"branch": ""
+},
+{
+"id": "2f58",
+"name": "GB205M [GeForce RTX 5070 Ti Mobile]",
+"branch": ""
+},
+{
+"id": "3182",
+"name": "GB110 [B300 SXM6 AC]",
+"branch": ""
+},
+{
+"id": "31c2",
+"name": "GB110 [GB300]",
+"branch": ""
+},
+{
+"id": "31c3",
+"name": "",
+"branch": ""
+},
+{
+"id": "0020",
+"name": "NV4 [Riva TNT]",
+"branch": "71.86"
+},
+{
+"id": "0028",
+"name": "NV5 [Riva TNT2 / TNT2 Pro]",
+"branch": "71.86"
+},
+{
+"id": "0029",
+"name": "NV5 [Riva TNT2 Ultra]",
+"branch": "71.86"
+},
+{
+"id": "002c",
+"name": "NV5 [Vanta / Vanta LT]",
+"branch": "71.86"
+},
+{
+"id": "002d",
+"name": "NV5 [Riva TNT2 Model 64 / Model 64 Pro]",
+"branch": "71.86"
+},
+{
+"id": "0040",
+"name": "NV40 [GeForce 6800 Ultra]",
+"branch": "304"
+},
+{
+"id": "0041",
+"name": "NV40 [GeForce 6800]",
+"branch": "304"
+},
+{
+"id": "0042",
+"name": "NV40 [GeForce 6800 LE]",
+"branch": "304"
+},
+{
+"id": "0043",
+"name": "NV40 [GeForce 6800 XE]",
+"branch": "304"
+},
+{
+"id": "0044",
+"name": "NV40 [GeForce 6800 XT]",
+"branch": "304"
+},
+{
+"id": "0045",
+"name": "NV40 [GeForce 6800 GT]",
+"branch": "304"
+},
+{
+"id": "0047",
+"name": "NV40 [GeForce 6800 GS]",
+"branch": "304"
+},
+{
+"id": "0048",
+"name": "NV40 [GeForce 6800 XT]",
+"branch": "304"
+},
+{
+"id": "004e",
+"name": "NV40GL [Quadro FX 4000]",
+"branch": "304"
+},
+{
+"id": "0090",
+"name": "G70 [GeForce 7800 GTX]",
+"branch": "304"
+},
+{
+"id": "0091",
+"name": "G70 [GeForce 7800 GTX]",
+"branch": "304"
+},
+{
+"id": "0092",
+"name": "G70 [GeForce 7800 GT]",
+"branch": "304"
+},
+{
+"id": "0093",
+"name": "G70 [GeForce 7800 GS]",
+"branch": "304"
+},
+{
+"id": "0095",
+"name": "G70 [GeForce 7800 SLI]",
+"branch": "304"
+},
+{
+"id": "0098",
+"name": "G70M [GeForce Go 7800]",
+"branch": "304"
+},
+{
+"id": "0099",
+"name": "G70M [GeForce Go 7800 GTX]",
+"branch": "304"
+},
+{
+"id": "009d",
+"name": "G70GL [Quadro FX 4500]",
+"branch": "304"
+},
+{
+"id": "00a0",
+"name": "NV0A [Aladdin TNT2 IGP]",
+"branch": "71.86"
+},
+{
+"id": "00c0",
+"name": "NV41 [GeForce 6800 GS]",
+"branch": "304"
+},
+{
+"id": "00c1",
+"name": "NV41 [GeForce 6800]",
+"branch": "304"
+},
+{
+"id": "00c2",
+"name": "NV41 [GeForce 6800 LE]",
+"branch": "304"
+},
+{
+"id": "00c3",
+"name": "NV41 [GeForce 6800 XT]",
+"branch": "304"
+},
+{
+"id": "00c8",
+"name": "NV41M [GeForce Go 6800]",
+"branch": "304"
+},
+{
+"id": "00c9",
+"name": "NV41M [GeForce Go 6800 Ultra]",
+"branch": "304"
+},
+{
+"id": "00cc",
+"name": "NV41GLM [Quadro FX Go1400]",
+"branch": "304"
+}
+]
+}

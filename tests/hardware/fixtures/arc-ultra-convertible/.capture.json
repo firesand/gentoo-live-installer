@@ -1,0 +1,9 @@
+{
+ "now": 1792800000,
+ "redacted": true,
+ "schema": 1,
+ "summary": "Intel Core Ultra 9 185H - 22 threads - 30 GiB - Intel Arc Graphics + NVIDIA GeForce RTX 4050 Max-Q / Mobile - NVMe SSD - UEFI 64-bit",
+ "synthetic": true,
+ "tool": "synthetic",
+ "tool_version": 1
+}

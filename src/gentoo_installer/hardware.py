@@ -97,6 +97,8 @@ class MachineInfo:
     chassis_type: int | None = None
     form_factor: str = ""  # desktop | laptop | tablet | server | vm | other
     hypervisor: str = ""  # "" | qemu | kvm | vmware | virtualbox | hyperv | xen | parallels | bhyve | other
+    vendor_family: str = ""  # asus | razer | lenovo | dell | hp | framework | system76 | tuxedo | microsoft | apple ... | "" (see hardware_data)
+    oem: str = ""  # product line inside the family: rog | tuf | thinkpad | legion | victus | blade | surface ... | ""
 
 
 @dataclass
@@ -267,10 +269,55 @@ class BluetoothInfo:
 
 
 @dataclass
+class UsbDevice:
+    """One USB device (never its serial number). ``role`` is the key of the tool it may need (hardware_data.usb_role)."""
+
+    vendor_id: str = ""
+    product_id: str = ""
+    manufacturer: str = ""
+    product: str = ""
+    classes: list[str] = field(default_factory=list)
+    role: str = ""  # razer | aura | logitech | controller | tablet | corsair | steelseries | ... | ""
+
+
+@dataclass
 class PeripheralInfo:
     usb_printers: int = 0
     thunderbolt: bool = False
     webcam: bool = False
+    usb_devices: list[UsbDevice] = field(default_factory=list)
+
+    def with_role(self, role: str) -> list[UsbDevice]:
+        return [device for device in self.usb_devices if device.role == role]
+
+
+@dataclass
+class PlatformInfo:
+    """Kernel platform drivers that say which vendor tools make sense (read from /sys; nothing is loaded or probed)."""
+
+    asus_nb_wmi: bool = False
+    asus_armoury: bool = False
+    platform_profile: bool = False
+    platform_profiles: list[str] = field(default_factory=list)  # low-power | balanced | performance ...
+    thinkpad_acpi: bool = False
+    i2c_dev: bool = False  # /dev/i2c-N exist (OpenRGB talks to RAM and motherboard RGB through them)
+    kbd_backlight: bool = False
+
+
+@dataclass
+class LaptopInfo:
+    """What a laptop's sysfs shows; only meaningful when machine.form_factor is laptop or tablet."""
+
+    pm_profile: int | None = None  # ACPI preferred PM profile: 2 mobile, 8 tablet, 1 desktop ...
+    mem_sleep: str = ""  # selected suspend mode: s2idle | deep | ""
+    mem_sleep_options: list[str] = field(default_factory=list)
+    charge_threshold: bool = False  # the battery accepts a charge limit
+    charge_end: int | None = None
+    iio_sensors: list[str] = field(default_factory=list)  # accel_3d, gyro_3d, als ...
+    pen: bool = False
+    tablet_switch: bool = False
+    convertible: bool = False
+    ipu_camera: bool = False  # Intel IPU6 camera: no working driver stack on Gentoo
 
 
 @dataclass
@@ -300,6 +347,8 @@ class HardwareProfile:
     audio: AudioInfo = field(default_factory=AudioInfo)
     bluetooth: BluetoothInfo = field(default_factory=BluetoothInfo)
     peripherals: PeripheralInfo = field(default_factory=PeripheralInfo)
+    platform: PlatformInfo = field(default_factory=PlatformInfo)
+    laptop: LaptopInfo = field(default_factory=LaptopInfo)
     clock: ClockInfo = field(default_factory=ClockInfo)
     hypervisor: HypervisorInfo = field(default_factory=HypervisorInfo)
     # Names (not contents) of the NetworkManager connections of this session; readable by root only.
@@ -1027,6 +1076,8 @@ class _Prober:
             ("input", self.collect_input),
             ("audio", self.collect_audio),
             ("usb", self.collect_usb),
+            ("platform", self.collect_platform),
+            ("laptop", self.collect_laptop),
             ("clock", self.collect_clock),
             ("network_profiles", self.collect_network_profiles),
         )
@@ -1091,6 +1142,8 @@ class _Prober:
         m.bios_version, m.bios_date = self.fs.line(dmi + "bios_version"), self.fs.line(dmi + "bios_date")
         m.board_vendor, m.board_name = self.fs.line(dmi + "board_vendor"), self.fs.line(dmi + "board_name")
         m.chassis_type = self.fs.int_of(dmi + "chassis_type")
+        m.vendor_family = data.vendor_family(m.sys_vendor, m.board_vendor)
+        m.oem = data.vendor_oem(m.vendor_family, m.product_name, m.product_version)
         lscpu = self.command(("lscpu",)) or ""
         match = re.search(r"^Hypervisor vendor:\s*(.+)$", lscpu, re.M)
         self.lscpu_vendor = match.group(1).strip() if match else ""
@@ -1166,7 +1219,7 @@ class _Prober:
                 gpu.integrated = data.amd_is_integrated(name)
             elif vendor == "intel":
                 gpu.generation = data.classify_intel_gpu(name)
-                gpu.integrated = not data.intel_is_discrete(name)
+                gpu.integrated = not data.intel_is_discrete(name, dev.slot)
             gpus.append(gpu)
         physical = [g for g in gpus if not g.virtual and g.vendor not in data.BMC_GPU_VENDORS]
         if len(physical) > 1:
@@ -1423,6 +1476,10 @@ class _Prober:
                 info.keyboard = True
             if data.GAME_CONTROLLER_RE.search(name):
                 continue  # a DualSense or Xbox pad has a touchpad and a motion sensor too
+            if data.PEN_RE.search(name):
+                self.profile.laptop.pen = True
+            if data.TABLET_SWITCH_RE.search(name):
+                self.profile.laptop.tablet_switch = True
             if name == "Lid Switch":
                 self.profile.power.has_lid = True
             elif data.TOUCHPAD_RE.search(name):
@@ -1468,6 +1525,44 @@ class _Prober:
                 peripherals.webcam = True
             if vendor in data.FINGERPRINT_USB_VENDORS and data.USB_CLASS_VENDOR_SPECIFIC in classes:
                 info.fingerprint_usb.append(f"{vendor}:{product}")
+            if vendor and product:  # the names are read for display only; a serial number is never read
+                manufacturer, label = fs.line(path + "/manufacturer"), fs.line(path + "/product")
+                peripherals.usb_devices.append(UsbDevice(vendor, product, manufacturer, label, sorted(c for c in classes if c),
+                                                         data.usb_role(vendor, product, label)))
+
+    # -- platform drivers, laptop sysfs ----------------------------------------------------------------
+
+    def collect_platform(self) -> None:
+        fs, platform = self.fs, self.profile.platform
+        drivers = "/sys/bus/platform/drivers"
+        platform.asus_nb_wmi = fs.exists(f"{drivers}/asus-nb-wmi") or fs.exists("/sys/devices/platform/asus-nb-wmi")
+        platform.asus_armoury = fs.exists("/sys/class/firmware-attributes/asus-armoury") or fs.exists(f"{drivers}/asus-armoury")
+        platform.thinkpad_acpi = fs.exists(f"{drivers}/thinkpad_acpi") or fs.exists("/sys/devices/platform/thinkpad_acpi")
+        profiles = fs.line("/sys/firmware/acpi/platform_profile_choices")
+        platform.platform_profiles = profiles.split()
+        platform.platform_profile = fs.exists("/sys/firmware/acpi/platform_profile") or bool(profiles)
+        platform.i2c_dev = bool(fs.listdir("/sys/class/i2c-dev"))
+        platform.kbd_backlight = any("kbd_backlight" in name for name in fs.listdir("/sys/class/leds"))
+
+    def collect_laptop(self) -> None:
+        fs, laptop = self.fs, self.profile.laptop
+        laptop.pm_profile = fs.int_of("/sys/firmware/acpi/pm_profile")
+        sleep = fs.line("/sys/power/mem_sleep")
+        laptop.mem_sleep_options = [word.strip("[]") for word in sleep.split()]
+        selected = re.search(r"\[(\w+)\]", sleep)
+        laptop.mem_sleep = selected.group(1) if selected else ""
+        for name in fs.listdir("/sys/class/power_supply"):
+            base = f"/sys/class/power_supply/{name}"
+            if fs.line(base + "/type") == "Battery" and fs.line(base + "/scope") != "Device" and fs.exists(base + "/charge_control_end_threshold"):
+                laptop.charge_threshold = True
+                laptop.charge_end = fs.int_of(base + "/charge_control_end_threshold")
+        laptop.iio_sensors = data.distinct(sorted(filter(None, (fs.line(f"/sys/bus/iio/devices/{entry}/name") for entry in fs.listdir("/sys/bus/iio/devices")
+                                                              if entry.startswith("iio:device")))))
+        laptop.ipu_camera = any(dev.vendor_id == data.VENDOR_INTEL and dev.class_code[:4] == "0480"
+                                and (re.search(r"ipu", self.pci_devices.get((dev.vendor_id, dev.device_id), ""), re.I) or "ipu" in dev.driver)
+                                for dev in self.pci)
+        machine = self.profile.machine
+        laptop.convertible = machine.chassis_type in (31, 32) or laptop.tablet_switch
 
     def collect_network_profiles(self) -> None:
         directory = "/etc/NetworkManager/system-connections"

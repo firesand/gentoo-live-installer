@@ -177,6 +177,8 @@ _INPUT_NAMES = (
     (re.compile(r"Sleep Button", re.I), "Sleep Button"),
     (re.compile(r"Video Bus", re.I), "Video Bus"),
     (re.compile(r"controller|dualsense|dualshock|gamepad|joystick|x-box|xbox|8bitdo", re.I), "Game Controller"),
+    (re.compile(r"\bpen\b|stylus", re.I), "Stylus Pen"),
+    (re.compile(r"tablet.?mode", re.I), "Tablet Mode Switch"),
     (re.compile(r"touch\s*pad|trackpad|synaptics", re.I), "Touchpad"),
     (re.compile(r"touch\s*screen|goodix|ilitek|egalax", re.I), "Touchscreen"),
     (re.compile(r"keyboard", re.I), "Keyboard"),

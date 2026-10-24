@@ -27,6 +27,10 @@ FIXTURE_NAMES = (
     "amd-laptop-sof",
     "vmware-guest",
     "intel-rst-hidden-nvme",
+    "asus-rog-laptop",
+    "razer-blade-laptop",
+    "arc-ultra-convertible",
+    "thinkpad-amd-laptop",
 )
 
 
