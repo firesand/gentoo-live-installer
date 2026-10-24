@@ -179,6 +179,13 @@ def test_merge_listings_are_counted_not_shown(page):
     assert "merged files: 3" in page.detail.text()
 
 
+def test_the_merged_file_counter_works_without_a_stage_message(page):
+    started(page)
+    page.handle_event({"type": "log", "message": ">>> /usr/bin/x"})
+    page.flush_log()
+    assert page.detail.text() == "Merged files: 1"
+
+
 def test_log_appends_are_batched(page):
     started(page)
     appended = []

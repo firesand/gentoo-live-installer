@@ -491,10 +491,12 @@ class ProgressPage(Page):
             self.secondary.show()
 
     def _refresh_detail(self) -> None:
-        text = self._base_detail
-        if self._merged_files:
-            text += f" · merged files: {self._merged_files:,}"
-        self.detail.setText(text)
+        if not self._merged_files:
+            self.detail.setText(self._base_detail)
+        elif self._base_detail:
+            self.detail.setText(f"{self._base_detail} · merged files: {self._merged_files:,}")
+        else:
+            self.detail.setText(f"Merged files: {self._merged_files:,}")
 
     def _log_event(self, text: str) -> None:
         for line in text.rstrip().splitlines() or [""]:
