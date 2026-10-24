@@ -295,3 +295,8 @@ def test_flag_warnings_name_the_handbook_cautions():
 
 def test_the_generated_data_modules_are_plain_and_complete():
     assert re.fullmatch(r"\d{4}-\d{2}-\d{2}", __import__("gentoo_installer.usedesc_data", fromlist=["TREE_DATE"]).TREE_DATE)
+
+
+def test_probe_reports_none_for_a_mirror_that_does_not_answer():
+    assert mirrors.probe_seconds("https://127.0.0.1:9/gentoo", timeout=0.5) is None
+    assert mirrors.probe_all([], timeout=0.5) == {}

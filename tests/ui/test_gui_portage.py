@@ -538,3 +538,25 @@ def test_fields_without_a_control_keep_their_values(make_window):
     page.save_manifest()
     assert window.manifest.portage.profile_override == "default/linux/amd64/23.0/desktop/gnome"
     assert window.manifest.portage.mirror_fallbacks == ["https://mirror.example/gentoo"]
+
+
+# --- PORT-06: the optional speed test --------------------------------------------------------------------------------------
+
+
+def test_test_speed_is_offered_only_while_online_and_shows_the_answers(make_window, monkeypatch):
+    offline = make_window(info=machine("qemu-q35-virtio"))
+    page = page_of(offline)
+    page.source_kind.setCurrentIndex(page.source_kind.findData("country"))
+    online_info = machine("qemu-q35-virtio")
+    online_info.network = True
+    page.set_info(online_info)
+    assert page.mirror_test.isVisibleTo(page)
+    online_info.network = False
+    page.set_info(online_info)
+    assert not page.mirror_test.isVisibleTo(page)
+    # the answers (measured elsewhere) are shown next to the names; nothing else changes
+    urls = [str(page.mirror_list.item(row).data(Qt.ItemDataRole.UserRole)) for row in range(page.mirror_list.count())]
+    page._show_speeds({urls[0]: 0.123, urls[1]: None})
+    assert page.mirror_list.item(0).text().endswith("[123 ms]") and page.mirror_list.item(1).text().endswith("[no answer]")
+    page._show_speeds({urls[0]: 0.2})
+    assert page.mirror_list.item(0).text().count("[") == 1 and page.checked_mirrors() == []

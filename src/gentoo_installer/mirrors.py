@@ -88,3 +88,32 @@ def mirror_list(primary: str, mirrors: list[str] | tuple[str, ...] = (), fallbac
         if url and url not in ordered:
             ordered.append(url)
     return ordered
+
+
+def probe_seconds(url: str, timeout: float = 5.0) -> float | None:
+    """How long one mirror takes to answer for the stage3 index (None when it does not answer or the answer is not HTTPS).
+
+    Only used by the optional "Test speed" button, and only when the computer is online. It asks for the headers of a small
+    file and installs nothing.
+    """
+    import time
+    import urllib.request
+
+    request = urllib.request.Request(url.rstrip("/") + "/releases/amd64/autobuilds/latest-stage3-amd64-openrc.txt", method="HEAD",
+                                     headers={"User-Agent": "gentoo-live-installer/0.1"})
+    started = time.monotonic()
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - an https address, checked below
+            if response.status != 200 or not response.geturl().startswith("https://"):
+                return None
+    except (OSError, ValueError):
+        return None
+    return time.monotonic() - started
+
+
+def probe_all(urls: list[str], timeout: float = 5.0, workers: int = 8) -> dict[str, float | None]:
+    """probe_seconds for several mirrors at once."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(max_workers=max(1, min(workers, len(urls) or 1))) as pool:
+        return dict(zip(urls, pool.map(lambda url: probe_seconds(url, timeout), urls)))

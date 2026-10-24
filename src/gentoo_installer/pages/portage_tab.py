@@ -11,7 +11,9 @@ from __future__ import annotations
 import os
 from typing import TYPE_CHECKING, Any
 
-from PySide6.QtCore import Qt
+import threading
+
+from PySide6.QtCore import QObject, Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QButtonGroup, QCheckBox, QComboBox, QFormLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QListWidget, QListWidgetItem, QPlainTextEdit, QPushButton, QRadioButton, QSpinBox, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget,
@@ -70,6 +72,15 @@ class _ChoiceLabel(QLabel):
         if self._radio.isEnabled():
             self._radio.click()
         super().mouseReleaseEvent(event)
+
+
+class _SpeedWorker(QObject):
+    """Measures the mirrors on a thread of its own and reports on the GUI thread."""
+
+    done = Signal(object)
+
+    def start(self, urls: list[str]) -> None:
+        threading.Thread(target=lambda: self.done.emit(mirrors.probe_all(urls)), daemon=True).start()
 
 
 def _radio_row(radio: QRadioButton, text: str, badge: QWidget | None = None) -> QHBoxLayout:
@@ -170,6 +181,13 @@ class PortageTabMixin:
         mirror_layout.setContentsMargins(0, 0, 0, 0)
         mirror_layout.addWidget(wrapped_label("Tick the servers to use. They are tried from the top.", muted=True))
         mirror_layout.addWidget(self.mirror_list)
+        self.mirror_test = QPushButton("Test speed")
+        self.mirror_test.setToolTip("Asks each mirror for a small file and shows how fast it answers. Only available while the computer is online.")
+        self.mirror_test.clicked.connect(self._test_mirrors)
+        self.mirror_test.hide()
+        move.addWidget(self.mirror_test)
+        self._speed_worker = _SpeedWorker()
+        self._speed_worker.done.connect(self._show_speeds)
         mirror_layout.addLayout(move)
         form.addRow(self.mirror_box)
         self.mirror = QLineEdit()
@@ -398,6 +416,21 @@ class PortageTabMixin:
         item = self.mirror_list.takeItem(row)
         self.mirror_list.insertItem(target, item)
         self.mirror_list.setCurrentRow(target)
+
+    def _test_mirrors(self) -> None:
+        self.mirror_test.setEnabled(False)
+        self.mirror_test.setText("Testing...")
+        self._speed_worker.start([str(self.mirror_list.item(row).data(Qt.ItemDataRole.UserRole)) for row in range(self.mirror_list.count())])
+
+    def _show_speeds(self, speeds: dict[str, float | None]) -> None:
+        for row in range(self.mirror_list.count()):
+            item = self.mirror_list.item(row)
+            url = str(item.data(Qt.ItemDataRole.UserRole))
+            base = item.text().split("  [")[0]
+            seconds = speeds.get(url)
+            item.setText(f"{base}  [{seconds * 1000:.0f} ms]" if seconds is not None else f"{base}  [no answer]")
+        self.mirror_test.setText("Test speed")
+        self.mirror_test.setEnabled(True)
 
     def checked_mirrors(self) -> list[str]:
         """The ticked mirrors in the order shown."""
@@ -650,6 +683,7 @@ class PortageTabMixin:
         if cpu_level:
             variant, _note = binhost_rules.choose_variant("auto", cpu_level, self._portable())
             self.binhost_variant.setItemText(0, f"Automatic (now: {'x86-64-v3' if variant == 'v3' else 'generic'} for this processor)")
+        self.mirror_test.setVisible(bool(info is not None and info.network))  # only while online
         self._update_optimize_note()
         self._update_jobs_summary()
         self._sync_video_boxes()
