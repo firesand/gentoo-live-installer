@@ -90,13 +90,15 @@ fn apply_fix(app: &mut App, ks: &KernelState, fix: &Fix) {
                 content.push('\n');
             }
             let path = PathBuf::from(format!("/etc/portage/sets/{}", ks.keep_set));
-            let old = std::fs::read_to_string(&path).unwrap_or_default();
-            app.push(Action::Write {
-                title: format!("Protect known-good kernels in @{}", ks.keep_set),
-                changes: vec![crate::app::FileChange { path, old, new: Some(content) }],
-                reload: vec![Reload::Kernels, Reload::Config],
-                then: None,
-            });
+            match crate::portage::config::read_utf8(&path) {
+                Ok(old) => app.push(Action::Write {
+                    title: format!("Protect known-good kernels in @{}", ks.keep_set),
+                    changes: vec![crate::app::FileChange { path, old, new: Some(content) }],
+                    reload: vec![Reload::Kernels, Reload::Config],
+                    then: None,
+                }),
+                Err(why) => app.toast(crate::app::ToastKind::Error, why),
+            }
         }
         Fix::AddKeepSetToWorld => app.push(Action::Root {
             title: format!("Add @{} to @world", ks.keep_set),
@@ -853,7 +855,7 @@ fn cleanup_page(app: &mut App, ui: &mut Ui) {
                 && let Some(cfg) = &cfg
             {
                 let ch = edits::remove_lines(cfg, &sel);
-                app.push(Action::Write { title: "Remove obsolete /etc/portage entries".into(), changes: ch, reload: vec![Reload::Config, Reload::Leftovers], then: None });
+                app.push_write("Remove obsolete /etc/portage entries", ch, vec![Reload::Config, Reload::Leftovers], None);
                 app.maintenance.config_selected.clear();
             }
         });

@@ -6,8 +6,9 @@ use crate::app::{Action, App, FileChange, JobKind};
 use crate::data::Reload;
 use crate::edits;
 use crate::portage::atom::Op as AOp;
-use crate::portage::config::{ConfKind, ConfSet, Entry, Line, StrayReason};
+use crate::portage::config::{self, ConfKind, ConfSet, Entry, Line, StrayReason};
 use crate::portage::makeconf::{self, COMMON_FEATURES};
+use crate::portage::system::{self, PendingUpdate};
 use crate::ui::theme::{self, *};
 use crate::ui::widgets as w;
 use egui::{Color32, Margin, RichText, Ui};
@@ -27,6 +28,8 @@ pub enum Page {
     News,
     Updates,
     Strays,
+    /// The helper's journal: multi-file changes that can be undone.
+    Changes,
 }
 
 #[derive(Default)]
@@ -56,7 +59,7 @@ pub struct State {
     pub env_edit: Option<(PathBuf, String)>,
     pub env_new: String,
     pub profile_pick: Option<usize>,
-    updates: Option<Arc<Mutex<Option<Vec<(PathBuf, PathBuf)>>>>>,
+    pub updates: Option<Arc<Mutex<Option<Vec<PendingUpdate>>>>>,
     pub stray_names: std::collections::HashMap<PathBuf, String>,
 }
 
@@ -119,6 +122,12 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                     app.config_view.page = Page::Updates;
                     app.config_view.updates = None;
                 }
+                if w::side_item(ui, icon::CLOCK_COUNTER_CLOCKWISE, "Recent changes (undo)", app.config_view.page == Page::Changes, None).clicked() {
+                    app.config_view.page = Page::Changes;
+                    if app.recent_changes.is_none() && app.exec.root_ready() {
+                        app.list_changes();
+                    }
+                }
                 let strays = cfg.strays.len();
                 let label = if strays > 0 { format!("Stray files {}", icon::WARNING) } else { "Stray files".to_string() };
                 if w::side_item(ui, icon::QUESTION, &label, app.config_view.page == Page::Strays, Some(strays)).clicked() {
@@ -126,6 +135,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 }
             });
         });
+    undo_bar(app, ui);
     egui::CentralPanel::default().frame(egui::Frame::new().fill(BG)).show(ui, |ui| match app.config_view.page {
         Page::Overview => overview(app, ui),
         Page::Kind(k) => kind_page(app, ui, k),
@@ -135,6 +145,93 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         Page::News => news(app, ui),
         Page::Updates => updates(app, ui),
         Page::Strays => strays(app, ui),
+        Page::Changes => changes(app, ui),
+    });
+}
+
+/// "Saved … Undo" strip after a change that the helper recorded as a transaction.
+fn undo_bar(app: &mut App, ui: &mut Ui) {
+    let Some(last) = app.last_change.clone() else { return };
+    egui::Panel::top("cfg-undo").frame(egui::Frame::new().fill(PANEL).inner_margin(Margin::symmetric(14, 6))).show_separator_line(false).show(ui, |ui| {
+        ui.horizontal(|ui| {
+            ui.label(RichText::new(icon::CHECK_CIRCLE).color(GREEN));
+            ui.label(RichText::new(format!("Saved: {}", last.title)).color(TEXT));
+            if w::button(ui, icon::ARROW_COUNTER_CLOCKWISE, "Undo").on_hover_text("Restore the files as they were before this change (refused if one was edited since)").clicked() {
+                app.undo_change(&last.tx, &last.title, false);
+            }
+            if w::icon_button(ui, icon::X, "Dismiss").clicked() {
+                app.last_change = None;
+            }
+        });
+    });
+}
+
+fn changes(app: &mut App, ui: &mut Ui) {
+    let loading = app.jobs.iter().any(|j| j.running() && matches!(j.kind, JobKind::ChangeList));
+    let ready = app.exec.root_ready();
+    common::page(ui, "cfg-changes", |ui| {
+        ui.horizontal(|ui| {
+            w::title(ui, "Recent changes");
+            if ready && !loading && w::icon_button(ui, icon::ARROWS_CLOCKWISE, "Reload").clicked() {
+                app.list_changes();
+            }
+        });
+        w::subtitle(ui, "Changes that touch several files at once are recorded by the admin helper, so they can be undone later. Undo restores the files exactly as they were, and refuses when one of them was edited after the change.");
+        ui.add_space(6.0);
+        if !ready {
+            ui.label(w::dim("The journal is readable only by root. Start the admin session to see it."));
+            if w::primary(ui, icon::LOCK_OPEN, "Start admin session").clicked() {
+                app.push(Action::StartHelper);
+            }
+            return;
+        }
+        let Some(list) = app.recent_changes.clone() else {
+            if loading {
+                w::loading(ui, "Reading the journal…");
+            } else if w::primary(ui, icon::ARROWS_CLOCKWISE, "Load recent changes").clicked() {
+                app.list_changes();
+            }
+            return;
+        };
+        if list.is_empty() {
+            w::empty_state(ui, icon::CLOCK_COUNTER_CLOCKWISE, "Nothing recorded yet", "Multi-file changes you make with PortageHub show up here.");
+            return;
+        }
+        for tx in &list {
+            w::card().show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.horizontal(|ui| {
+                    ui.label(RichText::new(icon::CLOCK_COUNTER_CLOCKWISE).size(18.0).color(ACCENT));
+                    ui.vertical(|ui| {
+                        ui.label(w::strong(&tx.label));
+                        let when = tx.id.split('-').next().and_then(|t| t.parse::<i64>().ok()).unwrap_or(tx.created);
+                        ui.label(w::dim(format!("{} · {} file(s)", crate::fmt::ago(when), tx.files.len())));
+                    });
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| match tx.state.as_str() {
+                        "committed" => {
+                            if app.settings.show_advanced && w::danger(ui, icon::WARNING, "Undo anyway").on_hover_text("Also overwrite files edited since the change").clicked() {
+                                app.undo_change(&tx.id, &tx.label, true);
+                            }
+                            if w::button(ui, icon::ARROW_COUNTER_CLOCKWISE, "Undo").clicked() {
+                                app.undo_change(&tx.id, &tx.label, false);
+                            }
+                        }
+                        "rolled_back" => {
+                            w::badge(ui, "UNDONE", TEXT, Color32::from_rgb(0x3a, 0x46, 0x55));
+                        }
+                        _ => {
+                            w::badge(ui, "UNFINISHED", Color32::from_rgb(0x2b, 0x1a, 0x00), ORANGE);
+                        }
+                    });
+                });
+                egui::CollapsingHeader::new("Files").id_salt(&tx.id).show(ui, |ui| {
+                    for f in &tx.files {
+                        ui.label(w::mono(f));
+                    }
+                });
+            });
+            ui.add_space(3.0);
+        }
     });
 }
 
@@ -231,6 +328,10 @@ fn kind_page(app: &mut App, ui: &mut Ui, kind: ConfKind) {
                 ui.label(RichText::new(format!("{} deprecated — consider moving these to package.accept_keywords", icon::WARNING)).color(ORANGE));
             }
         });
+        if let Some(why) = cfg.root_symlink.then(|| config::symlink_message(std::path::Path::new(config::ETC_PORTAGE))).or_else(|| set.symlink.then(|| config::symlink_message(&set.base))) {
+            ui.add_space(4.0);
+            w::callout(ui, ORANGE, icon::LOCK, &why);
+        }
         ui.add_space(6.0);
 
         // Add wizard
@@ -263,11 +364,13 @@ fn kind_page(app: &mut App, ui: &mut Ui, kind: ConfKind) {
         ui.horizontal(|ui| {
             w::search_box(ui, &mut app.config_view.filter, "Filter entries", 300.0);
             if let Some(fp) = app.config_view.file_filter.clone().or_else(|| (!set.is_dir && set.exists).then(|| set.base.clone())) {
-                if w::button(ui, icon::CODE, "Edit as text").clicked() {
+                if let Some(why) = cfg.edit_blocked_for(&fp) {
+                    ui.label(RichText::new(format!("{} {why}", icon::LOCK)).color(ORANGE));
+                } else if w::button(ui, icon::CODE, "Edit as text").clicked() {
                     let text = set.file(&fp).map(|f| f.raw.clone()).unwrap_or_default();
                     app.config_view.raw = Some((fp.clone(), text));
                 }
-                if set.is_dir && w::button(ui, icon::TRASH, "Delete this file").clicked() {
+                if set.is_dir && cfg.edit_blocked_for(&fp).is_none() && w::button(ui, icon::TRASH, "Delete this file").clicked() {
                     let old = set.file(&fp).map(|f| f.raw.clone()).unwrap_or_default();
                     app.push(Action::Write { title: format!("Delete {}", fp.display()), changes: vec![FileChange { path: fp.clone(), old, new: None }], reload: vec![Reload::Config], then: None });
                     app.config_view.file_filter = None;
@@ -321,11 +424,20 @@ fn entries_table(app: &mut App, ui: &mut Ui, kind: ConfKind, set: &ConfSet) {
             .filter(|(_, e)| filter.is_empty() || e.render().to_lowercase().contains(&filter))
             .map(|(i, e)| (i, e.clone()))
             .collect();
+        if let Some(why) = &f.unreadable {
+            any = true;
+            w::section(ui, &f.rel);
+            w::callout(ui, ORANGE, icon::WARNING, why);
+            continue;
+        }
         if entries.is_empty() {
             continue;
         }
         any = true;
         w::section(ui, &format!("{}{}", f.rel, if f.ignored { "  (ignored by Portage)" } else { "" }));
+        if f.symlink {
+            w::callout(ui, ORANGE, icon::LOCK, &config::symlink_message(&f.path));
+        }
         for (idx, e) in entries {
             let editing = app.config_view.editing.as_ref().is_some_and(|(p, i, _)| *p == f.path && *i == idx);
             let mut comment_above = None;
@@ -345,8 +457,8 @@ fn entries_table(app: &mut App, ui: &mut Ui, kind: ConfKind, set: &ConfSet) {
                         if w::toggle(ui, &mut on).on_hover_text(if on { "Active — switch off to comment it out" } else { "Commented out — switch on to activate" }).changed() {
                             let mut ne = e.clone();
                             ne.disabled = !on;
-                            let ch = edits::replace_entry(&cfg, &f.path, idx, Some(ne));
-                            app.push(Action::Write { title: format!("{} {}", if on { "Enable" } else { "Disable" }, e.atom_text), changes: vec![ch], reload: vec![Reload::Config], then: None });
+                            let ch = edits::replace_entry(&cfg, &f.path, idx, Some(ne)).map(|c| vec![c]);
+                            app.push_write(format!("{} {}", if on { "Enable" } else { "Disable" }, e.atom_text), ch, vec![Reload::Config], None);
                         }
                         if editing {
                             let text = &mut app.config_view.editing.as_mut().unwrap().2;
@@ -358,8 +470,8 @@ fn entries_table(app: &mut App, ui: &mut Ui, kind: ConfKind, set: &ConfSet) {
                                     let mut ne = Entry::new(a, toks.map(String::from).collect());
                                     ne.comment = e.comment.clone();
                                     ne.disabled = e.disabled;
-                                    let ch = edits::replace_entry(&cfg, &f.path, idx, Some(ne));
-                                    app.push(Action::Write { title: format!("Edit {}", e.atom_text), changes: vec![ch], reload: vec![Reload::Config], then: None });
+                                    let ch = edits::replace_entry(&cfg, &f.path, idx, Some(ne)).map(|c| vec![c]);
+                                    app.push_write(format!("Edit {}", e.atom_text), ch, vec![Reload::Config], None);
                                 }
                             }
                             if w::button(ui, "", "Cancel").clicked() {
@@ -405,8 +517,8 @@ fn entries_table(app: &mut App, ui: &mut Ui, kind: ConfKind, set: &ConfSet) {
                         });
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                             if w::icon_button(ui, icon::TRASH, "Delete line").clicked() {
-                                let ch = edits::replace_entry(&cfg, &f.path, idx, None);
-                                app.push(Action::Write { title: format!("Delete {}", e.atom_text), changes: vec![ch], reload: vec![Reload::Config], then: None });
+                                let ch = edits::replace_entry(&cfg, &f.path, idx, None).map(|c| vec![c]);
+                                app.push_write(format!("Delete {}", e.atom_text), ch, vec![Reload::Config], None);
                             }
                             if w::icon_button(ui, icon::PENCIL_SIMPLE, "Edit line").clicked() {
                                 let mut t = e.atom_text.clone();
@@ -614,7 +726,7 @@ fn wizard(app: &mut App, ui: &mut Ui, kind: ConfKind, set: &ConfSet) {
         let file_name = if wz.file.trim().is_empty() { app.settings.target_file.clone() } else { wz.file.trim().to_string() };
         if ui.add_enabled(entry.atom.is_some(), egui::Button::new(RichText::new(format!("{}  Add entry", icon::PLUS)).color(WHITE)).fill(Color32::from_rgb(0x1f, 0x6f, 0xb2))).clicked() {
             let ch = edits::add_lines(&cfg, &[(kind, entry.render())], &file_name, None);
-            app.push(Action::Write { title: format!("{}: {}", kind.file_name(), entry.render()), changes: ch, reload: vec![Reload::Config], then: None });
+            app.push_write(format!("{}: {}", kind.file_name(), entry.render()), ch, vec![Reload::Config], None);
             app.config_view.wizard.values.clear();
         }
     });
@@ -633,11 +745,15 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
         w::title(ui, "make.conf");
         ui.label(w::mono(file.to_string_lossy()));
         common::tip(app, ui, "The global build settings. The cards below edit the most common variables; every other variable is listed further down. Effective values include what your profile adds.");
+        let blocked = mc.edit_blocked(&file);
+        if let Some(why) = &blocked {
+            w::callout(ui, ORANGE, icon::LOCK, why);
+        }
         let mut set = |app: &mut App, name: &str, value: String| {
             let new = makeconf::set_var(&text, name, &value);
             app.push(Action::Write { title: format!("Set {name} in make.conf"), changes: vec![FileChange { path: file.clone(), old: text.clone(), new: Some(new) }], reload: vec![Reload::MakeConf, Reload::Env], then: None });
         };
-        let editable = |name: &str| mc.last(name).is_none_or(|a| !a.self_ref && a.file == file);
+        let editable = |name: &str| blocked.is_none() && mc.last(name).is_none_or(|a| !a.self_ref && a.file == file);
 
         // MAKEOPTS
         w::section(ui, "Parallel building (MAKEOPTS)");
@@ -860,7 +976,7 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
         });
         ui.add_space(8.0);
         ui.horizontal(|ui| {
-            if app.config_view.mk_raw.is_none() && w::button(ui, icon::CODE, "Edit make.conf as text").clicked() {
+            if app.config_view.mk_raw.is_none() && blocked.is_none() && w::button(ui, icon::CODE, "Edit make.conf as text").clicked() {
                 app.config_view.mk_raw = Some(text.clone());
             }
             if w::button(ui, icon::TERMINAL, "Show emerge --info").clicked() {
@@ -926,6 +1042,9 @@ fn env_files(app: &mut App, ui: &mut Ui) {
                     let used = users.get(&e.name).map(|v| v.len()).unwrap_or(0);
                     ui.label(w::dim(format!("used by {used} package.env entr{}", if used == 1 { "y" } else { "ies" }))).on_hover_text(users.get(&e.name).map(|v| v.join("\n")).unwrap_or_default());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if cfg.edit_blocked_for(&e.path).is_some() {
+                            return;
+                        }
                         if w::icon_button(ui, icon::TRASH, "Delete").clicked() {
                             app.push(Action::Write { title: format!("Delete env/{}", e.name), changes: vec![FileChange { path: e.path.clone(), old: e.content.clone(), new: None }], reload: vec![Reload::Config], then: None });
                         }
@@ -934,6 +1053,9 @@ fn env_files(app: &mut App, ui: &mut Ui) {
                         }
                     });
                 });
+                if let Some(why) = cfg.edit_blocked_for(&e.path) {
+                    w::callout(ui, ORANGE, icon::LOCK, &why);
+                }
                 let editing = app.config_view.env_edit.as_ref().is_some_and(|(p, _)| *p == e.path);
                 if editing {
                     let buf = &mut app.config_view.env_edit.as_mut().unwrap().1;
@@ -1088,20 +1210,31 @@ fn news(app: &mut App, ui: &mut Ui) {
     });
 }
 
+/// Accept a pending update; the helper checks that the file it replaces is still the one that was shown.
+fn accept_op(u: &PendingUpdate) -> Op {
+    let expect = match &u.old {
+        Some(old) => Some(portagehub::protocol::Expect::of(old)),
+        None if !u.target.exists() => Some(portagehub::protocol::Expect::Absent),
+        None => None, // root-only or too large to have been read
+    };
+    Op::ConfigUpdate { path: u.update.to_string_lossy().to_string(), accept: true, expect }
+}
+
 fn updates(app: &mut App, ui: &mut Ui) {
     let protect = app.data.env.as_ref().map(|e| e.get("CONFIG_PROTECT").to_string()).unwrap_or_default();
     if app.config_view.updates.is_none() {
-        let slot: Arc<Mutex<Option<Vec<(PathBuf, PathBuf)>>>> = Arc::default();
+        let slot: Arc<Mutex<Option<Vec<PendingUpdate>>>> = Arc::default();
         let s2 = slot.clone();
         let ctx = ui.ctx().clone();
         std::thread::spawn(move || {
-            let r = crate::portage::system::find_config_updates(&protect);
+            let r = system::find_config_updates(&protect);
             *s2.lock().unwrap() = Some(r);
             ctx.request_repaint();
         });
         app.config_view.updates = Some(slot);
     }
     let list = app.config_view.updates.as_ref().unwrap().lock().unwrap().clone();
+    let applying = !app.batches.is_empty();
     common::page(ui, "cfg-updates", |ui| {
         ui.horizontal(|ui| {
             w::title(ui, "Configuration file updates");
@@ -1111,6 +1244,10 @@ fn updates(app: &mut App, ui: &mut Ui) {
         });
         w::subtitle(ui, "When a package ships a new version of a config file you edited, Portage saves it as ._cfgXXXX_name instead of overwriting yours (CONFIG_PROTECT).");
         ui.add_space(6.0);
+        if applying {
+            w::loading(ui, "Applying…");
+            return;
+        }
         let Some(list) = list else {
             w::loading(ui, "Scanning CONFIG_PROTECT directories…");
             return;
@@ -1119,41 +1256,63 @@ fn updates(app: &mut App, ui: &mut Ui) {
             w::empty_state(ui, icon::CHECK_CIRCLE, "All configuration files are up to date", "Nothing is waiting to be merged.");
             return;
         }
+        let (fine, risky) = system::split_risky(&list);
         ui.horizontal(|ui| {
-            if w::primary(ui, icon::CHECKS, &format!("Accept all {} new versions", list.len())).clicked() {
-                let ops = list.iter().map(|(u, _)| Op::ConfigUpdate { path: u.to_string_lossy().to_string(), accept: true }).collect();
-                app.push(Action::Batch { title: "Accept all config updates".into(), ops, reload: vec![], then: None });
-                app.config_view.updates = None;
+            if !fine.is_empty() && w::primary(ui, icon::CHECKS, &format!("Review and accept {} new version{}…", fine.len(), if fine.len() == 1 { "" } else { "s" })).clicked() {
+                // Replacing many files at once is never one blind click: show every diff first.
+                let (mut changes, mut unreadable) = (Vec::new(), Vec::new());
+                for u in &fine {
+                    match (&u.old, &u.new) {
+                        (Some(old), Some(new)) => changes.push(FileChange { path: u.target.clone(), old: old.clone(), new: Some(new.clone()) }),
+                        (None, Some(new)) if !u.target.exists() => changes.push(FileChange { path: u.target.clone(), old: String::new(), new: Some(new.clone()) }),
+                        _ => unreadable.push(u.target.clone()),
+                    }
+                }
+                let mut notes = vec!["Each file below is replaced by its new version. Everything is one recorded change: you can undo it afterwards.".to_string()];
+                if !risky.is_empty() {
+                    notes.push(format!(
+                        "Not included, because they can lock you out or break the boot: {}. Review those one by one.",
+                        risky.iter().map(|u| u.target.display().to_string()).collect::<Vec<_>>().join(", ")
+                    ));
+                }
+                let ops = fine.iter().map(|u| accept_op(u)).collect();
+                app.push(Action::ReviewOps { title: format!("Accept {} new configuration file versions", fine.len()), changes, unreadable, notes, ops, reload: vec![] });
             }
-            if w::button(ui, icon::X, "Keep all current files").clicked() {
-                let ops = list.iter().map(|(u, _)| Op::ConfigUpdate { path: u.to_string_lossy().to_string(), accept: false }).collect();
+            if w::button(ui, icon::X, "Keep all current files").on_hover_text("Delete every pending new version (recorded, so it can be undone)").clicked() {
+                let ops = list.iter().map(|u| Op::ConfigUpdate { path: u.update.to_string_lossy().to_string(), accept: false, expect: None }).collect();
                 app.push(Action::Batch { title: "Discard all config updates".into(), ops, reload: vec![], then: None });
-                app.config_view.updates = None;
             }
         });
-        for (upd, target) in &list {
+        if !risky.is_empty() {
+            ui.add_space(4.0);
+            w::callout(
+                ui,
+                ORANGE,
+                icon::SHIELD_WARNING,
+                &format!("{} file(s) here (SSH, PAM, sudo, fstab, GRUB defaults, polkit, accounts, /etc/portage) can lock you out or break the boot. They are left out of the bulk action: read the differences and decide for each.", risky.len()),
+            );
+        }
+        for u in &list {
+            let (upd, target) = (&u.update, &u.target);
             w::card().show(ui, |ui| {
                 ui.set_width(ui.available_width());
                 ui.horizontal(|ui| {
-                    ui.label(RichText::new(icon::FILE_ARROW_UP).size(18.0).color(ORANGE));
+                    let risky = system::is_risky(target);
+                    ui.label(RichText::new(if risky { icon::SHIELD_WARNING } else { icon::FILE_ARROW_UP }).size(18.0).color(ORANGE));
                     ui.label(w::strong(target.to_string_lossy()));
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if w::button(ui, icon::X, "Keep mine").on_hover_text("Delete the new version").clicked() {
-                            app.push(Action::Batch { title: format!("Keep {}", target.display()), ops: vec![Op::ConfigUpdate { path: upd.to_string_lossy().to_string(), accept: false }], reload: vec![], then: None });
-                            app.config_view.updates = None;
+                            app.push(Action::Batch { title: format!("Keep {}", target.display()), ops: vec![Op::ConfigUpdate { path: upd.to_string_lossy().to_string(), accept: false, expect: None }], reload: vec![], then: None });
                         }
                         if w::primary(ui, icon::CHECK, "Use new version").clicked() {
-                            app.push(Action::Batch { title: format!("Update {}", target.display()), ops: vec![Op::ConfigUpdate { path: upd.to_string_lossy().to_string(), accept: true }], reload: vec![], then: None });
-                            app.config_view.updates = None;
+                            app.push(Action::Batch { title: format!("Update {}", target.display()), ops: vec![accept_op(u)], reload: vec![], then: None });
                         }
                     });
                 });
-                let old = std::fs::read_to_string(target);
-                let new = std::fs::read_to_string(upd);
-                match (old, new) {
-                    (Ok(o), Ok(n)) => {
-                        egui::CollapsingHeader::new("Show differences").id_salt(upd).show(ui, |ui| {
-                            for (c, l) in crate::fmt::line_diff(&o, &n) {
+                match (&u.old, &u.new) {
+                    (Some(o), Some(n)) => {
+                        egui::CollapsingHeader::new("Show differences").id_salt(upd).default_open(system::is_risky(target)).show(ui, |ui| {
+                            for (c, l) in crate::fmt::line_diff(o, n) {
                                 let col = match c {
                                     '+' => GREEN,
                                     '-' => RED,
@@ -1164,7 +1323,7 @@ fn updates(app: &mut App, ui: &mut Ui) {
                         });
                     }
                     _ => {
-                        ui.label(w::dim("Cannot read one of the files as your user (root-only file)."));
+                        ui.label(w::dim("Cannot show the differences: one of the files is root-only, missing or too large."));
                     }
                 }
             });
@@ -1190,7 +1349,10 @@ fn strays(app: &mut App, ui: &mut Ui) {
                     ui.label(RichText::new(icon::WARNING).size(20.0).color(ORANGE));
                     ui.label(w::strong(s.path.to_string_lossy()));
                 });
-                let content = std::fs::read_to_string(&s.path).unwrap_or_default();
+                let (content, unreadable) = match config::read_utf8(&s.path) {
+                    Ok(t) => (t, None),
+                    Err(why) => (String::new(), Some(why)),
+                };
                 match &s.reason {
                     StrayReason::Misnamed { kind, suggested_name } => {
                         ui.label(format!("Looks like it was meant to be inside {}/ — the separator is missing, so Portage ignores these entries.", kind.file_name()));
@@ -1200,10 +1362,16 @@ fn strays(app: &mut App, ui: &mut Ui) {
                             ui.add(egui::TextEdit::singleline(name).desired_width(200.0));
                         });
                         let name = name.clone();
-                        let plan = edits::plan_stray_fix(&cfg, &s.path, *kind, &name);
-                        ui.label(RichText::new(format!("{} {}", icon::INFO, plan.summary)).color(ACCENT));
-                        if w::primary(ui, icon::ARROW_BEND_DOWN_RIGHT, "Fix it").clicked() {
-                            app.push(Action::Batch { title: format!("Fix {}", s.path.display()), ops: plan.ops, reload: vec![Reload::Config], then: None });
+                        match edits::plan_stray_fix(&cfg, &s.path, *kind, &name) {
+                            Ok(plan) => {
+                                ui.label(RichText::new(format!("{} {}", icon::INFO, plan.summary)).color(ACCENT));
+                                if w::primary(ui, icon::ARROW_BEND_DOWN_RIGHT, "Fix it").clicked() {
+                                    app.push(Action::Batch { title: format!("Fix {}", s.path.display()), ops: plan.ops, reload: vec![Reload::Config], then: None });
+                                }
+                            }
+                            Err(why) => {
+                                ui.label(RichText::new(format!("{} {why}", icon::WARNING)).color(ORANGE));
+                            }
                         }
                     }
                     StrayReason::Backup => {
@@ -1218,7 +1386,9 @@ fn strays(app: &mut App, ui: &mut Ui) {
                         ui.label(w::mono(content.trim()));
                     });
                 }
-                if w::danger(ui, icon::TRASH, "Delete file").clicked() {
+                if let Some(why) = &unreadable {
+                    ui.label(RichText::new(format!("{} {why}", icon::WARNING)).color(ORANGE));
+                } else if w::danger(ui, icon::TRASH, "Delete file").clicked() {
                     // DeleteFile through a reviewed write.
                     app.push(Action::Write { title: format!("Delete {}", s.path.display()), changes: vec![FileChange { path: s.path.clone(), old: content.clone(), new: None }], reload: vec![Reload::Config], then: None });
                 }

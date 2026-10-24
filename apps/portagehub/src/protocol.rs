@@ -3,6 +3,7 @@
 //! The GUI writes one [`Request`] per line to the helper's stdin, the helper
 //! answers with [`Event`]s, one per line, on its stdout.
 
+use crate::journal::content_hash;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -22,7 +23,7 @@ impl Request {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum Op {
     Ping,
@@ -36,21 +37,29 @@ pub enum Op {
         cwd: Option<String>,
     },
     /// Atomically replace a file (creating parent directories when needed).
+    /// With `expect`, only when the file still is what the caller last saw.
     WriteFile {
         path: String,
         content: String,
         #[serde(default)]
         backup: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expect: Option<Expect>,
     },
     DeleteFile {
         path: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expect: Option<Expect>,
     },
     Mkdir {
         path: String,
     },
+    /// Move a file without replacing an existing target. `expect` applies to `from`.
     Rename {
         from: String,
         to: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expect: Option<Expect>,
     },
     /// Send a signal to the process group of a previously started `Run`.
     Signal {
@@ -62,6 +71,9 @@ pub enum Op {
     ConfigUpdate {
         path: String,
         accept: bool,
+        /// With `accept`: only when the file being replaced still is what the caller saw.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expect: Option<Expect>,
     },
     /// Read-only scan of root-only boot files (bootloader configs, /boot listings).
     BootScan,
@@ -115,6 +127,50 @@ pub enum Op {
         #[serde(default)]
         force: bool,
     },
+    /// The journal: recent transactions, newest first, as JSON `Vec<`[`TxInfo`]`>` in an
+    /// [`Event::Data`]. The journal directory is root-only, so the GUI asks.
+    ListTx,
+}
+
+/// Precondition on the current content of a file (compare-and-swap), so a change made outside
+/// PortageHub since the GUI read the file is refused instead of silently overwritten.
+#[derive(Serialize, Deserialize, Debug, Clone, Copy, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Expect {
+    /// The file is missing or empty.
+    Absent,
+    /// The file's content hashes to this value ([`content_hash`]).
+    Hash(u64),
+}
+
+impl Expect {
+    /// What a caller that read `content` expects to find later.
+    pub fn of(content: &str) -> Expect {
+        if content.is_empty() { Expect::Absent } else { Expect::Hash(content_hash(content.as_bytes())) }
+    }
+
+    /// Does the file as it is now (`None`: it does not exist) satisfy this expectation?
+    pub fn holds(&self, current: Option<&[u8]>) -> bool {
+        match (self, current) {
+            (Expect::Absent, None) => true,
+            (Expect::Absent, Some(c)) => c.is_empty(),
+            (Expect::Hash(h), Some(c)) => content_hash(c) == *h,
+            (Expect::Hash(_), None) => false,
+        }
+    }
+}
+
+/// One transaction of the journal, as [`Op::ListTx`] reports it.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
+pub struct TxInfo {
+    pub id: String,
+    pub label: String,
+    /// Unix time.
+    pub created: i64,
+    /// `open`, `committed` or `rolled_back`.
+    pub state: String,
+    /// Files (not directories) the transaction changed.
+    pub files: Vec<String>,
 }
 
 /// Every operation name on the wire (the `op` tag), kept next to [`Op::name`].
@@ -136,6 +192,7 @@ pub const OP_NAMES: &[&str] = &[
     "begin",
     "commit",
     "rollback",
+    "list_tx",
 ];
 
 /// The only mount points [`Op::Remount`] accepts.
@@ -163,6 +220,7 @@ impl Op {
             Op::Begin { .. } => "begin",
             Op::Commit { .. } => "commit",
             Op::Rollback { .. } => "rollback",
+            Op::ListTx => "list_tx",
         }
     }
 
@@ -171,7 +229,7 @@ impl Op {
         match self {
             Op::BootScan | Op::BootAction { .. } | Op::MarkGood { .. } | Op::RemoveKernelLeftovers { .. } | Op::CleanBuildDirs => (0, 2),
             Op::Remount { .. } => (0, 3),
-            Op::Begin { .. } | Op::Commit { .. } | Op::Rollback { .. } => (0, 4),
+            Op::Begin { .. } | Op::Commit { .. } | Op::Rollback { .. } | Op::ListTx => (0, 4),
             _ => (0, 1),
         }
     }
@@ -442,12 +500,17 @@ mod tests {
         vec![
             Op::Ping,
             Op::Run { argv: vec!["emerge".into(), "--pretend".into()], env: vec![("FEATURES".into(), "x".into())], cwd: Some("/".into()) },
-            Op::WriteFile { path: "/etc/portage/package.use/x".into(), content: "a/b c\n".into(), backup: true },
-            Op::DeleteFile { path: "/etc/portage/package.use/x".into() },
+            Op::WriteFile { path: "/etc/portage/package.use/x".into(), content: "a/b c\n".into(), backup: true, expect: None },
+            Op::WriteFile { path: "/etc/portage/package.use/x".into(), content: "a/b c\n".into(), backup: false, expect: Some(Expect::Hash(u64::MAX)) },
+            Op::WriteFile { path: "/etc/portage/package.use/x".into(), content: "a/b c\n".into(), backup: false, expect: Some(Expect::Absent) },
+            Op::DeleteFile { path: "/etc/portage/package.use/x".into(), expect: None },
+            Op::DeleteFile { path: "/etc/portage/package.use/x".into(), expect: Some(Expect::Hash(42)) },
             Op::Mkdir { path: "/etc/portage/package.use".into() },
-            Op::Rename { from: "/etc/portage/a".into(), to: "/etc/portage/b".into() },
+            Op::Rename { from: "/etc/portage/a".into(), to: "/etc/portage/b".into(), expect: None },
+            Op::Rename { from: "/etc/portage/a".into(), to: "/etc/portage/b".into(), expect: Some(Expect::Hash(7)) },
             Op::Signal { target: 3, signal: 2 },
-            Op::ConfigUpdate { path: "/etc/._cfg0000_make.conf".into(), accept: true },
+            Op::ConfigUpdate { path: "/etc/._cfg0000_make.conf".into(), accept: true, expect: None },
+            Op::ConfigUpdate { path: "/etc/._cfg0000_make.conf".into(), accept: true, expect: Some(Expect::Absent) },
             Op::BootScan,
             Op::BootAction { action: BootAction::DracutRegen, kver: Some("6.1.0".into()) },
             Op::MarkGood { kver: "6.1.0".into(), state_dir: "/var/lib/kernel-fallback".into(), backup: true },
@@ -457,6 +520,7 @@ mod tests {
             Op::Begin { label: "x".into() },
             Op::Commit { tx: "1-2".into() },
             Op::Rollback { tx: "1-2".into(), force: true },
+            Op::ListTx,
         ]
     }
 
@@ -465,6 +529,7 @@ mod tests {
         let ops = every_op();
         let mut names: Vec<&str> = ops.iter().map(Op::name).collect();
         names.sort_unstable();
+        names.dedup();
         let mut listed = OP_NAMES.to_vec();
         listed.sort_unstable();
         assert_eq!(names, listed, "OP_NAMES and every_op() must list the same operations");
@@ -513,6 +578,25 @@ mod tests {
     }
 
     #[test]
+    fn expectations() {
+        let t = "a/b c\n";
+        assert_eq!(Expect::of(""), Expect::Absent);
+        assert!(Expect::Absent.holds(None) && Expect::Absent.holds(Some(b"")) && !Expect::Absent.holds(Some(b"x")));
+        let h = Expect::of(t);
+        assert!(h.holds(Some(t.as_bytes())) && !h.holds(Some(b"a/b c")) && !h.holds(None));
+        // Omitted when absent (old helpers never see the key), and spelled in snake_case.
+        let plain = serde_json::to_string(&Request::new(1, Op::DeleteFile { path: "/etc/portage/x".into(), expect: None })).unwrap();
+        assert!(!plain.contains("expect"), "{plain}");
+        let with = serde_json::to_string(&Request::new(1, Op::DeleteFile { path: "/etc/portage/x".into(), expect: Some(Expect::Hash(5)) })).unwrap();
+        assert!(with.contains(r#""expect":{"hash":5}"#), "{with}");
+        let absent = serde_json::to_string(&Request::new(1, Op::DeleteFile { path: "/etc/portage/x".into(), expect: Some(Expect::Absent) })).unwrap();
+        assert!(absent.contains(r#""expect":"absent""#), "{absent}");
+        // A request without the key (an older GUI) still parses.
+        let old = parse_request(r#"{"id":3,"op":"write_file","path":"/etc/portage/x","content":"y"}"#).unwrap();
+        assert!(matches!(old.op, Op::WriteFile { expect: None, backup: false, .. }));
+    }
+
+    #[test]
     fn roundtrip_all_events() {
         let events = vec![
             Event::Ready { uid: 1000, version: Some("0.4.0".into()) },
@@ -540,7 +624,7 @@ mod tests {
         assert_eq!(back.id, 7);
         assert!(back.tx.is_none());
         assert!(matches!(back.op, Op::Run { .. }));
-        let r = Request { id: 8, tx: Some("1-2".into()), op: Op::DeleteFile { path: "/etc/portage/x".into() } };
+        let r = Request { id: 8, tx: Some("1-2".into()), op: Op::DeleteFile { path: "/etc/portage/x".into(), expect: None } };
         let back: Request = serde_json::from_str(&serde_json::to_string(&r).unwrap()).unwrap();
         assert_eq!(back.tx.as_deref(), Some("1-2"));
         assert_eq!(Op::Begin { label: String::new() }.min_helper(), (0, 4));

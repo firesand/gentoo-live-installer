@@ -746,7 +746,7 @@ fn problems(app: &mut App, ui: &mut Ui, plan: &Plan, opts: &EmergeOptions) {
                 let comment = format!("added by PortageHub for: emerge {}", opts.args().join(" "));
                 let ch = edits::add_lines(cfg, &sel, &target, Some(&comment));
                 let then = if app.settings.auto_repretend { Some(Box::new(Action::RePretend)) } else { None };
-                app.push(Action::Write { title: "Apply emerge's suggested changes".into(), changes: ch, reload: vec![Reload::Config], then });
+                app.push_write("Apply emerge's suggested changes", ch, vec![Reload::Config], then);
             }
             ui.label(w::dim(format!("into …/{target} of each package.* directory")));
         });
@@ -799,7 +799,7 @@ fn problem_body(app: &mut App, ui: &mut Ui, p: &Problem, pi: usize, opts: &Emerg
                             && let Some(cfg) = &cfg
                         {
                             let ch = edits::add_lines(cfg, &fixes, &target, Some(&format!("unmasked by PortageHub for {atom}")));
-                            app.push(Action::Write { title: format!("Allow {}", c.cpv), changes: ch, reload: vec![Reload::Config], then: Some(Box::new(Action::RePretend)) });
+                            app.push_write(format!("Allow {}", c.cpv), ch, vec![Reload::Config], Some(Box::new(Action::RePretend)));
                         }
                     });
                 });
@@ -952,7 +952,7 @@ fn problem_body(app: &mut App, ui: &mut Ui, p: &Problem, pi: usize, opts: &Emerg
                             let atom = crate::portage::atom::Atom::parse(pkg).map(|a| a.key()).unwrap_or(pkg.clone());
                             let line = format!("{atom} {}", change.replace(',', " "));
                             let ch = edits::add_lines(cfg, &[(ConfKind::Use, line)], &target, Some("temporary: break circular dependency"));
-                            app.push(Action::Write { title: "Break dependency cycle".into(), changes: ch, reload: vec![Reload::Config], then: Some(Box::new(Action::RePretend)) });
+                            app.push_write("Break dependency cycle", ch, vec![Reload::Config], Some(Box::new(Action::RePretend)));
                         }
                     });
                 }
@@ -1104,7 +1104,7 @@ fn plan_table(app: &mut App, ui: &mut Ui, plan: &Plan) {
 
 fn activity(app: &mut App, ui: &mut Ui) {
     let jobs: Vec<Job> = app.jobs.iter().filter(|j| !matches!(j.kind, JobKind::Capture { .. }) || app.settings.show_advanced).cloned().collect();
-    let batches: Vec<(String, usize, usize)> = app.batches.iter().map(|b| (b.title.clone(), b.done, b.done + b.ops.len() + 1)).collect();
+    let batches: Vec<(String, usize, usize)> = app.batches.iter().map(|b| (b.title.clone(), b.progress().0, b.progress().1)).collect();
     egui::Panel::left("jobs-side").resizable(true).default_size(300.0).frame(egui::Frame::new().fill(SIDEBAR).inner_margin(Margin::symmetric(0, 8))).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.add_space(12.0);

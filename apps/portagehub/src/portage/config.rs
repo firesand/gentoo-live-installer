@@ -6,6 +6,19 @@ use std::path::{Path, PathBuf};
 
 pub const ETC_PORTAGE: &str = "/etc/portage";
 
+/// Read a configuration file for editing. A file that does not exist is empty; one that cannot be
+/// read, or is not valid UTF-8, is an error that says why. It must never be mistaken for an empty
+/// file: the next edit would rewrite the whole file from nothing.
+pub fn read_utf8(path: &Path) -> Result<String, String> {
+    match std::fs::read(path) {
+        Ok(bytes) => String::from_utf8(bytes).map_err(|e| {
+            format!("{} is not valid UTF-8 (first bad byte at offset {}), so PortageHub will not edit it", path.display(), e.utf8_error().valid_up_to())
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(e) => Err(format!("{} cannot be read by your user ({e}), so PortageHub will not edit it", path.display())),
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ConfKind {
     Use,
@@ -192,7 +205,32 @@ pub struct Entry {
 
 impl Entry {
     pub fn new(atom: &str, values: Vec<String>) -> Entry {
-        Entry { atom_text: atom.to_string(), atom: Atom::parse(atom), values, comment: None, disabled: false }
+        Entry { atom_text: atom.to_string(), atom: Atom::parse_user(atom), values, comment: None, disabled: false }
+    }
+
+    /// The USE flags this line sets, the way Portage reads them: `(flag, enabled)`. A token that
+    /// ends in `:` (`PYTHON_TARGETS:`) makes the tokens after it, to the end of the line, belong
+    /// to that USE_EXPAND variable: `PYTHON_TARGETS: python3_12 -python3_11` sets
+    /// `python_targets_python3_12` and clears `python_targets_python3_11`. A `-*` under such a
+    /// prefix resets the variable; it is not a flag.
+    pub fn flag_tokens(&self) -> Vec<(String, bool)> {
+        let mut prefix = String::new();
+        let mut out = Vec::new();
+        for token in &self.values {
+            if let Some(var) = token.strip_suffix(':') {
+                prefix = format!("{}_", var.to_lowercase());
+                continue;
+            }
+            let (name, enabled) = match token.strip_prefix('-') {
+                Some(n) => (n, false),
+                None => (token.as_str(), true),
+            };
+            if name.is_empty() || (name == "*" && !prefix.is_empty()) {
+                continue;
+            }
+            out.push((format!("{prefix}{name}"), enabled));
+        }
+        out
     }
 
     pub fn render(&self) -> String {
@@ -221,8 +259,9 @@ impl Entry {
         let vals = self.values.join(", ");
         match kind {
             ConfKind::Use => {
-                let on: Vec<_> = self.values.iter().filter(|v| !v.starts_with('-')).cloned().collect();
-                let off: Vec<_> = self.values.iter().filter_map(|v| v.strip_prefix('-')).map(String::from).collect();
+                let flags = self.flag_tokens();
+                let on: Vec<_> = flags.iter().filter(|(_, enabled)| *enabled).map(|(f, _)| f.clone()).collect();
+                let off: Vec<_> = flags.iter().filter(|(_, enabled)| !*enabled).map(|(f, _)| f.clone()).collect();
                 let mut parts = Vec::new();
                 if !on.is_empty() {
                     parts.push(format!("enable {}", on.join(", ")));
@@ -272,6 +311,8 @@ pub fn describe_atom(a: &Atom) -> String {
         "all packages".to_string()
     } else if a.pn == "*" {
         format!("every package in {}", a.cat)
+    } else if a.is_wildcard() {
+        format!("packages matching {}", a.key())
     } else {
         a.key()
     };
@@ -302,11 +343,20 @@ pub enum Line {
 }
 
 pub fn parse_line(raw: &str) -> Line {
+    parse_line_as(ConfKind::Use, raw)
+}
+
+/// Parse one line of a `kind` file. `package.provided` lists exact versions (`sys-apps/foo-1.0`),
+/// which are not atoms; every other kind holds atoms as Portage reads them in `package.*` files.
+pub fn parse_line_as(kind: ConfKind, raw: &str) -> Line {
     let t = raw.trim();
     if t.is_empty() {
         return Line::Blank;
     }
+    // `Entry::render` writes a switched-off entry as `#atom …`, with no space after the `#`. A
+    // comment such as `# dev-libs/foo is needed by bar` is prose, not an entry to switch on.
     let (disabled, body) = match t.strip_prefix('#') {
+        Some(rest) if rest.starts_with(char::is_whitespace) => return Line::Comment(raw.to_string()),
         Some(rest) => (true, rest.trim()),
         None => (false, t),
     };
@@ -318,8 +368,8 @@ pub fn parse_line(raw: &str) -> Line {
     let Some(first) = toks.next() else {
         return Line::Comment(raw.to_string());
     };
-    let atom = Atom::parse(first);
-    let looks_like_entry = first.contains('/') && atom.is_some();
+    let atom = if kind == ConfKind::ProfileProvided { Atom::parse(first) } else { Atom::parse_user(first) };
+    let looks_like_entry = first.contains('/') && !first.starts_with('!') && atom.is_some();
     if disabled && !looks_like_entry {
         return Line::Comment(raw.to_string());
     }
@@ -339,17 +389,36 @@ pub struct ConfFile {
     pub ignored: bool,
     pub lines: Vec<Line>,
     pub raw: String,
-    pub writable_by_user: bool,
+    /// Why the file could not be read as UTF-8 text (it then shows no entries and is never edited).
+    pub unreadable: Option<String>,
+    /// The path is a symlink: the helper never writes through one (the link target would decide
+    /// where root writes), so the file is shown but not edited.
+    pub symlink: bool,
 }
 
 impl ConfFile {
     pub fn read(path: &Path, rel: String) -> ConfFile {
-        let raw = std::fs::read_to_string(path).unwrap_or_default();
+        ConfFile::read_as(ConfKind::Use, path, rel)
+    }
+
+    pub fn read_as(kind: ConfKind, path: &Path, rel: String) -> ConfFile {
+        let (raw, unreadable) = match read_utf8(path) {
+            Ok(t) => (t, None),
+            Err(e) => (String::new(), Some(e)),
+        };
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
         let ignored = name.starts_with('.') || name.ends_with('~');
-        let lines = raw.lines().map(parse_line).collect();
-        let writable_by_user = std::fs::OpenOptions::new().append(true).open(path).is_ok();
-        ConfFile { path: path.to_path_buf(), rel, ignored, lines, raw, writable_by_user }
+        let lines = raw.lines().map(|l| parse_line_as(kind, l)).collect();
+        let symlink = std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink());
+        ConfFile { path: path.to_path_buf(), rel, ignored, lines, raw, unreadable, symlink }
+    }
+
+    /// Why this file must not be edited, if it must not.
+    pub fn edit_blocked(&self) -> Option<String> {
+        if let Some(e) = &self.unreadable {
+            return Some(e.clone());
+        }
+        self.symlink.then(|| symlink_message(&self.path))
     }
 
     pub fn entries(&self) -> impl Iterator<Item = (usize, &Entry)> {
@@ -388,6 +457,8 @@ pub struct ConfSet {
     pub base: PathBuf,
     pub exists: bool,
     pub is_dir: bool,
+    /// The set's path (the `package.use` directory or file itself) is a symlink.
+    pub symlink: bool,
     pub files: Vec<ConfFile>,
 }
 
@@ -410,7 +481,15 @@ impl ConfSet {
     }
 }
 
-fn walk(dir: &Path, base: &Path, out: &mut Vec<ConfFile>) {
+/// The explanation for a path the helper will not write through.
+pub fn symlink_message(path: &Path) -> String {
+    format!(
+        "{} is a symlink. PortageHub never writes through a symlink, because the link target would decide where root writes: point it at a real file or directory, or edit it by hand.",
+        path.display()
+    )
+}
+
+fn walk(kind: ConfKind, dir: &Path, base: &Path, out: &mut Vec<ConfFile>) {
     let mut entries: Vec<_> = std::fs::read_dir(dir).into_iter().flatten().flatten().collect();
     entries.sort_by_key(|e| e.file_name());
     for e in entries {
@@ -420,10 +499,10 @@ fn walk(dir: &Path, base: &Path, out: &mut Vec<ConfFile>) {
             if name.starts_with('.') || name == "CVS" {
                 continue;
             }
-            walk(&p, base, out);
+            walk(kind, &p, base, out);
         } else {
             let rel = p.strip_prefix(base).map(|r| r.to_string_lossy().to_string()).unwrap_or(name);
-            out.push(ConfFile::read(&p, rel));
+            out.push(ConfFile::read_as(kind, &p, rel));
         }
     }
 }
@@ -434,12 +513,13 @@ pub fn load_set(kind: ConfKind) -> ConfSet {
     let is_dir = base.is_dir();
     let mut files = Vec::new();
     if is_dir {
-        walk(&base, &base, &mut files);
+        walk(kind, &base, &base, &mut files);
     } else if exists {
         let name = base.file_name().unwrap().to_string_lossy().to_string();
-        files.push(ConfFile::read(&base, name));
+        files.push(ConfFile::read_as(kind, &base, name));
     }
-    ConfSet { kind, base, exists, is_dir, files }
+    let symlink = std::fs::symlink_metadata(&base).is_ok_and(|m| m.file_type().is_symlink());
+    ConfSet { kind, base, exists, is_dir, symlink, files }
 }
 
 #[derive(Debug, Clone)]
@@ -447,6 +527,9 @@ pub struct EnvFile {
     pub name: String,
     pub path: PathBuf,
     pub content: String,
+    /// Why the file could not be read as UTF-8 text (see [`ConfFile::unreadable`]).
+    pub unreadable: Option<String>,
+    pub symlink: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -468,11 +551,31 @@ pub struct PortageConfig {
     pub sets: Vec<ConfSet>,
     pub env_files: Vec<EnvFile>,
     pub strays: Vec<Stray>,
+    /// `/etc/portage` itself is a symlink: the helper opens it without following links.
+    pub root_symlink: bool,
 }
 
 impl PortageConfig {
     pub fn set(&self, kind: ConfKind) -> Option<&ConfSet> {
         self.sets.iter().find(|s| s.kind == kind)
+    }
+
+    /// Why `path` must not be changed, if it must not: it (or a directory above it) is a symlink,
+    /// or it could not be read as UTF-8 text and rewriting it would replace it from nothing.
+    pub fn edit_blocked_for(&self, path: &Path) -> Option<String> {
+        if self.root_symlink {
+            return Some(symlink_message(Path::new(ETC_PORTAGE)));
+        }
+        for s in &self.sets {
+            if s.symlink && path.starts_with(&s.base) {
+                return Some(symlink_message(&s.base));
+            }
+            if let Some(m) = s.file(path).and_then(ConfFile::edit_blocked) {
+                return Some(m);
+            }
+        }
+        let env = self.env_files.iter().find(|e| e.path == path)?;
+        env.unreadable.clone().or_else(|| env.symlink.then(|| symlink_message(&env.path)))
     }
 
     /// Every entry (in any package.* file) whose atom covers `cat/pn`.
@@ -498,6 +601,7 @@ impl PortageConfig {
 
 pub fn load() -> PortageConfig {
     let mut cfg = PortageConfig { sets: ConfKind::ALL.iter().map(|&k| load_set(k)).collect(), ..Default::default() };
+    cfg.root_symlink = std::fs::symlink_metadata(ETC_PORTAGE).is_ok_and(|m| m.file_type().is_symlink());
     let env_dir = Path::new(ETC_PORTAGE).join("env");
     let mut envs: Vec<_> = std::fs::read_dir(&env_dir).into_iter().flatten().flatten().collect();
     envs.sort_by_key(|e| e.file_name());
@@ -508,7 +612,12 @@ pub fn load() -> PortageConfig {
             if name.starts_with('.') || name.ends_with('~') {
                 continue;
             }
-            cfg.env_files.push(EnvFile { name, content: std::fs::read_to_string(&p).unwrap_or_default(), path: p });
+            let (content, unreadable) = match read_utf8(&p) {
+                Ok(t) => (t, None),
+                Err(e) => (String::new(), Some(e)),
+            };
+            let symlink = std::fs::symlink_metadata(&p).is_ok_and(|m| m.file_type().is_symlink());
+            cfg.env_files.push(EnvFile { name, content, unreadable, symlink, path: p });
         }
     }
     cfg.strays = find_strays();
@@ -614,7 +723,8 @@ mod tests {
             ignored: false,
             lines: raw.lines().map(parse_line).collect(),
             raw: raw.into(),
-            writable_by_user: false,
+            unreadable: None,
+            symlink: false,
         };
         // Untouched lines keep their original spacing.
         assert_eq!(f.render(), raw);
@@ -631,5 +741,70 @@ mod tests {
     fn describe() {
         let e = Entry::new(">=dev-lang/rust-1.80", vec!["clippy".into(), "-doc".into()]);
         assert_eq!(e.describe(ConfKind::Use), "Enable clippy and disable doc for dev-lang/rust 1.80 and newer");
+    }
+
+    /// NOBS-19: only `#atom …` (how `Entry::render` writes a switched-off entry) is a disabled
+    /// entry; prose that happens to start with something atom-shaped stays a comment.
+    #[test]
+    fn comments_are_not_mistaken_for_switched_off_entries() {
+        for entry in ["#app-misc/foo bar", "#>=dev-lang/rust-1.80 clippy -doc", "#dev-qt/qt* qml"] {
+            match parse_line(entry) {
+                Line::Entry(e) => {
+                    assert!(e.disabled, "{entry}");
+                    assert_eq!(e.render(), entry, "round trip");
+                }
+                other => panic!("{entry}: {other:?}"),
+            }
+        }
+        for prose in ["# app-misc/foo bar", "# app-misc/foo: needed for bar", "# dev-libs/foo is needed by bar", "# and/or maybe", "#  dev-libs/foo x", "#\tdev-libs/foo x", "# required by app-misc/foo-1.0::gentoo", "##app-misc/foo x", "#!app-misc/foo"] {
+            assert!(matches!(parse_line(prose), Line::Comment(_)), "{prose}");
+        }
+        // Active lines are untouched by the rule.
+        assert!(matches!(parse_line("app-misc/foo bar # why"), Line::Entry(e) if !e.disabled && e.comment.as_deref() == Some(" why")));
+        for line in ["# header", "#app-misc/foo bar", "# dev-libs/foo is needed by bar", "app-misc/foo  bar", ""] {
+            let f = ConfFile { path: "/x".into(), rel: "x".into(), ignored: false, lines: vec![parse_line(line)], raw: line.into(), unreadable: None, symlink: false };
+            assert_eq!(f.render(), format!("{line}\n").replacen("\n\n", "\n", 1), "{line:?}");
+        }
+    }
+
+    /// P7: a `VAR:` token prefixes everything after it on the line.
+    #[test]
+    fn use_expand_tokens_are_prefixed() {
+        let flags = |line: &str| match parse_line(line) {
+            Line::Entry(e) => e.flag_tokens(),
+            other => panic!("{other:?}"),
+        };
+        assert_eq!(flags("dev-python/foo test -doc"), vec![("test".to_string(), true), ("doc".to_string(), false)]);
+        assert_eq!(
+            flags("dev-python/foo test PYTHON_TARGETS: python3_12 -python3_11"),
+            vec![("test".to_string(), true), ("python_targets_python3_12".to_string(), true), ("python_targets_python3_11".to_string(), false)]
+        );
+        // The Handbook form: `-*` under a prefix resets the variable, it is not a flag.
+        assert_eq!(flags("*/* VIDEO_CARDS: -* radeon radeonsi"), vec![("video_cards_radeon".to_string(), true), ("video_cards_radeonsi".to_string(), true)]);
+        assert_eq!(flags("*/* CPU_FLAGS_X86: aes avx2 VIDEO_CARDS: nvidia").len(), 3);
+        // The prefix is lower-cased like Portage does.
+        assert_eq!(flags("*/* Python_Targets: python3_13")[0].0, "python_targets_python3_13");
+        let e = match parse_line("dev-python/foo PYTHON_TARGETS: python3_12 -python3_11") {
+            Line::Entry(e) => e,
+            _ => panic!(),
+        };
+        assert_eq!(e.describe(ConfKind::Use), "Enable python_targets_python3_12 and disable python_targets_python3_11 for dev-python/foo");
+    }
+
+    #[test]
+    fn atoms_in_entries_follow_portage() {
+        // Partial wildcards are valid; a version without operator is not.
+        for ok in ["dev-qt/qt* qml", "app-*/foo x", "*/* VIDEO_CARDS: radeon"] {
+            assert!(matches!(parse_line(ok), Line::Entry(e) if e.atom.is_some()), "{ok}");
+        }
+        for bad in ["app-misc/foo-1.0 x", "app-misc/foo: x", "app-misc/foo[] x"] {
+            assert!(matches!(parse_line(bad), Line::Entry(e) if e.atom.is_none()), "{bad}");
+        }
+        // package.provided lists exact versions, which are not atoms.
+        assert!(matches!(parse_line_as(ConfKind::ProfileProvided, "sys-apps/foo-1.0"), Line::Entry(e) if e.atom.is_some()));
+        assert!(matches!(parse_line_as(ConfKind::Use, "sys-apps/foo-1.0"), Line::Entry(e) if e.atom.is_none()));
+        assert_eq!(describe_atom(&Atom::parse_user("dev-qt/qt*").unwrap()), "packages matching dev-qt/qt*");
+        assert_eq!(describe_atom(&Atom::parse_user("app-*/*").unwrap()), "every package in app-*");
+        assert_eq!(describe_atom(&Atom::parse_user("*/*").unwrap()), "all packages");
     }
 }

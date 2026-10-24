@@ -183,14 +183,18 @@ pub fn run(app: &mut App, ctx: &egui::Context, script: &mut Script) {
             }
             Step::WriteTest => {
                 let path = PathBuf::from(format!("/etc/portage/package.use/{}", app.settings.target_file));
-                let old = std::fs::read_to_string(&path).unwrap_or_default();
-                let new = crate::portage::config::append_line(&old, "# portagehub write test");
-                app.push(Action::Write {
-                    title: "Write test".into(),
-                    changes: vec![crate::app::FileChange { path, old, new: Some(new) }],
-                    reload: vec![crate::data::Reload::Config],
-                    then: None,
-                });
+                match crate::portage::config::read_utf8(&path) {
+                    Ok(old) => {
+                        let new = crate::portage::config::append_line(&old, "# portagehub write test");
+                        app.push(Action::Write {
+                            title: "Write test".into(),
+                            changes: vec![crate::app::FileChange { path, old, new: Some(new) }],
+                            reload: vec![crate::data::Reload::Config],
+                            then: None,
+                        });
+                    }
+                    Err(why) => app.toast(crate::app::ToastKind::Error, why),
+                }
             }
             Step::CheckWorld => app.push(Action::CheckWorld),
             Step::MPage(p) => {

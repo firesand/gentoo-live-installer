@@ -1,6 +1,8 @@
 //! PortageHub — a Steam-styled graphical front end for Gentoo's Portage.
 
 mod app;
+mod batch;
+mod danger;
 mod data;
 mod edits;
 mod exec;

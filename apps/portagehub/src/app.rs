@@ -1,5 +1,6 @@
 //! Application state, background loading, job bookkeeping and the window shell.
 
+use crate::batch;
 use crate::data::{self, Data, DataMsg, PkgDetail, Reload};
 use crate::exec::{ExecMsg, Executor, HelperState, Priv};
 use crate::portage::emerge::EmergeOptions;
@@ -12,8 +13,8 @@ use crate::ui::widgets as w;
 use crate::views;
 use egui::{Align, Color32, CornerRadius, Frame, Layout, Margin, RichText, Stroke};
 use egui_phosphor::regular as icon;
-use portagehub::protocol::{Event, Op};
-use std::collections::{HashMap, HashSet, VecDeque};
+use portagehub::protocol::{Event, Expect, Op, TxInfo};
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -82,6 +83,10 @@ pub enum Action {
     Capture { tag: String, argv: Vec<String>, privilege: Priv },
     Batch { title: String, ops: Vec<Op>, reload: Vec<Reload>, then: Option<Box<Action>> },
     Write { title: String, changes: Vec<FileChange>, reload: Vec<Reload>, then: Option<Box<Action>> },
+    /// Ask before running `ops` as one batch. `changes` only make the dialog show what will happen
+    /// (a diff per file); `unreadable` files cannot be previewed and `notes` explain what is left out.
+    /// The confirmation is not optional, whatever the "review changes" setting says.
+    ReviewOps { title: String, changes: Vec<FileChange>, unreadable: Vec<PathBuf>, notes: Vec<String>, ops: Vec<Op>, reload: Vec<Reload> },
     Reload(Reload),
     Toast(ToastKind, String),
     Cancel(u64),
@@ -113,6 +118,10 @@ pub enum JobKind {
     CleanupScan { tag: String },
     /// mount -o remount of a boot partition.
     Remount,
+    /// The helper's journal of recent changes (JSON from `Op::ListTx`).
+    ChangeList,
+    /// Undo of a recorded change.
+    Undo,
 }
 
 #[derive(Debug, Clone)]
@@ -167,11 +176,24 @@ impl Job {
 
 pub struct Batch {
     pub title: String,
-    pub ops: VecDeque<Op>,
+    pub run: batch::Run,
     pub current: Option<u64>,
     pub reload: Vec<Reload>,
     pub then: Option<Box<Action>>,
-    pub done: usize,
+}
+
+impl Batch {
+    /// (operations finished, operations in total).
+    pub fn progress(&self) -> (usize, usize) {
+        self.run.progress()
+    }
+}
+
+/// The newest change the helper recorded for undo.
+#[derive(Debug, Clone)]
+pub struct LastChange {
+    pub tx: String,
+    pub title: String,
 }
 
 #[derive(Default)]
@@ -188,6 +210,20 @@ pub struct ReviewDialog {
     pub reload: Vec<Reload>,
     pub then: Option<Box<Action>>,
     pub expanded: usize,
+    /// Run these operations instead of writing `changes` (which then only illustrate them).
+    pub ops: Option<Vec<Op>>,
+    /// Files that exist but cannot be shown as a diff (root-only).
+    pub unreadable: Vec<PathBuf>,
+    pub notes: Vec<String>,
+    /// Lines per change that make Portage run commands as root (see `danger.rs`).
+    pub warnings: Vec<Vec<crate::danger::Warning>>,
+}
+
+impl ReviewDialog {
+    pub fn new(title: String, changes: Vec<FileChange>, reload: Vec<Reload>, then: Option<Box<Action>>) -> ReviewDialog {
+        let warnings = changes.iter().map(crate::danger::flag_dangerous_lines).collect();
+        ReviewDialog { title, changes, reload, then, expanded: 0, ops: None, unreadable: Vec::new(), notes: Vec::new(), warnings }
+    }
 }
 
 pub struct App {
@@ -204,6 +240,10 @@ pub struct App {
     pub exec: Executor,
     pub jobs: Vec<Job>,
     pub batches: Vec<Batch>,
+    /// The change that can be undone with one click (a multi-file batch that was committed).
+    pub last_change: Option<LastChange>,
+    /// The helper's journal, newest first (loaded on demand: the journal is root-only).
+    pub recent_changes: Option<Vec<TxInfo>>,
     pub captures: HashMap<String, Captured>,
     pub actions: Vec<Action>,
     pub toasts: Vec<Toast>,
@@ -237,6 +277,25 @@ pub struct App {
     boot_mounts_cache: (Instant, Vec<crate::portage::mounts::BootMount>),
     /// Boot partitions PortageHub made writable that go back to read-only after the emerge.
     pub remount_restore: Vec<String>,
+}
+
+/// What a refused write means for a person.
+fn explain_write_error(msg: &str) -> String {
+    match msg.split_once("changed on disk: ") {
+        Some((_, path)) => format!(
+            "{path} was changed outside PortageHub after it was read, so PortageHub left it alone. The settings are being reloaded: make the edit again on the current content."
+        ),
+        None => msg.to_string(),
+    }
+}
+
+/// Settings to read again after a write was refused because a file had changed.
+fn stale_file_reloads(msg: &str) -> Vec<Reload> {
+    if msg.contains("changed on disk: ") {
+        vec![Reload::Config, Reload::MakeConf, Reload::Repos]
+    } else {
+        Vec::new()
+    }
 }
 
 fn world_cache_path() -> PathBuf {
@@ -308,6 +367,8 @@ impl App {
             exec,
             jobs: Vec::new(),
             batches: Vec::new(),
+            last_change: None,
+            recent_changes: None,
             captures: HashMap::new(),
             actions: Vec::new(),
             toasts: Vec::new(),
@@ -434,7 +495,7 @@ impl App {
     pub fn running_count(&self) -> usize {
         self.jobs
             .iter()
-            .filter(|j| j.running() && !matches!(j.kind, JobKind::Capture { .. } | JobKind::WorldCheck | JobKind::BootScan | JobKind::CleanupScan { .. }))
+            .filter(|j| j.running() && !matches!(j.kind, JobKind::Capture { .. } | JobKind::WorldCheck | JobKind::BootScan | JobKind::CleanupScan { .. } | JobKind::ChangeList))
             .count()
             + self.batches.len()
     }
@@ -734,6 +795,10 @@ impl App {
         let Some(id) = ev.id() else { return };
         // Batches first.
         if let Some(bi) = self.batches.iter().position(|b| b.current == Some(id)) {
+            if let Event::Data { text, .. } = &ev {
+                // The id of a transaction the batch just began.
+                self.batches[bi].run.note_data(text.clone());
+            }
             let outcome = match &ev {
                 Event::Ok { .. } => Some(Ok(())),
                 Event::Exit { code: Some(0), .. } => Some(Ok(())),
@@ -901,6 +966,28 @@ impl App {
                     self.toast(ToastKind::Error, format!("{} failed: {}", job.title, job.error.clone().unwrap_or_else(|| job.output().lines().last().unwrap_or("").to_string())));
                 }
             }
+            JobKind::ChangeList => {
+                if let Some(text) = job.lines.iter().map(|l| l.1.as_str()).find(|l| l.starts_with('['))
+                    && let Ok(list) = serde_json::from_str::<Vec<TxInfo>>(text)
+                {
+                    self.recent_changes = Some(list);
+                } else if let Some(e) = &job.error {
+                    self.toast(ToastKind::Error, format!("Could not read the recent changes: {e}"));
+                }
+            }
+            JobKind::Undo => {
+                if ok {
+                    self.toast(ToastKind::Success, format!("{}: done", job.title));
+                    self.last_change = None;
+                } else {
+                    let why = job.error.clone().unwrap_or_else(|| "see the log".into());
+                    self.toast(ToastKind::Error, format!("{} failed: {}", job.title, explain_write_error(&why)));
+                }
+                self.recent_changes = None;
+                if self.exec.root_ready() {
+                    self.list_changes();
+                }
+            }
             JobKind::CleanupScan { tag } => {
                 if job.error.is_none() {
                     let out = job.output();
@@ -947,30 +1034,59 @@ impl App {
     }
 
     fn advance_batch(&mut self, bi: usize, outcome: Result<(), String>) {
-        match outcome {
-            Err(e) => {
-                let b = self.batches.remove(bi);
-                self.toast(ToastKind::Error, format!("{} failed: {e}", b.title));
-                for r in b.reload {
-                    self.spawn_load(r);
+        let step = self.batches[bi].run.advance(outcome);
+        self.run_step(bi, step);
+    }
+
+    fn run_step(&mut self, bi: usize, step: batch::Step) {
+        match step {
+            batch::Step::Send { op, tx } => {
+                let id = self.exec.root_op_tx(op, tx);
+                self.batches[bi].current = Some(id);
+            }
+            batch::Step::Finished(finish) => self.finish_batch(bi, finish),
+        }
+    }
+
+    fn finish_batch(&mut self, bi: usize, finish: batch::Finish) {
+        use batch::Finish;
+        let b = self.batches.remove(bi);
+        let mut reload = b.reload;
+        let mut ok = false;
+        match finish {
+            Finish::Saved { tx, warning } => {
+                ok = true;
+                self.toast(ToastKind::Success, format!("{} — saved", b.title));
+                if let Some(w) = warning {
+                    self.toast(ToastKind::Warn, w);
+                }
+                if let Some(tx) = tx {
+                    self.last_change = Some(LastChange { tx, title: b.title.clone() });
+                    self.recent_changes = None;
                 }
             }
-            Ok(()) => {
-                self.batches[bi].done += 1;
-                if let Some(op) = self.batches[bi].ops.pop_front() {
-                    let id = self.exec.root_op(op);
-                    self.batches[bi].current = Some(id);
-                } else {
-                    let b = self.batches.remove(bi);
-                    self.toast(ToastKind::Success, format!("{} — saved", b.title));
-                    for r in b.reload {
-                        self.spawn_load(r);
-                    }
-                    if let Some(then) = b.then {
-                        self.actions.push(*then);
-                    }
-                }
+            Finish::RolledBack { reason } => {
+                self.toast(ToastKind::Error, format!("{} failed: {}. Nothing was changed: the steps that had run were rolled back.", b.title, explain_write_error(&reason)));
+                reload.extend(stale_file_reloads(&reason));
             }
+            Finish::Failed { reason, rollback_error, tx } => {
+                self.toast(ToastKind::Error, format!("{} failed: {}", b.title, explain_write_error(&reason)));
+                if let Some(e) = rollback_error {
+                    self.toast(ToastKind::Error, format!("Rolling the earlier steps back failed too: {e}. Check /etc/portage before changing anything else."));
+                }
+                if let Some(tx) = tx {
+                    self.last_change = Some(LastChange { tx, title: b.title.clone() });
+                    self.recent_changes = None;
+                }
+                reload.extend(stale_file_reloads(&reason));
+            }
+        }
+        self.config_view.updates = None; // the pending ._cfg list may have changed: scan again when it is shown
+        for r in reload {
+            self.spawn_load(r);
+        }
+        if ok && let Some(then) = b.then {
+            self.actions.push(*then);
         }
     }
 
@@ -1083,11 +1199,16 @@ impl App {
                 self.captures.insert(tag, Captured { job: id, ..Default::default() });
             }
             Action::Batch { title, ops, reload, then } => {
-                let mut ops: VecDeque<Op> = ops.into();
-                if let Some(first) = ops.pop_front() {
-                    let id = self.exec.root_op(first);
-                    self.batches.push(Batch { title, ops, current: Some(id), reload, then, done: 0 });
+                if ops.is_empty() {
+                    return;
                 }
+                // Changes that must land together run in a helper transaction (see batch.rs);
+                // a helper of another version may not know them.
+                let mut run = batch::Run::new(&title, ops, !self.exec.helper_outdated);
+                let first = run.first();
+                self.batches.push(Batch { title, run, current: None, reload, then });
+                let bi = self.batches.len() - 1;
+                self.run_step(bi, first);
             }
             Action::Write { title, changes, reload, then } => {
                 if changes.is_empty() {
@@ -1095,10 +1216,17 @@ impl App {
                     return;
                 }
                 if self.settings.review_writes {
-                    self.review = Some(ReviewDialog { title, changes, reload, then, expanded: 0 });
+                    self.review = Some(ReviewDialog::new(title, changes, reload, then));
                 } else {
                     self.apply_changes(title, changes, reload, then);
                 }
+            }
+            Action::ReviewOps { title, changes, unreadable, notes, ops, reload } => {
+                let mut dialog = ReviewDialog::new(title, changes, reload, None);
+                dialog.ops = Some(ops);
+                dialog.unreadable = unreadable;
+                dialog.notes = notes;
+                self.review = Some(dialog);
             }
             Action::Reload(r) => self.spawn_load(r),
             Action::Toast(k, t) => self.toast(k, t),
@@ -1174,12 +1302,41 @@ impl App {
         let backup = self.settings.backup_on_write;
         let ops = changes
             .into_iter()
-            .map(|c| match c.new {
-                Some(content) => Op::WriteFile { path: c.path.to_string_lossy().to_string(), content, backup },
-                None => Op::DeleteFile { path: c.path.to_string_lossy().to_string() },
+            .map(|c| {
+                // The helper refuses the write when the file is no longer what the GUI read, so a
+                // change made outside PortageHub since then is never silently overwritten.
+                let expect = Some(Expect::of(&c.old));
+                match c.new {
+                    Some(content) => Op::WriteFile { path: c.path.to_string_lossy().to_string(), content, backup, expect },
+                    None => Op::DeleteFile { path: c.path.to_string_lossy().to_string(), expect },
+                }
             })
             .collect();
         self.apply(Action::Batch { title, ops, reload, then });
+    }
+
+    /// Queue the review and write of the changes an edit produced, or tell the user why it
+    /// produced none (a file PortageHub will not edit, for example).
+    pub fn push_write(&mut self, title: impl Into<String>, changes: Result<Vec<FileChange>, String>, reload: Vec<Reload>, then: Option<Box<Action>>) {
+        match changes {
+            Ok(changes) => self.push(Action::Write { title: title.into(), changes, reload, then }),
+            Err(why) => self.toast(ToastKind::Error, why),
+        }
+    }
+
+    /// Ask the helper for its journal (needs the admin session: the journal is root-only).
+    pub fn list_changes(&mut self) {
+        self.push(Action::RootOp { title: "Read recent changes".into(), op: Op::ListTx, kind: JobKind::ChangeList, reload: vec![] });
+    }
+
+    /// Undo a recorded change. Without `force` the helper refuses when a file was changed since.
+    pub fn undo_change(&mut self, tx: &str, title: &str, force: bool) {
+        self.push(Action::RootOp {
+            title: format!("Undo: {title}"),
+            op: Op::Rollback { tx: tx.to_string(), force },
+            kind: JobKind::Undo,
+            reload: vec![Reload::Config, Reload::MakeConf, Reload::Repos, Reload::Kernels],
+        });
     }
 
     /// Boot partitions as currently mounted (refreshed at most every 2 s).
@@ -1262,7 +1419,7 @@ impl App {
                 content.push_str(a);
                 content.push('\n');
             }
-            ops.push(Op::WriteFile { path: format!("/etc/portage/sets/{}", ks.keep_set), content, backup: false });
+            ops.push(Op::WriteFile { path: format!("/etc/portage/sets/{}", ks.keep_set), content, backup: false, expect: None });
             if !ks.keep_set_in_world {
                 ops.push(Op::Run { argv: vec!["emerge".into(), "--noreplace".into(), "--ask=n".into(), format!("@{}", ks.keep_set)], env: vec![], cwd: None });
             }
@@ -1549,7 +1706,14 @@ impl App {
                 });
                 w::subtitle(ui, &review.title);
                 ui.add_space(6.0);
+                for note in &review.notes {
+                    w::callout(ui, ORANGE, icon::INFO, note);
+                    ui.add_space(4.0);
+                }
                 egui::ScrollArea::vertical().max_height(ctx.content_rect().height() * 0.6).show(ui, |ui| {
+                    for path in &review.unreadable {
+                        ui.label(RichText::new(format!("{} {} — cannot be previewed (root-only file)", icon::LOCK, path.display())).color(TEXT_DIM));
+                    }
                     for (i, c) in review.changes.iter().enumerate() {
                         let header = match &c.new {
                             None => format!("{} delete {}", icon::TRASH, c.path.display()),
@@ -1559,6 +1723,9 @@ impl App {
                         let open = review.expanded == i;
                         if ui.selectable_label(open, RichText::new(header).color(WHITE)).clicked() {
                             review.expanded = i;
+                        }
+                        for warning in review.warnings.get(i).into_iter().flatten() {
+                            w::callout(ui, RED, icon::WARNING, &format!("Runs commands as root — {}: {}", warning.why, warning.line));
                         }
                         if open {
                             Frame::new().fill(BG_DEEP).inner_margin(Margin::same(8)).corner_radius(CornerRadius::same(3)).show(ui, |ui| {
@@ -1591,7 +1758,10 @@ impl App {
             });
         if apply {
             let r = self.review.take().unwrap();
-            self.apply_changes(r.title, r.changes, r.reload, r.then);
+            match r.ops {
+                Some(ops) => self.apply(Action::Batch { title: r.title, ops, reload: r.reload, then: r.then }),
+                None => self.apply_changes(r.title, r.changes, r.reload, r.then),
+            }
         } else if cancel {
             self.review = None;
         }

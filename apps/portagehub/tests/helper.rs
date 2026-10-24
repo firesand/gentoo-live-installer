@@ -28,14 +28,14 @@ fn protocol_roundtrip() {
     assert!(matches!(evs.last(), Some(Event::Err { msg, .. }) if msg.contains("not allowed")));
 
     // Path outside /etc/portage.
-    h.send(4, Op::WriteFile { path: "/etc/passwd".into(), content: "x".into(), backup: false });
+    h.send(4, Op::WriteFile { path: "/etc/passwd".into(), content: "x".into(), backup: false, expect: None });
     let evs = h.until(|e| matches!(e, Event::Err { id: 4, .. }), 10);
     assert!(matches!(evs.last(), Some(Event::Err { msg, .. }) if msg.contains("not allowed")));
-    h.send(5, Op::DeleteFile { path: "/etc/portage/../shadow".into() });
+    h.send(5, Op::DeleteFile { path: "/etc/portage/../shadow".into(), expect: None });
     h.until(|e| matches!(e, Event::Err { id: 5, .. }), 10);
 
     // Bad config-update path.
-    h.send(6, Op::ConfigUpdate { path: "/etc/passwd".into(), accept: true });
+    h.send(6, Op::ConfigUpdate { path: "/etc/passwd".into(), accept: true, expect: None });
     h.until(|e| matches!(e, Event::Err { id: 6, .. }), 10);
 
     // Unknown signal target.

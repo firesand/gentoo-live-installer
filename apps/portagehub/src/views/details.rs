@@ -609,7 +609,7 @@ fn version_menu(app: &mut App, ui: &mut Ui, d: &PkgDetail, v: &VersionInfo) {
     ui.label(w::dim("Keywords (package.accept_keywords)"));
     let mut add = |app: &mut App, kind: ConfKind, line: String, title: String| {
         let ch = edits::add_lines(&cfg, &[(kind, line)], &target, None);
-        app.push(Action::Write { title, changes: ch, reload: vec![Reload::Config], then: None });
+        app.push_write(title, ch, vec![Reload::Config], None);
     };
     if v.kw == KwState::Testing || v.ver.is_live() || v.kw == KwState::Missing {
         let kwv = if v.kw == KwState::Testing { format!("~{arch}") } else { "**".to_string() };
@@ -853,13 +853,14 @@ fn use_flags(app: &mut App, ui: &mut Ui, d: &PkgDetail, installed: &[vdb::Instal
                     && let Some(cfg) = &cfg
                 {
                     let changes: Vec<(String, Tri)> = app.detail.use_edits.iter().map(|(k, v)| (k.clone(), *v)).collect();
-                    let fc = edits::set_use_flags(cfg, &atom, &changes, &app.settings.target_file);
+                    let use_expand: Vec<String> = app.data.env.as_ref().map(|e| e.get("USE_EXPAND").split_whitespace().map(String::from).collect()).unwrap_or_default();
+                    let fc = edits::set_use_flags(cfg, &atom, &changes, &app.settings.target_file, &use_expand);
                     let then = if app.detail.rebuild_after && !installed.is_empty() {
                         Some(Box::new(Action::Pretend(EmergeOptions::default().with("--oneshot", Value::On).with("--changed-use", Value::On).targets(&[d.key.as_str()]))))
                     } else {
                         None
                     };
-                    app.push(Action::Write { title: format!("USE flags for {atom}"), changes: fc, reload: vec![Reload::Config], then });
+                    app.push_write(format!("USE flags for {atom}"), fc, vec![Reload::Config], then);
                     app.detail.use_edits.clear();
                 }
                 if w::button(ui, icon::X, "Discard").clicked() {
@@ -1239,8 +1240,8 @@ fn my_settings(app: &mut App, ui: &mut Ui, d: &PkgDetail) {
                 if w::toggle(ui, &mut on).on_hover_text(if on { "Active — click to comment out" } else { "Commented out — click to enable" }).changed() {
                     let mut ne = e.clone();
                     ne.disabled = !on;
-                    let ch = edits::replace_entry(&cfg, path, *idx, Some(ne));
-                    app.push(Action::Write { title: format!("{} {}", if on { "Enable" } else { "Disable" }, e.atom_text), changes: vec![ch], reload: vec![Reload::Config], then: None });
+                    let ch = edits::replace_entry(&cfg, path, *idx, Some(ne)).map(|c| vec![c]);
+                    app.push_write(format!("{} {}", if on { "Enable" } else { "Disable" }, e.atom_text), ch, vec![Reload::Config], None);
                 }
                 ui.label(RichText::new(kind.icon()).color(ACCENT));
                 ui.vertical(|ui| {
@@ -1255,8 +1256,8 @@ fn my_settings(app: &mut App, ui: &mut Ui, d: &PkgDetail) {
                 });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if w::icon_button(ui, icon::TRASH, "Delete this line").clicked() {
-                        let ch = edits::replace_entry(&cfg, path, *idx, None);
-                        app.push(Action::Write { title: format!("Delete {}", e.atom_text), changes: vec![ch], reload: vec![Reload::Config], then: None });
+                        let ch = edits::replace_entry(&cfg, path, *idx, None).map(|c| vec![c]);
+                        app.push_write(format!("Delete {}", e.atom_text), ch, vec![Reload::Config], None);
                     }
                 });
             });
@@ -1347,7 +1348,7 @@ fn my_settings(app: &mut App, ui: &mut Ui, d: &PkgDetail) {
         ui.label(w::dim(format!("Will be written to {}", target.display())));
         if ui.add_enabled(entry.atom.is_some(), egui::Button::new(RichText::new(format!("{}  Add", icon::PLUS)).color(WHITE)).fill(Color32::from_rgb(0x1f, 0x6f, 0xb2))).clicked() {
             let ch = edits::add_lines(&cfg, &[(kind, line.clone())], &app.settings.target_file, None);
-            app.push(Action::Write { title: format!("{}: {line}", kind.file_name()), changes: ch, reload: vec![Reload::Config], then: None });
+            app.push_write(format!("{}: {line}", kind.file_name()), ch, vec![Reload::Config], None);
         }
     });
 }

@@ -9,7 +9,7 @@
 use crate::audit::{Audit, Record};
 use crate::journal::Journal;
 use crate::policy;
-use crate::protocol::{self, Event, KERNEL_STATE_DIRS, Op, Request, StreamKind};
+use crate::protocol::{self, Event, Expect, KERNEL_STATE_DIRS, Op, Request, StreamKind, TxInfo};
 use crate::rootops::{self, at};
 use crate::safefs::Beneath;
 use crate::stream::spawn_streaming;
@@ -58,12 +58,12 @@ pub fn describe(op: &Op) -> String {
             let env: String = env.iter().map(|(k, v)| format!("{k}={v} ")).collect();
             format!("run {env}{}", argv.join(" "))
         }
-        Op::WriteFile { path, content, backup } => format!("write {path} ({} bytes{})", content.len(), if *backup { ", backup" } else { "" }),
-        Op::DeleteFile { path } => format!("delete {path}"),
+        Op::WriteFile { path, content, backup, .. } => format!("write {path} ({} bytes{})", content.len(), if *backup { ", backup" } else { "" }),
+        Op::DeleteFile { path, .. } => format!("delete {path}"),
         Op::Mkdir { path } => format!("mkdir {path}"),
-        Op::Rename { from, to } => format!("rename {from} → {to}"),
+        Op::Rename { from, to, .. } => format!("rename {from} → {to}"),
         Op::Signal { target, signal } => format!("signal {signal} → request {target}"),
-        Op::ConfigUpdate { path, accept } => format!("{} config update {path}", if *accept { "accept" } else { "discard" }),
+        Op::ConfigUpdate { path, accept, .. } => format!("{} config update {path}", if *accept { "accept" } else { "discard" }),
         Op::BootScan => "boot scan".into(),
         Op::BootAction { action, kver } => format!("{}{}", action.label(), kver.as_deref().map(|k| format!(" for {k}")).unwrap_or_default()),
         Op::MarkGood { kver, state_dir, backup } => format!("mark {kver} known-good in {state_dir}{}", if *backup { " (with /boot backup)" } else { "" }),
@@ -73,6 +73,7 @@ pub fn describe(op: &Op) -> String {
         Op::Begin { label } => format!("begin: {label}"),
         Op::Commit { tx } => format!("commit {tx}"),
         Op::Rollback { tx, force } => format!("undo {tx}{}", if *force { " (forced)" } else { "" }),
+        Op::ListTx => "list recent changes".into(),
     };
     if s.len() > 600 {
         let mut cut = 600;
@@ -163,11 +164,11 @@ impl Server {
                 let root = self.root.clone();
                 self.blocking(id, sink, move |log| rootops::clean_build_dirs(&root, log));
             }
-            Op::WriteFile { path, content, backup } => reply(self.write_file(tx, &path, content.as_bytes(), backup)),
-            Op::DeleteFile { path } => reply(self.delete_file(tx, &path)),
+            Op::WriteFile { path, content, backup, expect } => reply(self.write_file(tx, &path, content.as_bytes(), backup, expect)),
+            Op::DeleteFile { path, expect } => reply(self.delete_file(tx, &path, expect)),
             Op::Mkdir { path } => reply(self.mkdir(tx, &path)),
-            Op::Rename { from, to } => reply(self.rename(tx, &from, &to)),
-            Op::ConfigUpdate { path, accept } => reply(self.config_update(tx, &path, accept)),
+            Op::Rename { from, to, expect } => reply(self.rename(tx, &from, &to, expect)),
+            Op::ConfigUpdate { path, accept, expect } => reply(self.config_update(tx, &path, accept, expect)),
             Op::Signal { target, signal } => {
                 let pid = self.pgids.lock().unwrap().get(&target).copied();
                 match pid {
@@ -186,6 +187,10 @@ impl Server {
                 }
                 Err(e) => reply(Err(format!("cannot start a transaction: {e}"))),
             },
+            Op::ListTx => {
+                sink(Event::Data { id, text: serde_json::to_string(&self.list_tx()).unwrap_or_else(|_| "[]".into()) });
+                reply(Ok(()));
+            }
             Op::Commit { tx: t } => reply(self.commit(id, &t)),
             Op::Rollback { tx: t, force } => match self.journal.rollback(&t, force, &|p| self.confine(p)) {
                 Ok((m, done)) => {
@@ -293,12 +298,41 @@ impl Server {
         Ok((base, rel))
     }
 
-    pub fn write_file(&self, tx: Option<&str>, path: &str, content: &[u8], backup: bool) -> Result<(), String> {
+    /// Recent transactions, newest first (the journal itself is root-only).
+    pub fn list_tx(&self) -> Vec<TxInfo> {
+        self.journal
+            .list()
+            .into_iter()
+            .map(|m| TxInfo {
+                files: m.files(),
+                id: m.id,
+                label: m.label,
+                created: m.created,
+                state: match m.state {
+                    crate::journal::TxState::Open => "open",
+                    crate::journal::TxState::Committed => "committed",
+                    crate::journal::TxState::RolledBack => "rolled_back",
+                }
+                .into(),
+            })
+            .collect()
+    }
+
+    /// Refuse when the file is no longer what the caller last saw, so a change made outside
+    /// PortageHub in the meantime is never silently overwritten (or deleted, or moved).
+    fn check_expect(b: &Beneath, rel: &Path, path: &str, expect: Option<Expect>) -> Result<(), String> {
+        let Some(expect) = expect else { return Ok(()) };
+        let current = b.read(rel).map_err(es)?;
+        if expect.holds(current.as_deref()) { Ok(()) } else { Err(format!("changed on disk: {path}")) }
+    }
+
+    pub fn write_file(&self, tx: Option<&str>, path: &str, content: &[u8], backup: bool, expect: Option<Expect>) -> Result<(), String> {
         const P: &str = "/etc/portage";
         let (b, rel) = self.portage(path)?;
         if b.is_dir(&rel).map_err(es)? {
             return Err(format!("{path} is a directory"));
         }
+        Server::check_expect(&b, &rel, path, expect)?;
         self.in_tx(tx, &format!("write {path}"), |t| {
             self.record_new_dirs(t, &b, P, &rel, false)?;
             if backup && let Some(old) = b.read(&rel).map_err(es)? {
@@ -314,7 +348,7 @@ impl Server {
         })
     }
 
-    fn delete_file(&self, tx: Option<&str>, path: &str) -> Result<(), String> {
+    fn delete_file(&self, tx: Option<&str>, path: &str, expect: Option<Expect>) -> Result<(), String> {
         let (b, rel) = self.portage(path)?;
         if b.is_dir(&rel).map_err(es)? {
             return Err(format!("{path} is a directory"));
@@ -322,6 +356,7 @@ impl Server {
         if !b.exists(&rel).map_err(es)? {
             return Err(format!("{path} does not exist"));
         }
+        Server::check_expect(&b, &rel, path, expect)?;
         self.in_tx(tx, &format!("delete {path}"), |t| {
             self.record(t, "/etc/portage", &b, &rel)?;
             b.unlink(&rel).map_err(es)
@@ -339,7 +374,7 @@ impl Server {
         })
     }
 
-    fn rename(&self, tx: Option<&str>, from: &str, to: &str) -> Result<(), String> {
+    fn rename(&self, tx: Option<&str>, from: &str, to: &str, expect: Option<Expect>) -> Result<(), String> {
         const P: &str = "/etc/portage";
         let (b, fr) = self.portage(from)?;
         let (_, tr) = self.portage(to)?;
@@ -352,6 +387,7 @@ impl Server {
         if b.is_dir(&fr).map_err(es)? {
             return Err(format!("{from} is a directory; only files can be moved"));
         }
+        Server::check_expect(&b, &fr, from, expect)?;
         self.in_tx(tx, &format!("rename {from} → {to}"), |t| {
             self.record_new_dirs(t, &b, P, &tr, false)?;
             self.record(t, P, &b, &fr)?;
@@ -360,12 +396,16 @@ impl Server {
         })
     }
 
-    fn config_update(&self, tx: Option<&str>, path: &str, accept: bool) -> Result<(), String> {
+    fn config_update(&self, tx: Option<&str>, path: &str, accept: bool, expect: Option<Expect>) -> Result<(), String> {
         const E: &str = "/etc";
         let (upd, target) = protocol::config_update_paths(path).ok_or_else(|| format!("not a config update file: {path}"))?;
         let b = Beneath::open(&at(&self.root, E)).map_err(|e| format!("/etc: {e}"))?;
         if !b.exists(&upd).map_err(es)? || b.is_dir(&upd).map_err(es)? {
             return Err(format!("{path} does not exist"));
+        }
+        if accept {
+            // The diff the user approved was against the file as it was then.
+            Server::check_expect(&b, &target, &format!("/etc/{}", target.display()), expect)?;
         }
         let label = format!("{} config update {path}", if accept { "accept" } else { "discard" });
         self.in_tx(tx, &label, |t| {

@@ -22,6 +22,11 @@ pub struct Assignment {
 pub struct MakeConf {
     pub files: Vec<(PathBuf, String)>,
     pub assignments: Vec<Assignment>,
+    /// Files that could not be read as UTF-8 text, and why. They contribute no assignments and
+    /// must never be rewritten: the editor would start from an empty text.
+    pub unreadable: Vec<(PathBuf, String)>,
+    /// Files that are symlinks: read as usual, but the helper never writes through one.
+    pub symlinks: Vec<PathBuf>,
 }
 
 impl MakeConf {
@@ -49,6 +54,14 @@ impl MakeConf {
 
     pub fn main_file(&self) -> PathBuf {
         self.files.first().map(|f| f.0.clone()).unwrap_or_else(|| PathBuf::from(MAKE_CONF))
+    }
+
+    /// Why `file` must not be edited, if it must not.
+    pub fn edit_blocked(&self, file: &Path) -> Option<String> {
+        if let Some((_, why)) = self.unreadable.iter().find(|(p, _)| p == file) {
+            return Some(why.clone());
+        }
+        self.symlinks.iter().any(|p| p == file).then(|| super::config::symlink_message(file))
     }
 
     pub fn text_of(&self, file: &Path) -> &str {
@@ -196,7 +209,16 @@ pub fn load() -> MakeConf {
     let mut mc = MakeConf::default();
     let mut vars: HashMap<String, String> = HashMap::new();
     for f in files {
-        let text = std::fs::read_to_string(&f).unwrap_or_default();
+        if std::fs::symlink_metadata(&f).is_ok_and(|m| m.file_type().is_symlink()) {
+            mc.symlinks.push(f.clone());
+        }
+        let text = match super::config::read_utf8(&f) {
+            Ok(t) => t,
+            Err(why) => {
+                mc.unreadable.push((f, why));
+                continue;
+            }
+        };
         for (name, value, span) in scan(&text) {
             let expanded = expand(&value, &vars).split_whitespace().collect::<Vec<_>>().join(" ");
             let self_ref = value.contains(&format!("${{{name}}}")) || value.contains(&format!("${name}"));
