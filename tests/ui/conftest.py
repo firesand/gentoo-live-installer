@@ -14,6 +14,28 @@ from pathlib import Path
 from typing import Callable
 
 import pytest
+from PySide6.QtCore import QTimer
+from PySide6.QtWidgets import QApplication
+
+
+@pytest.fixture(autouse=True)
+def no_stuck_dialogs(qapp):
+    """A modal dialog nobody answers would hang the whole run: close it after
+    a moment and fail the test that opened it."""
+    seen: list[str] = []
+
+    def watch() -> None:
+        modal = QApplication.activeModalWidget()
+        if modal is not None:
+            seen.append(modal.windowTitle() or type(modal).__name__)
+            modal.reject()
+
+    timer = QTimer()
+    timer.timeout.connect(watch)
+    timer.start(1500)
+    yield
+    timer.stop()
+    assert not seen, f"a test left a modal dialog open: {seen}"
 
 
 @pytest.fixture(autouse=True)

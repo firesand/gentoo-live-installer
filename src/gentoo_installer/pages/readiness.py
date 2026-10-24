@@ -210,7 +210,8 @@ class ReadinessPage(Page):
             text = ", ".join(f"{disk.path} ({disk.size_text})" for disk in with_identity)
             extra = [disk for disk in usable if disk not in with_identity]
             if extra:
-                text += f" · {len(extra)} more without a serial number need your explicit approval on the Storage page"
+                many = len(extra) != 1
+                text += f" · {len(extra)} more disk{'s' if many else ''} without a serial number {'need' if many else 'needs'} your explicit approval on the Storage page"
             row.set_status("ok", text)
         elif approvable:
             names = ", ".join(f"{disk.path} ({disk.size_text})" for disk in approvable)

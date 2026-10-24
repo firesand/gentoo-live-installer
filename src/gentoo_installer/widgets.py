@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Callable
 
 from PySide6.QtCore import QObject, Qt, Signal
-from PySide6.QtGui import QAccessible, QAccessibleStateChangeEvent
+from PySide6.QtGui import QAccessible, QAccessibleActionInterface, QAccessibleStateChangeEvent
 from PySide6.QtWidgets import (
     QAbstractButton,
     QAccessibleWidget,
@@ -134,10 +134,10 @@ class ChoiceCardAccessible(QAccessibleWidget):
         return state
 
     def actionNames(self):
-        return [QAccessible.pressAction()]
+        return [QAccessibleActionInterface.pressAction()]
 
     def doAction(self, action_name: str) -> bool:
-        if action_name == QAccessible.pressAction() and self._card().isEnabled():
+        if action_name == QAccessibleActionInterface.pressAction() and self._card().isEnabled():
             self._card().setChecked(True)
             return True
         return False
