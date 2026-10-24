@@ -272,10 +272,12 @@ fn backup_kernel(root: &Path, kver: &str, previous: &str, log: &dyn Fn(String), 
     // Only the new last-good and the previous known-good are worth their space.
     for e in std::fs::read_dir(at(root, "/boot/kernel-backup")).into_iter().flatten().flatten() {
         let name = e.file_name().to_string_lossy().to_string();
-        if name != kver && name != previous && e.file_type().is_ok_and(|t| t.is_dir()) {
-            if boot.remove_tree(&Path::new("kernel-backup").join(&name)).is_ok() {
-                log(format!("removed the old backup /boot/kernel-backup/{name}"));
-            }
+        if name != kver
+            && name != previous
+            && e.file_type().is_ok_and(|t| t.is_dir())
+            && boot.remove_tree(&Path::new("kernel-backup").join(&name)).is_ok()
+        {
+            log(format!("removed the old backup /boot/kernel-backup/{name}"));
         }
     }
     Ok(())

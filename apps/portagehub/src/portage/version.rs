@@ -99,10 +99,6 @@ impl Version {
         self.numbers.iter().any(|n| n.len() >= 4 && n.bytes().all(|b| b == b'9'))
     }
 
-    pub fn is_prerelease(&self) -> bool {
-        self.suffixes.iter().any(|(s, _)| *s < Suffix::P)
-    }
-
     /// `~` operator: equal ignoring revision.
     pub fn eq_ignoring_revision(&self, other: &Version) -> bool {
         let mut a = self.clone();

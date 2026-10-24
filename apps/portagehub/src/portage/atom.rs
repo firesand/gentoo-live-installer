@@ -45,8 +45,6 @@ impl Op {
             Op::Gt => "Newer than (>)",
         }
     }
-
-    pub const ALL: [Op; 8] = [Op::Any, Op::Eq, Op::EqGlob, Op::Tilde, Op::Ge, Op::Gt, Op::Le, Op::Lt];
 }
 
 #[derive(Debug, Clone)]

@@ -9,6 +9,9 @@ use crate::ui::widgets as w;
 use egui::{Color32, CornerRadius, FontId, Margin, RichText, Sense, Ui};
 use egui_phosphor::regular as icon;
 
+/// A group of updates in the update list: its heading and which packages belong to it.
+type UpdGroup = (&'static str, fn(&crate::data::UpdState) -> bool);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Page {
     #[default]
@@ -153,7 +156,7 @@ fn home(app: &mut App, ui: &mut Ui) {
             .as_ref()
             .map(|c| {
                 let mut v: Vec<(String, usize)> = c.categories.iter().map(|(k, v)| (k.clone(), v.len())).collect();
-                v.sort_by(|a, b| b.1.cmp(&a.1));
+                v.sort_by_key(|x| std::cmp::Reverse(x.1));
                 v.into_iter().take(18).collect()
             })
             .unwrap_or_default();
@@ -313,7 +316,7 @@ fn updates_section(app: &mut App, ui: &mut Ui) {
                 ui.label(w::dim(format!("{} Everything installed is at the newest version you allow.", icon::CHECK_CIRCLE)));
             } else {
                 // One list, top to bottom, grouped by what emerge does with each package.
-                let groups: [(&str, fn(&UpdState) -> bool); 5] = [
+                let groups: [UpdGroup; 5] = [
                     ("In the @world update", |s| matches!(s, UpdState::WillUpdate)),
                     ("Not checked with emerge yet", |s| matches!(s, UpdState::Unknown)),
                     ("Skipped by emerge", |s| matches!(s, UpdState::Skipped(_))),

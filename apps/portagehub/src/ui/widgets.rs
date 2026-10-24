@@ -3,7 +3,7 @@
 
 use super::theme::{self, *};
 use egui::{
-    Align2, Color32, CornerRadius, FontId, Frame, Margin, Pos2, Rect, Response, RichText, Sense, Stroke, Ui, Vec2, WidgetInfo,
+    Align2, Color32, CornerRadius, FontId, Frame, Margin, Pos2, Rect, Response, RichText, Sense, Stroke, Ui, WidgetInfo,
     WidgetType, epaint::Mesh,
 };
 use egui_phosphor::regular as icon;
@@ -323,7 +323,7 @@ pub fn side_item(ui: &mut Ui, icon_s: &str, text: &str, selected: bool, count: O
     } else if resp.hovered() {
         p.rect_filled(rect, 0.0, Color32::from_rgb(0x2a, 0x34, 0x42));
     }
-    let col = if selected { WHITE } else if resp.hovered() { WHITE } else { TEXT };
+    let col = if selected || resp.hovered() { WHITE } else { TEXT };
     p.text(Pos2::new(rect.left() + 12.0, rect.center().y), Align2::LEFT_CENTER, icon_s, FontId::proportional(15.0), if selected { WHITE } else { ACCENT_DIM });
     let max_text = rect.width() - 50.0 - if count.is_some() { 40.0 } else { 0.0 };
     let g = ui.painter().layout(text.to_string(), FontId::proportional(13.5), col, max_text);
@@ -453,12 +453,3 @@ pub fn link(ui: &mut Ui, text: &str, url: &str) -> Response {
     r.on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
-pub fn spacer(ui: &mut Ui, h: f32) {
-    ui.add_space(h);
-}
-
-pub fn vsep(ui: &mut Ui) {
-    let r = ui.available_rect_before_wrap();
-    let (rect, _) = ui.allocate_exact_size(Vec2::new(1.0, r.height().min(22.0)), Sense::hover());
-    ui.painter().vline(rect.center().x, rect.y_range(), Stroke::new(1.0, LINE));
-}

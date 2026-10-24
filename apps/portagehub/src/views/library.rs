@@ -327,7 +327,7 @@ fn library_home(app: &mut App, ui: &mut Ui) {
         if let Some(h) = history {
             w::section(ui, "Longest builds on this machine");
             let mut longest: Vec<(String, std::time::Duration)> = h.by_key.keys().filter_map(|k| h.estimate(k).map(|d| (k.clone(), d))).collect();
-            longest.sort_by(|a, b| b.1.cmp(&a.1));
+            longest.sort_by_key(|x| std::cmp::Reverse(x.1));
             let max = longest.first().map(|x| x.1.as_secs_f32()).unwrap_or(1.0).max(1.0);
             for (k, d) in longest.iter().take(12) {
                 ui.horizontal(|ui| {
@@ -406,11 +406,9 @@ mod tests {
         let base = State::default();
         let k0 = row_key(&base, &v, None, None);
         assert_eq!(k0, row_key(&base, &v, None, None));
-        let mut s = State::default();
-        s.query = "vim".into();
+        let s = State { query: "vim".into(), ..State::default() };
         assert_ne!(k0, row_key(&s, &v, None, None));
-        let mut s = State::default();
-        s.filter = Filter::World;
+        let s = State { filter: Filter::World, ..State::default() };
         assert_ne!(k0, row_key(&s, &v, None, None));
         let mut s = State::default();
         s.collapsed.insert("dev-libs".into());

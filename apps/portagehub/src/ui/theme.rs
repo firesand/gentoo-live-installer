@@ -33,7 +33,6 @@ pub const GRAD_GREEN: (Color32, Color32) = (Color32::from_rgb(0x75, 0xb0, 0x22),
 pub const GRAD_BLUE: (Color32, Color32) = (Color32::from_rgb(0x47, 0xbf, 0xff), Color32::from_rgb(0x1a, 0x44, 0xc2));
 pub const GRAD_GREY: (Color32, Color32) = (Color32::from_rgb(0x3d, 0x4c, 0x5d), Color32::from_rgb(0x2a, 0x35, 0x43));
 pub const GRAD_RED: (Color32, Color32) = (Color32::from_rgb(0xc8, 0x4b, 0x4b), Color32::from_rgb(0x8a, 0x22, 0x22));
-pub const GRAD_ORANGE: (Color32, Color32) = (Color32::from_rgb(0xe8, 0x9a, 0x2e), Color32::from_rgb(0xa8, 0x5d, 0x12));
 
 pub fn bold() -> FontFamily {
     FontFamily::Name("bold".into())

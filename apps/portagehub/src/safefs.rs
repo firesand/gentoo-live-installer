@@ -26,7 +26,7 @@ struct Entry {
 fn entry_of(parent: &OwnedFd, name: &CString) -> Option<Entry> {
     let mut st: libc::stat = unsafe { std::mem::zeroed() };
     let rc = unsafe { libc::fstatat(parent.as_raw_fd(), name.as_ptr(), &mut st, libc::AT_SYMLINK_NOFOLLOW) };
-    (rc == 0).then(|| Entry {
+    (rc == 0).then_some(Entry {
         mode: st.st_mode & 0o7777,
         dir: (st.st_mode & libc::S_IFMT) == libc::S_IFDIR,
         symlink: (st.st_mode & libc::S_IFMT) == libc::S_IFLNK,

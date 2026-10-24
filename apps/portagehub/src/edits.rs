@@ -75,7 +75,7 @@ pub fn add_lines(cfg: &PortageConfig, lines: &[(ConfKind, String)], file_name: &
 
 pub fn replace_entry(cfg: &PortageConfig, path: &Path, idx: usize, entry: Option<Entry>) -> Result<FileChange, String> {
     let f = conf_file(cfg, path)?;
-    let new = config::replace_line(&f, idx, entry.map(Line::Entry));
+    let new = config::replace_line(&f, idx, entry.map(|e| Line::Entry(Box::new(e))));
     Ok(FileChange { path: path.to_path_buf(), old: f.raw.clone(), new: Some(new) })
 }
 
@@ -403,9 +403,9 @@ mod tests {
         let st = user_use_state(&cfg, "media-libs", "mesa");
         assert_eq!(st.keys().collect::<Vec<_>>(), vec!["video_cards_radeon"], "{st:?}");
         let st = user_use_state(&cfg, "dev-python", "foo");
-        assert_eq!(st["test"].0, true);
-        assert_eq!(st["python_targets_python3_12"].0, true);
-        assert_eq!(st["python_targets_python3_11"].0, false);
+        assert!(st["test"].0);
+        assert!(st["python_targets_python3_12"].0);
+        assert!(!st["python_targets_python3_11"].0);
         assert!(!st.contains_key("python3_12"), "bare token names must not leak: {st:?}");
     }
 
@@ -469,8 +469,7 @@ mod tests {
         assert!(f.edit_blocked().unwrap().contains("symlink"));
         let cfg = PortageConfig { sets: vec![ConfSet { kind: ConfKind::Use, base: d.clone(), exists: true, is_dir: true, symlink: false, files: vec![f] }], ..Default::default() };
         assert!(replace_entry(&cfg, &d.join("link"), 0, None).unwrap_err().contains("symlink"));
-        let mut root = PortageConfig::default();
-        root.root_symlink = true;
+        let root = PortageConfig { root_symlink: true, ..Default::default() };
         assert!(add_lines(&root, &[(ConfKind::Use, "app-misc/a x".into())], "zz", None).unwrap_err().contains("/etc/portage is a symlink"));
         let _ = std::fs::remove_dir_all(&d);
     }

@@ -235,20 +235,18 @@ fn repo_card(app: &mut App, ui: &mut Ui, r: &Repo, ebuilds: Option<usize>) {
                     }
                 });
             }
-            if save && let Some((name, keys)) = app.overlays.editing.take() {
-                if let Some(file) = r.user_file() {
-                    match crate::portage::config::read_utf8(file) {
-                        Ok(old) => {
-                            let new = repos::replace_section(&old, &name, Some(&repos::render_section(&name, &keys)));
-                            app.push(Action::Write {
-                                title: format!("Update repository {name}"),
-                                changes: vec![FileChange { path: file.to_path_buf(), old, new: Some(new) }],
-                                reload: vec![Reload::Repos],
-                                then: None,
-                            });
-                        }
-                        Err(why) => app.toast(crate::app::ToastKind::Error, why),
+            if save && let Some((name, keys)) = app.overlays.editing.take() && let Some(file) = r.user_file() {
+                match crate::portage::config::read_utf8(file) {
+                    Ok(old) => {
+                        let new = repos::replace_section(&old, &name, Some(&repos::render_section(&name, &keys)));
+                        app.push(Action::Write {
+                            title: format!("Update repository {name}"),
+                            changes: vec![FileChange { path: file.to_path_buf(), old, new: Some(new) }],
+                            reload: vec![Reload::Repos],
+                            then: None,
+                        });
                     }
+                    Err(why) => app.toast(crate::app::ToastKind::Error, why),
                 }
             }
             if cancel {

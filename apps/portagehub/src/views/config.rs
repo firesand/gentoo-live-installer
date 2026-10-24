@@ -557,10 +557,8 @@ fn wizard(app: &mut App, ui: &mut Ui, kind: ConfKind, set: &ConfSet) {
                 let q = wz.query.trim().to_lowercase();
                 if !q.is_empty() && wz.key.as_deref() != Some(q.as_str()) {
                     ui.horizontal_wrapped(|ui| {
-                        if q.contains('*') || q.contains('/') {
-                            if ui.small_button(format!("use “{q}”")).clicked() {
-                                wz.key = Some(q.clone());
-                            }
+                        if (q.contains('*') || q.contains('/')) && ui.small_button(format!("use “{q}”")).clicked() {
+                            wz.key = Some(q.clone());
                         }
                         if let Some(c) = &catalog {
                             let mut n = 0;
@@ -756,7 +754,7 @@ fn make_conf(app: &mut App, ui: &mut Ui) {
             let names = mc.sourced.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", ");
             w::callout(ui, ACCENT, icon::INFO, &format!("make.conf also reads {names} (source): variables may come from there too and override what is shown here."));
         }
-        let mut set = |app: &mut App, name: &str, value: String| {
+        let set = |app: &mut App, name: &str, value: String| {
             match makeconf::set_var(&text, name, &value) {
                 Ok(new) => app.push(Action::Write { title: format!("Set {name} in make.conf"), changes: vec![FileChange { path: file.clone(), old: text.clone(), new: Some(new) }], reload: vec![Reload::MakeConf, Reload::Env], then: None }),
                 Err(why) => app.toast(crate::app::ToastKind::Error, why),
@@ -1096,7 +1094,7 @@ fn env_files(app: &mut App, ui: &mut Ui) {
         ui.horizontal_wrapped(|ui| {
             for (name, desc, content) in ENV_TEMPLATES {
                 let exists = cfg.env_files.iter().any(|e| e.name == *name);
-                if ui.add_enabled(!exists, egui::Button::new(format!("{name}"))).on_hover_text(format!("{desc}\n\n{content}")).clicked() {
+                if ui.add_enabled(!exists, egui::Button::new(name.to_string())).on_hover_text(format!("{desc}\n\n{content}")).clicked() {
                     app.push(Action::Write { title: format!("Create env/{name}"), changes: vec![FileChange { path: PathBuf::from(format!("/etc/portage/env/{name}")), old: String::new(), new: Some(format!("# {desc}\n{content}")) }], reload: vec![Reload::Config], then: None });
                 }
             }

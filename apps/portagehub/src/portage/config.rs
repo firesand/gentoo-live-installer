@@ -339,7 +339,7 @@ pub fn describe_atom(a: &Atom) -> String {
 pub enum Line {
     Blank,
     Comment(String),
-    Entry(Entry),
+    Entry(Box<Entry>),
 }
 
 pub fn parse_line(raw: &str) -> Line {
@@ -375,9 +375,9 @@ pub fn parse_line_as(kind: ConfKind, raw: &str) -> Line {
     }
     if !disabled && first.starts_with('@') {
         // Sets may include other sets.
-        return Line::Entry(Entry { atom_text: first.to_string(), atom: None, values: toks.map(String::from).collect(), comment, disabled });
+        return Line::Entry(Box::new(Entry { atom_text: first.to_string(), atom: None, values: toks.map(String::from).collect(), comment, disabled }));
     }
-    Line::Entry(Entry { atom_text: first.to_string(), atom, values: toks.map(String::from).collect(), comment, disabled })
+    Line::Entry(Box::new(Entry { atom_text: first.to_string(), atom, values: toks.map(String::from).collect(), comment, disabled }))
 }
 
 #[derive(Debug, Clone)]
@@ -423,7 +423,7 @@ impl ConfFile {
 
     pub fn entries(&self) -> impl Iterator<Item = (usize, &Entry)> {
         self.lines.iter().enumerate().filter_map(|(i, l)| match l {
-            Line::Entry(e) => Some((i, e)),
+            Line::Entry(e) => Some((i, &**e)),
             _ => None,
         })
     }

@@ -31,6 +31,8 @@ fn fstat(fd: i32) -> Option<libc::stat> {
     (unsafe { libc::fstat(fd, &mut st) } == 0).then_some(st)
 }
 
+// st_dev/st_ino are u64 on x86_64 but narrower on some 32-bit targets: keep the casts portable.
+#[allow(clippy::unnecessary_cast)]
 fn stream_id(fd: i32) -> Option<StreamId> {
     let st = fstat(fd)?;
     Some(StreamId { is_socket: st.st_mode & libc::S_IFMT == libc::S_IFSOCK, dev: st.st_dev as u64, ino: st.st_ino as u64 })

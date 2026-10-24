@@ -205,10 +205,6 @@ impl Executor {
         id
     }
 
-    pub fn root_op(&mut self, op: Op) -> u64 {
-        self.root_op_tx(op, None)
-    }
-
     /// A root operation that belongs to transaction `tx` (from `Op::Begin`).
     pub fn root_op_tx(&mut self, op: Op, tx: Option<String>) -> u64 {
         let id = self.alloc_id();
@@ -218,11 +214,6 @@ impl Executor {
 
     pub fn root_op_with_id(&mut self, id: u64, op: Op) {
         self.submit_root(Request::new(id, op));
-    }
-
-    /// Does the running helper understand `op`?
-    pub fn supports(&self, op: &Op) -> bool {
-        self.is_root || op.min_helper() <= self.helper_version
     }
 
     pub fn cancel(&mut self, id: u64, privilege: Priv, signal: i32) {

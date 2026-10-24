@@ -446,7 +446,7 @@ fn find_held_back(vdb: &Vdb, cfg: Option<&PortageConfig>, cands: &mut [UpdateCan
     if let Some(sets) = cfg.and_then(|c| c.set(ConfKind::Sets)) {
         for f in sets.files.iter().filter(|f| !f.ignored) {
             let name = format!("@{}", f.rel);
-            if !vdb.world_sets.iter().any(|w| *w == name) {
+            if !vdb.world_sets.contains(&name) {
                 continue;
             }
             for (_, e) in f.entries() {

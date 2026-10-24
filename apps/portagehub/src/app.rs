@@ -88,7 +88,6 @@ pub enum Action {
     /// The confirmation is not optional, whatever the "review changes" setting says.
     ReviewOps { title: String, changes: Vec<FileChange>, unreadable: Vec<PathBuf>, notes: Vec<String>, ops: Vec<Op>, reload: Vec<Reload> },
     Reload(Reload),
-    Toast(ToastKind, String),
     Cancel(u64),
     /// Stop with SIGINT now, SIGTERM after ten seconds and SIGKILL after ten more if it still runs.
     ForceStop(u64),
@@ -107,7 +106,7 @@ pub enum Action {
 pub enum JobKind {
     Generic,
     Pretend { opts: EmergeOptions },
-    Emerge { opts: EmergeOptions, tracker: Box<Tracker> },
+    Emerge { tracker: Box<Tracker> },
     Sync,
     Capture { tag: String },
     /// Background `emerge -uDN @world --pretend` for the Store's update list.
@@ -208,7 +207,6 @@ pub struct Captured {
     pub output: String,
     pub code: Option<i32>,
     pub done: bool,
-    pub job: u64,
 }
 
 pub struct ReviewDialog {
@@ -475,11 +473,10 @@ impl App {
         }
         let tracker = Box::new(Tracker::new(&planned, &history));
         let id = self.exec.alloc_id();
-        let opts = EmergeOptions::default().targets(&["@demo"]);
         self.jobs.push(Job {
             id,
             title: "emerge --update @demo (demo)".into(),
-            kind: JobKind::Emerge { opts, tracker },
+            kind: JobKind::Emerge { tracker },
             privilege: Priv::User,
             argv: vec!["emerge".into(), "@demo".into()],
             lines: Arc::default(),
@@ -1306,7 +1303,7 @@ impl App {
                 let mut env = opts.env.clone();
                 env.retain(|(_, v)| !v.is_empty());
                 let title = format!("emerge {}", opts.args().join(" "));
-                let kind = if opts.action == crate::portage::emerge::Action::Sync { JobKind::Sync } else { JobKind::Emerge { opts: opts.clone(), tracker } };
+                let kind = if opts.action == crate::portage::emerge::Action::Sync { JobKind::Sync } else { JobKind::Emerge { tracker } };
                 let id = self.start_job(title, argv, env, Priv::Root, kind, vec![]);
                 self.emerge.active_job = Some(id);
                 self.emerge.page = views::emerge::Page::Activity;
@@ -1317,8 +1314,8 @@ impl App {
                 self.emerge.selected_job = Some(id);
             }
             Action::Capture { tag, argv, privilege } => {
-                let id = self.start_job(format!("{}", argv.join(" ")), argv, vec![], privilege, JobKind::Capture { tag: tag.clone() }, vec![]);
-                self.captures.insert(tag, Captured { job: id, ..Default::default() });
+                self.start_job(argv.join(" "), argv, vec![], privilege, JobKind::Capture { tag: tag.clone() }, vec![]);
+                self.captures.insert(tag, Captured::default());
             }
             Action::Batch { title, ops, reload, then } => {
                 if ops.is_empty() {
@@ -1351,7 +1348,6 @@ impl App {
                 self.review = Some(dialog);
             }
             Action::Reload(r) => self.spawn_load(r),
-            Action::Toast(k, t) => self.toast(k, t),
             Action::Cancel(id) => {
                 if let Some(j) = self.jobs.iter().find(|j| j.id == id) {
                     let p = j.privilege;

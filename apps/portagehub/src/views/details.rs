@@ -20,6 +20,11 @@ use egui_phosphor::regular as icon;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::{Arc, Mutex};
 
+/// (package, what depends on it) pairs.
+type DepPairs = Vec<(String, String)>;
+/// The USE flags of one group with their state in the user's configuration.
+type FlagRows = Vec<(String, Option<bool>)>;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum DTab {
     #[default]
@@ -56,7 +61,7 @@ pub struct State {
     pub deps_active: bool,
     pub files_filter: String,
     files: Option<(String, Arc<Vec<ContentEntry>>)>,
-    rdeps: Option<(String, Shared<Vec<(String, String)>>)>,
+    rdeps: Option<(String, Shared<DepPairs>)>,
     pub quick_kind: Option<ConfKind>,
     pub quick_value: String,
     pub quick_atom: String,
@@ -149,7 +154,7 @@ pub fn show(app: &mut App, ui: &mut Ui, back: bool) {
         DTab::Overview => overview(app, ui, &detail, &installed),
         DTab::Versions => versions(app, ui, &detail),
         DTab::Use => use_flags(app, ui, &detail, &installed),
-        DTab::Deps => deps(app, ui, &detail, &installed),
+        DTab::Deps => deps(app, ui, &detail),
         DTab::Ebuild => ebuild(app, ui, &detail),
         DTab::Files => files(app, ui, &installed),
         DTab::History => history(app, ui, &key),
@@ -605,7 +610,7 @@ fn version_menu(app: &mut App, ui: &mut Ui, d: &PkgDetail, v: &VersionInfo) {
     let Some(cfg) = app.data.config.clone() else { return };
     ui.separator();
     ui.label(w::dim("Keywords (package.accept_keywords)"));
-    let mut add = |app: &mut App, kind: ConfKind, line: String, title: String| {
+    let add = |app: &mut App, kind: ConfKind, line: String, title: String| {
         let ch = edits::add_lines(&cfg, &[(kind, line)], &target, None);
         app.push_write(title, ch, vec![Reload::Config], None);
     };
@@ -740,7 +745,7 @@ fn use_flags(app: &mut App, ui: &mut Ui, d: &PkgDetail, installed: &[vdb::Instal
         return;
     }
     // Group USE_EXPAND flags.
-    let mut groups: BTreeMap<String, Vec<(String, Option<bool>)>> = BTreeMap::new();
+    let mut groups: BTreeMap<String, FlagRows> = BTreeMap::new();
     for (f, def) in iuse {
         let g = usedesc
             .as_ref()
@@ -755,7 +760,7 @@ fn use_flags(app: &mut App, ui: &mut Ui, d: &PkgDetail, installed: &[vdb::Instal
         UseScope::Version => format!("={}", v.cpv(&d.key)),
     };
     let required_use = v.meta.get("REQUIRED_USE").to_string();
-    let mut ordered: Vec<(&String, &Vec<(String, Option<bool>)>)> = groups.iter().collect();
+    let mut ordered: Vec<(&String, &FlagRows)> = groups.iter().collect();
     ordered.sort_by_key(|(g, _)| (g.as_str() != "Features", g.to_string()));
     for (g, flags) in ordered {
         let shown: Vec<_> = flags.iter().filter(|(f, _)| filter.is_empty() || f.contains(&filter)).collect();
@@ -871,7 +876,7 @@ fn use_flags(app: &mut App, ui: &mut Ui, d: &PkgDetail, installed: &[vdb::Instal
     });
 }
 
-fn deps(app: &mut App, ui: &mut Ui, d: &PkgDetail, installed: &[vdb::Installed]) {
+fn deps(app: &mut App, ui: &mut Ui, d: &PkgDetail) {
     if d.versions.is_empty() {
         return;
     }

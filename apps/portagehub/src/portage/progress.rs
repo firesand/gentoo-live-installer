@@ -40,7 +40,6 @@ impl Stage {
 pub struct Item {
     pub cpv: String,
     pub key: String,
-    pub repo: String,
     pub stage: Stage,
     /// Build phase reported by the build log (unpack, configure, compile …).
     pub phase: String,
@@ -90,7 +89,6 @@ pub struct Tracker {
     pub last_status: String,
     pub jobs_line: String,
     pub messages_for: Vec<String>,
-    pub failed_log: Vec<String>,
 }
 
 fn rx(cell: &'static OnceLock<Regex>, p: &str) -> &'static Regex {
@@ -102,13 +100,12 @@ impl Tracker {
     pub fn new(planned: &[(String, String, bool)], history: &History) -> Tracker {
         let items = planned
             .iter()
-            .map(|(cpv, repo, binary)| {
+            .map(|(cpv, _, binary)| {
                 let key = split_cpv(cpv).map(|(c, p, _)| format!("{c}/{p}")).unwrap_or_else(|| cpv.clone());
                 let (estimate, known) = if *binary { (Duration::from_secs(20), true) } else { history.estimate_or_default(&key) };
                 Item {
                     cpv: cpv.clone(),
                     key,
-                    repo: repo.clone(),
                     stage: Stage::Queued,
                     phase: String::new(),
                     started: None,
@@ -127,7 +124,6 @@ impl Tracker {
             last_status: "Starting emerge…".into(),
             jobs_line: String::new(),
             messages_for: Vec::new(),
-            failed_log: Vec::new(),
         }
     }
 
@@ -140,7 +136,6 @@ impl Tracker {
         self.items.push(Item {
             cpv: cpv.to_string(),
             key,
-            repo: String::new(),
             stage: Stage::Queued,
             phase: String::new(),
             started: None,

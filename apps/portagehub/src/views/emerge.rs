@@ -37,8 +37,6 @@ pub struct State {
     pub target_input: String,
     pub log_filter: String,
     pub log_errors_only: bool,
-    pub follow: bool,
-    pub show_raw: bool,
     pub confirm_dangerous: bool,
     /// The lines of the shown job that pass the output filter, kept between frames.
     pub log_cache: Option<LogCache>,
@@ -1080,7 +1078,10 @@ fn plan_table(app: &mut App, ui: &mut Ui, plan: &Plan) {
                 }
             });
             let change = if e.old.is_empty() { e.version.clone() } else { format!("{} → {}", e.old.join(", ").split("::").next().unwrap_or(""), e.version) };
-            ui.label(RichText::new(change).color(TEXT));
+            let version = ui.label(RichText::new(change).color(TEXT));
+            if !e.size.is_empty() {
+                version.on_hover_text(format!("Download: {}", e.size));
+            }
             if matches!(e.kind, EntryType::Ebuild | EntryType::Binary) {
                 let (d, known) = if e.kind == EntryType::Binary { (std::time::Duration::from_secs(20), true) } else { history.estimate_or_default(&e.key) };
                 ui.label(RichText::new(format!("{}{}", fmt_duration(d), if known { "" } else { "?" })).color(if known { TEXT } else { TEXT_FAINT }));

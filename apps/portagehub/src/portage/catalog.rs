@@ -226,12 +226,8 @@ fn description_re() -> &'static regex::Regex {
     RE.get_or_init(|| regex::Regex::new(r#"(?s)<longdescription(?:\s+lang="en")?\s*>(.*?)</longdescription>"#).expect("category description pattern"))
 }
 
-/// Category descriptions from `<repo>/<category>/metadata.xml`.
-pub fn category_description(repo_loc: &Path, category: &str) -> Option<String> {
-    category_description_with(repo_loc, category, &|p| std::fs::read_to_string(p).ok())
-}
-
-/// [`category_description`] with the file reader injected (tests).
+/// The description of a category from `<repo>/<category>/metadata.xml`, with the file reader
+/// injected (so tests need no repository).
 pub fn category_description_with(repo_loc: &Path, category: &str, read: &dyn Fn(&Path) -> Option<String>) -> Option<String> {
     let t = read(&repo_loc.join(category).join("metadata.xml"))?;
     let c = description_re().captures(&t)?;

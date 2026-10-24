@@ -13,8 +13,6 @@ pub struct Assignment {
     pub value: String,
     pub expanded: String,
     pub file: PathBuf,
-    /// Byte range of the whole assignment in the file text.
-    pub span: (usize, usize),
     pub self_ref: bool,
 }
 
@@ -300,11 +298,11 @@ pub fn load() -> MakeConf {
         if let Some(problem) = parsed.problem {
             mc.problems.push((f.clone(), problem));
         }
-        for (name, value, span) in parsed.assignments {
+        for (name, value, _) in parsed.assignments {
             let expanded = expand(&value, &vars).split_whitespace().collect::<Vec<_>>().join(" ");
             let self_ref = value.contains(&format!("${{{name}}}")) || value.contains(&format!("${name}"));
             vars.insert(name.clone(), expanded.clone());
-            mc.assignments.push(Assignment { name, value, expanded, file: f.clone(), span, self_ref });
+            mc.assignments.push(Assignment { name, value, expanded, file: f.clone(), self_ref });
         }
         mc.files.push((f, text));
     }
@@ -320,7 +318,7 @@ pub fn set_var(text: &str, name: &str, value: &str) -> Result<String, String> {
         return Err(format!("make.conf cannot be edited here: {problem}. Fix it in the text editor first."));
     }
     let quoted = format!("{name}=\"{}\"", value.replace('\\', "\\\\").replace('"', "\\\""));
-    let found = scanned.assignments.into_iter().filter(|(n, v, _)| n == name && !v.contains(&format!("${{{name}}}")) && !v.contains(&format!("${name}"))).next_back();
+    let found = scanned.assignments.into_iter().rfind(|(n, v, _)| n == name && !v.contains(&format!("${{{name}}}")) && !v.contains(&format!("${name}")));
     Ok(match found {
         Some((_, _, (s, e))) => format!("{}{}{}", &text[..s], quoted, &text[e..]),
         None => {

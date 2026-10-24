@@ -7,7 +7,7 @@ use std::collections::HashSet;
 #[derive(Debug, Clone)]
 pub enum DepNode {
     /// A leaf token; `atom` is filled in when the token parses as an atom.
-    Leaf { text: String, atom: Option<Atom> },
+    Leaf { text: String, atom: Option<Box<Atom>> },
     UseCond { flag: String, negate: bool, children: Vec<DepNode> },
     AnyOf(Vec<DepNode>),
     ExactlyOne(Vec<DepNode>),
@@ -64,7 +64,7 @@ fn parse_list(tokens: &[&str], pos: &mut usize) -> Vec<DepNode> {
             }
             t => {
                 *pos += 1;
-                out.push(DepNode::Leaf { text: t.to_string(), atom: Atom::parse(t) });
+                out.push(DepNode::Leaf { text: t.to_string(), atom: Atom::parse(t).map(Box::new) });
             }
         }
     }
@@ -76,7 +76,7 @@ fn parse_list(tokens: &[&str], pos: &mut usize) -> Vec<DepNode> {
 pub fn collect_atoms<'a>(nodes: &'a [DepNode], enabled: Option<&HashSet<String>>, out: &mut Vec<&'a Atom>) {
     for n in nodes {
         match n {
-            DepNode::Leaf { atom: Some(a), .. } => out.push(a),
+            DepNode::Leaf { atom: Some(a), .. } => out.push(&**a),
             DepNode::Leaf { .. } => {}
             DepNode::UseCond { flag, negate, children } => {
                 let active = match enabled {
@@ -100,7 +100,7 @@ pub fn collect_atoms<'a>(nodes: &'a [DepNode], enabled: Option<&HashSet<String>>
 pub fn collect_required_atoms<'a>(nodes: &'a [DepNode], out: &mut Vec<&'a Atom>) {
     for n in nodes {
         match n {
-            DepNode::Leaf { atom: Some(a), .. } => out.push(a),
+            DepNode::Leaf { atom: Some(a), .. } => out.push(&**a),
             DepNode::Leaf { .. } => {}
             DepNode::UseCond { children, .. } | DepNode::All(children) => collect_required_atoms(children, out),
             DepNode::AnyOf(_) | DepNode::ExactlyOne(_) | DepNode::AtMostOne(_) => {}

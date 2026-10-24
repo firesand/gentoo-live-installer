@@ -199,8 +199,7 @@ mod tests {
         let got = Arc::new(std::sync::Mutex::new(Vec::new()));
         let g = got.clone();
         pump(7, StreamKind::Stdout, input, Arc::new(move |e| g.lock().unwrap().push(e)));
-        let v = got.lock().unwrap().clone();
-        v
+        std::mem::take(&mut *got.lock().unwrap())
     }
 
     #[test]
