@@ -246,6 +246,7 @@ class InstallFollower:
         self.interactive = interactive
         self.quiet_until = quiet_until
         self.run_state = _Run()
+        self._quiet_noted = False  # the "nothing reported" note is printed once per quiet stretch, not at every timeout
 
     # --- the loop --------------------------------------------------------------------------------
 
@@ -295,7 +296,9 @@ class InstallFollower:
             if job == "running" and not state.supports("attach.v1"):
                 return self._wait_for_old_service()
             if job == "running" and silent:
-                self.sink.note(f"Nothing has been reported for {self.daemon.read_timeout:.0f} seconds; the installation is still running (long builds are quiet). Waiting on...")
+                if not self._quiet_noted:
+                    self.sink.note(f"Nothing has been reported for {self.daemon.read_timeout:.0f} seconds; the installation is still running (long builds are quiet). Waiting on...")
+                    self._quiet_noted = True
                 return 0, final_attach
             if job == "running":
                 self.sink.note("The connection to the installer service was lost, but the installation is still running. Reconnecting...")
@@ -343,6 +346,7 @@ class InstallFollower:
                 return False  # replayed after a reconnect
             run.last_seq = max(run.last_seq, seq)
         run.events += 1
+        self._quiet_noted = False
         data = event_data(event)
         if event.get("job_id"):
             run.job_id = str(event["job_id"])

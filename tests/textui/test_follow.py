@@ -336,3 +336,16 @@ def test_a_progress_message_with_a_big_payload_is_shown_without_it(installer, ho
     follower, script = follower_for(fake, host)
     follower.run(start_request())
     assert "[  5%]   System readiness checked" in script.text and "aaaa" not in script.text
+
+
+def test_a_long_quiet_stretch_is_reported_once_and_again_after_the_next_event(installer, host: FakeHost) -> None:
+    fake = installer()
+    fake.state["status"] = "running"  # the service says the job is still going on
+    follower, script = follower_for(fake, host)
+    follower.daemon.read_timeout = 90.0
+    for _ in range(5):  # five read timeouts in a row, as in a very long compile
+        assert follower._after_drop({"action": "attach"}, 0, 0, False, True) == (0, False)
+    assert script.text.count("Nothing has been reported for 90 seconds") == 1
+    follower._handle(log("a line at last"))
+    follower._after_drop({"action": "attach"}, 1, 0, False, True)
+    assert script.text.count("Nothing has been reported for 90 seconds") == 2
