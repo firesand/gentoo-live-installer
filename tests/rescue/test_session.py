@@ -190,6 +190,38 @@ def test_executing_the_write_transition_switches_to_read_write(lab_factory) -> N
     assert not any(lab.system.ro.values())
 
 
+def test_every_member_device_of_the_root_is_unprotected_and_made_writable_together(lab_factory) -> None:
+    lab = lab_factory(lf.xfs_external_log())
+    lab.add_tree("/dev/sda2", "gentoo", firmware="uefi", fstab=f"UUID={fr.ROOT_UUID} / xfs noatime 0 1\n")
+    session = lab.session("/dev/sda2")
+    session.mount_ro(lab.graph_obj)
+    flagged = {entry.data["device"]: entry.data["purpose"] for entry in session.ledger.of_kind("blockro")}
+    assert flagged["/dev/sda2"] == "session" and flagged["/dev/sdb1"] == "session"  # the external log is part of the file system (review R7c)
+    assert flagged["/dev/sdc"] == "protect" and "/dev/sdb" not in flagged and "/dev/sda" not in flagged
+    mount_root = lab.system.commands_named("mount")[0]
+    assert mount_root[:3] == ("mount", "-t", "xfs") and "logdev=/dev/sdb1" in mount_root[4].split(",") and mount_root[5:] == ("/dev/sda2", session.root)
+    displays = [step.display for step in session.enter_write_steps(with_virtual=False)]
+    assert displays[2:4] == ["blockdev --setrw /dev/sda2", "blockdev --setrw /dev/sdb1"]
+    assert displays[-1].startswith("mount -t xfs -o rw,logdev=/dev/sdb1,nodev,nosuid /dev/sda2 ")
+    run_all(session, session.enter_write_steps(with_virtual=False))
+    assert lab.system.ro["/dev/sda2"] is False and lab.system.ro["/dev/sdb1"] is False and lab.system.ro["/dev/sdc"] is True
+    leave = [step.display for step in session.leave_write_steps()]
+    assert "blockdev --setro /dev/sda2" in leave and "blockdev --setro /dev/sdb1" in leave
+    assert session.release().complete and not any(lab.system.ro.values())
+
+
+def test_a_btrfs_raid_root_keeps_all_of_its_disks_writable(lab_factory) -> None:
+    lab = lab_factory(lf.btrfs_multi_device())
+    lab.add_tree("/dev/sda1", "arch", firmware="uefi", fstab=f"UUID={fr.ROOT_UUID} / btrfs subvol=@,noatime 0 0\n")
+    lab.system.subvolumes["/dev/sda1"] = {5: "", 256: ""}
+    session = lab.session("/dev/sda1", rootflags="subvolid=256")
+    session.mount_ro(lab.graph_obj)
+    flagged = {entry.data["device"]: entry.data["purpose"] for entry in session.ledger.of_kind("blockro")}
+    assert flagged == {"/dev/sda1": "session", "/dev/sdb1": "session"}  # the second disk is not "another disk": it is flagged with the file system, not protected
+    assert ("blockdev", "--setrw", "/dev/sdb1") in [step.argv for step in session.enter_write_steps(with_virtual=False)]
+    assert session.release().complete and not any(lab.system.ro.values())
+
+
 def test_file_steps_are_refused_in_a_read_only_session(lab_factory) -> None:
     from gentoo_installerd.rescue.plan import Step
 

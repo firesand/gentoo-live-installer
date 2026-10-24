@@ -182,6 +182,17 @@ def btrfs_multi_device() -> str:
     )
 
 
+def xfs_external_log() -> str:
+    """XFS root whose log lives on a partition of a second disk (it shares the file system's UUID), plus an unrelated third disk."""
+    root_disk = sata_disk("a", 0, 100 * GiB, [
+        part("sda", 1, 512 * MiB, 8, 0, fstype="vfat", uuid=fr.ESP_UUID, parttype=ESP, pttype="gpt"),
+        part("sda", 2, 90 * GiB, 8, 0, fstype="xfs", uuid=fr.ROOT_UUID, parttype=LINUX_ROOT, pttype="gpt"),
+    ])
+    log_disk = sata_disk("b", 1, 8 * GiB, [part("sdb", 1, 1 * GiB, 8, 1, fstype="xfs_external_log", uuid=fr.ROOT_UUID, parttype=LINUX_FS, pttype="gpt")])
+    other = sata_disk("c", 2, 500 * GiB, [part("sdc", 1, 500 * GiB, 8, 2, fstype="ext4", uuid=fr.HOME_UUID, parttype=LINUX_FS, pttype="gpt")])
+    return lsblk(root_disk, log_disk, other)
+
+
 def usb_live_hybrid() -> str:
     """The live USB stick (iso9660 + appended EFI partition) next to an internal disk with a Linux root."""
     stick = node("sdb", "disk", 16 * GiB, maj_min="8:16", tran="usb", model="Cruzer", serial="USB0001", hotplug=True, rm=True, pttype="dos", ptuuid="12345678", children=[
@@ -252,6 +263,6 @@ def exotic_filesystems() -> str:
 SCENARIOS = {
     "plain_sata_mbr": plain_sata_mbr, "nvme_dualboot": nvme_dualboot, "debian_cloud": debian_cloud, "fedora_cloud_btrfs": fedora_cloud_btrfs, "ubuntu_lvm": ubuntu_lvm,
     "luks_lvm_ext4": luks_lvm_ext4, "luks_btrfs": luks_btrfs, "md_raid1_under_lvm": md_raid1_under_lvm, "md_raid1_unassembled": md_raid1_unassembled,
-    "lvm_inactive": lvm_inactive, "btrfs_multi_device": btrfs_multi_device, "usb_live_hybrid": usb_live_hybrid, "ventoy_live": ventoy_live,
+    "lvm_inactive": lvm_inactive, "btrfs_multi_device": btrfs_multi_device, "xfs_external_log": xfs_external_log, "usb_live_hybrid": usb_live_hybrid, "ventoy_live": ventoy_live,
     "desktop_automount": desktop_automount, "cloned_uuids": cloned_uuids, "legacy_null": legacy_null, "windows_only": windows_only, "exotic_filesystems": exotic_filesystems,
 }

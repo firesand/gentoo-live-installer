@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Iterable
 
 from .devices import GPT_ESP, MBR_ESP, GPT_XBOOTLDR, DeviceGraph, DeviceNode
@@ -76,6 +76,11 @@ class RootSpec:
     uuid: str = ""
     rootflags: str = ""  # "" or "subvolid=N"
     node_id: str = ""
+    options: list[str] = field(default_factory=list)  # device options of the root's fstab entry that exist here (logdev=, rtdev=, journal_path=, device=)
+    extra_devices: list[str] = field(default_factory=list)  # the other devices of the same file system: btrfs members, external logs (review R7c)
+
+    def identity(self) -> dict[str, Any]:
+        return {"device": self.device, "fstype": self.fstype, "uuid": self.uuid, "rootflags": self.rootflags, "options": self.options, "extra_devices": self.extra_devices}
 
     @property
     def subvolid(self) -> int | None:
@@ -101,21 +106,28 @@ class MountPlan:
 
     @property
     def digest(self) -> str:
-        document = {
-            "root": {"device": self.root.device, "fstype": self.root.fstype, "uuid": self.root.uuid, "rootflags": self.root.rootflags},
-            "items": [item.identity() for item in self.selected], "allow_write": self.allow_write,
-        }
+        document = {"root": self.root.identity(), "items": [item.identity() for item in self.selected], "allow_write": self.allow_write}
         return hashlib.sha256(json.dumps(document, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
 
     def devices(self) -> list[str]:
-        found = [self.root.device]
+        """Every device the repair session may write to: each selected file system with all of its member devices."""
+        found = [self.root.device, *self.root.extra_devices]
         for item in self.selected:
             found.extend([item.device, *item.extra_devices])
         return list(dict.fromkeys(found))
 
+    def members_of(self, device: str) -> list[str]:
+        """The device and the other devices of its file system (the set that must be made writable together)."""
+        if device == self.root.device:
+            return list(dict.fromkeys([device, *self.root.extra_devices]))
+        for item in self.items:
+            if item.device == device:
+                return list(dict.fromkeys([device, *item.extra_devices]))
+        return [device]
+
     def to_dict(self) -> dict[str, Any]:
         return {
-            "digest": self.digest, "root": {"device": self.root.device, "fstype": self.root.fstype, "uuid": self.root.uuid, "rootflags": self.root.rootflags},
+            "digest": self.digest, "root": self.root.identity(),
             "items": [item.to_dict() for item in self.items], "unresolved": self.unresolved, "suggestions": self.suggestions, "warnings": self.warnings,
             "allow_write": self.allow_write, "ignored_options": self.ignored_options,
         }
@@ -155,6 +167,54 @@ def _node_unusable_reason(node: DeviceNode) -> str:
     return ""
 
 
+def _external_logs(node: DeviceNode, graph: DeviceGraph) -> list[DeviceNode]:
+    if node.fstype != "xfs" or not node.uuid:
+        return []
+    return [log for log in graph.by_uuid(node.uuid, include_logs=True) if log.fstype == "xfs_external_log" and log.path != node.path]
+
+
+def _present_device_options(carried: list[str], graph: DeviceGraph, node: DeviceNode, warnings: list[str], where: str) -> list[str]:
+    """Device options (``logdev=``) are kept only when the device exists here: names change between the installed system and the live one.
+
+    An XFS external log is found again by the UUID it shares with its file system, so the option is repaired or added when exactly one log matches.
+    """
+    logs = _external_logs(node, graph)
+    kept: list[str] = []
+    for option in carried:
+        key, _, value = option.partition("=")
+        if key in DEVICE_OPTIONS and value.startswith("/dev/"):
+            try:
+                graph.find(value)
+            except LookupError:
+                if key == "logdev" and len(logs) == 1:
+                    warnings.append(f"{where}: the log device {value} is now {logs[0].path}.")
+                    kept.append(f"logdev={logs[0].path}")
+                else:
+                    warnings.append(f"{where}: the option {option} names a device that is not present here ({value}); it is not used and the mount may fail.")
+                continue
+        kept.append(option)
+    if len(logs) == 1 and not any(option.startswith("logdev=") for option in kept):
+        warnings.append(f"{where}: this XFS file system keeps its log on {logs[0].path}; it is mounted with logdev={logs[0].path}.")
+        kept.append(f"logdev={logs[0].path}")
+    return kept
+
+
+def _complete_root(root: RootSpec, fstab: Fstab, node: DeviceNode, graph: DeviceGraph, warnings: list[str]) -> RootSpec:
+    """The root's own fstab entry can name an external log or other member devices; they are mounted and unprotected together with it."""
+    options = list(root.options)
+    if not options:
+        entry = next((item for item in fstab.entries if _normalise_mountpoint(item.file) == "/"), None)
+        if entry is not None:
+            try:
+                carried, _dropped = filter_options(entry.options, node.fstype)
+            except ValueError:
+                carried = []
+            options = [option for option in carried if option.partition("=")[0] in DEVICE_OPTIONS]
+    options = _present_device_options(options, graph, node, warnings, "/")
+    extras = list(root.extra_devices) or [path for path in _extra_devices(options, graph, node) if path != node.path]
+    return replace(root, options=options, extra_devices=list(dict.fromkeys(extras)))
+
+
 def _extra_devices(carried: list[str], graph: DeviceGraph, node: DeviceNode) -> list[str]:
     extras: list[str] = []
     for option in carried:
@@ -163,7 +223,8 @@ def _extra_devices(carried: list[str], graph: DeviceGraph, node: DeviceNode) -> 
             extras.append(value)
     if node.fstype == "btrfs" and node.uuid:
         extras.extend(member.path for member in graph.by_uuid(node.uuid) if member.fstype == "btrfs" and member.path != node.path)
-    return extras
+    extras.extend(log.path for log in _external_logs(node, graph))
+    return list(dict.fromkeys(extras))
 
 
 def plan_mounts(
@@ -184,6 +245,7 @@ def plan_mounts(
     chosen_tier4 = set(include_tier4)
     plan = MountPlan(root, [], allow_write=allow_write)
     root_node = graph.find(root.device)
+    plan.root = _complete_root(root, fstab, root_node, graph, plan.warnings)
     plan.root_node_keys = [node.key for node in graph.stack_of(root_node)]
     resolved = resolve_all(fstab, graph, crypttab=crypttab)
     claimed = {root_node.key}
@@ -222,6 +284,7 @@ def plan_mounts(
             plan.unresolved.append({"mountpoint": mountpoint, "spec": entry.spec, "status": "unusable", "reason": str(exc), "tier": tier})
             continue
         plan.ignored_options.extend(f"{mountpoint}: {name}" for name in dropped)
+        carried = _present_device_options(carried, graph, node, plan.warnings, mountpoint)
         selected = tier in {TIER_BOOT, TIER_SYSTEM} or mountpoint in chosen_tier4
         plan.items.append(MountItem(mountpoint, node.path, node.fstype, carried, tier, "fstab", node.id, selected, False, _extra_devices(carried, graph, node), position))
         claimed.add(node.key)

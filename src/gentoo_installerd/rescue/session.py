@@ -239,7 +239,7 @@ class RescueSession:
 
     def _mount_root(self) -> None:
         spec = self.plan.root
-        rung = mount_readonly(self.runner, spec.device, spec.fstype, self.root, subvolid=spec.subvolid, noexec=not self.allow_write, allow_degraded=self.allow_degraded,
+        rung = mount_readonly(self.runner, spec.device, spec.fstype, self.root, extra=spec.options, subvolid=spec.subvolid, noexec=not self.allow_write, allow_degraded=self.allow_degraded,
                               available=self.env.host.filesystems() or None)
         self.ledger.add("mount", path=self.root, mountpoint="/", device=spec.device, fs=spec.fstype, tier=TIER_ROOT, rw=False, rung=rung, recursive=False)
         if rung:
@@ -314,7 +314,7 @@ class RescueSession:
         steps: list[Step] = [Step("w-idle", "internal", "Check that no terminal is open and no other step is running", handler="check-idle", group=group)]
         for index, entry in enumerate(reversed(self._mount_entries())):
             steps.append(self._umount_step(entry, f"w-umount-{index}", group))
-        rw_devices = [self.plan.root.device] + [device for item in self.plan.selected if item.tier <= TIER_SYSTEM for device in [item.device, *item.extra_devices]]
+        rw_devices = [self.plan.root.device, *self.plan.root.extra_devices] + [device for item in self.plan.selected if item.tier <= TIER_SYSTEM for device in [item.device, *item.extra_devices]]
         for index, device in enumerate(dict.fromkeys(rw_devices)):
             steps.append(Step(f"w-setrw-{index}", "host", f"blockdev --setrw {device}", ("blockdev", "--setrw", device), timeout=20, group=group,
                               effect={"kind": "blockro", "device": device, "ro_now": False}))
@@ -331,8 +331,8 @@ class RescueSession:
         steps: list[Step] = [Step("l-idle", "internal", "Check that no terminal is open and no other step is running", handler="check-idle", group=group)]
         for index, entry in enumerate(reversed(self._mount_entries())):
             steps.append(self._umount_step(entry, f"l-umount-{index}", group))
-        devices = [self.plan.root.device] + [device for item in self.plan.selected for device in [item.device, *item.extra_devices]]
-        for index, device in enumerate(dict.fromkeys(devices)):
+        devices = self.plan.devices()
+        for index, device in enumerate(devices):
             steps.append(Step(f"l-setro-{index}", "host", f"blockdev --setro {device}", ("blockdev", "--setro", device), timeout=20, group=group, effect={"kind": "blockro", "device": device, "ro_now": True}))
         steps.extend(self.mount_steps(rw=False, group=group))
         return steps
@@ -344,7 +344,7 @@ class RescueSession:
         harden = ["nodev", "nosuid"] + ([] if self.allow_write else ["noexec"])
         if root:
             flag = "rw" if rw else "ro"
-            options = [flag, *([f"subvolid={spec.subvolid}"] if spec.subvolid is not None else []), *self._skip_options(spec.fstype, rw), *harden]
+            options = [flag, *([f"subvolid={spec.subvolid}"] if spec.subvolid is not None else []), *spec.options, *self._skip_options(spec.fstype, rw), *harden]
             argv = ("mount", "-t", mount_type(spec.fstype), "-o", ",".join(options), spec.device, self.root)
             steps.append(Step(f"{group}-mount-root", "host", " ".join(argv), argv, timeout=120, group=group, mountpoint="/", atomic=False,
                               effect={"kind": "mount_add", "path": self.root, "mountpoint": "/", "device": spec.device, "fs": spec.fstype, "tier": TIER_ROOT, "rw": rw}))
@@ -691,7 +691,7 @@ class RescueSession:
 def session_from_state(env: SessionEnv, raw: dict[str, Any], graph: DeviceGraph | None = None) -> RescueSession:
     """Re-create a session object from its state file (adoption after a restart, or in --local mode)."""
     root = raw["root"]
-    spec = RootSpec(root["device"], root["fstype"], root.get("uuid", ""), root.get("rootflags", ""))
+    spec = RootSpec(root["device"], root["fstype"], root.get("uuid", ""), root.get("rootflags", ""), options=list(root.get("options", [])), extra_devices=list(root.get("extra_devices", [])))
     items = [MountItem(item["mountpoint"], item["device"], item["fstype"], [o for o in item.get("options", "").split(",") if o], int(item["tier"]), item.get("source", "fstab"),
                        selected=item.get("selected", True), needs_mkdir=item.get("needs_mkdir", False), extra_devices=item.get("extra_devices", [])) for item in raw.get("items", [])]
     plan = MountPlan(spec, items, allow_write=raw.get("allow_write", True))

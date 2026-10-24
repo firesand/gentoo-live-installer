@@ -181,9 +181,10 @@ class DeviceGraph:
         """Whole disks below which this node lives (a node can sit on several disks)."""
         return [item for item in ([node] + self.ancestors(node)) if item.type in {"disk", "loop"} and not self.parents_of(item)]
 
-    def by_uuid(self, uuid: str) -> list[DeviceNode]:
+    def by_uuid(self, uuid: str, *, include_logs: bool = False) -> list[DeviceNode]:
+        """Devices with this UUID. An XFS external log carries the UUID of the file system it belongs to; it is never what fstab means."""
         wanted = uuid.lower()
-        return [node for node in self if node.uuid and node.uuid.lower() == wanted]
+        return [node for node in self if node.uuid and node.uuid.lower() == wanted and (include_logs or node.fstype != "xfs_external_log")]
 
     def by_label(self, label: str) -> list[DeviceNode]:
         return [node for node in self if node.label and node.label == label]

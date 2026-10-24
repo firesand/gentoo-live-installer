@@ -46,11 +46,11 @@ def test_ubuntu_lvm_plan_orders_parents_first(tmp_path: Path) -> None:
     fstab = (f"UUID={fr.ROOT_UUID} / ext4 defaults 0 1\nUUID={fr.ESP_UUID} /boot/efi vfat umask=0077 0 1\nUUID={fr.BOOT_UUID} /boot ext4 defaults 0 2\n"
              "/dev/mapper/ubuntu--vg-ubuntu--lv /home ext4 defaults 0 2\n")
     plan, _ = make_plan(tmp_path, "ubuntu", lf.ubuntu_lvm(), "/dev/mapper/ubuntu--vg-ubuntu--lv", fstab=fstab, mounts=["/boot", "/boot/efi", "/home"])
-    assert [item.mountpoint for item in plan.items] == ["/boot", "/home", "/boot/efi"] or [item.mountpoint for item in plan.items][:2] == ["/boot", "/home"]
+    assert [item.mountpoint for item in plan.items] == ["/boot", "/home", "/boot/efi"]  # the same depth keeps fstab order, /boot/efi comes after its parent
     order = [item.mountpoint for item in plan.selected]
     assert order.index("/boot") < order.index("/boot/efi")
     home = [item for item in plan.items if item.mountpoint == "/home"]
-    assert not home or home[0].selected is False
+    assert len(home) == 1 and home[0].selected is False
 
 
 def test_tier4_data_is_listed_but_off_until_ticked(tmp_path: Path) -> None:
@@ -177,15 +177,34 @@ def test_missing_fstab_suggests_the_esp_on_the_roots_disk(tmp_path: Path) -> Non
 
 
 def test_btrfs_multi_device_members_are_part_of_the_plan_devices(tmp_path: Path) -> None:
-    graph = build_graph(lf.btrfs_multi_device())
-    root = fr.make_root(tmp_path / "r", "arch")
-    node = graph.find("/dev/sda1")
-    spec = RootSpec(node.path, "btrfs", node.uuid, "subvolid=256", node.id)
-    from gentoo_installerd.rescue.mountplan import _extra_devices
-    assert _extra_devices([], graph, node) == ["/dev/sdb1"]
-    with RootFS(root) as fs:
-        plan = plan_mounts(spec, fs, Fstab.parse(""), [], graph)
-    assert plan.root.rootflags == "subvolid=256"
+    fstab = f"UUID={fr.ROOT_UUID} / btrfs subvol=@,noatime 0 0\n"
+    plan, _ = make_plan(tmp_path, "arch", lf.btrfs_multi_device(), "/dev/sda1", fstab=fstab, rootflags="subvolid=256")
+    assert plan.root.rootflags == "subvolid=256" and plan.root.extra_devices == ["/dev/sdb1"]
+    assert plan.devices() == ["/dev/sda1", "/dev/sdb1"]  # every member is flagged, made writable and allowed together (review R7c)
+    assert plan.members_of("/dev/sda1") == ["/dev/sda1", "/dev/sdb1"] and plan.members_of("/dev/sdz9") == ["/dev/sdz9"]
+    assert plan.to_dict()["root"]["extra_devices"] == ["/dev/sdb1"]
+    other, _ = make_plan(tmp_path / "x", "arch", lf.btrfs_multi_device(), "/dev/sda1", fstab=fstab, rootflags="subvolid=256")
+    assert other.digest == plan.digest
+
+
+def test_xfs_external_log_is_found_by_uuid_and_never_taken_for_the_file_system(tmp_path: Path) -> None:
+    fstab = f"UUID={fr.ROOT_UUID} / xfs noatime 0 1\n"
+    plan, _ = make_plan(tmp_path, "gentoo", lf.xfs_external_log(), "/dev/sda2", fstab=fstab)
+    assert plan.root.options == ["logdev=/dev/sdb1"] and plan.root.extra_devices == ["/dev/sdb1"] and plan.devices() == ["/dev/sda2", "/dev/sdb1"]
+    assert any("keeps its log on /dev/sdb1" in warning for warning in plan.warnings)
+    graph = build_graph(lf.xfs_external_log())
+    assert [node.path for node in graph.by_uuid(fr.ROOT_UUID)] == ["/dev/sda2"]  # the log shares the UUID but is not a candidate for UUID= lookups
+    assert {node.path for node in graph.by_uuid(fr.ROOT_UUID, include_logs=True)} == {"/dev/sda2", "/dev/sdb1"}
+
+
+def test_a_renamed_log_device_is_repaired_and_a_missing_one_is_dropped_with_a_warning(tmp_path: Path) -> None:
+    renamed, _ = make_plan(tmp_path, "gentoo", lf.xfs_external_log(), "/dev/sda2", fstab=f"UUID={fr.ROOT_UUID} / xfs logdev=/dev/sdz9,noatime 0 1\n")
+    assert renamed.root.options == ["logdev=/dev/sdb1"] and any("is now /dev/sdb1" in warning for warning in renamed.warnings)
+    present, _ = make_plan(tmp_path / "p", "gentoo", lf.xfs_external_log(), "/dev/sda2", fstab=f"UUID={fr.ROOT_UUID} / xfs logdev=/dev/sdb1 0 1\n")
+    assert present.root.options == ["logdev=/dev/sdb1"] and not [w for w in present.warnings if "log" in w]
+    plain, _ = make_plan(tmp_path / "q", "gentoo", lf.plain_sata_mbr(), "/dev/sda1", fstab=f"UUID={fr.ROOT_UUID} / ext4 logdev=/dev/sdz9,noatime 0 1\n")
+    assert plain.root.options == [] and plain.root.extra_devices == []
+    assert [w for w in plain.warnings if "option logdev=/dev/sdz9 names a device that is not present here" in w]
 
 
 def test_digest_is_stable_and_changes_with_the_plan(tmp_path: Path) -> None:

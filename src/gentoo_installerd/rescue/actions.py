@@ -434,6 +434,21 @@ CHECK_COMMANDS = {
 }
 
 
+def _external_log_flags(fstype: str, session: RescueSession, device: str) -> list[str]:
+    """xfs_repair needs ``-l``/``-r`` for an external log or realtime device that the mount options named."""
+    if fstype != "xfs":
+        return []
+    options = session.plan.root.options if device == session.plan.root.device else next((item.options for item in session.plan.items if item.device == device), [])
+    flags: list[str] = []
+    for option in options:
+        key, _, value = option.partition("=")
+        if key == "logdev" and value.startswith("/dev/"):
+            flags += ["-l", value]
+        elif key == "rtdev" and value.startswith("/dev/"):
+            flags += ["-r", value]
+    return flags
+
+
 def _check_family(fstype: str) -> str:
     return "ext" if fstype in {"ext2", "ext3", "ext4"} else fstype
 
@@ -462,15 +477,20 @@ def _plan_fs_check(b: PlanBuilder) -> None:
     steps = [Step("fs-idle", "internal", "Check that no terminal is open and no other step is running", handler="check-idle", group="fs-check")]
     for index, entry in enumerate(reversed(session._mount_entries())):
         steps.append(session._umount_step(entry, f"fs-umount-{index}", "fs-check"))
+    members = session.plan.members_of(device)  # a multi-device btrfs or an external log is checked and made writable as a whole (review R7c)
     if mode != "check":
-        steps.append(Step("fs-setrw", "host", f"blockdev --setrw {device}", ("blockdev", "--setrw", device), timeout=20, group="fs-check", effect={"kind": "blockro", "device": device, "ro_now": False}))
+        for index, member in enumerate(members):
+            steps.append(Step(f"fs-setrw-{index}", "host", f"blockdev --setrw {member}", ("blockdev", "--setrw", member), timeout=20, group="fs-check",
+                              effect={"kind": "blockro", "device": member, "ro_now": False}))
         for array in session.readonly_md:
             steps.append(Step("fs-mdrw", "host", f"mdadm --readwrite {array}", ("mdadm", "--readwrite", array), timeout=30, group="fs-check", ok_rc=(0, 1)))
-    command = tuple([*argv, device])
-    steps.append(Step("fs-run", "host", " ".join(command), command, writes=(device,) if mode != "check" else (), timeout=14400, ok_rc=ok_rc, atomic=False, group="fs-check"))
+    command = tuple([*argv, *_external_log_flags(node.fstype, session, device), device])
+    steps.append(Step("fs-run", "host", " ".join(command), command, writes=tuple(members) if mode != "check" else (), timeout=14400, ok_rc=ok_rc, atomic=False, group="fs-check"))
     cleanup: list[Step] = []
     if mode != "check":
-        cleanup.append(Step("fs-setro", "host", f"blockdev --setro {device}", ("blockdev", "--setro", device), timeout=20, group="fs-check", effect={"kind": "blockro", "device": device, "ro_now": True}, ok_rc=(0,)))
+        for index, member in enumerate(members):
+            cleanup.append(Step(f"fs-setro-{index}", "host", f"blockdev --setro {member}", ("blockdev", "--setro", member), timeout=20, group="fs-check",
+                                effect={"kind": "blockro", "device": member, "ro_now": True}, ok_rc=(0,)))
     cleanup.extend(session.mount_steps(rw=False, group="fs-check"))
     b.steps = steps
     b.cleanup = cleanup

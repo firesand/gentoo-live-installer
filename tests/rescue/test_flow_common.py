@@ -407,3 +407,34 @@ def test_nothing_recommended_means_no_composite_plan(lab_factory) -> None:
     with pytest.raises(RescueError) as err:
         manager.plan({"session_id": sid, "action_id": "repair.recommended"})
     assert err.value.short == "unsupported_action"
+
+
+def test_repairing_a_multi_device_btrfs_makes_every_member_writable_and_restores_them(lab_factory, tmp_path: Path) -> None:
+    lab = lab_factory(lf.btrfs_multi_device())
+    top = fr.make_root(tmp_path / "top", "gentoo", fstab=f"UUID={fr.ROOT_UUID} / btrfs noatime 0 0\n")
+    lab.system.attach("/dev/sda1", top)
+    lab.system.subvolumes["/dev/sda1"] = {5: ""}
+    lab.system.btrfs_text["/dev/sda1"] = ""
+    lab.system.btrfs_default["/dev/sda1"] = "ID 5 (FS_TREE)"
+    manager, sid, info = mount_through_the_manager(lab, candidate_device="/dev/sda1")
+    plan = manager.plan({"session_id": sid, "action_id": "fs.check", "params": {"mode": "repair_force"}})
+    shown = [step["display"] for step in plan["steps"]]
+    assert shown.index("blockdev --setrw /dev/sda1") < shown.index("blockdev --setrw /dev/sdb1") < shown.index("btrfs rescue zero-log /dev/sda1")  # review R7a/c
+    assert [step["display"] for step in plan["cleanup"]][:2] == ["blockdev --setro /dev/sda1", "blockdev --setro /dev/sdb1"]
+    assert plan["risk"] == "dangerous" and plan["confirm"]["phrase"] == "I HAVE A BACKUP"
+    plan, result, _ = plan_and_run(manager, sid, "fs.check", {"mode": "repair_force"})
+    assert result["outcome"] == "success"
+    assert lab.system.ro["/dev/sda1"] is True and lab.system.ro["/dev/sdb1"] is True  # the cleanup protected them again
+    unmount(manager, sid)
+    assert not any(lab.system.ro.values())
+
+
+def test_xfs_repair_names_the_external_log(lab_factory) -> None:
+    lab = lab_factory(lf.xfs_external_log())
+    lab.add_tree("/dev/sda2", "gentoo", firmware="uefi", fstab=f"UUID={fr.ROOT_UUID} / xfs noatime 0 1\n")
+    manager, sid, _info = mount_through_the_manager(lab, candidate_device="/dev/sda2")
+    plan = manager.plan({"session_id": sid, "action_id": "fs.check", "params": {"mode": "repair"}})
+    commands = [step["argv"] for step in plan["steps"] if step.get("argv") and step["argv"][0] == "xfs_repair"]
+    assert commands == [["xfs_repair", "-l", "/dev/sdb1", "/dev/sda2"]]
+    check = manager.plan({"session_id": sid, "action_id": "fs.check", "params": {"mode": "check"}})
+    assert [step["argv"] for step in check["steps"] if step.get("argv") and step["argv"][0] == "xfs_repair"] == [["xfs_repair", "-n", "-l", "/dev/sdb1", "/dev/sda2"]]
