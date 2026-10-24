@@ -34,6 +34,9 @@ class CustomizePage(PortageTabMixin, NetworkTabMixin, ToolsTabMixin, Page):
         super().__init__("Make it yours", "Safe defaults are already selected. The Hardware tab shows what was found on this computer; the other tabs use the same Portage and network configuration files described in the Handbook.")
         self.manifest = manifest
         self._loaded_make_opts = ""
+        self._loaded_license = ""
+        self._loaded_jobs = (0, 0)
+        self._source_loaded = ""
         self._cleared_companions: tuple[bool, bool] | None = None
         tabs = QTabWidget()
         self.hardware = HardwareTab(manifest, info)
@@ -60,6 +63,7 @@ class CustomizePage(PortageTabMixin, NetworkTabMixin, ToolsTabMixin, Page):
 
     def set_advanced(self, advanced: bool) -> None:
         self.hardware.set_advanced(advanced)
+        self.portage_advanced.set_advanced(advanced)
 
     def show_hardware(self) -> None:
         self.tabs.setCurrentWidget(self.hardware)
@@ -99,6 +103,11 @@ class CustomizePage(PortageTabMixin, NetworkTabMixin, ToolsTabMixin, Page):
         self.save_manifest()
         problem = proxy_problem(self.proxy.text())
         if problem:
+            return False, problem
+        problem = self.portage_problem()  # before the manifest's own wording: -* gets the Handbook's reason, a mirror its own message
+        if problem:
+            self.tabs.setCurrentIndex(1)
+            self.portage_advanced.set_open(True)
             return False, problem
         sections = self.manifest.validate_sections()
         errors = [error for name in ("portage", "network", "options") for error in sections[name]]
