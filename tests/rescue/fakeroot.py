@@ -105,6 +105,7 @@ def base_system(root: Path, family: str, *, merged: bool = True, init: str = "sy
         (root / name).mkdir(parents=True, exist_ok=True)
     tool(root, "usr/bin/env", elf())
     tool(root, "usr/bin/sh", elf())
+    tool(root, "usr/bin/bash", elf())
     tool(root, "usr/bin/true", elf())
     if init == "systemd":
         tool(root, "usr/lib/systemd/systemd", elf())
@@ -244,7 +245,7 @@ def _gentoo(root: Path, opts: dict[str, Any]) -> None:
     _common_boot(root, opts, kvers)
     if not opts.get("separate_boot"):
         put(root, "boot/amd-uc.img", size=1 << 20)
-    for name in ("grub-install", "grub-mkconfig", "dracut", "emerge", "eselect", "chpasswd", "usermod", "passwd", "efibootmgr", "genkernel" if opts.get("genkernel") else "", "revdep-rebuild" if opts.get("gentoolkit") else "", "bootctl" if opts.get("bootctl") else ""):
+    for name in ("grub-install", "grub-mkconfig", "dracut", "emerge", "eselect", "chpasswd", "usermod", "chage", "passwd", "efibootmgr", "genkernel" if opts.get("genkernel") else "", "revdep-rebuild" if opts.get("gentoolkit") else "", "bootctl" if opts.get("bootctl") else ""):
         if name:
             tool(root, f"usr/bin/{name}", elf())
     put(root, "etc/passwd", "root:x:0:0:root:/root:/bin/bash\nuser:x:1000:1000::/home/user:/bin/bash\nnobody:x:65534:65534::/:/sbin/nologin\n")
@@ -271,8 +272,12 @@ def _debian_like(root: Path, opts: dict[str, Any], key: str) -> None:
         status += "Package: grub-efi-amd64\nStatus: install ok half-configured\nVersion: 2.12\n\n"
     put(root, "var/lib/dpkg/status", status)
     _common_boot(root, opts, kver, initrd_prefix="boot/initrd.img-", initrd_suffix="")
-    for name in ("update-grub", "update-initramfs", "grub-install", "grub-mkconfig", "apt-get", "dpkg", "chpasswd", "usermod", "passwd", "efibootmgr", "dpkg-query"):
-        tool(root, f"usr/sbin/{name}" if not opts.get("merged", True) or name in {"update-grub", "update-initramfs", "grub-install", "grub-mkconfig", "chpasswd", "usermod"} else f"usr/bin/{name}", elf())
+    for name in ("update-grub", "update-initramfs", "grub-install", "grub-mkconfig", "apt-get", "dpkg", "chpasswd", "usermod", "chage", "passwd", "efibootmgr", "dpkg-query", "bootctl" if key == "pop" else ""):
+        if not name:
+            continue
+        body = elf() + (b"--uefi-secure-boot --removable --bootloader-id" if name == "grub-install" and opts.get("secure_boot_flag", True) else b"")
+        tool(root, f"usr/sbin/{name}" if not opts.get("merged", True) or name in {"update-grub", "update-initramfs", "grub-install", "grub-mkconfig", "chpasswd", "usermod"} else f"usr/bin/{name}", body)
+    put(root, "etc/initramfs-tools/initramfs.conf", "MODULES=dep\nBUSYBOX=auto\n")
     put(root, "etc/default/grub", 'GRUB_DEFAULT=0\nGRUB_CMDLINE_LINUX_DEFAULT="quiet splash"\nGRUB_CMDLINE_LINUX=""\n')
     if opts.get("shim", opts.get("firmware") == "uefi"):
         put(root, "usr/lib/shim/shimx64.efi.signed", size=1 << 20)
@@ -304,7 +309,7 @@ def _fedora_like(root: Path, opts: dict[str, Any], key: str) -> None:
                     f"options root=UUID={opts.get('root_uuid', ROOT_UUID)} ro rootflags=subvol=root\ngrub_users $grub_users\ngrub_arg --unrestricted\ngrub_class fedora\n")
     if not opts.get("separate_boot") and opts.get("grub_cfg", True):
         put(root, "boot/grub2/grub.cfg", "set default=0\ninsmod blscfg\nblscfg\n")
-    for name in ("dnf", "dracut", "kernel-install", "rpm", "chpasswd", "usermod", "passwd", "efibootmgr", "grub2-mkconfig", "grub2-install", "grubby"):
+    for name in ("dnf", "dracut", "kernel-install", "rpm", "chpasswd", "usermod", "chage", "passwd", "efibootmgr", "grub2-mkconfig", "grub2-install", "grubby"):
         tool(root, f"usr/bin/{name}", elf())
     if opts.get("selinux", key == "fedora"):
         put(root, "etc/selinux/config", "SELINUX=enforcing\nSELINUXTYPE=targeted\n")

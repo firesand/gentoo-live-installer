@@ -213,7 +213,7 @@ class PlanExecutor:
             return ok, f"{check['dir']}/{check['name']} exists" if ok else f"{check['dir']}/{check['name']} is missing"
         if kind == "efi_entry":
             state = efimod.parse_efibootmgr(*self._efi_text())
-            wanted = check.get("loader", "").lower()
+            wanted = check.get("loader", "").lower().replace("\\", "/").lstrip("/")
             ok = state.usable and any(wanted in entry.loader.lower().replace("\\", "/") or wanted in entry.label.lower() for entry in state.entries)
             return ok, "the firmware lists a boot entry for this system" if ok else "the firmware does not list a boot entry for this system (the fallback path still works)"
         if kind == "fstab_resolves":

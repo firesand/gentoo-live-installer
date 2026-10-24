@@ -106,4 +106,5 @@ class Lab:
     def manager(self, **kwargs):
         from gentoo_installerd.rescue.manager import RescueManager
 
+        kwargs.setdefault("network_check", lambda: {"ip": True, "dns": True})
         return RescueManager(self.session_env(), **kwargs)

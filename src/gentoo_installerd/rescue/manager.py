@@ -20,7 +20,7 @@ from .audit import AuditLog
 from .devices import DeviceGraph, DeviceNode
 from .errors import PlanStale, RescueError
 from .fstab import Fstab, parse_crypttab
-from .hostenv import Environment, collect_environment
+from .hostenv import Environment, check_network, collect_environment
 from .ledger import Ledger, write_json_atomic
 from .mountplan import MountPlan, RootSpec, plan_mounts
 from .ops import Operation, OperationTable
@@ -37,8 +37,10 @@ KEEP_SCANS = 3
 
 
 class RescueManager:
-    def __init__(self, env: SessionEnv, *, install_busy: Callable[[], str | None] | None = None, auto_adopt: bool = False) -> None:
+    def __init__(self, env: SessionEnv, *, install_busy: Callable[[], str | None] | None = None, auto_adopt: bool = False,
+                 network_check: Callable[[], dict[str, bool]] | None = None) -> None:
         self.env = env
+        self.network_check = network_check or check_network
         self.install_busy = install_busy or (lambda: None)
         self.auto_adopt = auto_adopt
         self.sessions: dict[str, RescueSession] = {}
@@ -51,6 +53,8 @@ class RescueManager:
         self.audit = AuditLog(env.audit_dir / "audit" / f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(env.clock()))}-daemon.jsonl", "daemon", clock=env.clock)
         self._scans: dict[str, ScanResult] = {}
         self._views: dict[str, Any] = {}
+        self._shell_managers: dict[str, Any] = {}
+        self.shell_spawn: Callable[..., Any] | None = None
         self._load_pool()
 
     # ---- persistence of the pool ---------------------------------------------------------------------------
@@ -400,10 +404,16 @@ class RescueManager:
         if not sid:
             return self._release_pool(op, force)
         session = self.session(sid)
+        if session.shells and not force:
+            raise RescueError("busy", "A terminal is still open in this system. Close it, or choose Force unmount.", shells=len(session.shells))
         if not session.op_lock.acquire(blocking=False):
             raise RescueError("busy", "A step is still running in this session", busy=session.busy)
         try:
             session.busy = {"op": op.id if op else "", "what": "unmount"}
+            if session.shells:
+                from .shell import close_shells
+
+                close_shells(session)
             emit = self._emitter(op)
             report = ""
             if params.get("save_report", True) and session.mode == "rw":
@@ -488,6 +498,10 @@ class RescueManager:
                 problems.append(f"{session.sid}: out of time")
                 continue
             try:
+                if session.shells:
+                    from .shell import close_shells
+
+                    close_shells(session)
                 result = session.release()
                 if result.complete:
                     with self.lock:
@@ -637,9 +651,7 @@ class RescueManager:
             if name not in secrets_in:
                 raise RescueError("needs_confirmation", f"The {name} is needed to run this plan", missing=name)
         if plan.needs.get("network"):
-            from .hostenv import check_network
-
-            status = check_network()
+            status = self.network_check()
             if not status["ip"] or not status["dns"]:
                 raise RescueError("needs_network", "This repair needs the network: " + ("the computer has no route to the internet" if not status["ip"] else "name lookup (DNS) does not work"), network=status)
         if not session.op_lock.acquire(blocking=False):
@@ -692,3 +704,22 @@ class RescueManager:
         if op is None:
             raise RescueError("not_found", "There is no such operation; it may have been forgotten")
         return op
+
+
+    # ---- terminals ---------------------------------------------------------------------------------------------------------------------------------
+    def shell_for(self, session: RescueSession) -> Any:
+        from .shell import ShellManager
+
+        if session.sid not in self._shell_managers:
+            self._shell_managers[session.sid] = ShellManager(session, spawn=self.shell_spawn, clock=self.env.clock) if self.shell_spawn else ShellManager(session, clock=self.env.clock)
+        return self._shell_managers[session.sid]
+
+    def open_shell(self, params: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+        self.check_not_busy()
+        session = self.session(str(params.get("session_id", "")))
+        return self.shell_for(session).open_pty(params)
+
+    def run_shell_here(self, params: dict[str, Any]) -> int:
+        self.check_not_busy()
+        session = self.session(str(params.get("session_id", "")))
+        return self.shell_for(session).run_here(params)
