@@ -59,7 +59,8 @@ SHUTDOWN_HOOK_SECONDS = 30.0
 # Socket parents that must never be taken over (chown/chmod) as a private directory.
 FORBIDDEN_SOCKET_PARENTS = frozenset({"/", "/run", "/var/run", "/tmp", "/var/tmp", "/etc", "/usr", "/var", "/home", "/root", "/dev", "/dev/shm", "/mnt", "/opt", "/srv"})
 # Optional modules that add actions: (module, function). Each is called with the registry.
-OPTIONAL_PLUGINS = (("gentoo_installerd.hwactions", "register"), ("gentoo_installerd.rescue.api", "register"))
+OPTIONAL_PLUGINS = (("gentoo_installerd.hwactions", "register"), ("gentoo_installerd.netactions", "register"),
+                    ("gentoo_installerd.remote", "register"), ("gentoo_installerd.rescue.api", "register"))
 
 
 # ------------------------------------------------------------------ errors
