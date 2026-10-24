@@ -363,6 +363,40 @@ class Stage3StageTests(StageHarness):
         self.assertEqual(set(capture.kwargs), {"allowed_existing"})
 
 
+class OptionMatrixDryRunTests(unittest.TestCase):
+    """Every combination of the main options must plan an installation without raising."""
+
+    def test_dry_run_succeeds_for_every_valid_combination(self) -> None:
+        import itertools
+
+        from gentoo_installerd.runner import DryRunRunner
+
+        combinations = itertools.product(
+            ("kde", "gnome", "xfce", "minimal"), ("openrc", "systemd"), ("grub", "systemd-boot", "efi-stub"), ("uefi", "bios"),
+            (False, True), ("networkmanager", "dhcpcd", "netifrc", "systemd-networkd"), ("sudo", "doas"))
+        ran = 0
+        with tempfile.TemporaryDirectory() as temporary:
+            for index, (desktop, init, bootloader, firmware, encrypted, network, privilege) in enumerate(combinations):
+                m = target_manifest(system={"desktop": desktop, "init": init, "stage_variant": f"amd64-{init}", "bootloader": bootloader,
+                                            "uki": bootloader == "efi-stub", "dual_boot": bootloader == "grub" and index % 2 == 0},
+                                    storage={"firmware": firmware, "luks": encrypted, "luks_passphrase": "long-enough-passphrase" if encrypted else "",
+                                             "lvm": encrypted and index % 3 == 0},
+                                    network={"manager": network, "interface": "enp1s0", "dhcp": index % 2 == 0, "address": "192.0.2.10/24",
+                                             "gateway": "192.0.2.1", "dns": ["192.0.2.53"]},
+                                    accounts={"privilege": privilege},
+                                    options={"install_hwmonux": index % 5 == 0, "install_portagehub": index % 7 == 0, "ssh": index % 4 == 0,
+                                             "extra_packages": ["app-editors/vim"] if index % 6 == 0 else []})
+                if m.validate():
+                    continue
+                with self.subTest(index=index):
+                    events: list = []
+                    installer = Installer(m, runner=DryRunRunner(), target_root=Path(temporary, "target"), state_dir=Path(temporary, "state"),
+                                          dry_run=True, inspector=FakeInspector(), emit=events.append)
+                    self.assertTrue(installer.run(), [event.error for event in events if event.error])
+                    ran += 1
+        self.assertGreater(ran, 150)
+
+
 class PlanSeamTests(unittest.TestCase):
     def installer(self, temporary: str) -> Installer:
         return Installer(target_manifest(), runner=ScriptedRunner(), target_root=Path(temporary) / "t", state_dir=Path(temporary) / "s",
