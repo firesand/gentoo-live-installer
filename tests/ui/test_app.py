@@ -120,7 +120,9 @@ def test_default_gui_manifest_selects_kde_profile_for_amd64_openrc():
     assert manifest.system.stage_variant == "amd64-openrc"
     assert manifest.system.init == "openrc"
     assert manifest.system.desktop == "kde"
-    assert manifest.system.profile == "default/linux/amd64/23.0/desktop/plasma"
+    # The profile is derived from init and desktop unless a manifest names one.
+    assert manifest.system.profile == ""
+    assert manifest.effective_profile() == "default/linux/amd64/23.0/desktop/plasma"
 
 
 def test_kernel_guidance_explains_automatic_kernel_dracut_requirement(window):

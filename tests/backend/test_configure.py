@@ -6,7 +6,7 @@ import unittest
 from pathlib import Path
 
 from gentoo_installer.manifest import Partition
-from gentoo_installerd.configure import ConfigurationError, Configurer, render_fstab, render_hosts, render_make_conf, render_netifrc, render_package_use, render_systemd_network
+from gentoo_installerd.configure import ConfigurationError, Configurer, ninja_opts_from_make_opts, render_fstab, render_hosts, render_make_conf, render_netifrc, render_package_use, render_systemd_network
 from gentoo_installerd.storage import LayoutEntry
 
 from tests.backend.helpers import FakeRunner, manifest
@@ -18,29 +18,49 @@ class RenderingTests(unittest.TestCase):
         m.portage.cflags = "-O2 -pipe; not-a-command"
         m.portage.features = ["collision-protect"]
         text = render_make_conf(m)
-        self.assertIn("CFLAGS='-O2 -pipe; not-a-command'", text)
+        self.assertIn("COMMON_FLAGS='-O2 -pipe; not-a-command'", text)
+        self.assertIn("CFLAGS='${COMMON_FLAGS}'", text)
         self.assertIn("getbinpkg", text)
         self.assertIn("binpkg-request-signature", text)
         self.assertEqual(text.count("FEATURES="), 1)
         self.assertIn("PORTAGE_BINHOST=", text)
-        self.assertIn("NINJAOPTS=-j2", text)
+
+    def test_make_conf_keeps_the_stage3_compiler_and_locale_settings(self) -> None:
+        text = render_make_conf(manifest())
+        for line in ("FCFLAGS='${COMMON_FLAGS}'", "FFLAGS='${COMMON_FLAGS}'", "LC_MESSAGES=C.UTF-8", "CXXFLAGS='${CFLAGS}'"):
+            self.assertIn(line, text.splitlines())
+
+    def test_empty_values_never_override_profile_defaults(self) -> None:
+        # An empty CPU_FLAGS_X86 made opencv's REQUIRED_USE fail in the default KDE install.
+        m = manifest()
+        self.assertEqual((m.portage.cpu_flags, m.portage.video_cards, m.portage.use_flags, m.portage.rustflags), ("", "", [], ""))
+        text = render_make_conf(m)
+        for key in ("CPU_FLAGS_X86", "VIDEO_CARDS", "USE", "RUSTFLAGS", "MAKEOPTS", "NINJAOPTS"):
+            self.assertNotIn(f"{key}=", text)
+        m.portage.cpu_flags = "auto"
+        m.portage.video_cards = "auto"
+        self.assertNotIn("CPU_FLAGS_X86", render_make_conf(m))
+        self.assertNotIn("VIDEO_CARDS", render_make_conf(m))
+        m.portage.cpu_flags = "${CPU_FLAGS_X86} aes avx"
+        m.portage.video_cards = "intel"
+        text = render_make_conf(m)
+        self.assertIn("CPU_FLAGS_X86='${CPU_FLAGS_X86} aes avx'", text)
+        self.assertIn("VIDEO_CARDS=intel", text)
+
+    def test_make_opts_given_by_the_caller_are_used_verbatim(self) -> None:
+        m = manifest()
+        self.assertIn("MAKEOPTS='-j6 -l8'", render_make_conf(m, make_opts="-j6 -l8"))
+        m.portage.make_opts = "-j3"
+        self.assertIn("MAKEOPTS=-j3", render_make_conf(m))
+        self.assertNotIn("NINJAOPTS", render_make_conf(m))
 
     def test_ninja_parallelism_tracks_bounded_make_jobs(self) -> None:
-        m = manifest()
-        m.portage.make_opts = "-j3 -l2.5"
-        self.assertIn("NINJAOPTS='-j3 -l2.5'", render_make_conf(m))
-        m.portage.make_opts = "--jobs=5 --load-average=4"
-        self.assertIn("NINJAOPTS='-j5 -l4'", render_make_conf(m))
-        m.portage.make_opts = "-j 1 -l 2.5"
-        self.assertIn("NINJAOPTS='-j1 -l2.5'", render_make_conf(m))
-        m.portage.make_opts = "--jobs 1 --load-average 2.5"
-        self.assertIn("NINJAOPTS='-j1 -l2.5'", render_make_conf(m))
-        m.portage.make_opts = "-j4 --jobs 1 -l3 --load-average 2.5"
-        self.assertIn("NINJAOPTS='-j1 -l2.5'", render_make_conf(m))
-        m.portage.make_opts = "-j"
-        self.assertIn("NINJAOPTS=-j2", render_make_conf(m))
-        m.portage.make_opts = "-j9 -j0"
-        self.assertIn("NINJAOPTS=-j2", render_make_conf(m))
+        # NINJAOPTS is no longer persisted, but the helper still bounds ninja for explicit use.
+        for make_opts, expected in (("-j3 -l2.5", "-j3 -l2.5"), ("--jobs=5 --load-average=4", "-j5 -l4"),
+                                    ("-j 1 -l 2.5", "-j1 -l2.5"), ("--jobs 1 --load-average 2.5", "-j1 -l2.5"),
+                                    ("-j4 --jobs 1 -l3 --load-average 2.5", "-j1 -l2.5"), ("-j", "-j2"), ("-j9 -j0", "-j2")):
+            with self.subTest(make_opts=make_opts):
+                self.assertEqual(ninja_opts_from_make_opts(make_opts), expected)
 
     def test_package_use_is_sorted_and_validated(self) -> None:
         self.assertEqual(render_package_use({"app/two": ["-X"], "app/one": ["ssl"]}), "app/one ssl\napp/two -X\n")

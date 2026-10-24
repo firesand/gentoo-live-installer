@@ -1,25 +1,53 @@
 from __future__ import annotations
 
 import hashlib
+import http.client
 import os
 import posixpath
 import re
 import stat
 import tarfile
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 from copy import copy
 from pathlib import Path, PurePosixPath
-from typing import Callable
+from typing import Callable, Iterable, Sequence, TypeVar
 
+from .proxy import build_opener
 from .runner import InstallCancelled, Runner
+
+T = TypeVar("T")
+# Seconds to wait before retry 2, 3, 4, ...; the last value repeats. Tests shorten it.
+BACKOFF_SECONDS = (2, 4, 8, 16)
+ATTEMPTS_SINGLE_MIRROR = 5
+ATTEMPTS_PER_MIRROR = 2
+# A stage3 is rebuilt weekly; a signature much older than that means a rolled-back mirror or a wrong clock.
+MAX_SIGNATURE_AGE = 60 * 24 * 3600
+MAX_SIGNATURE_FUTURE = 24 * 3600
+BAD_SIGNATURE_STATUSES = {
+    "BADSIG": "the signature does not match the file",
+    "EXPSIG": "the signature itself has expired",
+    "EXPKEYSIG": "the signing key has expired",
+    "REVKEYSIG": "the signing key was revoked",
+    "ERRSIG": "the signature could not be checked",
+    "NO_PUBKEY": "the signing key is not in the Gentoo release keyring",
+}
 
 
 class Stage3Error(RuntimeError):
     pass
+
+
+class Stage3Transient(Stage3Error):
+    """A failure worth retrying: a dropped connection, a timeout or a server-side error."""
+
+
+class Stage3Truncated(Stage3Transient):
+    """The server closed the connection before the whole file arrived; the partial download is kept."""
 
 
 @dataclass(frozen=True)
@@ -99,6 +127,30 @@ def parse_digests(text: str, archive_name: str) -> tuple[str, str]:
     raise Stage3Error("Signed DIGESTS contains no SHA-512 or SHA-256 hash for the selected archive")
 
 
+def release_signing_fingerprints(colon_listing: str) -> set[str]:
+    """Primary fingerprints of the Release Engineering keys in ``gpg --show-keys --with-colons`` output.
+
+    The keyring also carries the ebuild-repository and mirror signing keys; only Release
+    Engineering signs stage3 files, so only those keys are accepted for them.
+    """
+    allowed: set[str] = set()
+    fingerprint = ""
+    matches = False
+    usable = True
+    for line in [*colon_listing.splitlines(), "pub::::::::::::"]:
+        fields = line.split(":")
+        if fields[0] == "pub":
+            if fingerprint and matches and usable:
+                allowed.add(fingerprint)
+            fingerprint, matches = "", False
+            usable = fields[1] not in {"r", "e", "i", "d"} if len(fields) > 1 else True
+        elif fields[0] == "fpr" and not fingerprint and len(fields) > 9:
+            fingerprint = fields[9]
+        elif fields[0] == "uid" and len(fields) > 9 and "Release Engineering" in fields[9]:
+            matches = True
+    return allowed
+
+
 class Stage3Manager:
     def __init__(
         self,
@@ -106,66 +158,239 @@ class Stage3Manager:
         cache_dir: str | Path = "/var/tmp/gentoo-installer",
         keyring: str | Path = "/usr/share/openpgp-keys/gentoo-release.asc",
         cancel: threading.Event | None = None,
+        *,
+        proxy: str = "",
     ) -> None:
         self.runner = runner
         self.cache_dir = Path(cache_dir)
         self.keyring = Path(keyring)
         self.cancel = cancel or threading.Event()
+        self.proxy = proxy
+        self.fallback_mirrors: tuple[str, ...] = ()
+        self.notify: Callable[[str], None] = lambda message: None
+        self.now: Callable[[], float] = time.time
+        self._binary_keyring: Path | None = None
+        self._allowed_signers: set[str] = set()
+        self._expected_size: int | None = None  # size announced by the index, for the download in progress
 
-    def install(self, mirror: str, variant: str, target_root: str | Path, progress: Progress | None = None) -> Path:
+    def install(self, mirror: str, variant: str, target_root: str | Path, progress: Progress | None = None, *,
+                proxy: str | None = None, fallback_mirrors: Iterable[str] = (),
+                allowed_existing: Iterable[str] = ()) -> Path:
+        if proxy is not None:
+            self.proxy = proxy
+        self.fallback_mirrors = tuple(fallback_mirrors)
         archive = self.discover(mirror, variant)
-        digests = self._fetch_bytes(archive.digests_url)
+        name = PurePosixPath(archive.path).name
+        digests = self._fetch_with_retry(self._source_urls(archive, ".DIGESTS", archive.digests_url), "the signed checksums")
         self._secure_cache_dir()
-        digest_path = self.cache_dir / (Path(archive.path).name + ".DIGESTS")
-        verified_path = self.cache_dir / (Path(archive.path).name + ".DIGESTS.verified")
+        digest_path = self.cache_dir / (name + ".DIGESTS")
+        verified_path = self.cache_dir / (name + ".DIGESTS.verified")
         self._safe_cache_file(digest_path)
         self._safe_cache_file(verified_path)
         digest_path.write_bytes(digests)
         digest_path.chmod(0o600)
+        self._prepare_keyring()
+        verified_path.unlink(missing_ok=True)
+        try:
+            self._verify_signed(digest_path, verified_path)
+            # Only parse bytes written by gpg after successful signature verification.
+            algorithm, expected = parse_digests(verified_path.read_text(encoding="utf-8"), name)
+        finally:
+            verified_path.unlink(missing_ok=True)
+        archive_path = self.cache_dir / name
+        self._safe_cache_file(archive_path)
+        if not self._cached_archive_is_valid(archive_path, archive, algorithm, expected):
+            for round_number in (1, 2):
+                self._download_with_retry(archive, archive_path, progress)
+                if self._hash(archive_path, algorithm) == expected:
+                    break
+                archive_path.unlink(missing_ok=True)
+                if round_number == 2:
+                    raise Stage3Error(f"Authenticated {algorithm} verification failed for {archive_path.name}")
+                self.notify("The downloaded stage3 failed its checksum; downloading it once more")
+        leftovers = self.unexpected_root_entries(Path(target_root), allowed_existing)
+        if leftovers:
+            self.notify("WARNING: the target filesystem is not empty (" + ", ".join(leftovers[:8]) +
+                        (", ..." if len(leftovers) > 8 else "") + "); the stage3 is unpacked over the existing files")
+        self.extract(archive_path, Path(target_root))
+        return archive_path
+
+    def discover(self, mirror: str, variant: str) -> Stage3Archive:
+        mirrors = [mirror, *(m for m in self.fallback_mirrors if m != mirror)]
+        error: Stage3Error | None = None
+        attempts = ATTEMPTS_SINGLE_MIRROR if len(mirrors) == 1 else ATTEMPTS_PER_MIRROR
+        for candidate in mirrors:
+            try:
+                text = self._fetch_with_retry([latest_index_url(candidate, variant)], "the stage3 index", attempts=attempts).decode("utf-8")
+                if text.lstrip().startswith("-----BEGIN PGP SIGNED MESSAGE-----"):
+                    text = self._verified_text(text)
+                return parse_latest_index(text, candidate, variant)
+            except Stage3Error as exc:
+                error = exc
+                if candidate != mirrors[-1]:
+                    self.notify(f"Mirror {candidate} did not work ({exc}); trying the next one")
+        raise error or Stage3Error("No stage3 mirror is configured")
+
+    # ----- signatures -------------------------------------------------------------------------
+
+    def _prepare_keyring(self) -> None:
+        if self._binary_keyring is not None:
+            return
         if not self.keyring.is_file():
             raise Stage3Error(f"Gentoo release keyring is missing: {self.keyring}")
         binary_keyring = self.cache_dir / "gentoo-release.gpg"
         self._safe_cache_file(binary_keyring)
         binary_keyring.unlink(missing_ok=True)
         self.runner.run(("gpg", "--batch", "--dearmor", "--output", str(binary_keyring), str(self.keyring)))
+        listing = self.runner.run(("gpg", "--batch", "--show-keys", "--with-colons", str(self.keyring))).stdout
+        allowed = release_signing_fingerprints(listing)
+        if not allowed:
+            raise Stage3Error("The Gentoo release keyring contains no Release Engineering signing key")
+        self._binary_keyring, self._allowed_signers = binary_keyring, allowed
+
+    def _verify_signed(self, signed: Path, plaintext: Path) -> None:
+        """Verify a clearsigned file twice (gpgv, then gpg --decrypt to extract the signed text)."""
+        assert self._binary_keyring is not None
+        keyring = str(self._binary_keyring)
         gnupg_home = self.cache_dir / "gnupg-verify"
         self._safe_cache_dir(gnupg_home)
         gnupg_home.mkdir(mode=0o700, exist_ok=True)
-        verified_path.unlink(missing_ok=True)
-        try:
-            self.runner.run(("gpgv", "--keyring", str(binary_keyring), str(digest_path)))
-            self.runner.run(("gpg", "--batch", "--homedir", str(gnupg_home), "--no-default-keyring",
-                             "--keyring", str(binary_keyring), "--decrypt", "--output", str(verified_path), str(digest_path)))
-            # Only parse bytes written by gpgv after successful signature verification.
-            algorithm, expected = parse_digests(verified_path.read_text(encoding="utf-8"), PurePosixPath(archive.path).name)
-        finally:
-            verified_path.unlink(missing_ok=True)
-        archive_path = self.cache_dir / PurePosixPath(archive.path).name
-        self._safe_cache_file(archive_path)
-        self._download(archive.url, archive_path, progress)
-        actual = self._hash(archive_path, algorithm)
-        if actual != expected:
-            archive_path.unlink(missing_ok=True)
-            raise Stage3Error(f"Authenticated {algorithm} verification failed for {archive_path.name}")
-        self.extract(archive_path, Path(target_root))
-        return archive_path
+        status = self.runner.run(("gpgv", "--status-fd", "1", "--keyring", keyring, str(signed))).stdout
+        self._check_signature_status(status)
+        status = self.runner.run(("gpg", "--batch", "--status-fd", "1", "--homedir", str(gnupg_home), "--no-default-keyring",
+                                  "--keyring", keyring, "--decrypt", "--output", str(plaintext), str(signed))).stdout
+        self._check_signature_status(status)
 
-    def discover(self, mirror: str, variant: str) -> Stage3Archive:
-        text = self._fetch_bytes(latest_index_url(mirror, variant)).decode("utf-8")
-        return parse_latest_index(text, mirror, variant)
+    def _verified_text(self, clearsigned: str) -> str:
+        self._secure_cache_dir()
+        self._prepare_keyring()
+        path = self.cache_dir / "latest-index.asc"
+        plaintext = self.cache_dir / "latest-index.verified"
+        for item in (path, plaintext):
+            self._safe_cache_file(item)
+            item.unlink(missing_ok=True)
+        path.write_text(clearsigned, encoding="utf-8")
+        path.chmod(0o600)
+        try:
+            self._verify_signed(path, plaintext)
+            return plaintext.read_text(encoding="utf-8")
+        finally:
+            path.unlink(missing_ok=True)
+            plaintext.unlink(missing_ok=True)
+
+    def _check_signature_status(self, status: str) -> None:
+        """Accept only a good, current signature by a Release Engineering key.
+
+        gpgv and gpg exit with success for some bad cases (an expired or revoked key), so the
+        machine-readable status lines decide.
+        """
+        good = valid = 0
+        for line in status.splitlines():
+            if not line.startswith("[GNUPG:] "):
+                continue
+            fields = line[len("[GNUPG:] "):].split()
+            if not fields:
+                continue
+            keyword = fields[0]
+            if keyword in BAD_SIGNATURE_STATUSES:
+                raise Stage3Error(f"The stage3 checksums are not trustworthy: {BAD_SIGNATURE_STATUSES[keyword]}")
+            if keyword == "GOODSIG":
+                good += 1
+            elif keyword == "VALIDSIG":
+                valid += 1
+                if len(fields) < 11 or not fields[3].isdigit():
+                    raise Stage3Error("The stage3 signature status is malformed")
+                if fields[-1] not in self._allowed_signers:
+                    raise Stage3Error("The stage3 checksums were not signed by a Gentoo Release Engineering key")
+                signed_at, now = int(fields[3]), self.now()
+                if now - signed_at > MAX_SIGNATURE_AGE:
+                    raise Stage3Error("The stage3 signature is more than 60 days old: the mirror is serving an outdated image or this computer's clock is wrong")
+                if signed_at - now > MAX_SIGNATURE_FUTURE:
+                    raise Stage3Error("The stage3 signature is dated in the future: this computer's clock is wrong")
+        if good != 1 or valid != 1:
+            raise Stage3Error("The stage3 checksums do not carry exactly one valid Gentoo signature")
+
+    # ----- network ---------------------------------------------------------------------------------
+
+    def _open(self, request: urllib.request.Request, timeout: int):
+        if self.proxy:
+            return build_opener(self.proxy).open(request, timeout=timeout)
+        return urllib.request.urlopen(request, timeout=timeout)
+
+    def _source_urls(self, archive: Stage3Archive, suffix: str, primary: str) -> list[str]:
+        """The same file on the primary and on the fallback mirrors."""
+        urls = [primary]
+        for mirror in self.fallback_mirrors:
+            url = mirror.rstrip("/") + "/releases/amd64/autobuilds/" + archive.path + suffix
+            if url not in urls:
+                urls.append(url)
+        return urls
+
+    def _backoff(self, attempt: int) -> None:
+        delay = BACKOFF_SECONDS[min(attempt - 1, len(BACKOFF_SECONDS) - 1)]
+        if self.cancel.wait(delay):
+            raise InstallCancelled("Installation cancelled")
+
+    def _retry(self, operation: Callable[[str], T], urls: Sequence[str], what: str, *, attempts: int | None = None) -> T:
+        """Run ``operation(url)`` with bounded retries, then on the next mirror."""
+        per_mirror = attempts or (ATTEMPTS_SINGLE_MIRROR if len(urls) == 1 else ATTEMPTS_PER_MIRROR)
+        error: Stage3Error | None = None
+        for url in urls:
+            for attempt in range(1, per_mirror + 1):
+                self._check_cancel()
+                try:
+                    return operation(url)
+                except Stage3Transient as exc:
+                    error = exc
+                    if attempt < per_mirror:
+                        self.notify(f"Connection interrupted while fetching {what}; retrying ({attempt + 1}/{per_mirror})")
+                        self._backoff(attempt)
+                except Stage3Error as exc:  # permanent for this mirror (HTTP 4xx, redirect away from HTTPS)
+                    error = exc
+                    break
+            if url != urls[-1]:
+                self.notify(f"Switching to the next mirror for {what}")
+        assert error is not None
+        raise error
+
+    def _fetch_with_retry(self, urls: Sequence[str], what: str, *, attempts: int | None = None) -> bytes:
+        return self._retry(self._fetch_bytes, urls, what, attempts=attempts)
 
     def _fetch_bytes(self, url: str) -> bytes:
         self._check_cancel()
         request = urllib.request.Request(url, headers={"User-Agent": "gentoo-live-installer/0.1"})
         try:
-            with urllib.request.urlopen(request, timeout=60) as response:
+            with self._open(request, 60) as response:
                 if response.status != 200 or response.geturl() and urlsplit_scheme(response.geturl()) != "https":
                     raise Stage3Error(f"Unauthenticated response for {url}")
                 return response.read()
-        except (urllib.error.URLError, TimeoutError) as exc:
-            raise Stage3Error(f"Unable to download {url}: {exc}") from exc
+        except urllib.error.HTTPError as exc:
+            raise self._http_error(exc, url) from exc
+        except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
+            raise Stage3Transient(f"Unable to download {url}: {exc}") from exc
+
+    @staticmethod
+    def _http_error(exc: urllib.error.HTTPError, url: str) -> Stage3Error:
+        message = f"Unable to download {url}: HTTP {exc.code}"
+        return Stage3Transient(message) if exc.code >= 500 or exc.code in {408, 425, 429} else Stage3Error(message)
+
+    def _cached_archive_is_valid(self, path: Path, archive: Stage3Archive, algorithm: str, expected: str) -> bool:
+        if not path.is_file() or (archive.size is not None and path.stat().st_size != archive.size):
+            return False
+        if self._hash(path, algorithm) == expected:
+            self.notify("Using the stage3 archive that was already downloaded and verified")
+            return True
+        path.unlink(missing_ok=True)
+        return False
+
+    def _download_with_retry(self, archive: Stage3Archive, destination: Path, progress: Progress | None) -> None:
+        urls = self._source_urls(archive, "", archive.url)
+        self._expected_size = archive.size
+        self._retry(lambda url: self._download(url, destination, progress), urls, "the stage3 archive")
 
     def _download(self, url: str, destination: Path, progress: Progress | None = None) -> None:
+        """One download attempt: resumes a partial file and raises Stage3Truncated on a short body."""
+        expected_size = self._expected_size
         self._secure_cache_dir()
         if destination.parent != self.cache_dir:
             raise Stage3Error("Download destination must be inside the validated cache")
@@ -173,12 +398,15 @@ class Stage3Manager:
         self._safe_cache_file(destination)
         self._safe_cache_file(partial)
         offset = partial.stat().st_size if partial.exists() else 0
+        if expected_size is not None and offset > expected_size:
+            partial.unlink()
+            offset = 0
         headers = {"User-Agent": "gentoo-live-installer/0.1"}
         if offset:
             headers["Range"] = f"bytes={offset}-"
         request = urllib.request.Request(url, headers=headers)
         try:
-            with urllib.request.urlopen(request, timeout=120) as response:
+            with self._open(request, 120) as response:
                 if response.geturl() and urlsplit_scheme(response.geturl()) != "https":
                     raise Stage3Error("Stage3 download redirected away from HTTPS")
                 if offset and response.status != 206:
@@ -188,8 +416,7 @@ class Stage3Manager:
                     mode = "ab" if offset else "wb"
                 else:
                     raise Stage3Error(f"Unexpected HTTP status {response.status} for stage3 download")
-                total_header = response.headers.get("Content-Length", "")
-                total = offset + int(total_header) if total_header.isdigit() else None
+                total = self._total_size(response, offset, expected_size)
                 with partial.open(mode) as output:
                     while True:
                         self._check_cancel()
@@ -202,12 +429,29 @@ class Stage3Manager:
                             progress(offset, total)
         except urllib.error.HTTPError as exc:
             if exc.code == 416 and partial.exists():
+                if expected_size is not None and partial.stat().st_size == expected_size:
+                    partial.replace(destination)
+                    return
                 partial.unlink()
-                return self._download(url, destination, progress)
-            raise Stage3Error(f"Stage3 download failed: HTTP {exc.code}") from exc
-        except (urllib.error.URLError, TimeoutError) as exc:
-            raise Stage3Error(f"Stage3 download failed: {exc}") from exc
+                raise Stage3Transient("The partial download was out of range; starting again") from exc
+            raise self._http_error(exc, url) from exc
+        except (urllib.error.URLError, OSError, http.client.HTTPException) as exc:
+            raise Stage3Transient(f"Stage3 download failed: {exc}") from exc
+        if total is not None and offset != total:
+            raise Stage3Truncated(f"The connection closed after {offset} of {total} bytes")
         partial.replace(destination)
+
+    @staticmethod
+    def _total_size(response: object, offset: int, expected_size: int | None) -> int | None:
+        """The full size of the file: from Content-Range, else Content-Length, else the index."""
+        headers = getattr(response, "headers", {})
+        match = re.fullmatch(r"bytes (\d+)-(\d+)/(\d+)", str(headers.get("Content-Range", "")))
+        if match:
+            return int(match.group(3))
+        length = str(headers.get("Content-Length", ""))
+        if length.isdigit():
+            return offset + int(length)
+        return expected_size
 
     def _secure_cache_dir(self) -> None:
         # Trust every parent before creating or opening its child. A private
@@ -257,6 +501,15 @@ class Stage3Manager:
                 digest.update(chunk)
         return digest.hexdigest()
 
+    @staticmethod
+    def unexpected_root_entries(root: Path, allowed: Iterable[str] = ()) -> list[str]:
+        """Entries already in the target root that are neither lost+found nor a mount point of the layout."""
+        permitted = {"lost+found", *(item.strip("/").split("/")[0] for item in allowed if item.strip("/"))}
+        try:
+            return sorted(entry.name for entry in root.iterdir() if entry.name not in permitted)
+        except OSError:
+            return []
+
     def extract(self, archive: Path, target_root: Path) -> None:
         root = target_root.resolve()
         root.mkdir(parents=True, exist_ok=True)
@@ -269,8 +522,23 @@ class Stage3Manager:
                 # a Gentoo stage3 unusable. Preserve archive metadata after checking
                 # each destination and link against the mounted target root.
                 tar.extractall(root, members=members, filter=lambda member, _: self._checked_member(member, root), numeric_owner=True)
+                self._restore_extended_attributes(members, root)
         except (tarfile.TarError, OSError) as exc:
             raise Stage3Error(f"Safe stage3 extraction failed: {exc}") from exc
+
+    def _restore_extended_attributes(self, members: Sequence[tarfile.TarInfo], root: Path) -> None:
+        """CPython's tarfile ignores PAX xattr records; apply them so file capabilities survive."""
+        for member in members:
+            for key, value in member.pax_headers.items():
+                if key.startswith("SCHILY.acl."):
+                    self.notify(f"WARNING: ACLs of {member.name} are not restored by this installer")
+                elif key.startswith("SCHILY.xattr."):
+                    name = key[len("SCHILY.xattr."):]
+                    data = value if isinstance(value, bytes) else str(value).encode("utf-8", "surrogateescape")
+                    try:
+                        os.setxattr(root / member.name, name, data, follow_symlinks=False)
+                    except OSError as exc:
+                        self.notify(f"WARNING: could not restore {name} on {member.name}: {exc}")
 
     @staticmethod
     def _checked_member(member: tarfile.TarInfo, root: Path) -> tarfile.TarInfo | None:

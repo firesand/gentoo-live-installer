@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field, fields, is_dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, ClassVar, get_args, get_origin, get_type_hints
 
@@ -12,6 +13,106 @@ SECRET_KEYS = {"password", "root_password", "luks_passphrase", "wifi_password", 
 # Keys of validate_sections(); GUI pages route errors by section, not wording.
 VALIDATION_SECTIONS = ("general", "storage", "system", "locale", "portage", "network", "accounts", "options", "hardware")
 CMDLINE_TOKEN_RE = re.compile(r"[A-Za-z0-9_.:=,/+@%-]+")
+# Shared with the daemon so that bad Portage input is rejected before any disk is touched.
+ATOM_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_+.-]*/[A-Za-z0-9][A-Za-z0-9_+.-]*(?::[A-Za-z0-9_.-]+)?")
+PROFILE_BASE = "default/linux/amd64/23.0"
+PROFILE_RE = re.compile(r"default/linux/amd64/23\.0(?:/[a-z0-9][a-z0-9-]*)*")
+KEYMAP_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,39}")
+# language[_TERRITORY][.codeset][@modifier] (glibc also accepts the modifier first, as in de_DE@euro)
+LOCALE_RE = re.compile(r"(?:[a-z]{2,3}(?:_[A-Z]{2})?(?:[.@][A-Za-z0-9-]+){0,2}|C(?:\.UTF-8)?|POSIX)")
+# wget and the stage3 downloader only speak HTTP proxies; SOCKS proxies would fail late.
+PROXY_SCHEMES = {"http", "https"}
+KDE_APPS_CHOICES = {"core", "full"}
+# One word of a package.use line: a flag, a negated flag or a USE_EXPAND heading such as "VIDEO_CARDS:".
+USE_TOKEN_RE = re.compile(r"-?[A-Za-z0-9][A-Za-z0-9_+@.-]*|[A-Z][A-Z0-9_]*:")
+
+
+def derive_profile(init: str, desktop: str, *, multilib: bool = True, hardened: bool = False) -> str:
+    """Return the published 23.0 profile for the selected init and profile family."""
+    path = PROFILE_BASE
+    if hardened:
+        path += "/no-multilib/hardened" if not multilib else "/hardened"
+    elif not multilib:
+        # The pinned tree has no desktop/no-multilib profiles. Desktop package
+        # selection remains independent, while this chooses the valid ABI profile.
+        path += "/no-multilib"
+    elif desktop == "kde":
+        path += "/desktop/plasma"
+    elif desktop == "gnome":
+        path += "/desktop/gnome"
+    elif desktop == "xfce":
+        path += "/desktop"
+    if init == "systemd":
+        path += "/systemd"
+    return path
+
+
+def has_control_characters(value: str) -> bool:
+    return any(ord(char) < 32 or ord(char) == 127 for char in value)
+
+
+@lru_cache(maxsize=1)
+def _known_timezones() -> frozenset[str]:
+    """Time zones of the running system; empty when the zone database is unavailable."""
+    try:
+        import zoneinfo
+        return frozenset(zoneinfo.available_timezones())
+    except Exception:  # noqa: BLE001 - a missing tzdata must not break validation
+        return frozenset()
+
+
+def _redact_url_password(url: str) -> str:
+    """http://user:secret@host:3128 -> http://user:<redacted>@host:3128 (anything else unchanged)."""
+    match = re.fullmatch(r"([A-Za-z][A-Za-z0-9+.-]*://[^/@:]*):([^/@]*)@(.*)", url)
+    return f"{match.group(1)}:<redacted>@{match.group(3)}" if match and match.group(2) != "<redacted>" else url
+
+
+def _wifi_errors(ssid: str, password: str) -> list[str]:
+    errors: list[str] = []
+    if ssid:
+        if has_control_characters(ssid) or not 1 <= len(ssid.encode("utf-8")) <= 32:
+            errors.append("The Wi-Fi network name must be 1 to 32 bytes without control characters")
+    elif password:
+        errors.append("A Wi-Fi password needs a Wi-Fi network name")
+    if password:
+        printable = all(32 <= ord(char) < 127 for char in password)
+        if not ((printable and 8 <= len(password) <= 63) or re.fullmatch(r"[0-9a-fA-F]{64}", password)):
+            errors.append("The Wi-Fi password must be 8 to 63 printable ASCII characters or 64 hexadecimal digits")
+    return errors
+
+
+def _proxy_errors(proxy: str) -> list[str]:
+    from urllib.parse import urlsplit
+
+    try:
+        parts = urlsplit(proxy)
+        port = parts.port
+    except ValueError:
+        return ["The proxy address is not a valid URL"]
+    if "<redacted>" in proxy:
+        return ["Replace the redacted proxy password before installing"]
+    if has_control_characters(proxy) or " " in proxy or parts.scheme not in PROXY_SCHEMES or not parts.hostname \
+            or parts.path not in {"", "/"} or parts.query or parts.fragment or (port is not None and port == 0):
+        return ["The proxy must look like http://host:port (http or https; SOCKS proxies are not supported)"]
+    return []
+
+
+def _make_opts_errors(make_opts: str) -> list[str]:
+    """MAKEOPTS may only contain job-count options; anything else ends up in a shell variable."""
+    message = ["MAKEOPTS may contain only job options such as -j4, -l8, --jobs=4 or --load-average=8"]
+    if has_control_characters(make_opts):
+        return message
+    tokens = make_opts.split()
+    index = 0
+    while index < len(tokens):
+        token = tokens[index]
+        if not re.fullmatch(r"-j[0-9]*|-l[0-9]*(?:\.[0-9]+)?|--jobs(?:=[0-9]+)?|--load-average(?:=[0-9]+(?:\.[0-9]+)?)?", token):
+            return message
+        if token in {"-j", "--jobs", "-l", "--load-average"} and index + 1 < len(tokens) \
+                and re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", tokens[index + 1]):
+            index += 1
+        index += 1
+    return []
 
 
 class ManifestError(ValueError):
@@ -122,9 +223,13 @@ class Storage:
 class System:
     init: str = "openrc"
     stage_variant: str = "amd64-openrc"
-    profile: str = "default/linux/amd64/23.0/desktop/plasma"
+    # "" derives the profile from init, desktop, multilib and stage variant
+    # (see derive_profile); an explicit published profile path is used as is.
+    profile: str = ""
     multilib: bool = True
     desktop: str = "kde"
+    # "manual" is meant for command-line (headless) installs: the installer stops
+    # after the initramfs configuration so a kernel can be installed by hand.
     kernel: str = "gentoo-kernel-bin"
     initramfs: str = "dracut"
     bootloader: str = "grub"
@@ -155,7 +260,8 @@ class Portage:
     rsync_mirror: str = ""
     binhost: bool = True
     binhost_url: str = "https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/"
-    make_opts: str = "-j2"
+    # "" chooses -j/-l from the CPU count and memory of the machine that runs the install.
+    make_opts: str = ""
     cflags: str = "-O2 -pipe"
     cxxflags: str = "${CFLAGS}"
     rustflags: str = ""
@@ -164,8 +270,12 @@ class Portage:
     accept_license: str = "@FREE"
     use_flags: list[str] = field(default_factory=list)
     package_use: dict[str, list[str]] = field(default_factory=dict)
+    # "" and "auto" keep the profile defaults (and any hardware-detected value);
+    # a value replaces them.
     cpu_flags: str = ""
     video_cards: str = ""
+    # Extra HTTPS mirrors tried in order when the primary stage3 mirror keeps failing.
+    mirror_fallbacks: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -213,6 +323,9 @@ class Options:
     microcode: bool = True
     shell_completion: bool = True
     logger: bool = True
+    # KDE application set: "core" (file manager, terminal, editor, help) or
+    # "full" (the complete kde-apps suite: games, education, multimedia, ...).
+    kde_apps: str = "core"
     extra_packages: list[str] = field(default_factory=list)
 
 
@@ -282,6 +395,8 @@ class InstallManifest:
         def scrub(value: Any, key: str = "") -> Any:
             if redact and key in SECRET_KEYS and value:
                 return "<redacted>"
+            if redact and key == "proxy" and isinstance(value, str):
+                return _redact_url_password(value)
             if is_dataclass(value):
                 return {f.name: scrub(getattr(value, f.name), f.name) for f in fields(value)}
             if isinstance(value, dict):
@@ -484,8 +599,11 @@ class InstallManifest:
             errors.append("Unknown bootloader selection")
         if system.bootloader != "grub" and storage.firmware != "uefi":
             errors.append("systemd-boot and EFI stub require UEFI firmware")
-        if system.secure_boot and (not system.secure_boot_key or not system.secure_boot_certificate):
-            errors.append("Secure Boot needs both a signing key and certificate")
+        if system.uki and storage.firmware != "uefi":
+            errors.append("A Unified Kernel Image requires UEFI firmware")
+        if system.profile and not PROFILE_RE.fullmatch(system.profile):
+            errors.append("Unknown Portage profile; use a published default/linux/amd64/23.0 profile or leave it empty")
+        errors.extend(self._secure_boot_errors())
         extra = system.kernel_cmdline_extra
         if extra:
             tokens = extra.split(" ")
@@ -495,14 +613,36 @@ class InstallManifest:
                 errors.append("Extra kernel arguments cannot override root=, init= or the encryption arguments")
         return errors
 
+    def _secure_boot_errors(self) -> list[str]:
+        """Secure Boot needs a signed Unified Kernel Image booted by systemd-boot or the EFI stub."""
+        system, storage = self.system, self.storage
+        if not system.secure_boot:
+            return []
+        errors: list[str] = []
+        if storage.firmware != "uefi":
+            errors.append("Secure Boot requires UEFI firmware")
+        if system.bootloader == "grub":
+            errors.append("Secure Boot is not supported with GRUB (it would need a signed shim chain); choose systemd-boot or the EFI stub with a Unified Kernel Image")
+        elif not system.uki:
+            errors.append("Secure Boot with systemd-boot or EFI stub requires a signed Unified Kernel Image (enable UKI)")
+        if not system.secure_boot_key or not system.secure_boot_certificate:
+            errors.append("Secure Boot needs both a signing key and certificate")
+        elif not (system.secure_boot_key.startswith("/") and system.secure_boot_certificate.startswith("/")) \
+                or has_control_characters(system.secure_boot_key + system.secure_boot_certificate):
+            errors.append("The Secure Boot key and certificate must be absolute file paths")
+        return errors
+
     def _validate_locale(self) -> list[str]:
         errors: list[str] = []
         system = self.system
-        if not system.timezone or system.timezone.startswith("/") or ".." in system.timezone:
+        if not system.timezone or system.timezone.startswith("/") or ".." in system.timezone \
+                or not re.fullmatch(r"[A-Za-z0-9_+./-]{1,64}", system.timezone):
             errors.append("Invalid timezone")
-        if not re.fullmatch(r"[A-Za-z0-9_.@-]{1,64}", system.locale):
+        elif _known_timezones() and system.timezone not in _known_timezones():
+            errors.append(f"Unknown timezone: {system.timezone}")
+        if not LOCALE_RE.fullmatch(system.locale):
             errors.append("Invalid locale")
-        if not re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", system.keymap):
+        if system.keymap not in {"", "auto"} and not KEYMAP_RE.fullmatch(system.keymap):
             errors.append("Invalid console keymap")
         if not re.fullmatch(r"[a-z][a-z0-9_-]{0,15}(?:,[a-z][a-z0-9_-]{0,15}){0,3}", system.keyboard_layout):
             errors.append("Invalid keyboard layout")
@@ -528,6 +668,13 @@ class InstallManifest:
             errors.append("The root password must contain at least 8 characters")
         if self.accounts.privilege not in {"sudo", "doas"}:
             errors.append("Privilege tool must be sudo or doas")
+        full_name = self.accounts.full_name
+        if len(full_name) > 64 or ":" in full_name or has_control_characters(full_name):
+            errors.append("The full name may have at most 64 characters, without colons or line breaks")
+        if any(not re.fullmatch(r"[A-Za-z0-9_.-]+", group) for group in self.accounts.groups):
+            errors.append("Account groups contain an invalid name")
+        if any(not key.strip() or has_control_characters(key) for key in self.accounts.ssh_authorized_keys):
+            errors.append("SSH authorized keys must be single-line, non-empty keys")
         if any(c in secret for secret in (self.accounts.password, self.accounts.root_password) for c in "\n\r\0"):
             # chpasswd reads "user:password" lines; a newline would set a second account.
             errors.append("Passwords cannot contain line breaks or NUL characters")
@@ -544,30 +691,65 @@ class InstallManifest:
             errors.append("netifrc is available only with OpenRC")
         if self.network.manager == "systemd-networkd" and system.init != "systemd":
             errors.append("systemd-networkd requires systemd")
-        if not self.network.dhcp:
+        network = self.network
+        if network.interface and not re.fullmatch(r"[A-Za-z0-9_.:-]{1,15}", network.interface):
+            errors.append("The network interface name may contain only letters, numbers, and . _ : - (at most 15 characters)")
+        if network.manager == "dhcpcd" and not network.dhcp and not network.interface:
+            errors.append("A static address with dhcpcd needs the network interface name")
+        if not network.dhcp:
             import ipaddress
             try:
-                ipaddress.ip_interface(self.network.address)
-                ipaddress.ip_address(self.network.gateway)
-                for server in self.network.dns:
+                ipaddress.ip_interface(network.address)
+                ipaddress.ip_address(network.gateway)
+                for server in network.dns:
                     ipaddress.ip_address(server)
             except ValueError:
                 errors.append("Static networking needs a valid address/prefix, gateway, and DNS servers")
+        if network.wifi_ssid or network.wifi_password:
+            if network.manager != "networkmanager":
+                errors.append("Wi-Fi setup is available only with NetworkManager")
+            errors.extend(_wifi_errors(network.wifi_ssid, network.wifi_password))
+        if network.import_live_profiles and network.manager != "networkmanager":
+            errors.append("Importing this session's network connections requires NetworkManager")
+        if network.proxy:
+            errors.extend(_proxy_errors(network.proxy))
         return errors
 
     def _validate_portage(self) -> list[str]:
         errors: list[str] = []
-        if not self.portage.mirror.startswith("https://"):
+        portage = self.portage
+        if not portage.mirror.startswith("https://"):
             errors.append("The stage3 mirror must use HTTPS")
-        if self.portage.binhost and not self.portage.binhost_url.startswith("https://"):
+        if portage.binhost and not portage.binhost_url.startswith("https://"):
             errors.append("The binary package host must use HTTPS")
+        for url in (portage.mirror, portage.binhost_url, *portage.mirror_fallbacks):
+            if url and (has_control_characters(url) or " " in url):
+                errors.append("Mirror and binary package host addresses cannot contain spaces or line breaks")
+                break
+        if any(not mirror.startswith("https://") for mirror in portage.mirror_fallbacks):
+            errors.append("Fallback stage3 mirrors must use HTTPS")
+        if portage.rsync_mirror and not portage.rsync_mirror.startswith(("rsync://", "https://")):
+            errors.append("The repository sync mirror must use rsync or HTTPS")
+        errors.extend(_make_opts_errors(portage.make_opts))
+        for label, value in (("CFLAGS", portage.cflags), ("CXXFLAGS", portage.cxxflags), ("RUSTFLAGS", portage.rustflags),
+                             ("EMERGE_DEFAULT_OPTS", portage.emerge_opts), ("ACCEPT_LICENSE", portage.accept_license),
+                             ("CPU_FLAGS_X86", portage.cpu_flags), ("VIDEO_CARDS", portage.video_cards)):
+            if has_control_characters(value):
+                errors.append(f"{label} cannot contain line breaks or control characters")
+        if any(not re.fullmatch(r"-?[A-Za-z0-9_+@.-]+", token) for token in (*portage.features, *portage.use_flags)):
+            errors.append("FEATURES and USE entries may contain only letters, numbers, and + _ @ . -")
+        for atom, flags in portage.package_use.items():
+            if not (ATOM_RE.fullmatch(atom) or atom == "*/*") or any(not USE_TOKEN_RE.fullmatch(flag) for flag in flags):
+                errors.append(f"Invalid package.use entry: {atom}")
         return errors
 
     def _validate_options(self) -> list[str]:
         errors: list[str] = []
         for atom in self.options.extra_packages:
-            if not re.fullmatch(r"[A-Za-z0-9_+.-]+/[A-Za-z0-9_+.-]+(?::[A-Za-z0-9_.-]+)?", atom):
+            if not ATOM_RE.fullmatch(atom):
                 errors.append(f"Invalid package atom: {atom}")
+        if self.options.kde_apps not in KDE_APPS_CHOICES:
+            errors.append("KDE applications must be core or full")
         return errors
 
     def _validate_hardware(self) -> list[str]:
@@ -594,12 +776,18 @@ class InstallManifest:
         if errors:
             raise ManifestError("\n".join(errors))
 
+    def effective_profile(self) -> str:
+        """The Portage profile that will be selected: the explicit one or the derived one."""
+        system = self.system
+        return system.profile or derive_profile(
+            system.init, system.desktop, multilib=system.multilib, hardened="hardened" in system.stage_variant)
+
     def summary(self) -> list[tuple[str, str]]:
         return [
             ("Disk", f"{self.storage.device} · {self.storage.mode} · {self.storage.filesystem}"),
             ("Firmware", self.storage.firmware.upper()),
             ("Encryption", "LUKS enabled" if self.storage.luks else "Not enabled"),
-            ("Base", f"{self.system.stage_variant} · {self.system.profile}"),
+            ("Base", f"{self.system.stage_variant} · {self.effective_profile()}"),
             ("Desktop", self.system.desktop.upper() if self.system.desktop != "minimal" else "Minimal (no desktop)"),
             ("Kernel", self.system.kernel),
             ("Bootloader", self.system.bootloader),
