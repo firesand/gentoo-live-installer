@@ -1,0 +1,7 @@
+1af4  Red Hat, Inc.
+	1041  Virtio 1.0 network device
+	1042  Virtio 1.0 block device
+	1050  Virtio 1.0 GPU
+8086  Intel Corporation
+	2922  82801IR/IO/IH (ICH9R/DO/DH) 6 port SATA Controller [AHCI mode]
+	29c0  82G33/G31/P35/P31 Express DRAM Controller

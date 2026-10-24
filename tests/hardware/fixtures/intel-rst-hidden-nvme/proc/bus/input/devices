@@ -1,0 +1,17 @@
+I: Bus=0011 Vendor=0001 Product=0001 Version=ab41
+N: Name="AT Translated Set 2 keyboard"
+H: Handlers=sysrq kbd leds event0
+B: PROP=0
+B: EV=120013
+
+I: Bus=0018 Vendor=06cb Product=7a13 Version=ab41
+N: Name="DLL07BE:01 06CB:7A13 Touchpad"
+H: Handlers=mouse0 event5
+B: PROP=0
+B: EV=120013
+
+I: Bus=0011 Vendor=0001 Product=0001 Version=ab41
+N: Name="Lid Switch"
+H: Handlers=event1
+B: PROP=0
+B: EV=120013

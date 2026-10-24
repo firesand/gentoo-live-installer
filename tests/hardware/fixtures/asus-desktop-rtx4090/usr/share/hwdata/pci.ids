@@ -1,0 +1,42 @@
+10de  NVIDIA Corporation
+	22ba  AD102 High Definition Audio Controller
+	2684  AD102 [GeForce RTX 4090]
+15b7  Sandisk Corp
+	5030  WD Black SN850X NVMe SSD
+1987  Phison Electronics Corporation
+	5018  E18 PCIe4 NVMe Controller
+1b21  ASMedia Technology Inc.
+	0612  ASM1061/ASM1062 Serial ATA Controller
+1d97  Shenzhen Longsys Electronics Co., Ltd.
+	1602  Lexar NM790 / Patriot Viper VP4300 Lite NVMe SSD (DRAM-less)
+8086  Intel Corporation
+	09ab  RST VMD Managed Controller
+	1136  Thunderbolt 4 Bridge [Maple Ridge 4C 2020]
+	1137  Thunderbolt 4 NHI [Maple Ridge 4C 2020]
+	1138  Thunderbolt 4 USB Controller [Maple Ridge 4C 2020]
+	125c  Ethernet Controller I226-V
+	7a04  Z790 Chipset LPC/eSPI Controller
+	7a23  700 Series Chipset SMBus Controller
+	7a24  Raptor Lake SPI (flash) Controller
+	7a27  Raptor Lake PCH Shared SRAM
+	7a30  Raptor Lake PCI Express Root Port #9
+	7a34  Raptor Lake PCI Express Root Port #13
+	7a38  Raptor Lake PCI Express Root Port #1
+	7a39  Raptor Lake PCI Express Root Port #2
+	7a3b  Raptor Lake PCI Express Root Port #4
+	7a3c  Raptor Lake PCI Express Root Port #5
+	7a40  Raptor Lake PCI Express Root Port #17
+	7a48  Raptor Lake PCI Express Root Port #25
+	7a4c  Raptor Lake Serial IO I2C Host Controller #0
+	7a4d  Raptor Lake Serial IO I2C Host Controller #1
+	7a4e  Raptor Lake Serial IO I2C Host Controller #2
+	7a50  Raptor Lake High Definition Audio Controller
+	7a60  Raptor Lake USB 3.2 Gen 2x2 (20 Gb/s) XHCI Host Controller
+	7a62  Raptor Lake SATA AHCI Controller
+	7a68  Raptor Lake CSME HECI #1
+	7a70  700 Series Chipset CNVi WiFi
+	a700  Raptor Lake-S Host Bridge/DRAM Controller
+	a70d  Raptor Lake PCI Express 5.0 Graphics Port (PEG010)
+	a74d  Raptor Lake PCI Express 4.0 Graphics Port
+	a77d  Raptor Lake Crashlog and Telemetry
+	a77f  RST Volume Management Device Controller

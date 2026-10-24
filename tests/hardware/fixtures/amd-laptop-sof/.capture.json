@@ -1,0 +1,9 @@
+{
+ "now": 1792800000,
+ "redacted": true,
+ "schema": 1,
+ "summary": "AMD Ryzen 5 5500U with Radeon Graphics - 12 threads - 15 GiB - AMD Lucienne - NVMe SSD - UEFI 64-bit",
+ "synthetic": true,
+ "tool": "synthetic",
+ "tool_version": 1
+}

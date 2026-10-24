@@ -1,0 +1,2 @@
+Architecture:                            x86_64
+Model name:                              AMD Ryzen 5 5500U with Radeon Graphics

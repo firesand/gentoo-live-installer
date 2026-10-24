@@ -1,0 +1,442 @@
+{
+ "fixture": "old-bios-sata-radeon",
+ "machine": "OptiPlex 580",
+ "scenarios": {
+  "kde-openrc": {
+   "description": "the GUI defaults (KDE, OpenRC, binary packages)",
+   "issues": [
+    {
+     "code": "hw.memory_tight",
+     "message": "This PC has 3.8 GiB of memory. KDE will feel slow; Xfce needs less.",
+     "severity": "info"
+    }
+   ],
+   "plan": {
+    "driver_atoms": [],
+    "early_atoms": [
+     "sys-kernel/linux-firmware"
+    ],
+    "files": [
+     [
+      "/etc/conf.d/zram-init",
+      "# Compressed RAM swap, written by the Gentoo installer.\nload_on_start=\"yes\"\nunload_on_stop=\"yes\"\nnum_devices=\"1\"\ntype0=\"swap\"\nsize0=\"1953\"\nmaxs0=\"1\"\nalgo0=\"zstd\"\nlabl0=\"zram_swap\"\n",
+      420
+     ]
+    ],
+    "kernel_cmdline": [],
+    "make_conf": {},
+    "notes": [],
+    "optional_atoms": [
+     "sys-block/zram-init"
+    ],
+    "optional_services": [
+     [
+      "zram-init",
+      "default"
+     ]
+    ],
+    "package_license": {
+     "sys-kernel/linux-firmware": [
+      "linux-fw-redistributable"
+     ]
+    },
+    "package_mask": [],
+    "package_use": {
+     "media-video/pipewire": [
+      "sound-server"
+     ],
+     "sys-kernel/linux-firmware": [
+      "initramfs",
+      "redistributable"
+     ]
+    },
+    "post_steps": [
+     [
+      "sh",
+      "-c",
+      "if getent group pipewire >/dev/null; then usermod -aG pipewire \"$1\"; fi; exit 0",
+      "sh",
+      "gentoo"
+     ]
+    ],
+    "required_atoms": [],
+    "scalars": {
+     "btrfs_discard_async": false,
+     "cpu_flags_mode": "profile",
+     "cpu_vendor": "amd",
+     "firmware_forced": false,
+     "firmware_reasons": [
+      "AMD graphics",
+      "Ethernet adapter"
+     ],
+     "form_factor": "desktop",
+     "gpu_driver": "open",
+     "gpu_vendors": [
+      "amd"
+     ],
+     "grub_target": "i386-pc",
+     "hidpi": "off",
+     "hybrid": false,
+     "hypervisor": "",
+     "init": "openrc",
+     "luks_allow_discards": false,
+     "microcode": "amd",
+     "nvidia_branch": "",
+     "nvk": "no",
+     "power": "none",
+     "prime": "off",
+     "removable_fallback": "never",
+     "sof_firmware": "no",
+     "target": "this",
+     "thermald": "no",
+     "trim": "off",
+     "zram": "yes",
+     "zram_mib": 1953
+    },
+    "schema": 1,
+    "services": [],
+    "summary": [
+     "CPU: AMD Athlon(tm) II X2 250 Processor, 2 threads; AMD microcode (linux-firmware)",
+     "Graphics: AMD Radeon HD 5000/6000/7350/8350 Series - open AMD driver",
+     "Firmware: Linux firmware (AMD graphics, Ethernet adapter)",
+     "Memory: compressed RAM swap (zram), 1953 MiB"
+    ],
+    "warnings": []
+   }
+  },
+  "nvidia-this": {
+   "description": "this PC, proprietary NVIDIA driver accepted",
+   "issues": [
+    {
+     "code": "hw.nvidia_no_gpu",
+     "message": "The proprietary NVIDIA driver was selected but no NVIDIA graphics card was found in this PC. Choose the open driver, or select 'portable' if the disk will run on another computer.",
+     "severity": "error"
+    },
+    {
+     "code": "hw.memory_tight",
+     "message": "This PC has 3.8 GiB of memory. KDE will feel slow; Xfce needs less.",
+     "severity": "info"
+    }
+   ],
+   "plan": {
+    "driver_atoms": [],
+    "early_atoms": [
+     "sys-kernel/linux-firmware"
+    ],
+    "files": [
+     [
+      "/etc/conf.d/zram-init",
+      "# Compressed RAM swap, written by the Gentoo installer.\nload_on_start=\"yes\"\nunload_on_stop=\"yes\"\nnum_devices=\"1\"\ntype0=\"swap\"\nsize0=\"1953\"\nmaxs0=\"1\"\nalgo0=\"zstd\"\nlabl0=\"zram_swap\"\n",
+      420
+     ]
+    ],
+    "kernel_cmdline": [],
+    "make_conf": {},
+    "notes": [],
+    "optional_atoms": [
+     "sys-block/zram-init"
+    ],
+    "optional_services": [
+     [
+      "zram-init",
+      "default"
+     ]
+    ],
+    "package_license": {
+     "sys-kernel/linux-firmware": [
+      "linux-fw-redistributable"
+     ]
+    },
+    "package_mask": [],
+    "package_use": {
+     "media-video/pipewire": [
+      "sound-server"
+     ],
+     "sys-kernel/linux-firmware": [
+      "initramfs",
+      "redistributable"
+     ]
+    },
+    "post_steps": [
+     [
+      "sh",
+      "-c",
+      "if getent group pipewire >/dev/null; then usermod -aG pipewire \"$1\"; fi; exit 0",
+      "sh",
+      "gentoo"
+     ]
+    ],
+    "required_atoms": [],
+    "scalars": {
+     "btrfs_discard_async": false,
+     "cpu_flags_mode": "profile",
+     "cpu_vendor": "amd",
+     "firmware_forced": false,
+     "firmware_reasons": [
+      "AMD graphics",
+      "Ethernet adapter"
+     ],
+     "form_factor": "desktop",
+     "gpu_driver": "open",
+     "gpu_vendors": [
+      "amd"
+     ],
+     "grub_target": "i386-pc",
+     "hidpi": "off",
+     "hybrid": false,
+     "hypervisor": "",
+     "init": "openrc",
+     "luks_allow_discards": false,
+     "microcode": "amd",
+     "nvidia_branch": "",
+     "nvk": "no",
+     "power": "none",
+     "prime": "off",
+     "removable_fallback": "never",
+     "sof_firmware": "no",
+     "target": "this",
+     "thermald": "no",
+     "trim": "off",
+     "zram": "yes",
+     "zram_mib": 1953
+    },
+    "schema": 1,
+    "services": [],
+    "summary": [
+     "CPU: AMD Athlon(tm) II X2 250 Processor, 2 threads; AMD microcode (linux-firmware)",
+     "Graphics: AMD Radeon HD 5000/6000/7350/8350 Series - open AMD driver",
+     "Firmware: Linux firmware (AMD graphics, Ethernet adapter)",
+     "Memory: compressed RAM swap (zram), 1953 MiB",
+     "The proprietary NVIDIA driver was not installed because it does not fit this PC or these settings (nvidia_no_gpu). The open driver is used."
+    ],
+    "warnings": [
+     {
+      "code": "hw.nvidia_skipped",
+      "message": "The proprietary NVIDIA driver was not installed because it does not fit this PC or these settings (nvidia_no_gpu). The open driver is used.",
+      "severity": "warning"
+     }
+    ]
+   }
+  },
+  "portable-nvidia": {
+   "description": "a portable disk with the proprietary NVIDIA driver",
+   "issues": [
+    {
+     "code": "hw.memory_tight",
+     "message": "This PC has 3.8 GiB of memory. KDE will feel slow; Xfce needs less.",
+     "severity": "info"
+    }
+   ],
+   "plan": {
+    "driver_atoms": [
+     "x11-drivers/nvidia-drivers"
+    ],
+    "early_atoms": [
+     "sys-firmware/intel-microcode",
+     "sys-kernel/linux-firmware"
+    ],
+    "files": [],
+    "kernel_cmdline": [
+     "nvidia-drm.modeset=1",
+     "nvidia-drm.fbdev=1"
+    ],
+    "make_conf": {
+     "VIDEO_CARDS": "${VIDEO_CARDS} nvidia"
+    },
+    "notes": [
+     "Portable install: both Intel and AMD microcode are installed.",
+     "NVIDIA proprietary driver 595 (current, open kernel modules); if it fails to build, the open nouveau driver stays in use."
+    ],
+    "optional_atoms": [
+     "sys-firmware/sof-firmware"
+    ],
+    "optional_services": [],
+    "package_license": {
+     "sys-firmware/intel-microcode": [
+      "intel-ucode"
+     ],
+     "sys-kernel/linux-firmware": [
+      "linux-fw-redistributable"
+     ],
+     "x11-drivers/nvidia-drivers": [
+      "NVIDIA-2025"
+     ]
+    },
+    "package_mask": [],
+    "package_use": {
+     "media-video/pipewire": [
+      "sound-server"
+     ],
+     "sys-firmware/intel-microcode": [
+      "initramfs"
+     ],
+     "sys-kernel/linux-firmware": [
+      "initramfs",
+      "redistributable"
+     ],
+     "x11-drivers/nvidia-drivers": [
+      "dist-kernel",
+      "wayland"
+     ]
+    },
+    "post_steps": [
+     [
+      "sh",
+      "-c",
+      "if [ -f /etc/modprobe.d/nvidia.conf ]; then dracut --force --regenerate-all; fi"
+     ],
+     [
+      "sh",
+      "-c",
+      "if getent group pipewire >/dev/null; then usermod -aG pipewire \"$1\"; fi; exit 0",
+      "sh",
+      "gentoo"
+     ],
+     [
+      "sh",
+      "-c",
+      "set -- /var/db/pkg/app-misc/hwmonux-*; if [ -f /etc/modprobe.d/nvidia.conf ] && [ -d \"$1\" ]; then echo 'app-misc/hwmonux nvidia' > /etc/portage/package.use/installer-hwmonux-nvidia && emerge --oneshot app-misc/hwmonux || { rm -f /etc/portage/package.use/installer-hwmonux-nvidia; echo 'HWMonux NVIDIA sensors skipped'; }; fi; exit 0"
+     ]
+    ],
+    "required_atoms": [],
+    "scalars": {
+     "btrfs_discard_async": false,
+     "cpu_flags_mode": "profile",
+     "cpu_vendor": "amd",
+     "firmware_forced": false,
+     "firmware_reasons": [
+      "a portable install can meet any hardware",
+      "AMD graphics",
+      "Ethernet adapter"
+     ],
+     "form_factor": "desktop",
+     "gpu_driver": "nvidia",
+     "gpu_vendors": [
+      "amd"
+     ],
+     "grub_target": "i386-pc",
+     "hidpi": "off",
+     "hybrid": false,
+     "hypervisor": "",
+     "init": "openrc",
+     "luks_allow_discards": false,
+     "microcode": "both",
+     "nvidia_branch": "595",
+     "nvk": "no",
+     "power": "none",
+     "prime": "off",
+     "removable_fallback": "never",
+     "sof_firmware": "yes",
+     "target": "portable",
+     "thermald": "no",
+     "trim": "off",
+     "zram": "no"
+    },
+    "schema": 1,
+    "services": [],
+    "summary": [
+     "CPU: AMD Athlon(tm) II X2 250 Processor, 2 threads; Intel and AMD microcode",
+     "Graphics: AMD Radeon HD 5000/6000/7350/8350 Series - open AMD driver",
+     "Firmware: Linux firmware (a portable install can meet any hardware, AMD graphics, Ethernet adapter)",
+     "Audio: Sound Open Firmware (many laptop audio chips need it)"
+    ],
+    "warnings": []
+   }
+  },
+  "xfce-systemd-source": {
+   "description": "Xfce on systemd, everything built from source",
+   "issues": [],
+   "plan": {
+    "driver_atoms": [],
+    "early_atoms": [
+     "sys-kernel/linux-firmware"
+    ],
+    "files": [
+     [
+      "/etc/systemd/zram-generator.conf",
+      "# Compressed RAM swap, written by the Gentoo installer.\n[zram0]\nzram-size = min(ram * 50 / 100, 16384)\ncompression-algorithm = zstd\nswap-priority = 100\n",
+      420
+     ]
+    ],
+    "kernel_cmdline": [],
+    "make_conf": {
+     "CPU_FLAGS_X86": "3dnow 3dnowext mmx mmxext popcnt sse sse2 sse3 sse4a",
+     "VIDEO_CARDS": "radeon r600"
+    },
+    "notes": [],
+    "optional_atoms": [
+     "sys-apps/zram-generator"
+    ],
+    "optional_services": [],
+    "package_license": {
+     "sys-kernel/linux-firmware": [
+      "linux-fw-redistributable"
+     ]
+    },
+    "package_mask": [],
+    "package_use": {
+     "media-video/pipewire": [
+      "sound-server"
+     ],
+     "sys-kernel/linux-firmware": [
+      "initramfs",
+      "redistributable"
+     ]
+    },
+    "post_steps": [
+     [
+      "sh",
+      "-c",
+      "if getent group pipewire >/dev/null; then usermod -aG pipewire \"$1\"; fi; exit 0",
+      "sh",
+      "gentoo"
+     ]
+    ],
+    "required_atoms": [],
+    "scalars": {
+     "btrfs_discard_async": false,
+     "cpu_flags_mode": "detect",
+     "cpu_vendor": "amd",
+     "firmware_forced": false,
+     "firmware_reasons": [
+      "AMD graphics",
+      "Ethernet adapter"
+     ],
+     "form_factor": "desktop",
+     "gpu_driver": "open",
+     "gpu_vendors": [
+      "amd"
+     ],
+     "grub_target": "i386-pc",
+     "hidpi": "off",
+     "hybrid": false,
+     "hypervisor": "",
+     "init": "systemd",
+     "luks_allow_discards": false,
+     "microcode": "amd",
+     "nvidia_branch": "",
+     "nvk": "no",
+     "power": "none",
+     "prime": "off",
+     "removable_fallback": "never",
+     "sof_firmware": "no",
+     "target": "this",
+     "thermald": "no",
+     "trim": "off",
+     "zram": "yes",
+     "zram_mib": 1953
+    },
+    "schema": 1,
+    "services": [],
+    "summary": [
+     "CPU: AMD Athlon(tm) II X2 250 Processor, 2 threads; AMD microcode (linux-firmware)",
+     "CPU flags: tuned for this CPU (packages are built, not downloaded)",
+     "Graphics: AMD Radeon HD 5000/6000/7350/8350 Series - open AMD driver",
+     "Firmware: Linux firmware (AMD graphics, Ethernet adapter)",
+     "Memory: compressed RAM swap (zram), 1953 MiB"
+    ],
+    "warnings": []
+   }
+  }
+ }
+}

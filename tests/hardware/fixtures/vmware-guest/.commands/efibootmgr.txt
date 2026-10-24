@@ -1,0 +1,1 @@
+Boot0000* EFI VMware Virtual SCSI Hard Drive (0.0)

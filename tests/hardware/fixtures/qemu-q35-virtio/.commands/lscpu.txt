@@ -1,0 +1,4 @@
+Architecture:                            x86_64
+Model name:                              Intel Core Processor (Skylake, IBRS)
+Hypervisor vendor:                       KVM
+Virtualization type:                     full

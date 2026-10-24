@@ -1,0 +1,167 @@
+I: Bus=0019 Vendor=0000 Product=0003 Version=0000
+N: Name="Sleep Button"
+H: Handlers=kbd event0 
+B: PROP=0
+B: EV=3
+B: KEY=4000 0 0
+
+I: Bus=0019 Vendor=0000 Product=0001 Version=0000
+N: Name="Power Button"
+H: Handlers=kbd event1 
+B: PROP=0
+B: EV=3
+B: KEY=8000 10000000000000 0
+
+I: Bus=0019 Vendor=0000 Product=0001 Version=0000
+N: Name="Power Button"
+H: Handlers=kbd event2 
+B: PROP=0
+B: EV=3
+B: KEY=8000 10000000000000 0
+
+I: Bus=0003 Vendor=054c Product=0ce6 Version=8111
+N: Name="Game Controller"
+H: Handlers=event3 js0 
+B: PROP=0
+B: EV=20000b
+B: KEY=7fdb000000000000 0 0 0 0
+B: ABS=3003f
+B: FF=107030000 0
+
+I: Bus=0003 Vendor=054c Product=0ce6 Version=8111
+N: Name="Game Controller"
+H: Handlers=event4 js1 
+B: PROP=40
+B: EV=19
+B: ABS=3f
+B: MSC=20
+
+I: Bus=0003 Vendor=054c Product=0ce6 Version=8111
+N: Name="Game Controller Touchpad"
+H: Handlers=event5 mouse0 
+B: PROP=5
+B: EV=b
+B: KEY=2420 10000 0 0 0 0
+B: ABS=260800000000003
+
+I: Bus=0003 Vendor=054c Product=0ce6 Version=8111
+N: Name="Game Controller"
+H: Handlers=event6 Headphone Jack Headset Mic Jack 
+B: PROP=0
+B: EV=21
+B: SW=14
+
+I: Bus=0003 Vendor=1532 Product=0091 Version=0100
+N: Name="Input device"
+H: Handlers=event7 mouse1 
+B: PROP=0
+B: EV=17
+B: KEY=1f0000 0 0 0 0
+B: REL=903
+B: MSC=10
+
+I: Bus=0003 Vendor=1532 Product=0091 Version=0100
+N: Name="Keyboard"
+H: Handlers=sysrq kbd event8 
+B: PROP=0
+B: EV=10001f
+B: KEY=733eff 0 0 483ffff17aff32d bfd4444600000000 1 130c730b17c007 ffbf7bfad941dfff febeffdfffefffff fffffffffffffffe
+B: REL=1040
+B: ABS=100000000
+B: MSC=10
+
+I: Bus=0003 Vendor=1532 Product=0091 Version=0100
+N: Name="Input device"
+H: Handlers=event9 
+B: PROP=0
+B: EV=9
+B: ABS=10000000000
+
+I: Bus=0003 Vendor=1532 Product=0091 Version=0111
+N: Name="Input device"
+H: Handlers=sysrq kbd leds event10 
+B: PROP=0
+B: EV=120013
+B: KEY=1000000000007 ff9f207ac14057ff febeffdfffefffff fffffffffffffffe
+B: MSC=10
+B: LED=7
+
+I: Bus=0003 Vendor=2dc8 Product=5200 Version=0111
+N: Name="Game Controller"
+H: Handlers=event11 mouse2 
+B: PROP=0
+B: EV=17
+B: KEY=1f0000 0 0 0 0
+B: REL=1943
+B: MSC=10
+
+I: Bus=0003 Vendor=2dc8 Product=5200 Version=0111
+N: Name="Game Controller"
+H: Handlers=sysrq kbd leds event12 
+B: PROP=0
+B: EV=12001f
+B: KEY=3f00733fff 0 0 483ffff17aff32d bfd4444600000000 1 130ff38b17d007 ffff7bfad941dfff ffbeffdfffefffff fffffffffffffffe
+B: REL=1040
+B: ABS=100000000
+B: MSC=10
+B: LED=1f
+
+I: Bus=0010 Vendor=001f Product=0001 Version=0100
+N: Name="Input device"
+H: Handlers=kbd event13 
+B: PROP=0
+B: EV=40001
+B: SND=6
+
+I: Bus=0019 Vendor=0000 Product=0000 Version=0000
+N: Name="Input device"
+H: Handlers=kbd event14 rfkill 
+B: PROP=0
+B: EV=100013
+B: KEY=7e40000 0 800000000000 0 0 1400b00100000 300180001100800 e000000000000 2
+B: MSC=10
+
+I: Bus=0000 Vendor=0000 Product=0000 Version=0000
+N: Name="Input device"
+H: Handlers=event15 
+B: PROP=0
+B: EV=21
+B: SW=140
+
+I: Bus=0000 Vendor=0000 Product=0000 Version=0000
+N: Name="Input device"
+H: Handlers=event16 
+B: PROP=0
+B: EV=21
+B: SW=140
+
+I: Bus=0000 Vendor=0000 Product=0000 Version=0000
+N: Name="Input device"
+H: Handlers=event17 
+B: PROP=0
+B: EV=21
+B: SW=140
+
+I: Bus=0000 Vendor=0000 Product=0000 Version=0000
+N: Name="Input device"
+H: Handlers=event18 
+B: PROP=0
+B: EV=21
+B: SW=140
+
+I: Bus=0003 Vendor=045e Product=028e Version=0114
+N: Name="Game Controller"
+H: Handlers=event19 js2 
+B: PROP=0
+B: EV=20000b
+B: KEY=7cdb000000000000 0 0 0 0
+B: ABS=3003f
+B: FF=0
+
+I: Bus=0003 Vendor=0001 Product=0001 Version=0001
+N: Name="Keyboard"
+H: Handlers=kbd event20 
+B: PROP=0
+B: EV=200003
+B: KEY=168000000000 20050701085c002
+B: FF=0

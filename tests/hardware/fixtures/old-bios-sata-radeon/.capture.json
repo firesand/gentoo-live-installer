@@ -1,0 +1,9 @@
+{
+ "now": 1792800000,
+ "redacted": true,
+ "schema": 1,
+ "summary": "AMD Athlon(tm) II X2 250 Processor - 2 threads - 4 GiB - AMD Radeon HD 5000/6000/7350/8350 Series - SATA HDD - Legacy BIOS",
+ "synthetic": true,
+ "tool": "synthetic",
+ "tool_version": 1
+}

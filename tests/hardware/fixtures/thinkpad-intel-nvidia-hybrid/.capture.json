@@ -1,0 +1,9 @@
+{
+ "now": 1792800000,
+ "redacted": true,
+ "schema": 1,
+ "summary": "11th Gen Intel Core i7-11800H @ 2.30GHz - 16 threads - 30 GiB - Intel UHD Graphics + NVIDIA RTX A5000 Mobile - NVMe SSD - UEFI 64-bit",
+ "synthetic": true,
+ "tool": "synthetic",
+ "tool_version": 1
+}

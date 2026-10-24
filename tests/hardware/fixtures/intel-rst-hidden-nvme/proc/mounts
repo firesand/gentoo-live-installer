@@ -1,0 +1,2 @@
+efivarfs /sys/firmware/efi/efivars efivarfs rw,nosuid,nodev,noexec,relatime 0 0
+/dev/sdb1 /run/initramfs/live iso9660 ro,relatime 0 0
