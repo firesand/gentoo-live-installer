@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Gentoo Installer
+Comment=Start the guided Gentoo installation
+Exec=gentoo-installer
+Icon=drive-harddisk
+Terminal=false
+OnlyShowIn=XFCE;
+X-GNOME-Autostart-enabled=true

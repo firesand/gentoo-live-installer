@@ -1,0 +1,21 @@
+[package]
+description = "PortageHub — a Steam-styled graphical front end for Gentoo Portage"
+license = "GPL-2.0-or-later"
+name = "portagehub"
+version = "0.4.0"
+edition = "2024"
+
+[dependencies]
+chrono = "0.4.45"
+eframe = "0.36.1"
+egui = "0.36.2"
+egui-phosphor = "0.14.0"
+libc = "0.2.191"
+regex = "1.13.1"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+
+[profile.release]
+lto = "thin"
+strip = true
+codegen-units = 4

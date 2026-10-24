@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Gentoo Installer
+GenericName=System Installer
+Comment=Install and customize Gentoo Linux using the AMD64 Handbook
+Exec=gentoo-installer
+Icon=drive-harddisk
+Terminal=false
+Categories=System;Settings;Qt;
+Keywords=gentoo;install;amd64;stage3;portage;

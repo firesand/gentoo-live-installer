@@ -1,0 +1,23 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+
+# Build outputs and caches. Anchored to the project root: apps/portagehub/dist
+# holds tracked packaging sources that the ISO build needs.
+/build/
+/dist/
+/.cache/
+
+# Rust
+target/
+
+# Disk images
+*.iso
+*.qcow2

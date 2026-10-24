@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=HWMonux
+GenericName=Hardware Monitor
+Comment=Temperatures, clocks, fans, power and utilization of CPU, GPU, memory and drives
+Exec=hwmonux
+Icon=utilities-system-monitor
+Terminal=false
+Categories=System;Monitor;Qt;
+Keywords=sensors;temperature;hwmonitor;cpu;gpu;

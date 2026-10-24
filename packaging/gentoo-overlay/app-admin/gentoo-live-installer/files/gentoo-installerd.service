@@ -1,0 +1,14 @@
+[Unit]
+Description=Gentoo installer privileged daemon
+Requires=dbus.service
+After=dbus.service NetworkManager.service
+
+[Service]
+Type=simple
+Group=gentoo-installer
+ExecStart=/usr/bin/gentoo-installerd
+Restart=on-failure
+RestartSec=2s
+
+[Install]
+WantedBy=multi-user.target

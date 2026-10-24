@@ -1,0 +1,7 @@
+net-misc/networkmanager dhcpcd -dhclient
+sys-kernel/linux-firmware initramfs
+x11-base/xorg-server udev
+dev-libs/libdbusmenu gtk3
+sys-boot/grub mount
+sys-apps/i2c-tools python
+media-libs/libwebp -tiff

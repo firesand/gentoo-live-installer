@@ -1,0 +1,351 @@
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass, field, fields, is_dataclass
+from pathlib import Path
+from typing import Any, get_args, get_origin, get_type_hints
+
+
+SCHEMA_VERSION = 1
+SECRET_KEYS = {"password", "root_password", "luks_passphrase", "wifi_password", "proxy_password"}
+
+
+class ManifestError(ValueError):
+    pass
+
+
+@dataclass
+class Partition:
+    device: str = ""
+    mountpoint: str = "/"
+    filesystem: str = "ext4"
+    size_mib: int = 0
+    format: bool = True
+    label: str = ""
+    flags: list[str] = field(default_factory=list)
+
+
+@dataclass
+class Storage:
+    mode: str = "erase"
+    device: str = ""
+    device_id: str = ""
+    firmware: str = "uefi"
+    table: str = "gpt"
+    filesystem: str = "ext4"
+    swap_mib: int = 4096
+    separate_home: bool = False
+    home_mib: int = 0
+    luks: bool = False
+    luks_passphrase: str = ""
+    lvm: bool = False
+    raid_level: str = ""
+    partitions: list[Partition] = field(default_factory=list)
+
+
+@dataclass
+class System:
+    init: str = "openrc"
+    stage_variant: str = "amd64-openrc"
+    profile: str = "default/linux/amd64/23.0/desktop/plasma"
+    multilib: bool = True
+    desktop: str = "kde"
+    kernel: str = "gentoo-kernel-bin"
+    initramfs: str = "dracut"
+    bootloader: str = "grub"
+    secure_boot: bool = False
+    secure_boot_key: str = ""
+    secure_boot_certificate: str = ""
+    uki: bool = False
+    dual_boot: bool = False
+    locale: str = "en_US.UTF-8"
+    timezone: str = "UTC"
+    keymap: str = "us"
+    world_update: bool = False
+
+
+@dataclass
+class Portage:
+    mirror: str = "https://distfiles.gentoo.org"
+    rsync_mirror: str = ""
+    binhost: bool = True
+    binhost_url: str = "https://distfiles.gentoo.org/releases/amd64/binpackages/23.0/x86-64/"
+    make_opts: str = "-j2"
+    cflags: str = "-O2 -pipe"
+    cxxflags: str = "${CFLAGS}"
+    rustflags: str = ""
+    emerge_opts: str = "--ask=n --verbose=y"
+    features: list[str] = field(default_factory=list)
+    accept_license: str = "@FREE"
+    use_flags: list[str] = field(default_factory=list)
+    package_use: dict[str, list[str]] = field(default_factory=dict)
+    cpu_flags: str = ""
+    video_cards: str = ""
+
+
+@dataclass
+class Network:
+    manager: str = "networkmanager"
+    interface: str = ""
+    dhcp: bool = True
+    address: str = ""
+    gateway: str = ""
+    dns: list[str] = field(default_factory=list)
+    proxy: str = ""
+    wifi_ssid: str = ""
+    wifi_password: str = ""
+
+
+@dataclass
+class Accounts:
+    hostname: str = "gentoo"
+    username: str = "gentoo"
+    full_name: str = ""
+    password: str = ""
+    root_password: str = ""
+    privilege: str = "sudo"
+    groups: list[str] = field(default_factory=lambda: ["audio", "video", "wheel"])
+    disable_root_login: bool = False
+    ssh_authorized_keys: list[str] = field(default_factory=list)
+
+
+@dataclass
+class Options:
+    install_hwmonux: bool = True
+    install_portagehub: bool = True
+    pipewire: bool = True
+    bluetooth: bool = True
+    printing: bool = True
+    flatpak: bool = False
+    ssh: bool = False
+    chrony: bool = True
+    cron: bool = True
+    file_indexing: bool = False
+    firmware: bool = True
+    microcode: bool = True
+    shell_completion: bool = True
+    logger: bool = True
+    extra_packages: list[str] = field(default_factory=list)
+
+
+@dataclass
+class InstallManifest:
+    storage: Storage = field(default_factory=Storage)
+    system: System = field(default_factory=System)
+    portage: Portage = field(default_factory=Portage)
+    network: Network = field(default_factory=Network)
+    accounts: Accounts = field(default_factory=Accounts)
+    options: Options = field(default_factory=Options)
+    version: int = SCHEMA_VERSION
+
+    def to_dict(self, redact: bool = False) -> dict[str, Any]:
+        def scrub(value: Any, key: str = "") -> Any:
+            if redact and key in SECRET_KEYS and value:
+                return "<redacted>"
+            if is_dataclass(value):
+                return {f.name: scrub(getattr(value, f.name), f.name) for f in fields(value)}
+            if isinstance(value, dict):
+                return {k: scrub(v, k) for k, v in value.items()}
+            if isinstance(value, list):
+                return [scrub(v) for v in value]
+            return value
+
+        return scrub(self)
+
+    def to_json(self, redact: bool = False) -> str:
+        return json.dumps(self.to_dict(redact), indent=2, sort_keys=True)
+
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> InstallManifest:
+        if not isinstance(raw, dict):
+            raise ManifestError("The installation manifest must be a JSON object")
+
+        def convert(tp: Any, value: Any, name: str) -> Any:
+            origin = get_origin(tp)
+            if origin is list:
+                if not isinstance(value, list):
+                    raise ManifestError(f"{name} must be a list")
+                item_type = get_args(tp)[0]
+                return [convert(item_type, item, f"{name}[]") for item in value]
+            if origin is dict:
+                if not isinstance(value, dict):
+                    raise ManifestError(f"{name} must be an object")
+                key_type, value_type = get_args(tp)
+                return {
+                    convert(key_type, key, f"{name} key"): convert(value_type, item, f"{name}.{key}")
+                    for key, item in value.items()
+                }
+            if is_dataclass(tp):
+                if not isinstance(value, dict):
+                    raise ManifestError(f"{name} must be an object")
+                hints = get_type_hints(tp)
+                allowed = {f.name: hints[f.name] for f in fields(tp)}
+                unknown = set(value) - set(allowed)
+                if unknown:
+                    raise ManifestError(f"Unknown {name} fields: {', '.join(sorted(unknown))}")
+                return tp(**{key: convert(allowed[key], item, f"{name}.{key}") for key, item in value.items()})
+            if tp is bool:
+                if type(value) is not bool:
+                    raise ManifestError(f"{name} must be true or false")
+            elif tp is int:
+                if type(value) is not int:
+                    raise ManifestError(f"{name} must be an integer")
+            elif tp is str and not isinstance(value, str):
+                raise ManifestError(f"{name} must be a string")
+            return value
+
+        return convert(cls, raw, "manifest")
+
+    @classmethod
+    def from_json(cls, text: str) -> InstallManifest:
+        try:
+            raw = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise ManifestError(f"Invalid manifest JSON: {exc.msg}") from exc
+        manifest = cls.from_dict(raw)
+        manifest.require_valid()
+        return manifest
+
+    @classmethod
+    def load(cls, path: str | Path) -> InstallManifest:
+        return cls.from_json(Path(path).read_text())
+
+    def save(self, path: str | Path, redact: bool = True) -> None:
+        target = Path(path)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(self.to_json(redact) + "\n")
+        target.chmod(0o600)
+
+    def validate(self) -> list[str]:
+        errors: list[str] = []
+        storage, system = self.storage, self.system
+        for section in (self.storage, self.system, self.portage, self.network, self.accounts, self.options):
+            for key in SECRET_KEYS:
+                if getattr(section, key, None) == "<redacted>":
+                    errors.append(f"Replace the redacted secret in {key} before installing")
+        if self.version != SCHEMA_VERSION:
+            errors.append(f"Unsupported manifest version {self.version}")
+        if storage.mode not in {"erase", "manual"}:
+            errors.append("Storage mode must be erase or manual")
+        if not storage.device.startswith("/dev/") or storage.device in {"/dev/null", "/dev/zero", "/dev/random"}:
+            errors.append("Select a real target disk")
+        if "\n" in storage.device or ".." in storage.device:
+            errors.append("The target disk path is invalid")
+        if storage.firmware not in {"uefi", "bios"}:
+            errors.append("Firmware must be uefi or bios")
+        if storage.table not in {"gpt", "dos"}:
+            errors.append("Partition table must be gpt or dos")
+        if storage.filesystem not in {"ext4", "xfs", "btrfs"}:
+            errors.append("Root filesystem must be ext4, XFS, or Btrfs")
+        if storage.swap_mib < 0 or storage.home_mib < 0:
+            errors.append("Partition sizes cannot be negative")
+        if storage.mode == "manual":
+            if not any(p.mountpoint == "/" for p in storage.partitions):
+                errors.append("Manual storage needs a root (/) mountpoint")
+            root_partition = next((p for p in storage.partitions if p.mountpoint == "/"), None)
+            if root_partition and not root_partition.format and (storage.luks or storage.lvm):
+                errors.append("Preserved root cannot create a new LUKS/LVM stack; select an already opened volume with stack creation disabled")
+            for partition in storage.partitions:
+                if not partition.device.startswith("/dev/"):
+                    errors.append(f"Invalid partition device for {partition.mountpoint}")
+                if not partition.mountpoint.startswith("/") or ".." in partition.mountpoint:
+                    errors.append(f"Invalid mountpoint: {partition.mountpoint}")
+                if partition.filesystem not in {"ext4", "xfs", "btrfs", "vfat", "swap", "none"}:
+                    errors.append(f"Unsupported filesystem: {partition.filesystem}")
+            if storage.firmware == "uefi" and not any(p.mountpoint in {"/efi", "/boot/efi"} for p in storage.partitions):
+                errors.append("UEFI installations need an EFI System Partition mounted at /efi or /boot/efi")
+            if storage.luks and not any(p.mountpoint == "/boot" and p.filesystem not in {"swap", "none"} for p in storage.partitions):
+                errors.append("Manual LUKS installations need a separate /boot partition outside the encrypted root")
+            if storage.table == "dos":
+                if len(storage.partitions) > 4:
+                    errors.append("DOS partition tables support at most four primary partitions; use GPT or reduce the layout")
+        elif storage.table == "dos":
+            required_partitions = 1 + int(storage.firmware == "uefi") + int(storage.swap_mib > 0) + int(storage.separate_home) + int(storage.luks)
+            if required_partitions > 4:
+                errors.append("This guided DOS layout needs more than four primary partitions; use GPT or reduce the layout")
+        if storage.luks and len(storage.luks_passphrase) < 8:
+            errors.append("The LUKS passphrase must contain at least 8 characters")
+        if storage.raid_level and storage.raid_level not in {"0", "1", "5", "6", "10"}:
+            errors.append("Unsupported RAID level")
+        if system.init not in {"openrc", "systemd"}:
+            errors.append("Init system must be OpenRC or systemd")
+        if system.stage_variant not in {"amd64-openrc", "amd64-systemd", "amd64-desktop-openrc", "amd64-desktop-systemd", "amd64-nomultilib-openrc", "amd64-nomultilib-systemd", "amd64-hardened-openrc", "amd64-hardened-systemd"}:
+            errors.append("Select a supported published AMD64 stage3 variant")
+        if (system.init == "openrc") != ("openrc" in system.stage_variant):
+            errors.append("The stage3 variant and init system do not match")
+        if not system.multilib and "nomultilib" not in system.stage_variant:
+            errors.append("Pure 64-bit installation requires a no-multilib stage3/profile")
+        if system.desktop not in {"minimal", "kde", "gnome", "xfce"}:
+            errors.append("Unknown desktop selection")
+        if system.kernel not in {"gentoo-kernel-bin", "gentoo-kernel", "manual"}:
+            errors.append("Unknown kernel selection")
+        if system.initramfs not in {"dracut", "genkernel", "none"}:
+            errors.append("Unknown initramfs selection")
+        if system.kernel in {"gentoo-kernel-bin", "gentoo-kernel"} and system.initramfs in {"genkernel", "none"}:
+            errors.append("Automatic distribution kernels require Dracut; select a manual kernel for another initramfs choice")
+        if (storage.luks or storage.lvm or storage.raid_level) and system.initramfs == "none":
+            errors.append("Encrypted, LVM, and RAID root configurations need an initramfs")
+        if system.bootloader not in {"grub", "systemd-boot", "efi-stub"}:
+            errors.append("Unknown bootloader selection")
+        if system.bootloader != "grub" and storage.firmware != "uefi":
+            errors.append("systemd-boot and EFI stub require UEFI firmware")
+        if system.secure_boot and (not system.secure_boot_key or not system.secure_boot_certificate):
+            errors.append("Secure Boot needs both a signing key and certificate")
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]{0,62}", self.accounts.hostname):
+            errors.append("Hostname must contain only letters, numbers, and hyphens")
+        if not re.fullmatch(r"[a-z_][a-z0-9_-]{0,31}\$?", self.accounts.username):
+            errors.append("Username must be a valid lowercase Linux username")
+        if len(self.accounts.password) < 8:
+            errors.append("The user password must contain at least 8 characters")
+        if not self.accounts.disable_root_login and len(self.accounts.root_password) < 8:
+            errors.append("The root password must contain at least 8 characters")
+        if self.accounts.privilege not in {"sudo", "doas"}:
+            errors.append("Privilege tool must be sudo or doas")
+        if self.network.manager not in {"networkmanager", "dhcpcd", "netifrc", "systemd-networkd"}:
+            errors.append("Unknown network manager")
+        if self.network.manager == "netifrc" and not re.fullmatch(r"[A-Za-z0-9_]+", self.network.interface):
+            errors.append("netifrc needs a network interface name containing only letters, numbers, and underscores")
+        if self.network.manager == "netifrc" and system.init != "openrc":
+            errors.append("netifrc is available only with OpenRC")
+        if self.network.manager == "systemd-networkd" and system.init != "systemd":
+            errors.append("systemd-networkd requires systemd")
+        if not self.network.dhcp:
+            import ipaddress
+            try:
+                ipaddress.ip_interface(self.network.address)
+                ipaddress.ip_address(self.network.gateway)
+                for server in self.network.dns:
+                    ipaddress.ip_address(server)
+            except ValueError:
+                errors.append("Static networking needs a valid address/prefix, gateway, and DNS servers")
+        if not self.portage.mirror.startswith("https://"):
+            errors.append("The stage3 mirror must use HTTPS")
+        if self.portage.binhost and not self.portage.binhost_url.startswith("https://"):
+            errors.append("The binary package host must use HTTPS")
+        for atom in self.options.extra_packages:
+            if not re.fullmatch(r"[A-Za-z0-9_+.-]+/[A-Za-z0-9_+.-]+(?::[A-Za-z0-9_.-]+)?", atom):
+                errors.append(f"Invalid package atom: {atom}")
+        if not self.system.timezone or self.system.timezone.startswith("/") or ".." in self.system.timezone:
+            errors.append("Invalid timezone")
+        return errors
+
+    def require_valid(self) -> None:
+        errors = self.validate()
+        if errors:
+            raise ManifestError("\n".join(errors))
+
+    def summary(self) -> list[tuple[str, str]]:
+        return [
+            ("Disk", f"{self.storage.device} · {self.storage.mode} · {self.storage.filesystem}"),
+            ("Firmware", self.storage.firmware.upper()),
+            ("Encryption", "LUKS enabled" if self.storage.luks else "Not enabled"),
+            ("Base", f"{self.system.stage_variant} · {self.system.profile}"),
+            ("Desktop", self.system.desktop.upper() if self.system.desktop != "minimal" else "Minimal (no desktop)"),
+            ("Kernel", self.system.kernel),
+            ("Bootloader", self.system.bootloader),
+            ("Portage", "Binary packages preferred" if self.portage.binhost else "Build from source"),
+            ("Network", self.network.manager),
+            ("Account", f"{self.accounts.username}@{self.accounts.hostname}"),
+            ("Companion apps", ", ".join(name for name, enabled in (("HWMonux", self.options.install_hwmonux), ("PortageHub", self.options.install_portagehub)) if enabled) or "None"),
+        ]

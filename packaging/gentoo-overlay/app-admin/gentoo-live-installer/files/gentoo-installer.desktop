@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Install Gentoo
+GenericName=Gentoo System Installer
+Comment=Guided AMD64 Gentoo installation
+Exec=gentoo-installer
+Icon=drive-harddisk
+Terminal=false
+Categories=System;
+Keywords=gentoo;install;system;
+StartupNotify=true

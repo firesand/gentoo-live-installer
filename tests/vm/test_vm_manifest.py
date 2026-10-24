@@ -1,0 +1,97 @@
+import pytest
+
+from gentoo_installer.manifest import InstallManifest
+
+from tests.vm.helpers import PUBLIC_KEY, load_vm_module
+
+
+vm = load_vm_module()
+
+
+@pytest.mark.parametrize("name", vm.SCENARIOS)
+def test_scenario_manifests_match_schema_and_fast_install_choices(name):
+    scenario = vm.SCENARIO_MAP[name]
+    manifest = vm.build_manifest(scenario, PUBLIC_KEY)
+
+    assert manifest.validate() == []
+    assert InstallManifest.from_json(manifest.to_json()).to_dict() == manifest.to_dict()
+    assert manifest.storage.device == "/dev/vda"
+    assert manifest.storage.firmware == scenario.firmware
+    assert manifest.storage.table == ("dos" if name == "bios" else "gpt")
+    assert manifest.storage.luks is (name == "uefi-luks")
+    assert manifest.system.init == scenario.init
+    assert manifest.system.stage_variant == f"amd64-{scenario.init}"
+    assert manifest.system.profile == "default/linux/amd64/23.0" + ("/systemd" if scenario.init == "systemd" else "")
+    assert manifest.system.kernel == "gentoo-kernel-bin"
+    assert manifest.portage.binhost is True
+    assert "getbinpkg" in manifest.portage.features
+    assert manifest.accounts.hostname == scenario.hostname
+    assert manifest.accounts.ssh_authorized_keys == [PUBLIC_KEY]
+    assert manifest.accounts.disable_root_login is True
+    assert manifest.options.ssh is True
+    assert manifest.options.install_hwmonux is True
+    assert manifest.options.install_portagehub is True
+    assert manifest.network.dhcp is (name != "bios")
+    if name == "bios":
+        assert manifest.network.address == "10.0.2.15/24"
+        assert manifest.network.gateway == "10.0.2.2"
+        assert manifest.network.dns == ["10.0.2.3"]
+
+
+def test_luks_passphrase_is_test_only_and_sufficiently_long():
+    manifest = vm.build_manifest(vm.SCENARIO_MAP["uefi-luks"], PUBLIC_KEY)
+    assert manifest.storage.luks_passphrase == vm.TEST_LUKS_PASSPHRASE
+    assert len(manifest.storage.luks_passphrase) >= 8
+
+
+def test_bounded_compiler_resources_survive_saved_manifest(tmp_path):
+    from gentoo_installerd.configure import render_make_conf
+
+    manifest = vm.build_manifest(vm.SCENARIO_MAP["openrc"], PUBLIC_KEY,
+                                 build_jobs=1, swap_mib=4096)
+    saved = tmp_path / "manifest.json"
+    manifest.save(saved, redact=False)
+    reloaded = InstallManifest.load(saved)
+    assert reloaded.storage.swap_mib == 4096
+    assert reloaded.portage.make_opts == "-j1"
+    assert "NINJAOPTS=-j1\n" in render_make_conf(reloaded)
+    assert vm.companion_selection(reloaded) == {"hwmonux": True, "portagehub": True}
+
+
+@pytest.mark.parametrize(("jobs", "swap"), [(0, 512), (257, 512), (1, -1), (1, 131073)])
+def test_invalid_compiler_resources_are_rejected(jobs, swap):
+    with pytest.raises(vm.HarnessError, match="Build jobs"):
+        vm.build_manifest(vm.SCENARIO_MAP["openrc"], PUBLIC_KEY,
+                          build_jobs=jobs, swap_mib=swap)
+
+
+@pytest.mark.parametrize(
+    ("selection", "expected"),
+    [
+        ("both", {"hwmonux": True, "portagehub": True}),
+        ("portagehub", {"hwmonux": False, "portagehub": True}),
+        ("none", {"hwmonux": False, "portagehub": False}),
+    ],
+)
+def test_companion_selection_is_written_to_manifest(selection, expected):
+    manifest = vm.build_manifest(vm.SCENARIO_MAP["openrc"], PUBLIC_KEY, selection)
+    assert vm.companion_selection(manifest) == expected
+    assert manifest.validate() == []
+
+
+def test_companion_probe_plan_uses_saved_manifest_flags(tmp_path):
+    manifest = vm.build_manifest(vm.SCENARIO_MAP["systemd"], PUBLIC_KEY, "portagehub")
+    saved = tmp_path / "manifest.json"
+    manifest.save(saved, redact=False)
+    reloaded = InstallManifest.load(saved)
+
+    plan = vm.companion_probe_plan(reloaded)
+    assert [name for name, _, _ in plan] == ["disabled-hwmonux-absent", "portagehub"]
+    assert "hwmonux --dump" not in plan[0][1]
+    assert "portagehub --self-test" == plan[1][1]
+
+
+@pytest.mark.parametrize("key", ["", "not-a-key", "ssh-ed25519 bad;payload", "ssh-rsa\nsecond-line"])
+def test_invalid_public_keys_are_rejected(key):
+    with pytest.raises(vm.HarnessError, match="public key"):
+        vm.build_manifest(vm.SCENARIO_MAP["openrc"], key)

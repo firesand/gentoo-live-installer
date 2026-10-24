@@ -1,0 +1,12 @@
+#!/sbin/openrc-run
+
+# Catalyst enables xdm and livecd-tools autoconfig depends on it. The actual
+# display manager runs through display-manager; xdm is only its compatibility
+# service name.
+depend() {
+	need display-manager
+}
+
+start() {
+	return 0
+}

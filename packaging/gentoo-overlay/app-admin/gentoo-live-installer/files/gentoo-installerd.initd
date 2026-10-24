@@ -1,0 +1,14 @@
+#!/sbin/openrc-run
+
+name="Gentoo installer daemon"
+description="Privileged backend for the Gentoo GUI installer"
+command="/usr/bin/gentoo-installerd"
+command_background=true
+pidfile="/run/gentoo-installerd.pid"
+command_user="root:gentoo-installer"
+retry="TERM/30/KILL/5"
+
+depend() {
+	need dbus
+	after NetworkManager
+}

@@ -1,0 +1,27 @@
+FROM gentoo/stage3:amd64-openrc@sha256:d60b786ab715b2bd5ec0efdbe90a55b261b68ba3f56c0a7f6b3de6ff768f034e
+
+ARG GENTOO_TREEISH=8694f43d32823e774da57921c6927f3a76c063a1
+
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+RUN install -d /etc/portage/package.accept_keywords /etc/portage/package.use \
+    && printf 'dev-util/catalyst ~amd64\n' > /etc/portage/package.accept_keywords/catalyst \
+    && printf '>=sys-apps/util-linux-2.42.3 python\n>=sys-boot/grub-2.14-r5 grub_platforms_efi-32\n' > /etc/portage/package.use/catalyst
+RUN install -d /var/db/repos/gentoo \
+    && curl --proto '=https' --tlsv1.2 -fL --retry 4 \
+        "https://codeload.github.com/gentoo/gentoo/tar.gz/${GENTOO_TREEISH}" \
+        | tar -xz --strip-components=1 -C /var/db/repos/gentoo \
+    && emerge --noreplace --verbose \
+        app-arch/pixz \
+        app-arch/zstd \
+        app-cdr/cdrtools \
+        dev-lang/rust-bin \
+        dev-util/catalyst \
+        dev-vcs/git \
+        net-misc/curl \
+        sec-keys/openpgp-keys-gentoo-release \
+        sys-fs/squashfs-tools-ng
+
+COPY builder-entrypoint.sh /usr/local/sbin/build-gentoo-installer-iso
+RUN chmod 0755 /usr/local/sbin/build-gentoo-installer-iso
+
+ENTRYPOINT ["/usr/local/sbin/build-gentoo-installer-iso"]
