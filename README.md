@@ -89,7 +89,7 @@ python3 scripts/test-vm.py --scenario openrc --iso dist/test-only/gentoo-install
   --ssh-host 127.0.0.1 --ssh-port 40222 --ssh-private-key "$testkey"
 ```
 
-Never hand a `-TESTKEY` image to anybody: whoever has the key can log in as root. Remove the key pair when you are done. [docs/TESTING.md](docs/TESTING.md) describes the scenarios (disks, firmware, network cards, laptop identities, LUKS, rescue), the memory rules, the KVM and software-emulation timeouts and the known gaps. The harness creates a new qcow2 disk under `build/vm`, never touches a host block device, and forwards SSH on loopback only. If `GENTOO_TEST_SSH_PUBLIC_KEY` is exported in your shell, `build-iso.sh` uses it silently: unset it before a normal build.
+Never hand a `-TESTKEY` image to anybody: whoever has the key can log in as root. Remove the key pair when you are done. Build the test ISO from the same tree as the harness: an older ISO rejects a newer settings file. [docs/TESTING.md](docs/TESTING.md) describes the scenarios (disks, firmware, network cards, laptop identities, LUKS, rescue), the memory rules, the KVM and software-emulation timeouts and the known gaps. The harness creates a new qcow2 disk under `build/vm`, never touches a host block device, and forwards SSH on loopback only. If `GENTOO_TEST_SSH_PUBLIC_KEY` is exported in your shell, `build-iso.sh` uses it silently: unset it before a normal build.
 
 ## Source entry points
 

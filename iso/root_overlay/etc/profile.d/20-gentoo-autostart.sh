@@ -1,5 +1,5 @@
 # Start the repair tool or the text installer on the first console login when the boot
-# menu asked for it (interface I7 of the installer).
+# menu asked for it.
 #
 # The boot menu entries "Repair a system (text console)" and "Install in text mode" add
 # gentoo.autostart=rescue or gentoo.autostart=installer-text to the kernel command line.

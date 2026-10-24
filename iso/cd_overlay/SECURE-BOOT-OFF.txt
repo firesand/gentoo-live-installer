@@ -29,9 +29,11 @@ Before you change the setting on a PC that runs Windows
   can make Windows ask for its recovery key at the next start. Look the key up
   first (https://aka.ms/myrecoverykey or your IT department) and keep it
   at hand.
-* Secure Boot can be turned on again later. It is only this disc that needs it
-  off. Whether a Gentoo system installed from this disc uses Secure Boot is a
-  separate choice in the installer.
+* Only this disc needs Secure Boot off. After you have used it you can turn
+  Secure Boot on again, except for a Gentoo system installed with GRUB (the
+  default boot loader): GRUB does not work with Secure Boot, so that system
+  needs it off too. The installer can set up systemd-boot with your own
+  signing key instead (an advanced choice, see the user guide).
 * Intel Macs with a T2 chip: in the Startup Security Utility choose
   "No Security" and allow booting from external media.
 

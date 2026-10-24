@@ -1,4 +1,4 @@
-"""The text-mode boot entries "Repair a system" and "Install in text mode" (interface I7).
+"""The text-mode boot entries "Repair a system" and "Install in text mode".
 
 Three parts have to agree: the boot menu adds `gentoo.autostart=<tool>`, the profile.d hook
 starts that tool on the first console login, and the image contract demands both. This file
@@ -329,7 +329,7 @@ def test_there_is_no_waiting_when_the_service_is_already_up(hook: HookRun) -> No
 
 
 def test_the_text_installer_script_exists_wherever_the_disc_names_it() -> None:
-    """Integration tripwire: the greeting, the boot entry and the hook send users to gentoo-installer-text (I5).
+    """Integration tripwire: the greeting, the boot entry and the hook send users to gentoo-installer-text (the console script of src/gentoo_installer/textui).
 
     Skipped while the text installer is not part of this tree; once its package exists, pyproject.toml must
     declare the console script, or the first text-mode install would end at 'command not found'."""

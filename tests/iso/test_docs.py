@@ -6,7 +6,7 @@ import re
 
 import pytest
 
-from .conftest import ROOT
+from .conftest import ROOT, load_script
 
 README = ROOT / "README.md"
 USER_GUIDE = ROOT / "docs/USER-GUIDE.md"
@@ -78,3 +78,21 @@ def test_cheat_sheet_commands_name_tools_that_are_on_the_disc() -> None:
     for tool in ("cryptsetup", "mdadm", "smartctl", "nvme", "efibootmgr", "xfs_repair", "ddrescue", "testdisk", "hdparm", "lshw", "dmidecode", "lspci", "lsusb", "ntfsfix"):
         if re.search(rf"`{tool}\b|\b{tool}\b", guide):
             assert tool in contract_commands or tool == "testdisk", tool
+
+
+def test_the_documents_name_every_main_boot_entry() -> None:
+    """A renamed menu entry must not leave the README, the guide or the disc's README.txt pointing at a title that is gone."""
+    parser = load_script("scripts/verify-iso.py", "verify_iso")
+    template = (ROOT / "iso/cd_overlay/boot/grub/grub.cfg.in").read_text()
+    titles = [entry.title for entry in parser.parse_grub_cfg(template)[0]]
+    main = [t for t in titles[:5]]
+    assert main[0] == "Gentoo installer and rescue desktop" and len(main) == 5
+    documents = {
+        "README.md": README.read_text(),
+        "docs/USER-GUIDE.md": USER_GUIDE.read_text(),
+        "iso/README-live.txt": (ROOT / "iso/README-live.txt").read_text(),
+    }
+    for title in main:
+        short = title if "text console)" in title else title.split(" (")[0]
+        for name, text in documents.items():
+            assert short in re.sub(r"\s+", " ", text), f"{name} does not mention the boot entry '{short}'"
