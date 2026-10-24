@@ -17,9 +17,10 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping, MutableMapping, Sequence
 
 from gentoo_installer import __version__ as INSTALLER_VERSION
-from gentoo_installer import keymaps
+from gentoo_installer import blockdev, keymaps
 from gentoo_installer.manifest import ATOM_RE, CMDLINE_TOKEN_RE, USE_TOKEN_RE, InstallManifest, Network, System
 
+from .inspect import MD_MEMBER_TYPES
 from .proxy import make_conf_settings, proxy_environment
 from .runner import CommandResult, Runner, RunnerError, accepts_keyword
 from .storage import LayoutEntry
@@ -767,6 +768,48 @@ def efi_arch(plan: object | None) -> str:
     return "ia32" if grub_efi_target(plan) == "i386-efi" else "x64"
 
 
+@dataclass(frozen=True)
+class ExistingStack:
+    """LVM volumes and md arrays under the layout that the installer did not create.
+
+    A manual layout may sit on a volume group or array that was activated before the installation. The manifest
+    cannot say so (storage.lvm and storage.raid_level mean "create one"), so Configurer.detect_stack() reads it from
+    the device tree. The initramfs needs the tools and the activation arguments of what the root (and the swap to
+    resume from) sit on; every other volume is activated by the init system once the system is up.
+    """
+
+    lvm: bool = False  # a layout device is on LVM: lvm2 is needed
+    md: bool = False  # a layout device is on an md array: mdadm is needed
+    thin: bool = False  # a logical volume is thin or cached: lvm2 needs its thin flag
+    root_lvm: bool = False
+    root_md: str = ""  # RAID level of the array under the root ("1", "5", "10"; "md" when unknown), "" when the root is not on one
+    lvs: tuple[str, ...] = ()  # "vg/lv" of the volumes the initramfs has to activate (rd.lvm.lv)
+    md_uuids: tuple[str, ...] = ()  # arrays the initramfs has to assemble (rd.md.uuid)
+    arrays: tuple[str, ...] = ()  # ARRAY lines of every array under the layout, for /etc/mdadm.conf
+    unsupported: str = ""  # why the root cannot be booted (a device type the initramfs cannot assemble)
+
+    @property
+    def early_lvm(self) -> bool:
+        return self.root_lvm or bool(self.lvs)
+
+    @property
+    def early_md(self) -> bool:
+        return bool(self.root_md) or bool(self.md_uuids)
+
+
+# Device-mapper types below a root that the installer cannot make bootable (multipath, linear/mirror maps, ...).
+UNSUPPORTED_ROOT_TYPES = frozenset({"dm", "mpath"})
+# What goes onto the kernel command line and into mdadm.conf comes from tools that print user-chosen names: only plain text passes.
+LVM_NAME_RE = re.compile(r"[A-Za-z0-9+_.-]+/[A-Za-z0-9+_.-]+")
+MD_UUID_RE = re.compile(r"[0-9a-fA-F:-]{32,40}")
+MDADM_ARRAY_RE = re.compile(r"ARRAY [\x21-\x7e]+( [\x21-\x7e]+)*")
+
+
+def _is_md(node: blockdev.BlockDevice) -> bool:
+    """lsblk calls an md array by its RAID level (raid1, raid10, linear) or plain md."""
+    return node.type == "md" or node.type == "linear" or node.type.startswith("raid")
+
+
 class Configurer:
     def __init__(self, runner: Runner, target_root: str | Path, *, dry_run: bool = False,
                  companion_bundle: str | Path = "/usr/local/share/gentoo-installer",
@@ -1223,22 +1266,23 @@ class Configurer:
             atoms.append("sys-fs/btrfs-progs")
         return atoms
 
-    def storage_tool_atoms(self, manifest: InstallManifest) -> list[str]:
+    def storage_tool_atoms(self, manifest: InstallManifest, stack: ExistingStack | None = None) -> list[str]:
         """Tools dracut needs on the target to build an initramfs for the storage stack."""
         atoms: list[str] = []
         if manifest.storage.luks:
             atoms.append("sys-fs/cryptsetup")
-        if manifest.storage.lvm:
+        if manifest.storage.lvm or (stack is not None and stack.lvm):
             atoms.append("sys-fs/lvm2")
-        if manifest.storage.raid_level:
+        if manifest.storage.raid_level or (stack is not None and stack.md):
             atoms.append("sys-fs/mdadm")
         return atoms
 
-    def kernel_stage_atoms(self, manifest: InstallManifest, layout: Sequence[LayoutEntry] = (), plan: object | None = None) -> list[str]:
+    def kernel_stage_atoms(self, manifest: InstallManifest, layout: Sequence[LayoutEntry] = (), plan: object | None = None,
+                           stack: ExistingStack | None = None) -> list[str]:
         """What must exist before the kernel and initramfs are built."""
         # The console font is built into the initramfs, which copies every font installed when it is built.
         fonts = ["media-fonts/terminus-font"] if manifest.system.console_font.startswith("ter-") else []
-        return list(dict.fromkeys([*self.storage_tool_atoms(manifest), *self.early_boot_atoms(manifest, plan),
+        return list(dict.fromkeys([*self.storage_tool_atoms(manifest, stack), *self.early_boot_atoms(manifest, plan),
                                    *self.filesystem_atoms(manifest, layout), *fonts]))
 
     def kernel_atoms(self, manifest: InstallManifest) -> list[str]:
@@ -1729,13 +1773,128 @@ class Configurer:
             path, content, mode = item
             self.write(str(path), str(content), int(mode))
 
+    # ----- LVM volumes and md arrays that existed before the installation ------------------------------
+
+    def detect_stack(self, layout: Sequence[LayoutEntry], disks: Sequence[blockdev.BlockDevice] | None, resume_device: str | None = None) -> ExistingStack:
+        """What the layout sits on that the installer did not create: LVM volumes and md arrays (see ExistingStack).
+
+        ``disks`` is the live device tree (lsblk). A preview, or a missing tree, finds nothing.
+        """
+        if self.dry_run or not disks:
+            return ExistingStack()
+        everything = blockdev.all_nodes(disks)
+        # device -> whether the initramfs needs it (the root, and the swap that hibernation resumes from)
+        wanted: dict[str, bool] = {}
+        root_device = ""
+        for entry in layout:
+            if entry.source:
+                continue  # a swap file is named by its path inside the root
+            wanted[entry.device] = wanted.get(entry.device, False) or entry.mountpoint == "/" or entry.device == resume_device
+            root_device = entry.device if entry.mountpoint == "/" else root_device
+        lvm = md = thin = root_lvm = False
+        root_md = unsupported = ""
+        lvs: list[str] = []
+        uuids: list[str] = []
+        arrays: list[str] = []
+        for device, early in wanted.items():
+            try:
+                node = blockdev.find(disks, device)
+            except (LookupError, ValueError):
+                continue
+            # the device and everything it sits on: partitions, arrays, volumes, disks
+            chain = [other for other in everything if any(sub.key == node.key for sub in other.walk())]
+            on_arrays = [other for other in chain if _is_md(other)]
+            lvm = lvm or any(other.type == "lvm" for other in chain)
+            md = md or bool(on_arrays)
+            if device == root_device:
+                root_lvm = any(other.type == "lvm" for other in chain)
+                root_md = on_arrays[-1].type.removeprefix("raid") if on_arrays else ""
+                bad = next((other for other in chain if other.type in UNSUPPORTED_ROOT_TYPES), None)
+                if bad is not None:
+                    unsupported = (f"The root filesystem sits on a {bad.type} device ({bad.path}), which the installer cannot make bootable. "
+                                   "It can boot from a partition, an LVM volume, an md RAID array or the encrypted volume it creates itself.")
+            if node.type == "lvm":
+                name, segtype = self._lvm_volume(node)
+                thin = thin or "thin" in segtype or "cache" in segtype
+                if early and name:
+                    lvs.append(name)
+            for array in on_arrays:
+                arrays.extend(self._md_scan(array))
+                if early:
+                    uuids.append(self._md_uuid(array, everything))
+        return ExistingStack(lvm=lvm, md=md, thin=thin, root_lvm=root_lvm, root_md=root_md, lvs=tuple(dict.fromkeys(lvs)),
+                             md_uuids=tuple(dict.fromkeys(uuid for uuid in uuids if uuid)), arrays=tuple(dict.fromkeys(arrays)), unsupported=unsupported)
+
+    def _lvm_volume(self, node: blockdev.BlockDevice) -> tuple[str, str]:
+        """("vg/lv", segment type) of a logical volume; the name is "" when it cannot be found out."""
+        try:
+            fields = self.runner.run(("lvs", "--noheadings", "-o", "vg_name,lv_name,segtype", node.path)).stdout.split()
+        except (RunnerError, OSError):
+            fields = []
+        if len(fields) >= 2 and LVM_NAME_RE.fullmatch(f"{fields[0]}/{fields[1]}"):
+            return f"{fields[0]}/{fields[1]}", fields[2] if len(fields) > 2 else ""
+        # /dev/mapper/<vg>-<lv>: a dash inside a name is doubled
+        parts = re.split(r"(?<!-)-(?!-)", os.path.basename(node.path))
+        name = "/".join(part.replace("--", "-") for part in parts)
+        if len(parts) == 2 and LVM_NAME_RE.fullmatch(name):
+            return name, ""
+        self.notify(f"warning: could not tell which LVM volume {node.path} is, so the initramfs may not activate it")
+        return "", ""
+
+    def _md_uuid(self, array: blockdev.BlockDevice, everything: Sequence[blockdev.BlockDevice]) -> str:
+        """The UUID dracut's rd.md.uuid wants: from a member as dracut itself reads it (a firmware-RAID volume has another UUID than its container)."""
+        members = [other for other in everything if other.fstype in MD_MEMBER_TYPES and any(sub.key == array.key for sub in other.walk()[1:])]
+        for argv in ([("mdadm", "--examine", "--export", members[0].path)] if members else []) + [("mdadm", "--detail", "--export", array.path)]:
+            try:
+                output = self.runner.run(argv).stdout
+            except (RunnerError, OSError):
+                continue
+            uuid = next((line.partition("=")[2].strip() for line in output.splitlines() if line.startswith("MD_UUID=")), "")
+            if MD_UUID_RE.fullmatch(uuid):
+                return uuid
+        self.notify(f"warning: could not read the UUID of the RAID array {array.path}, so the initramfs may not assemble it")
+        return ""
+
+    def _md_scan(self, array: blockdev.BlockDevice) -> list[str]:
+        """The ARRAY line(s) mdadm prints for an assembled array, for /etc/mdadm.conf."""
+        try:
+            output = self.runner.run(("mdadm", "--detail", "--scan", array.path)).stdout
+        except (RunnerError, OSError):
+            return []
+        return [line.strip() for line in output.splitlines() if MDADM_ARRAY_RE.fullmatch(line.strip())]
+
+    def prepare_stack_packages(self, stack: ExistingStack) -> None:
+        """USE flags for the tools the existing volumes need; before they are emerged (lvm2[-lvm] has no lvm command, and the thin tools need thin)."""
+        if stack.lvm:
+            self.write("etc/portage/package.use/installer-storage", "sys-fs/lvm2 lvm" + (" thin" if stack.thin else "") + "\n")
+
+    def finish_stack(self, manifest: InstallManifest, stack: ExistingStack) -> None:
+        """After lvm2 and mdadm are installed: the array list for the installed system and, on OpenRC, the services that activate the other volumes at boot.
+
+        The initramfs activates the root through its arguments. Home, swap or /boot on other volumes of the same group
+        or array are activated by the lvm and mdraid services (systemd does it from udev rules and generators).
+        """
+        if stack.arrays:
+            self.write("etc/mdadm.conf", "# Arrays this system was installed on, written by the Gentoo installer.\n" + "\n".join(stack.arrays) + "\n")
+        if manifest.system.init != "openrc":
+            return
+        for name, needed in (("lvm", stack.lvm), ("mdraid", stack.md)):
+            if not needed:
+                continue
+            if not self.service_installed(name, "openrc"):
+                self.notify(f"warning: Service {name} was not enabled because its package is not installed")
+                continue
+            self.chroot(("rc-update", "add", name, "boot"))
+
     # ----- initramfs, boot loader -----------------------------------------------------------------
 
     def configure_initramfs(self, manifest: InstallManifest, root_device: str, luks_device: str | None = None,
-                            plan: object | None = None, resume_device: str | None = None) -> None:
+                            plan: object | None = None, resume_device: str | None = None, stack: ExistingStack | None = None) -> None:
         """Persist the root discovery arguments before a kernel/initramfs is built.
 
         ``resume_device`` is the swap partition that hibernation writes to; the kernel looks for the image there.
+        ``stack`` is what the layout sits on that already existed (LVM volumes, md arrays): dracut activates nothing
+        without rd.lvm.lv or rd.md.uuid, whatever modules it has.
         """
         plan = self._plan(plan)
         root_uuid = "" if self.dry_run else self.runner.run(
@@ -1773,6 +1932,9 @@ class Configurer:
             modules.append("lvm")
         if manifest.storage.raid_level:
             modules.append("mdraid")
+        if stack is not None:
+            arguments.extend(token for token in [*(f"rd.lvm.lv={lv}" for lv in stack.lvs), *(f"rd.md.uuid={uuid}" for uuid in stack.md_uuids)] if token not in arguments)
+            modules.extend(name for name, wanted in (("lvm", stack.lvm), ("mdraid", stack.md)) if wanted and name not in modules)
         if resume_device:
             swap_uuid = "" if self.dry_run else self.runner.run(("blkid", "-s", "UUID", "-o", "value", resume_device)).stdout.strip()
             if not self.dry_run and not re.fullmatch(r"[0-9a-fA-F-]{36}", swap_uuid):
@@ -2091,7 +2253,8 @@ class Configurer:
     # ----- receipt and verification -------------------------------------------------------------------
 
     def build_receipt(self, manifest: InstallManifest, *, root_uuid: str = "", luks_uuid: str = "",
-                      root_filesystem: str = "", boot_separate: bool = False, plan: object | None = None) -> dict:
+                      root_filesystem: str = "", boot_separate: bool = False, plan: object | None = None,
+                      stack: ExistingStack | None = None) -> dict:
         system, storage = manifest.system, manifest.storage
         return {
             "version": 1,
@@ -2109,13 +2272,13 @@ class Configurer:
             "secure_boot": system.secure_boot,
             "profile": manifest.effective_profile(),
             "root": {"fstype": root_filesystem or storage.filesystem, "uuid": root_uuid, "luks_uuid": luks_uuid,
-                     "lvm": storage.lvm, "raid": storage.raid_level},
+                     "lvm": storage.lvm or (stack is not None and stack.root_lvm), "raid": storage.raid_level or (stack.root_md if stack is not None else "")},
             "cmdline_file": "/etc/kernel/cmdline",
             "hardware": [str(line) for line in _plan_list(self._plan(plan), "summary")],
         }
 
     def write_receipt(self, manifest: InstallManifest, root_device: str, layout: Sequence[LayoutEntry] = (),
-                      luks_device: str | None = None, plan: object | None = None) -> dict:
+                      luks_device: str | None = None, plan: object | None = None, stack: ExistingStack | None = None) -> dict:
         """Record what was installed (no secrets) for later repair tools: /etc/gentoo-live-installer/install.json."""
         def uuid_of(device: str | None) -> str:
             if self.dry_run or not device:
@@ -2129,11 +2292,12 @@ class Configurer:
         receipt = self.build_receipt(
             manifest, root_uuid=uuid_of(root_device), luks_uuid=uuid_of(luks_device) if manifest.storage.luks else "",
             root_filesystem=root_entry.filesystem if root_entry else "",
-            boot_separate=any(entry.mountpoint == "/boot" for entry in layout), plan=plan)
+            boot_separate=any(entry.mountpoint == "/boot" for entry in layout), plan=plan, stack=stack)
         self.write(RECEIPT_PATH, json.dumps(receipt, indent=2) + "\n", 0o644)
         return receipt
 
-    def verify_boot_setup(self, manifest: InstallManifest, root_device: str, *, root_uuid: str = "", plan: object | None = None) -> list[str]:
+    def verify_boot_setup(self, manifest: InstallManifest, root_device: str, *, root_uuid: str = "", plan: object | None = None,
+                          stack: ExistingStack | None = None) -> list[str]:
         """Check the finished installation; returns a list of problems (empty when it looks bootable)."""
         plan = self._plan(plan)
         if self.dry_run:
@@ -2158,7 +2322,8 @@ class Configurer:
             if not re.search(r"^\s*linux(?:efi)?\s+\S+", config, re.MULTILINE):
                 problems.append("grub.cfg has no menu entry that loads a kernel")
             else:
-                for wanted, present in (("rd.luks.uuid", storage.luks), ("rd.lvm.lv", storage.lvm)):
+                for wanted, present in (("rd.luks.uuid", storage.luks), ("rd.lvm.lv", storage.lvm or (stack is not None and bool(stack.lvs))),
+                                        ("rd.md.uuid", stack is not None and bool(stack.md_uuids))):
                     if present and wanted not in config:
                         problems.append(f"grub.cfg does not pass {wanted}, so the root filesystem would not be found")
             if storage.firmware == "uefi":

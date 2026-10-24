@@ -132,3 +132,90 @@ class PortageRunner(ScriptedRunner):
             if atom in ("sys-apps/systemd", "sys-apps/systemd-utils"):
                 self.rebuilds.append(atom)
                 self.install_files(atom)
+
+
+# --- block device trees and the LVM / mdadm tools that describe them ------------------------------------------------
+
+GIB = 1024**3
+MD_UUID = "7b6b4ce2:c0a8a3f6:8f2d9ac8:1fcb0b2e"
+ROOT_FS_UUID = "cccccccc-dddd-eeee-ffff-000000000000"
+
+
+def node(name: str, kind: str, maj_min: str, *, path: str | None = None, fstype: str = "", children: tuple[dict, ...] = (), mountpoints: tuple[str, ...] = (),
+         size: int = 100 * GIB) -> dict:
+    """One lsblk --json node with the columns the installer asks for."""
+    return {"name": name, "kname": name, "path": path or f"/dev/{name}", "maj:min": maj_min, "type": kind, "size": size, "ro": False, "rm": False, "hotplug": False,
+            "fstype": fstype or None, "mountpoints": list(mountpoints) or [None], "children": list(children) or None}
+
+
+def lsblk_json(*disks: dict) -> str:
+    import json
+
+    return json.dumps({"blockdevices": list(disks)})
+
+
+def mapper(name: str, maj_min: str, *, fstype: str = "ext4", mountpoints: tuple[str, ...] = (), kind: str = "lvm", children: tuple[dict, ...] = ()) -> dict:
+    return node(name, kind, maj_min, path=f"/dev/mapper/{name}", fstype=fstype, mountpoints=mountpoints, children=children)
+
+
+def lvm_tree(*, thin: bool = False) -> str:
+    """sda: ESP, /boot, and a partition that is the physical volume of vg0 (root, home and swap volumes)."""
+    if thin:
+        root = mapper("vg0-root", "253:6", mountpoints=("/mnt/gentoo",))
+        pool = mapper("vg0-pool-tpool", "253:4", fstype="", children=(root, mapper("vg0-home", "253:7")))
+        volumes = (mapper("vg0-pool_tdata", "253:3", fstype="", children=(pool,)),)
+    else:
+        volumes = (mapper("vg0-root", "253:0", mountpoints=("/mnt/gentoo",)), mapper("vg0-home", "253:1"), mapper("vg0-swap", "253:2", fstype="swap"))
+    return lsblk_json(node("sda", "disk", "8:0", children=(
+        node("sda1", "part", "8:1", fstype="vfat", mountpoints=("/mnt/gentoo/efi",)),
+        node("sda2", "part", "8:2", fstype="ext4", mountpoints=("/mnt/gentoo/boot",)),
+        node("sda3", "part", "8:3", fstype="LVM2_member", children=volumes))))
+
+
+def md_tree(*, lvm_on_top: bool = False, level: str = "raid1") -> str:
+    """sda and sdb each have a RAID member partition; together they are /dev/md0 (the root, or the physical volume of vg0)."""
+    if lvm_on_top:
+        array = node("md0", level, "9:0", fstype="LVM2_member", children=(mapper("vg0-root", "253:0", mountpoints=("/mnt/gentoo",)),))
+    else:
+        array = node("md0", level, "9:0", fstype="ext4", mountpoints=("/mnt/gentoo",))
+    return lsblk_json(
+        node("sda", "disk", "8:0", children=(node("sda1", "part", "8:1", fstype="vfat", mountpoints=("/mnt/gentoo/efi",)), node("sda3", "part", "8:3", fstype="linux_raid_member", children=(array,)))),
+        node("sdb", "disk", "8:16", children=(node("sdb3", "part", "8:19", fstype="linux_raid_member", children=(array,)),)))
+
+
+def multipath_tree() -> str:
+    return lsblk_json(node("sda", "disk", "8:0", children=(
+        node("sda1", "part", "8:1", fstype="vfat", mountpoints=("/mnt/gentoo/efi",)),
+        mapper("mpatha", "253:0", fstype="", kind="mpath", children=(mapper("mpatha2", "253:2", kind="part", mountpoints=("/mnt/gentoo",)),)))))
+
+
+class LayerRunner(ScriptedRunner):
+    """ScriptedRunner that answers lvs and mdadm the way the real tools print (padded columns, colon-separated UUIDs)."""
+
+    def __init__(self, volumes: dict[str, tuple[str, str, str]] | None = None, arrays: dict[str, dict] | None = None) -> None:
+        super().__init__()
+        self.volumes = volumes or {}     # device path -> (volume group, logical volume, segment type)
+        self.arrays = arrays or {}       # array path -> {"uuid": ..., "level": "raid1", "members": [...]}
+
+    def run(self, argv, **kwargs):  # type: ignore[no-untyped-def]
+        args = tuple(argv)
+        result = super().run(argv, **kwargs)
+        if args[:1] == ("lvs",):
+            vg, lv, segtype = self.volumes.get(args[-1], ("", "", ""))
+            if not lv:
+                raise RunnerError(args, 5, f'  Failed to find logical volume "{args[-1]}"')
+            return type(result)(args, 0, f"  {vg} {lv} {segtype}\n")
+        if args[:2] == ("mdadm", "--examine"):
+            member = args[-1]
+            for path, array in self.arrays.items():
+                if member in array["members"]:
+                    return type(result)(args, 0, f"MD_LEVEL={array['level']}\nMD_DEVICES=2\nMD_METADATA=1.2\nMD_UUID={array['uuid']}\nMD_NAME=host:0\nMD_DEVICE_ROLE=0\n")
+            raise RunnerError(args, 1, f"mdadm: No md superblock detected on {member}.")
+        if args[:2] == ("mdadm", "--detail"):
+            array = self.arrays.get(args[-1])
+            if array is None:
+                raise RunnerError(args, 1, f"mdadm: cannot open {args[-1]}: No such file or directory")
+            if "--scan" in args:
+                return type(result)(args, 0, f"ARRAY {args[-1]} metadata=1.2 name=host:0 UUID={array['uuid']}\n")
+            return type(result)(args, 0, f"MD_LEVEL={array['level']}\nMD_DEVICES=2\nMD_METADATA=1.2\nMD_UUID={array['uuid']}\nMD_DEVNAME=0\nMD_NAME=host:0\n")
+        return result

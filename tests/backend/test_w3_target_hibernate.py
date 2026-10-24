@@ -122,7 +122,7 @@ class HibernationValidationTests(unittest.TestCase):
     def test_manual_layout_without_a_swap_row_cannot_hibernate(self) -> None:
         from gentoo_installer.manifest import Partition
 
-        m = target_manifest(hardware=HIBERNATE, storage={"mode": "manual", "swap_mib": 20480, "partitions": [Partition("/dev/sda3", "/", "ext4", True), Partition("/dev/sda1", "/efi", "vfat", True)]})
+        m = target_manifest(hardware=HIBERNATE, storage={"mode": "manual", "swap_mib": 20480, "partitions": [Partition("/dev/sda3", "/", "ext4", format=True), Partition("/dev/sda1", "/efi", "vfat", format=True)]})
         found = [issue for issue in hwplan.validate_plan(m, None) if issue.code == "hw.hibernate_swap_small"]
         self.assertEqual(len(found), 1)
         self.assertIn("no swap partition", found[0].message)
@@ -130,7 +130,7 @@ class HibernationValidationTests(unittest.TestCase):
     def test_manual_layout_with_a_swap_row_is_checked_against_its_real_size(self) -> None:
         from gentoo_installer.manifest import Partition
 
-        rows = [Partition("/dev/sda3", "/", "ext4", True), Partition("/dev/sda2", "", "swap", True)]
+        rows = [Partition("/dev/sda3", "/", "ext4", format=True), Partition("/dev/sda2", "", "swap", format=True)]
         m = target_manifest(hardware=HIBERNATE, storage={"mode": "manual", "partitions": rows})
         small = self.machine(16, [("sda2", 4 * 1024**3)])
         big = self.machine(16, [("sda2", 24 * 1024**3)])
@@ -140,7 +140,7 @@ class HibernationValidationTests(unittest.TestCase):
     def test_manual_swap_on_a_volume_the_probe_does_not_list_is_not_second_guessed(self) -> None:
         from gentoo_installer.manifest import Partition
 
-        rows = [Partition("/dev/sda3", "/", "ext4", True), Partition("/dev/mapper/vg0-swap", "", "swap", True)]
+        rows = [Partition("/dev/sda3", "/", "ext4", format=True), Partition("/dev/mapper/vg0-swap", "", "swap", format=True)]
         m = target_manifest(hardware=HIBERNATE, storage={"mode": "manual", "partitions": rows})
         self.assertNotIn("hw.hibernate_swap_small", codes(m, self.machine(16), "error"))
 

@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 from gentoo_installer.manifest import InstallManifest
 
 from . import __version__
-from .configure import GRUB_EFI_FILES, RECEIPT_PATH, Configurer, PackageInstallError, grub_efi_target, live_input_problems, render_fstab
+from .configure import GRUB_EFI_FILES, RECEIPT_PATH, Configurer, ExistingStack, PackageInstallError, grub_efi_target, live_input_problems, render_fstab
 from .events import ErrorCode, Event, EventSink
 from .hwplan import PLAN_SCHEMA, HardwarePlan, blocking_issues
 from .hwplan import plan as plan_hardware
@@ -890,7 +890,10 @@ class Installer:
         plan = self._plan()
         self.configurer.notify = self.log
         root = self._root_device()
-        self.configurer.configure_initramfs(self.manifest, root, self.storage._stack.get("luks_device"), plan, resume_device=self._resume_device())
+        stack = self._storage_stack()
+        if stack.unsupported:
+            raise InstallError(stack.unsupported)
+        self.configurer.configure_initramfs(self.manifest, root, self.storage._stack.get("luks_device"), plan, resume_device=self._resume_device(), stack=stack)
         kernel = self.manifest.system.kernel
         if kernel == "manual":
             # "Manual kernel" is a command-line option: the graphical installer cannot pause for it.
@@ -903,9 +906,11 @@ class Installer:
         # encrypted/LVM/RAID root image (or fail generation altogether). Firmware
         # packages also supply microcode and dracut configuration, and the filesystem
         # userland lets the installed system check its own partitions; later --noreplace skips them.
-        batch = self.configurer.kernel_stage_atoms(self.manifest, self.storage.layout, plan)
+        self.configurer.prepare_stack_packages(stack)
+        batch = self.configurer.kernel_stage_atoms(self.manifest, self.storage.layout, plan, stack)
         if batch:
             self.configurer.emerge(self.manifest, ("--noreplace", *batch))
+        self.configurer.finish_stack(self.manifest, stack)
         # systemd (systemd-utils on OpenRC) is already installed in its stage3, so --noreplace would keep the
         # build without the flags the installer wrote: cryptsetup for the initramfs, boot and ukify for
         # systemd-boot and a Unified Kernel Image. One rebuild, and a stop right here if a tool is still missing.
@@ -944,6 +949,23 @@ class Installer:
                                "Add a swap partition as large as the memory, or turn hibernation off.")
         return swap
 
+    def _storage_stack(self) -> ExistingStack:
+        """The LVM volumes and md arrays under the layout that the installer did not create (manual storage only).
+
+        A guided install makes its own stack from the manifest flags. A manual layout may sit on a volume group or
+        an array that was activated before the installation; it is looked up once, in the live device tree.
+        """
+        stack: ExistingStack | None = self.__dict__.get("_existing_stack")
+        if stack is None:
+            disks = None
+            if self.manifest.storage.mode == "manual" and not self.dry_run:
+                disks = self.storage.inventory()
+                if disks is None:
+                    self.log("WARNING: the device tree could not be read, so the LVM volumes and RAID arrays under the layout were not looked for")
+            stack = self.configurer.detect_stack(self.storage.layout, disks, self._resume_device())
+            self.__dict__["_existing_stack"] = stack
+        return stack
+
     def _target(self) -> None:
         self.configurer.notify = self.log
         self.configurer.configure_identity(self.manifest)
@@ -979,7 +1001,7 @@ class Installer:
         root = self._root_device()
         efi = next((entry.device for entry in self.storage.layout if entry.mountpoint in {"/efi", "/boot/efi"}), None)
         self.configurer.configure_bootloader(self.manifest, root, efi, self._plan())
-        self.configurer.write_receipt(self.manifest, root, self.storage.layout, self.storage._stack.get("luks_device"), self._plan())
+        self.configurer.write_receipt(self.manifest, root, self.storage.layout, self.storage._stack.get("luks_device"), self._plan(), stack=self._storage_stack())
 
     def _desktop(self) -> None:
         """Desktop and optional packages, installed after the bootloader.
@@ -1019,10 +1041,12 @@ class Installer:
             for path in ("etc/fstab", "etc/portage/make.conf"):
                 cfg.chroot(("test", "-s", f"/{path}"))
             cfg.chroot(("getent", "passwd", self.manifest.accounts.username))
-            problems = cfg.verify_boot_setup(self.manifest, self._root_device(), root_uuid=self._uuid_of(self._root_device()), plan=self._plan())
+            stack = self._storage_stack()
+            problems = cfg.verify_boot_setup(self.manifest, self._root_device(), root_uuid=self._uuid_of(self._root_device()), plan=self._plan(), stack=stack)
             modules = cfg.initramfs_modules()
             if modules is not None:
-                for wanted, needed in (("crypt", self.manifest.storage.luks), ("lvm", self.manifest.storage.lvm)):
+                storage = self.manifest.storage
+                for wanted, needed in (("crypt", storage.luks), ("lvm", storage.lvm or stack.early_lvm), ("mdraid", bool(storage.raid_level) or stack.early_md)):
                     if needed and wanted not in modules:
                         problems.append(f"The initramfs lacks the {wanted} module, so the root filesystem could not be opened at boot")
             if problems:
