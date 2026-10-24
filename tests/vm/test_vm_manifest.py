@@ -174,7 +174,7 @@ def test_defaults_scenario_differs_from_the_wizard_defaults_only_in_disk_credent
     assert changed <= ACCESS_ONLY | extra, sorted(changed - ACCESS_ONLY - extra)
     # and the defaults the user cares most about are the real ones
     for path in ("system.desktop", "system.profile", "options.microcode", "options.firmware", "options.pipewire",
-                 "options.bluetooth", "options.printing", "options.chrony", "options.cron", "hardware.guest_tools"):
+                 "options.bluetooth", "options.printing", "options.timesync", "options.cron", "hardware.guest_tools"):
         assert actual[path] == expected[path], path
 
 

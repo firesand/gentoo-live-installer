@@ -92,7 +92,7 @@ class DesktopMixin(PackagesMixin):
         if problem:
             result.degraded.append("The companion applications were skipped: " + problem)
             atoms.optional = [atom for atom in atoms.optional if atom not in COMPANION_ATOMS]
-        if manifest.system.world_update:
+        if manifest.system.world_update == "now":
             try:
                 self.emerge(manifest, ("--update", "--deep", "--newuse", "--keep-going", "@world"))
             except RunnerError as exc:

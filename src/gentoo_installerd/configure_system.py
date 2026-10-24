@@ -182,7 +182,7 @@ class SystemMixin(ConfigurerBase):
 
     def wants_cron(self, manifest: InstallManifest) -> bool:
         """cron runs logrotate, so a ticked OpenRC logger brings a cron daemon with it."""
-        return manifest.options.cron or (manifest.options.logger and manifest.system.init == "openrc")
+        return manifest.options.cron_enabled or (manifest.options.logger_enabled and manifest.system.init == "openrc")
 
     # ----- services ---------------------------------------------------------------------------------
 
@@ -204,7 +204,7 @@ class SystemMixin(ConfigurerBase):
             base.append(("chronyd", "default", False))
         if self.wants_cron(manifest):
             base.append(("cronie", "default", False))
-        if options.logger and system.init == "openrc":
+        if options.logger_enabled and system.init == "openrc":
             base.append(("syslog-ng", "default", False))
         if network.manager == "netifrc":
             interface = network.interface

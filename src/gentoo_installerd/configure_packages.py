@@ -388,7 +388,7 @@ class PackagesMixin(PortageMixin):
             atoms.append("sys-apps/mlocate")
         if options.shell_completion:
             atoms.append("app-shells/bash-completion")
-        if options.logger:
+        if options.logger_enabled:
             if system.init == "openrc":
                 # syslog-ng writes /var/log/messages forever without a rotator.
                 atoms.extend(("app-admin/syslog-ng", "app-admin/logrotate"))

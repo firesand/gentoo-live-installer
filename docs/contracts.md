@@ -208,6 +208,17 @@ the content) and `from_dict()`. `Issue` is `{code, severity, message}`; the code
 `validate_plan` reports `hw.fw_uefi32` as an **error** when the boot setup cannot start on 32-bit UEFI
 firmware (a Unified Kernel Image, the EFI stub, systemd-boot without multilib) and as a warning otherwise.
 
+### Plan schema 2 (Wave 5)
+
+`PLAN_SCHEMA` is 2; `READABLE_PLAN_SCHEMAS` is `(1, 2)`, so a plan saved by an earlier installer is still read on resume.
+`HardwarePlan` gained six fields, all empty by default and left out of `to_dict()` while empty (so a plain plan looks like a
+schema 1 plan apart from `schema`): `groups` (groups the first user joins, merged into `accounts.groups`), `package_keywords`
+(atom to keywords, for `package.accept_keywords/installer-hardware`), `package_unmask` (atoms for `package.unmask/installer-hardware`),
+`user_services` (`(name, kind)` enabled with `systemctl --global enable`), `repos` (companion overlay atoms) and `first_steps`
+(lines for the finish page and `first-steps.txt`). The configuration code ignores empty fields; the planner fills them in later steps.
+Manifest settings that were widened (`options.logger`/`cron` as choices, `system.world_update`, `hardware.nvk` as `on`/`off`) are read through
+`Options.logger_enabled`/`cron_enabled` and plain comparisons; the plan's `scalars` keep their old spelling (`nvk` is `yes`/`no`, `gpu_driver` is `open`/`nvidia`).
+
 ### Memory-heavy packages
 
 `hwplan.MEMORY_HEAVY_ATOMS` is a short list of packages the installer can pull in that need about

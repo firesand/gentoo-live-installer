@@ -107,7 +107,7 @@
      "zram": "yes",
      "zram_mib": 4022
     },
-    "schema": 1,
+    "schema": 2,
     "services": [],
     "summary": [
      "CPU: Intel Core i7-7700HQ CPU @ 2.80GHz, 4 threads; no microcode",
@@ -230,7 +230,7 @@
      "zram": "yes",
      "zram_mib": 4022
     },
-    "schema": 1,
+    "schema": 2,
     "services": [],
     "summary": [
      "CPU: Intel Core i7-7700HQ CPU @ 2.80GHz, 4 threads; no microcode",
@@ -371,7 +371,7 @@
      "trim": "off",
      "zram": "no"
     },
-    "schema": 1,
+    "schema": 2,
     "services": [],
     "summary": [
      "CPU: Intel Core i7-7700HQ CPU @ 2.80GHz, 4 threads; no microcode",
@@ -490,7 +490,7 @@
      "zram": "yes",
      "zram_mib": 4022
     },
-    "schema": 1,
+    "schema": 2,
     "services": [],
     "summary": [
      "CPU: Intel Core i7-7700HQ CPU @ 2.80GHz, 4 threads; no microcode",

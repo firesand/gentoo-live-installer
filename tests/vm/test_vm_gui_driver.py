@@ -217,8 +217,7 @@ def test_overrides_are_exactly_what_the_wizard_cannot_detect():
 def test_the_defaults_scenario_needs_almost_no_overrides():
     expected = vm.build_manifest(vm.SCENARIO_MAP["defaults"], PUBLIC_KEY).to_dict(redact=False)
     overrides = vm.manifest_overrides(expected, InstallManifest().to_dict(redact=False))
-    assert set(overrides) == {"accounts", "options"}  # credentials and the SSH probe access: nothing else
-    assert overrides["options"] == {"ssh": True}
+    assert set(overrides) == {"accounts"}  # credentials only: sshd is on by default (the probes log in over SSH), so no option differs
 
 
 # --- watchdog (NOBS-14) ---------------------------------------------------------------------------------

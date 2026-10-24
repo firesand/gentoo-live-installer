@@ -423,7 +423,7 @@ def build_manifest(scenario: Scenario, ssh_public_key: str, companions: str = "b
     manifest.options.printing = False
     manifest.options.microcode = False
     manifest.options.chrony = False
-    manifest.options.cron = False
+    manifest.options.cron = "none"
     if scenario.name == "bios":
         # QEMU user networking reserves these guest/router/DNS addresses.
         # Exercise the generated static Ethernet profile as well as DHCP.

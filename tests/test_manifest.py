@@ -161,7 +161,7 @@ def test_manifest_without_new_sections_still_loads_with_defaults():
 
 
 @pytest.mark.parametrize(("field", "value", "fragment"), [
-    ("gpu_driver", "nouveau", "gpu driver"),
+    ("gpu_driver", "radeon", "gpu driver"),
     ("power", "laptop-mode", "power"),
     ("zram_percent", 5, "zram"),
     ("hidpi", "dpi:400", "Display scaling"),

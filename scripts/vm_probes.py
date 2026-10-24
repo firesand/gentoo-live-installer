@@ -506,8 +506,8 @@ def plan_atoms(plan: Mapping[str, Any], *fields: str) -> list[str]:
 def hardware_plan_problems(plan: Mapping[str, Any], manifest: "InstallManifest", smbios: str = "qemu") -> list[str]:
     """What the installer decided for this virtual machine must be what a virtual machine needs."""
     problems: list[str] = []
-    if plan.get("schema") != 1:
-        problems.append(f"the plan has schema {plan.get('schema')!r}, not 1")
+    if plan.get("schema") not in (1, 2):
+        problems.append(f"the plan has schema {plan.get('schema')!r}, not 1 or 2")
     portable = manifest.hardware.target == "portable"
     early = plan_atoms(plan, "early_atoms", "driver_atoms", "required_atoms")
     if INTEL_MICROCODE in early and not portable:

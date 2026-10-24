@@ -37,7 +37,7 @@ def test_the_daemons_stderr_log_and_the_hardware_plan_are_copied_out_of_the_live
     lab.rules = guest_rules(vm, "bios")
     assert lab.run("--scenario", "bios", "--keep") == 0
     run = lab.run_dir()
-    assert (run / "daemon-stderr.log").read_text() == "daemon stderr\n" and json.loads((run / "hardware-plan.json").read_text())["plan"]["schema"] == 1
+    assert (run / "daemon-stderr.log").read_text() == "daemon stderr\n" and json.loads((run / "hardware-plan.json").read_text())["plan"]["schema"] == 2
     artifacts = json.loads((run / "install-artifacts.json").read_text())
     assert artifacts["daemon-stderr.log"]["from"] == "/var/log/gentoo-installerd.log" and artifacts["hardware-plan.json"]["from"] == vm.HARDWARE_PLAN_PATH
     assert lab.result()["install"]["artifacts"] == artifacts and lab.result()["install"]["mode"] == "cli"

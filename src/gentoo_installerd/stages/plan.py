@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from ..hwplan import HardwarePlan, plan as plan_hardware, PLAN_SCHEMA
+from ..hwplan import READABLE_PLAN_SCHEMAS, HardwarePlan, plan as plan_hardware
 from .context import _timestamp, _write_private, InstallError, StageContext
 
 
@@ -73,7 +73,7 @@ class PlanMixin(StageContext):
         except (OSError, ValueError) as exc:
             raise InstallError(f"The saved hardware-specific setup cannot be read ({exc}); start the installation again") from exc
         plan = raw.get("plan") if isinstance(raw, dict) else None
-        if not isinstance(plan, dict) or raw.get("version") != 1 or raw.get("fingerprint") != self.checkpoints.fingerprint or plan.get("schema") != PLAN_SCHEMA:
+        if not isinstance(plan, dict) or raw.get("version") != 1 or raw.get("fingerprint") != self.checkpoints.fingerprint or plan.get("schema") not in READABLE_PLAN_SCHEMAS:
             raise InstallError("The saved hardware-specific setup does not belong to this installation; start the installation again")
         self.log("Using the hardware-specific setup that was decided when this installation started")
         return HardwarePlan.from_dict(plan)

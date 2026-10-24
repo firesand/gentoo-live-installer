@@ -140,7 +140,7 @@ class ToolsTabMixin:
 
     def _load_checks(self) -> None:
         for key, check in self.checks.items():
-            check.setChecked(getattr(self.manifest.options, key))
+            check.setChecked(self.manifest.options.is_on(key))
         minimal = self.manifest.system.desktop == "minimal"
         self.companion_note.setVisible(minimal and self._cleared_companions is not None)
         self._update_hwmonux_note()
@@ -172,6 +172,7 @@ class ToolsTabMixin:
 
     def save_tools(self) -> None:
         for key, check in self.checks.items():
-            setattr(self.manifest.options, key, check.isChecked())
+            if check.isChecked() != self.manifest.options.is_on(key):  # a chosen logger or cron daemon stays unless it is switched
+                setattr(self.manifest.options, key, check.isChecked())
         self.manifest.options.kde_apps = str(self.kde_apps.currentData() or self.manifest.options.kde_apps)
         self.manifest.options.extra_packages = self.extra_packages.text().split()

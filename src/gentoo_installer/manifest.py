@@ -4,8 +4,9 @@ import json
 import re
 from dataclasses import dataclass, field, fields, is_dataclass
 from functools import lru_cache
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Any, ClassVar, get_args, get_origin, get_type_hints
+from typing import Any, Callable, ClassVar, get_args, get_origin, get_type_hints
 
 
 SCHEMA_VERSION = 1
@@ -27,17 +28,58 @@ KDE_APPS_CHOICES = {"core", "full"}
 USE_TOKEN_RE = re.compile(r"-?[A-Za-z0-9][A-Za-z0-9_+@.-]*|[A-Z][A-Z0-9_]*:")
 REDACTED = "<redacted>"
 
+# Choices of the settings that only allow a fixed list. Validation messages name the allowed values.
+SWAP_KINDS = ("auto", "partition", "file", "zram", "none")
+SWAP_CHOICES = ("recommended", "none", "custom", "hibernate")
+ROOT_FILESYSTEMS = ("ext4", "xfs", "btrfs", "f2fs")
+FSTAB_IDENTS = ("uuid", "label", "partuuid")
+ATIME_MODES = ("noatime", "lazytime", "relatime")
+OPTIMIZE_CHOICES = ("generic", "native")
+BINHOST_VARIANTS = ("auto", "generic", "v3")
+RSYNC_MODES = ("snapshot", "sync")
+WORLD_UPDATE_CHOICES = ("auto", "now", "later")
+KERNEL_CHOICES = ("gentoo-kernel-bin", "gentoo-kernel", "manual", "custom")
+INITRAMFS_CHOICES = ("dracut", "ugrd", "none")
+BOOTLOADER_CHOICES = ("grub", "systemd-boot", "efi-stub", "none")
+SECURE_BOOT_MODES = ("off", "own-key", "create", "shim")
+ROOT_MODES = ("same", "separate", "locked")
+PRIVILEGE_TOOLS = ("sudo", "doas", "run0", "su")
+LOGGER_CHOICES = ("sysklogd", "syslog-ng", "metalog", "none")
+CRON_CHOICES = ("cronie", "dcron", "fcron", "bcron", "none")
+TIMESYNC_CHOICES = ("chrony", "timesyncd", "none")
+BROWSER_CHOICES = ("firefox", "none")
+INPUT_METHODS = ("auto", "none", "ibus", "fcitx5")
+GAMING_MODES = ("off", "flatpak", "native")
+NVIDIA_EXTRAS = ("vaapi", "cuda", "nvtop", "persistenced")
+HARDWARE_DEVICE_KEYS = ("openrazer", "openrgb", "game_rules", "solaar", "razer_frontend", "iio_sensors", "bolt", "wacom",
+                        "fingerprint", "asus_tools", "thinkfan")
+GENKERNEL_MESSAGE = (
+    "genkernel is no longer offered: the current Gentoo Handbook builds the initramfs with dracut (or ugrd) and this installer "
+    "has no genkernel support. Choose dracut, ugrd or none.")
+F2FS_GRUB_MESSAGE = (
+    "F2FS is meant for flash media such as USB sticks and SD cards (that is how the Gentoo Handbook describes it), and GRUB cannot "
+    "reliably read /boot from it. Keep /boot on a separate ext4 partition, use systemd-boot or the EFI stub, or choose another root filesystem.")
+SERIAL_CONSOLE_RE = re.compile(r"tty(?:S|USB|AMA)[0-9]{1,2}(?:,[0-9]{3,7}(?:[noe][5-8])?)?")
+UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
+LICENSE_TOKEN_RE = re.compile(r"-?@?[A-Za-z0-9][A-Za-z0-9_.+-]*")
+KERNEL_CONFIG_LINE_RE = re.compile(r"CONFIG_[A-Z0-9_]+=\S.*|# CONFIG_[A-Z0-9_]+ is not set")
+DOMAIN_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?")
+HOSTS_NAME_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?")
+
 # Stage3 families and the desktops the installer can build on each. KDE Plasma needs the desktop USE flags that only
 # the standard and desktop profiles enable (plasma-meta has unmet USE dependencies on no-multilib and hardened);
 # GNOME and Xfce are unverified there. Minimal always works.
 STAGE3_VARIANTS = frozenset(
     f"{family}-{init}" for family in ("amd64", "amd64-desktop", "amd64-nomultilib", "amd64-hardened") for init in ("openrc", "systemd"))
 FAMILY_LABELS = {"standard": "Standard", "desktop": "Desktop", "nomultilib": "No multilib", "hardened": "Hardened"}
+# The lighter desktops and window managers are listed for every family; the desktop registry (a later Wave 5 step) refines them.
+_EXTRA_DESKTOPS = {"cinnamon", "mate", "lxqt", "gnome-light", "sway", "i3"}
+DESKTOPS = ("minimal", "kde", "gnome", "xfce", "cinnamon", "mate", "lxqt", "gnome-light", "sway", "i3")
 FAMILY_DESKTOP_SUPPORT = {
-    "standard": {"kde", "gnome", "xfce"},
-    "desktop": {"kde", "gnome", "xfce"},
-    "nomultilib": {"gnome", "xfce"},
-    "hardened": {"gnome", "xfce"},
+    "standard": {"kde", "gnome", "xfce"} | _EXTRA_DESKTOPS,
+    "desktop": {"kde", "gnome", "xfce"} | _EXTRA_DESKTOPS,
+    "nomultilib": {"gnome", "xfce"} | _EXTRA_DESKTOPS,
+    "hardened": {"gnome", "xfce"} | _EXTRA_DESKTOPS,
 }
 UNVERIFIED_FAMILIES = {"nomultilib", "hardened"}
 KDE_NEEDS_DESKTOP_STAGE = (
@@ -66,7 +108,7 @@ def stage_family(stage_variant: str) -> str:
 
 def desktop_problem(stage_variant: str, desktop: str) -> str:
     """Why this desktop cannot be installed on this stage3 ("" when it can)."""
-    if desktop in {"kde", "gnome", "xfce"} and desktop not in FAMILY_DESKTOP_SUPPORT[stage_family(stage_variant)]:
+    if desktop in DESKTOPS and desktop != "minimal" and desktop not in FAMILY_DESKTOP_SUPPORT[stage_family(stage_variant)]:
         return KDE_NEEDS_DESKTOP_STAGE if desktop == "kde" else (
             f"{desktop.upper()} is not available on this stage3: choose a Standard or Desktop stage3 or the Minimal system.")
     return ""
@@ -207,6 +249,52 @@ class ManifestError(ValueError):
     pass
 
 
+def _choice_error(value: Any, choices: Sequence[str], label: str) -> list[str]:
+    """One plain message when value is not one of choices."""
+    if value in choices:
+        return []
+    return [f"{label} must be {_or_list(choices)}"]
+
+
+def _or_list(items: Sequence[str]) -> str:
+    return ", ".join(items[:-1]) + " or " + items[-1] if len(items) > 1 else items[0]
+
+
+def _config_line_ok(line: str) -> bool:
+    """A kernel .config line: CONFIG_X=value, "# CONFIG_X is not set", a plain comment or nothing."""
+    line = line.strip()
+    return not line or bool(KERNEL_CONFIG_LINE_RE.fullmatch(line)) or (line.startswith("#") and not line.startswith("# CONFIG_"))
+
+
+def _is_https_url(url: str) -> bool:
+    return url.startswith("https://") and not has_control_characters(url) and " " not in url
+
+
+def _flag_to(true_value: str, false_value: str) -> Callable[[Any], Any]:
+    """Migration of a setting that used to be on or off: true and false become the matching choice; anything else is kept."""
+    def migrate(value: Any) -> Any:
+        return true_value if value is True else false_value if value is False else value
+    return migrate
+
+
+def _renamed(old: str, new: str) -> Callable[[Any], Any]:
+    return lambda value: new if value == old else value
+
+
+class _Migrating:
+    """Settings whose type was widened keep loading: every assignment, also a later ``section.name = value``, goes through ``_MIGRATE``.
+
+    A bool becomes the choice of the same meaning (logger/cron/world_update) and an old spelling becomes the new one
+    (gpu_driver "open", nvk "yes"/"no"), so code and old settings files that still use the old value keep working.
+    """
+
+    _MIGRATE: ClassVar[dict[str, Callable[[Any], Any]]] = {}
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        migrate = self._MIGRATE.get(name)
+        object.__setattr__(self, name, migrate(value) if migrate else value)
+
+
 @dataclass
 class Partition:
     """One manual-mode row: an existing partition or volume and what to do with it.
@@ -227,7 +315,7 @@ class Partition:
     flags: list[str] = field(default_factory=list)
 
     # Longest label (bytes) each mkfs/mkswap accepts.
-    LABEL_LIMITS: ClassVar[dict[str, int]] = {"ext4": 16, "xfs": 12, "btrfs": 255, "vfat": 11, "swap": 15}
+    LABEL_LIMITS: ClassVar[dict[str, int]] = {"ext4": 16, "xfs": 12, "btrfs": 255, "vfat": 11, "swap": 15, "f2fs": 512}
 
     def label_problem(self) -> str:
         """Why ``label`` cannot be written ("" when it is fine or empty)."""
@@ -278,6 +366,19 @@ class Storage:
     # Manual mode with a preserved (format=false) root that already holds a system: consent to
     # install the new system over its files (a backup of /etc is taken first).
     overwrite_existing_system: bool = False
+    # Wave 5 settings (the effect of each is implemented by a later step; the defaults reproduce the earlier behaviour).
+    # A /boot partition of its own (Advanced). Guided installs get one only where they always did, for example with LUKS.
+    separate_boot: bool = False
+    # "auto" keeps today's choice of swap (a partition, or a file inside an encrypted root).
+    swap_kind: str = "auto"
+    # "custom" uses swap_mib as it is; "recommended" lets the installer size it; "hibernate" sizes it for hibernation.
+    swap_choice: str = "custom"
+    # How /etc/fstab names a filesystem: by UUID (today), by label or by partition UUID.
+    fstab_ident: str = "uuid"
+    # The access-time mount option written to /etc/fstab (today noatime).
+    atime: str = "noatime"
+    # Mount /boot only on demand (noauto).
+    boot_noauto: bool = False
 
     def raid_problem(self) -> str:
         """Why the RAID setting cannot work ("" when there is none).
@@ -310,7 +411,7 @@ class Storage:
 
 
 @dataclass
-class System:
+class System(_Migrating):
     init: str = "openrc"
     stage_variant: str = "amd64-openrc"
     # "" derives the profile from init, desktop, multilib and stage variant
@@ -341,7 +442,38 @@ class System:
     console_font: str = ""
     # Extra kernel arguments appended after the installer's own (no root=/init=).
     kernel_cmdline_extra: str = ""
-    world_update: bool = False
+    # auto | now | later. Saved files with true/false load as now/later.
+    world_update: str = "later"
+    # Wave 5 settings (effects follow in later steps; defaults reproduce the earlier behaviour).
+    # Pick the stage3 file that matches the other choices automatically.
+    stage_auto: bool = True
+    # The kernel .config lines added to a "custom" kernel (CONFIG_X=y lines only).
+    kernel_config_snippet: str = ""
+    # dracut hostonly mode (today the image is always generic: "no").
+    hostonly: bool = False
+    # Also build a generic Unified Kernel Image next to the machine-specific one.
+    generic_uki: bool = False
+    # off | own-key | create | shim. An old file with secure_boot true loads as own-key.
+    secure_boot_mode: str = "off"
+    # Kernel console on a serial port, for example ttyS0,115200 ("" for none).
+    serial_console: str = ""
+    domain: str = ""
+    # Extra /etc/hosts lines: "address name [alias ...]".
+    hosts_extra: list[str] = field(default_factory=list)
+    # Locales generated besides system.locale.
+    extra_locales: list[str] = field(default_factory=list)
+
+    _MIGRATE: ClassVar[dict[str, Callable[[Any], Any]]] = {"world_update": _flag_to("now", "later")}
+
+    def __post_init__(self) -> None:
+        if self.secure_boot and self.secure_boot_mode == "off":
+            self.secure_boot_mode = "own-key"  # the only Secure Boot an old file could ask for: its own key and certificate
+        object.__setattr__(self, "_ready", True)
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        super().__setattr__(name, value)
+        if name == "secure_boot" and value and self.secure_boot_mode == "off" and getattr(self, "_ready", False):
+            object.__setattr__(self, "secure_boot_mode", "own-key")
 
 
 @dataclass
@@ -366,6 +498,26 @@ class Portage:
     video_cards: str = ""
     # Extra HTTPS mirrors tried in order when the primary stage3 mirror keeps failing.
     mirror_fallbacks: list[str] = field(default_factory=list)
+    # Wave 5 settings (effects follow in later steps; defaults reproduce the earlier behaviour).
+    optimize: str = "generic"  # generic | native (-march=native)
+    binhost_variant: str = "auto"  # auto | generic | v3
+    mirrors: list[str] = field(default_factory=list)  # HTTPS mirrors, tried in order (mirror and mirror_fallbacks stay valid)
+    rsync_mode: str = "snapshot"  # snapshot (emerge-webrsync, today) | sync (emerge --sync)
+    license_groups: list[str] = field(default_factory=list)  # ACCEPT_LICENSE groups; accept_license stays the source of truth
+    depclean: bool = False  # run emerge --depclean at the end
+    profile_override: str = ""  # a published profile path that replaces the derived one ("" for none)
+
+
+@dataclass
+class LiveStatic:
+    """A fixed address for the live session's own network (empty by default: DHCP)."""
+
+    address: str = ""
+    gateway: str = ""
+    dns: list[str] = field(default_factory=list)
+
+    def is_set(self) -> bool:
+        return bool(self.address or self.gateway or self.dns)
 
 
 @dataclass
@@ -382,6 +534,13 @@ class Network:
     # Copy the live session's NetworkManager connections (including saved
     # Wi-Fi secrets) into the target. Off unless the user asks for it.
     import_live_profiles: bool = False
+    # Wave 5 settings (effects follow in later steps; defaults reproduce the earlier behaviour).
+    keep_proxy: bool = True  # keep the proxy in the new system's make.conf (it is written there today)
+    live_static: LiveStatic = field(default_factory=LiveStatic)
+    wireless_tools: bool = False
+    ppp: bool = False
+    # The uuid of a live NetworkManager Wi-Fi connection that is copied, with its secret, into the new system.
+    copy_live_wifi: str = ""
 
 
 @dataclass
@@ -395,39 +554,114 @@ class Accounts:
     groups: list[str] = field(default_factory=lambda: ["audio", "video", "wheel"])
     disable_root_login: bool = False
     ssh_authorized_keys: list[str] = field(default_factory=list)
+    # Wave 5 settings (effects follow in later steps).
+    # same: root uses the user's password | separate: root has its own (today) | locked: no root login (disable_root_login).
+    root_mode: str = "separate"
+    ssh_password_login: bool = True
+    ssh_root_login: bool = False
+
+    def __post_init__(self) -> None:
+        if self.disable_root_login:
+            self.root_mode = "locked"
+        elif self.root_mode == "locked":
+            self.disable_root_login = True
+        object.__setattr__(self, "_ready", True)  # from here on the two settings follow each other
+
+    def __setattr__(self, name: str, value: Any) -> None:
+        object.__setattr__(self, name, value)
+        if getattr(self, "_ready", False):
+            if name == "disable_root_login":
+                if value:
+                    object.__setattr__(self, "root_mode", "locked")
+                elif self.root_mode == "locked":
+                    object.__setattr__(self, "root_mode", "separate")
+            elif name == "root_mode":
+                object.__setattr__(self, "disable_root_login", value == "locked")
+
+    def root_locked(self) -> bool:
+        return self.disable_root_login or self.root_mode == "locked"
 
 
 @dataclass
-class Options:
+class Options(_Migrating):
     install_hwmonux: bool = True
     install_portagehub: bool = True
     pipewire: bool = True
     bluetooth: bool = True
     printing: bool = True
     flatpak: bool = False
-    ssh: bool = False
-    chrony: bool = True
-    cron: bool = True
+    ssh: bool = True  # sshd is enabled on the installed system (it was off before Wave 5)
+    cron: str = "cronie"  # cronie | dcron | fcron | bcron | none; true/false load as cronie/none
     file_indexing: bool = False
     firmware: bool = True
     microcode: bool = True
     shell_completion: bool = True
-    logger: bool = True
+    # sysklogd | syslog-ng | metalog | none. Saved files with true/false load as syslog-ng/none.
+    logger: str = "syslog-ng"
     # KDE application set: "core" (file manager, terminal, editor, help) or
     # "full" (the complete kde-apps suite: games, education, multimedia, ...).
     kde_apps: str = "core"
     extra_packages: list[str] = field(default_factory=list)
+    # Wave 5 settings (effects follow in later steps; defaults reproduce the earlier behaviour).
+    timesync: str = "chrony"  # chrony | timesyncd | none. The old yes/no setting "chrony" still loads (true: chrony, false: none).
+    gentoolkit: bool = False
+    eclean_kernel: bool = False
+    mlocate: bool = False
+    journal_persistent: bool = False
+    browser: str = "firefox"  # firefox | none (nothing is installed by this setting yet)
+    flathub: bool = False
+    input_method: str = "auto"  # auto | none | ibus | fcitx5 ("auto" installs nothing yet)
+    accessibility: bool = False
+    gaming: str = "off"  # off | flatpak | native
+    gaming_tweaks: bool = True  # read only when gaming is not off
+    gaming_windows_tools: bool = False
+    gaming_accept_external: bool = False  # native: accept the Steam overlay, ~amd64 packages and the download from Valve
+
+    _MIGRATE: ClassVar[dict[str, Callable[[Any], Any]]] = {"logger": _flag_to("syslog-ng", "none"), "cron": _flag_to("cronie", "none")}
+
+    @property
+    def chrony(self) -> bool:
+        """The earlier yes/no setting for time synchronisation (timesync is the real setting)."""
+        return self.timesync == "chrony"
+
+    @chrony.setter
+    def chrony(self, value: bool) -> None:
+        self.timesync = "chrony" if value else "none"
+
+    @classmethod
+    def migrate_raw(cls, raw: dict[str, Any]) -> dict[str, Any]:
+        """Settings-file keys of earlier versions: ``chrony`` becomes ``timesync``."""
+        if "chrony" not in raw:
+            return raw
+        raw = dict(raw)
+        chrony = raw.pop("chrony")
+        if "timesync" not in raw and isinstance(chrony, bool):
+            raw["timesync"] = "chrony" if chrony else "none"
+        return raw
+
+    def is_on(self, name: str) -> bool:
+        """A yes/no view of any option: a choice that is "none" counts as off (for check boxes and summaries)."""
+        value = getattr(self, name)
+        return value if isinstance(value, bool) else value != "none"
+
+    @property
+    def logger_enabled(self) -> bool:
+        return self.logger != "none"
+
+    @property
+    def cron_enabled(self) -> bool:
+        return self.cron != "none"
 
 
 @dataclass
-class Hardware:
+class Hardware(_Migrating):
     """Hardware-dependent choices; "auto" means "decide from detection"."""
 
     target: str = "this"  # "this" (this machine) | "portable" (generic, movable install)
-    gpu_driver: str = "auto"  # "auto" | "open" | "nvidia"
+    gpu_driver: str = "auto"  # "auto" | "nvidia" | "nouveau" | "basic" (a saved "open" loads as "nouveau")
     nvidia_branch: str = "auto"  # "auto" | three-digit driver branch such as "580"
     nvidia_license_accepted: bool = False
-    nvk: str = "auto"  # "auto" | "yes" | "no"
+    nvk: str = "auto"  # "auto" | "on" | "off" (saved "yes"/"no" load as on/off)
     prime: str = "auto"  # "auto" | "off" | "offload"
     cpu_flags_mode: str = "auto"  # "auto" | "detect" | "profile" | "manual" (portage.cpu_flags)
     power: str = "auto"  # "auto" | "ppd" | "tlp" | "none"
@@ -445,13 +679,33 @@ class Hardware:
     hidpi: str = "auto"  # "auto" | "off" | "dpi:<96..288>"
     removable_fallback: str = "auto"  # "auto" | "always" | "if-missing" | "never"
     pipewire_alsa: bool = False
+    # Wave 5 settings (effects follow in later steps; defaults reproduce the earlier behaviour).
+    nvidia_modules: str = "auto"  # auto | open | closed
+    safe_graphics_entry: bool = True
+    nvidia_rtd3: str = "auto"  # auto | on | off
+    nvidia_extras: list[str] = field(default_factory=list)  # subset of vaapi, cuda, nvtop, persistenced
+    nvidia_cuda_license_accepted: bool = False  # "cuda" in nvidia_extras needs it
+    signed_modules: str = "off"  # off | auto | kernel_key
+    devices: dict[str, bool] = field(default_factory=dict)  # opt-ins for HARDWARE_DEVICE_KEYS
+    battery_charge_limit: int = 0  # 0 (none) | 60 | 80
+    lid_action: str = "suspend"  # suspend | lock | ignore
+    vendor_workarounds: bool = False
+
+    _MIGRATE: ClassVar[dict[str, Callable[[Any], Any]]] = {
+        "gpu_driver": _renamed("open", "nouveau"),
+        "nvk": lambda value: {"yes": "on", "no": "off"}.get(value, value) if isinstance(value, str) else value,
+    }
 
 
 PRINTER_DRIVERS = {"gutenprint", "hplip"}
 HARDWARE_CHOICES = {
     "target": {"this", "portable"},
-    "gpu_driver": {"auto", "open", "nvidia"},
-    "nvk": {"auto", "yes", "no"},
+    "gpu_driver": {"auto", "nvidia", "nouveau", "basic"},
+    "nvk": {"auto", "on", "off"},
+    "nvidia_modules": {"auto", "open", "closed"},
+    "nvidia_rtd3": {"auto", "on", "off"},
+    "signed_modules": {"off", "auto", "kernel_key"},
+    "lid_action": {"suspend", "lock", "ignore"},
     "prime": {"auto", "off", "offload"},
     "cpu_flags_mode": {"auto", "detect", "profile", "manual"},
     "power": {"auto", "ppd", "tlp", "none"},
@@ -525,6 +779,11 @@ class InstallManifest:
                     raise ManifestError(f"{name} must be an object")
                 hints = get_type_hints(tp)
                 allowed = {f.name: hints[f.name] for f in fields(tp)}
+                if hasattr(tp, "migrate_raw"):
+                    value = tp.migrate_raw(value)
+                migrations = getattr(tp, "_MIGRATE", {})
+                if migrations:
+                    value = {key: migrations[key](item) if key in migrations else item for key, item in value.items()}
                 unknown = set(value) - set(allowed)
                 if unknown:
                     raise ManifestError(f"Unknown {name} fields: {', '.join(sorted(unknown))}")
@@ -618,8 +877,14 @@ class InstallManifest:
             errors.append("Firmware must be uefi or bios")
         if storage.table not in {"gpt", "dos"}:
             errors.append("Partition table must be gpt or dos")
-        if storage.filesystem not in {"ext4", "xfs", "btrfs"}:
-            errors.append("Root filesystem must be ext4, XFS, or Btrfs")
+        if storage.filesystem not in ROOT_FILESYSTEMS:
+            errors.append("Root filesystem must be ext4, XFS, Btrfs or F2FS")
+        elif storage.filesystem == "f2fs" and storage.mode == "erase" and self.system.bootloader == "grub" and not storage.separate_boot:
+            errors.append(F2FS_GRUB_MESSAGE)
+        errors.extend(_choice_error(storage.swap_kind, SWAP_KINDS, "Swap kind"))
+        errors.extend(_choice_error(storage.swap_choice, SWAP_CHOICES, "Swap choice"))
+        errors.extend(_choice_error(storage.fstab_ident, FSTAB_IDENTS, "The way fstab names disks"))
+        errors.extend(_choice_error(storage.atime, ATIME_MODES, "The access-time option"))
         if storage.swap_mib < 0 or storage.home_mib < 0:
             errors.append("Partition sizes cannot be negative")
         if storage.mode == "manual":
@@ -642,8 +907,10 @@ class InstallManifest:
                     errors.append(f"Invalid mountpoint for {partition.device or 'a partition'}: choose where it is mounted (for example /home), or remove the row")
                 elif not partition.mountpoint.startswith("/") or ".." in partition.mountpoint or any(c.isspace() or ord(c) < 32 for c in partition.mountpoint):
                     errors.append(f"Invalid mountpoint: {partition.mountpoint}")
-                if partition.filesystem not in {"ext4", "xfs", "btrfs", "vfat", "swap", "none"}:
+                if partition.filesystem not in {"ext4", "xfs", "btrfs", "f2fs", "vfat", "swap", "none"}:
                     errors.append(f"Unsupported filesystem: {partition.filesystem}")
+                elif partition.filesystem == "f2fs" and partition.mountpoint == "/boot" and self.system.bootloader == "grub":
+                    errors.append(F2FS_GRUB_MESSAGE)
                 if partition.size_mib:
                     errors.append(f"Partition sizes are not supported for {partition.device}: the installer uses existing partitions as they are (leave the size at 0)")
                 if partition.flags:
@@ -703,21 +970,23 @@ class InstallManifest:
             errors.append("Pure 64-bit installation requires a no-multilib stage3/profile")
         if system.multilib and "nomultilib" in system.stage_variant:
             errors.append("A no-multilib stage3 cannot run 32-bit applications: turn off multilib, or choose a stage3 with multilib")
-        if system.desktop not in {"minimal", "kde", "gnome", "xfce"}:
+        if system.desktop not in DESKTOPS:
             errors.append("Unknown desktop selection")
         elif desktop_problem(system.stage_variant, system.desktop):
             errors.append(desktop_problem(system.stage_variant, system.desktop))
-        if system.kernel not in {"gentoo-kernel-bin", "gentoo-kernel", "manual"}:
+        if system.kernel not in KERNEL_CHOICES:
             errors.append("Unknown kernel selection")
-        if system.initramfs not in {"dracut", "genkernel", "none"}:
+        if system.initramfs == "genkernel":
+            errors.append(GENKERNEL_MESSAGE)
+        elif system.initramfs not in INITRAMFS_CHOICES:
             errors.append("Unknown initramfs selection")
-        if system.kernel in {"gentoo-kernel-bin", "gentoo-kernel"} and system.initramfs in {"genkernel", "none"}:
+        if system.kernel in {"gentoo-kernel-bin", "gentoo-kernel"} and system.initramfs in {"genkernel", "ugrd", "none"}:
             errors.append("Automatic distribution kernels require Dracut; select a manual kernel for another initramfs choice")
         if (storage.luks or storage.lvm or storage.raid_level) and system.initramfs == "none":
             errors.append("Encrypted, LVM, and RAID root configurations need an initramfs")
-        if system.bootloader not in {"grub", "systemd-boot", "efi-stub"}:
+        if system.bootloader not in BOOTLOADER_CHOICES:
             errors.append("Unknown bootloader selection")
-        if system.bootloader != "grub" and storage.firmware != "uefi":
+        if system.bootloader in {"systemd-boot", "efi-stub"} and storage.firmware != "uefi":
             errors.append("systemd-boot and EFI stub require UEFI firmware")
         if system.uki and storage.firmware != "uefi":
             errors.append("A Unified Kernel Image requires UEFI firmware")
@@ -726,6 +995,7 @@ class InstallManifest:
         elif profile_problem(system.profile, system.init, system.stage_variant):
             errors.append(profile_problem(system.profile, system.init, system.stage_variant))
         errors.extend(self._secure_boot_errors())
+        errors.extend(self._validate_system_wave5())
         extra = system.kernel_cmdline_extra
         if extra:
             tokens = extra.split(" ")
@@ -733,6 +1003,35 @@ class InstallManifest:
                 errors.append("Extra kernel arguments may contain only single-space-separated plain tokens (at most 512 characters)")
             elif any(token.split("=", 1)[0] in {"root", "init", "rd.luks.uuid", "rd.luks.name"} for token in tokens):
                 errors.append("Extra kernel arguments cannot override root=, init= or the encryption arguments")
+        return errors
+
+    def _validate_system_wave5(self) -> list[str]:
+        import ipaddress
+
+        errors: list[str] = []
+        system = self.system
+        errors.extend(_choice_error(system.world_update, WORLD_UPDATE_CHOICES, "The @world update choice"))
+        errors.extend(_choice_error(system.secure_boot_mode, SECURE_BOOT_MODES, "The Secure Boot mode"))
+        snippet = system.kernel_config_snippet
+        if len(snippet) > 16384 or has_control_characters(snippet.replace("\n", "")) or not all(
+                _config_line_ok(line) for line in snippet.splitlines()):
+            errors.append("The kernel configuration lines must look like CONFIG_NAME=value or # CONFIG_NAME is not set (at most 16 KiB)")
+        if system.serial_console and not SERIAL_CONSOLE_RE.fullmatch(system.serial_console):
+            errors.append("The serial console must look like ttyS0 or ttyS0,115200")
+        if system.domain and not DOMAIN_RE.fullmatch(system.domain):
+            errors.append("The domain name may contain only letters, numbers, dots and hyphens")
+        for line in system.hosts_extra:
+            parts = line.split()
+            try:
+                ipaddress.ip_address(parts[0])
+                valid = len(parts) >= 2 and not has_control_characters(line) and all(HOSTS_NAME_RE.fullmatch(name) for name in parts[1:])
+            except (ValueError, IndexError):
+                valid = False
+            if not valid:
+                errors.append(f"Extra hosts entries must look like “192.168.1.10 name [alias ...]”: {line[:60]}")
+                break
+        if any(not LOCALE_RE.fullmatch(name) for name in system.extra_locales):
+            errors.append("Invalid entry in the extra locales")
         return errors
 
     def _secure_boot_errors(self) -> list[str]:
@@ -786,10 +1085,15 @@ class InstallManifest:
             errors.append("Username must be a valid lowercase Linux username")
         if len(self.accounts.password) < 8:
             errors.append("The user password must contain at least 8 characters")
-        if not self.accounts.disable_root_login and len(self.accounts.root_password) < 8:
+        errors.extend(_choice_error(self.accounts.root_mode, ROOT_MODES, "The root account mode"))
+        if not self.accounts.root_locked() and len(self.accounts.root_password) < 8:
             errors.append("The root password must contain at least 8 characters")
-        if self.accounts.privilege not in {"sudo", "doas"}:
-            errors.append("Privilege tool must be sudo or doas")
+        if self.accounts.privilege not in PRIVILEGE_TOOLS:
+            errors.append("Privilege tool must be sudo, doas, run0 or su")
+        elif self.accounts.privilege == "run0" and self.system.init != "systemd":
+            errors.append("run0 is part of systemd: choose sudo, doas or su with OpenRC")
+        if self.options.ssh and not self.accounts.ssh_password_login and not self.accounts.ssh_authorized_keys:
+            errors.append("Nobody could log in over SSH: add a public key or allow password login")
         full_name = self.accounts.full_name
         if len(full_name) > 64 or ":" in full_name or has_control_characters(full_name):
             errors.append("The full name may have at most 64 characters, without colons or line breaks")
@@ -802,7 +1106,7 @@ class InstallManifest:
             errors.append("Passwords cannot contain line breaks or NUL characters")
         if _cannot_be_stored(self.accounts.password):
             errors.append("The user password contains a character that cannot be stored; type it again")
-        if not self.accounts.disable_root_login and _cannot_be_stored(self.accounts.root_password):
+        if not self.accounts.root_locked() and _cannot_be_stored(self.accounts.root_password):
             errors.append("The root password contains a character that cannot be stored; type it again")
         return errors
 
@@ -839,6 +1143,21 @@ class InstallManifest:
             errors.append("Importing this session's network connections requires NetworkManager")
         if network.proxy:
             errors.extend(_proxy_errors(network.proxy))
+        live = network.live_static
+        if live.is_set():
+            import ipaddress
+            try:
+                ipaddress.ip_interface(live.address)
+                ipaddress.ip_address(live.gateway)
+                for server in live.dns:
+                    ipaddress.ip_address(server)
+            except ValueError:
+                errors.append("A fixed address for this session needs a valid address/prefix, gateway, and DNS servers")
+        if network.copy_live_wifi:
+            if not UUID_RE.fullmatch(network.copy_live_wifi):
+                errors.append("The Wi-Fi connection to copy must be given by its uuid")
+            elif network.manager != "networkmanager":
+                errors.append("Copying this session's Wi-Fi connection requires NetworkManager")
         return errors
 
     def _validate_portage(self) -> list[str]:
@@ -856,6 +1175,15 @@ class InstallManifest:
             errors.append("Fallback stage3 mirrors must use HTTPS")
         if portage.rsync_mirror and not portage.rsync_mirror.startswith(("rsync://", "https://")):
             errors.append("The repository sync mirror must use rsync or HTTPS")
+        errors.extend(_choice_error(portage.optimize, OPTIMIZE_CHOICES, "Optimisation"))
+        errors.extend(_choice_error(portage.binhost_variant, BINHOST_VARIANTS, "The binary package variant"))
+        errors.extend(_choice_error(portage.rsync_mode, RSYNC_MODES, "The repository sync mode"))
+        if any(not _is_https_url(mirror) for mirror in portage.mirrors):
+            errors.append("Mirrors must use HTTPS and cannot contain spaces or line breaks")
+        if any(not LICENSE_TOKEN_RE.fullmatch(group) for group in portage.license_groups):
+            errors.append("Licence groups may contain only letters, numbers, and @ + _ . -")
+        if portage.profile_override and not PROFILE_RE.fullmatch(portage.profile_override):
+            errors.append("The profile override must be a published default/linux/amd64/23.0 profile or empty")
         errors.extend(_make_opts_errors(portage.make_opts))
         for label, value in (("CFLAGS", portage.cflags), ("CXXFLAGS", portage.cxxflags), ("RUSTFLAGS", portage.rustflags),
                              ("EMERGE_DEFAULT_OPTS", portage.emerge_opts), ("ACCEPT_LICENSE", portage.accept_license),
@@ -876,6 +1204,20 @@ class InstallManifest:
                 errors.append(f"Invalid package atom: {atom}")
         if self.options.kde_apps not in KDE_APPS_CHOICES:
             errors.append("KDE applications must be core or full")
+        options = self.options
+        errors.extend(_choice_error(options.logger, LOGGER_CHOICES, "The system logger"))
+        errors.extend(_choice_error(options.cron, CRON_CHOICES, "The cron daemon"))
+        errors.extend(_choice_error(options.timesync, TIMESYNC_CHOICES, "Time synchronisation"))
+        if options.timesync == "timesyncd" and self.system.init != "systemd":
+            errors.append("systemd-timesyncd needs systemd: choose chrony with OpenRC")
+        errors.extend(_choice_error(options.browser, BROWSER_CHOICES, "The web browser"))
+        errors.extend(_choice_error(options.input_method, INPUT_METHODS, "The input method"))
+        errors.extend(_choice_error(options.gaming, GAMING_MODES, "Gaming"))
+        if options.gaming != "off" and options.gaming in GAMING_MODES:
+            if self.system.desktop == "minimal":
+                errors.append("Gaming needs a desktop: choose a desktop, or turn gaming off")
+            if options.gaming == "native" and (not self.system.multilib or "nomultilib" in self.system.stage_variant):
+                errors.append("Native gaming (Steam) needs 32-bit support: choose a stage3 with multilib, or use Flatpak gaming")
         return errors
 
     def _validate_hardware(self) -> list[str]:
@@ -892,6 +1234,15 @@ class InstallManifest:
             errors.append("Compressed RAM swap (zram) must use 10–100% of memory")
         if not set(hardware.printer_drivers) <= PRINTER_DRIVERS:
             errors.append("Unknown printer driver selection")
+        if not set(hardware.nvidia_extras) <= set(NVIDIA_EXTRAS):
+            errors.append("Unknown NVIDIA add-on: choose from " + ", ".join(NVIDIA_EXTRAS))
+        elif "cuda" in hardware.nvidia_extras and not hardware.nvidia_cuda_license_accepted:
+            errors.append("The NVIDIA CUDA toolkit needs its licence to be accepted")
+        unknown_devices = sorted(set(hardware.devices) - set(HARDWARE_DEVICE_KEYS))
+        if unknown_devices:
+            errors.append("Unknown device option: " + ", ".join(unknown_devices))
+        if hardware.battery_charge_limit not in (0, 60, 80):
+            errors.append("The battery charge limit must be 0 (none), 60 or 80")
         dpi = re.fullmatch(r"dpi:([0-9]{2,3})", hardware.hidpi)
         if hardware.hidpi not in {"auto", "off"} and not (dpi and 96 <= int(dpi.group(1)) <= 288):
             errors.append("Display scaling must be auto, off, or dpi:96 to dpi:288")
@@ -913,7 +1264,7 @@ class InstallManifest:
         system, options, storage = self.system, self.options, self.storage
         advice: list[str] = []
         family = stage_family(system.stage_variant)
-        if family in UNVERIFIED_FAMILIES and system.desktop in {"gnome", "xfce"} and system.desktop in FAMILY_DESKTOP_SUPPORT[family]:
+        if family in UNVERIFIED_FAMILIES and system.desktop not in {"minimal", "kde"} and system.desktop in FAMILY_DESKTOP_SUPPORT[family]:
             advice.append(f"Not verified: {system.desktop.upper()} on a {FAMILY_LABELS[family]} stage3 may need extra USE changes during the installation.")
         if system.desktop == "minimal" and (options.install_hwmonux or options.install_portagehub):
             advice.append(COMPANIONS_ON_MINIMAL)

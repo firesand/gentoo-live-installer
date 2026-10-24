@@ -409,7 +409,7 @@ def test_a_plan_with_microcode_or_without_the_expected_tool_is_reported():
     plan["optional_atoms"] = [atom for atom in plan["optional_atoms"] if atom != "app-emulation/qemu-guest-agent"]
     problems = " ".join(vm_probes.hardware_plan_problems(plan, manifest, "qemu"))
     assert "Intel microcode in a virtual machine" in problems and "does not list app-emulation/qemu-guest-agent" in problems
-    assert "schema" in " ".join(vm_probes.hardware_plan_problems({"schema": 2}, manifest, "qemu"))
+    assert "schema" in " ".join(vm_probes.hardware_plan_problems({"schema": 3}, manifest, "qemu"))
 
 
 def test_a_portable_install_may_carry_intel_microcode():

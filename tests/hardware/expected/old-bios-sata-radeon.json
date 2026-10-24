@@ -106,7 +106,7 @@
      "zram": "yes",
      "zram_mib": 1953
     },
-    "schema": 1,
+    "schema": 2,
     "services": [],
     "summary": [
      "CPU: AMD Athlon(tm) II X2 250 Processor, 2 threads; AMD microcode (linux-firmware)",
@@ -227,7 +227,7 @@
      "zram": "yes",
      "zram_mib": 1953
     },
-    "schema": 1,
+    "schema": 2,
     "services": [],
     "summary": [
      "CPU: AMD Athlon(tm) II X2 250 Processor, 2 threads; AMD microcode (linux-firmware)",
@@ -373,7 +373,7 @@
      "trim": "off",
      "zram": "no"
     },
-    "schema": 1,
+    "schema": 2,
     "services": [],
     "summary": [
      "CPU: AMD Athlon(tm) II X2 250 Processor, 2 threads; Intel and AMD microcode",
@@ -481,7 +481,7 @@
      "zram": "yes",
      "zram_mib": 1953
     },
-    "schema": 1,
+    "schema": 2,
     "services": [],
     "summary": [
      "CPU: AMD Athlon(tm) II X2 250 Processor, 2 threads; AMD microcode (linux-firmware)",
