@@ -2272,10 +2272,13 @@ class ScenarioRunner:
         return [str(item) for item in self.install_completed().get("degraded") or []]
 
     def install_completion_probe(self, manifest: InstallManifest, plan: Mapping[str, Any] | None) -> ProbeResult:
-        """Optional parts that failed (a desktop package, the NVIDIA driver) and warnings (a cleanup that failed after a good install) are findings."""
+        """Optional parts that failed (a desktop package, the NVIDIA driver) and warnings (a cleanup that failed after a good install) are findings.
+
+        The reasons are the installer's own words from the completed event, whole: they are what explains a missing package.
+        """
         completed = self.install_completed()
         notes = [str(item) for item in (completed.get("degraded") or [])] + [f"warning: {item}" for item in (completed.get("warnings") or [])]
-        return ProbeResult("install-degraded", not notes, json.dumps(completed, sort_keys=True)[:400],
+        return ProbeResult("install-degraded", not notes, json.dumps(completed, sort_keys=True)[:20000],
                            "the installer finished with problems it did not treat as fatal: " + "; ".join(notes) if notes else "", advisory=True)
 
     def hardware_plan_findings(self, manifest: InstallManifest, plan: Mapping[str, Any] | None) -> list[ProbeResult]:
@@ -2308,10 +2311,12 @@ class ScenarioRunner:
         self.wait_for_ssh(TEST_USERNAME, "target", target)
         probes = self.verify(label)
         strict = getattr(self.args, "strict_probes", False)
-        result[key] = [asdict(probe) for probe in probes]
-        result["companion_probes"] = [asdict(probe) for probe in probes if probe.name in {"hwmonux", "portagehub"}]
-        result["disabled_companion_probes"] = [asdict(probe) for probe in probes if probe.name.startswith("disabled-")]
-        result["advisory_findings"] = [asdict(probe) for probe in probes if not probe.success and probe.advisory]
+        result[key] = [probe.record() for probe in probes]
+        result["companion_probes"] = [probe.record() for probe in probes if probe.name in {"hwmonux", "portagehub"}]
+        result["disabled_companion_probes"] = [probe.record() for probe in probes if probe.name.startswith("disabled-")]
+        result["advisory_findings"] = [probe.record() for probe in probes if not probe.success and probe.advisory]
+        # What Portage would still change right after the install: information, kept from the first round of probes.
+        result["world_drift"] = result.get("world_drift") or next((probe.data for probe in probes if probe.name == "world-drift"), None)
         for probe in probes:
             if not probe.success and probe.advisory:
                 print(f"WARNING {self.scenario.name}: advisory probe {probe.name} failed: {probe.error}", file=sys.stderr)
@@ -2734,7 +2739,7 @@ class ScenarioRunner:
         checks = []
         for name, command, expected in (("firmware", "test -d /sys/firmware/efi && echo uefi || echo bios", "uefi"), ("hostname", "hostname", self.scenario.hostname)):
             code, log = self.ssh(TEST_USERNAME, command, f"verify-fresh-{name}.log", self.args.command_timeout)
-            checks.append(asdict(parse_probe_result(name, code, log.read_text(errors="replace"), expected)))
+            checks.append(parse_probe_result(name, code, log.read_text(errors="replace"), expected).record())
         serial_text = vm.serial_log.read_text(errors="replace") if vm.serial_log.exists() else ""
         choices = vm_probes.firmware_boot_choices(serial_text)
         evidence["probes"], evidence["firmware_boot_choices"] = checks, choices
@@ -2754,7 +2759,7 @@ class ScenarioRunner:
                   "companions": None, "companion_probes": [], "disabled_companion_probes": [],
                   "probes": [], "resume": None, "cancel": None, "luks_unlock": None,
                   "decoys": None, "refusal": None, "rescue": None, "live": None, "hardware": asdict(self.scenario.hardware),
-                  "firmware": self.scenario.firmware, "install": None, "boot_entry": None, "fresh_nvram": None}
+                  "firmware": self.scenario.firmware, "install": None, "boot_entry": None, "fresh_nvram": None, "world_drift": None}
         mode = getattr(self.args, "rescue_break", "none")
         command = getattr(self.args, "rescue_command", None) or ""
         try:

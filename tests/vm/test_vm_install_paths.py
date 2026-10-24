@@ -100,6 +100,36 @@ def test_a_success_that_is_not_bootable_is_not_a_success(lab):
     assert "success but not a bootable system" in lab.result()["error"]
 
 
+def last_result(lab) -> dict:
+    return json.loads((lab.run_dirs()[-1] / "result.json").read_text())
+
+
+def test_the_installers_reason_for_a_degraded_part_is_shown_as_it_sent_it_and_a_strict_run_fails(lab):
+    """H3: the completed event of the first real run (a part that could not be installed) is the one the harness judges."""
+    completed = json.loads((DATA / "completed-uefi-nvme-luks-openrc.json").read_text())
+    reason = completed["data"]["degraded"][0]
+    stream = EVENT_STREAM[:-1] + [completed]
+    lab.rules = guest_rules(vm, "bios", sudo=True, install=stream)
+    assert lab.run("--scenario", "bios") == 0  # a finding: the system installed and boots
+    finding = findings(lab)["install-degraded"]
+    assert reason in finding["error"] and json.loads(finding["output"])["degraded"] == [reason]
+    assert lab.result()["install"]["completed"]["degraded"] == [reason]
+    lab.rules = guest_rules(vm, "bios", sudo=True, install=stream)
+    assert lab.run("--scenario", "bios", "--strict-probes") == 1  # an optional part that is missing is a real problem
+    # nothing else fails: the one problem is what the installer said
+    assert last_result(lab)["error"] == f"Target verification failed: install-degraded: the installer finished with problems it did not treat as fatal: {reason}"
+
+
+def test_a_long_reason_of_the_installer_is_not_cut_short(lab):
+    reason = ("app-misc/hwmonux could not be installed: dev-python/pyside-6.11.2 was stopped because the machine ran out of memory while it compiled "
+              "QtOpenGL (the compiler was killed). " + "The build log inside the new system has the details. " * 12 + "End of the reason.")
+    stream = EVENT_STREAM[:-1] + [{"type": "completed", "message": "done", "data": {"success": True, "bootable": True, "degraded": [reason], "warnings": []}}]
+    lab.rules = guest_rules(vm, "bios", install=stream)
+    assert lab.run("--scenario", "bios") == 0
+    finding = findings(lab)["install-degraded"]
+    assert len(reason) > 500 and json.loads(finding["output"])["degraded"] == [reason] and finding["error"].endswith("End of the reason.")
+
+
 def test_optional_parts_that_failed_and_cleanup_warnings_are_findings(lab):
     stream = EVENT_STREAM[:-1] + [{"type": "completed", "message": "done", "data": {
         "success": True, "bootable": True, "degraded": ["NVIDIA driver failed to build"], "warnings": ["Could not unmount /mnt/gentoo"]}}]
@@ -131,13 +161,38 @@ def test_the_world_probe_can_be_skipped_and_has_its_own_timeout(lab):
     assert "world-resolve" not in {probe["name"] for probe in lab.result()["probes"]}
 
 
-def test_a_world_that_does_not_resolve_fails_and_one_that_wants_rebuilds_is_a_finding(lab):
+def test_a_world_that_does_not_resolve_fails_the_run(lab):
     lab.rules = guest_rules(vm, "bios", extra=[{"user": "^vmtest$", "match": r"emerge --color=n", "rc": 1,
                                                  "stdout": "The following USE changes are necessary to proceed:\n>=media-libs/libpng-1.6 -apng\n"}])
     assert lab.run("--scenario", "bios") == 1
     assert "world-resolve: the configuration cannot satisfy the world" in lab.result()["error"]
-    lab.rules = guest_rules(vm, "bios", extra=[{"user": "^vmtest$", "match": r"emerge --color=n", "stdout": "[ebuild   R    ] dev-libs/drift-2.0 USE=\"b\" 10 KiB\n"}])
+
+
+def test_drift_is_information_that_never_fails_a_job_not_even_a_strict_one(lab):
+    """H2: the first real run (4 upgrades, 3 new, 5 reinstalls) came from a tree newer than the stage3, not from the installer."""
+    real = (DATA / "emerge-world-uefi-nvme-luks-openrc.log").read_text()
+    lab.rules = guest_rules(vm, "bios", sudo=True, extra=[{"user": "^vmtest$", "match": r"emerge --color=n", "stdout": real}])
+    assert lab.run("--scenario", "bios", "--strict-probes") == 0
+    result = lab.result()
+    assert result["advisory_findings"] == []
+    drift = result["world_drift"]
+    assert drift["counts"] == {"upgrades": 4, "new": 3, "reinstalls": 5}
+    assert "net-misc/curl-8.23.0-1" in drift["upgrades"] and "app-arch/zstd-1.5.7-r1-10" in drift["reinstalls"] and "net-libs/nghttp2-1.70.0-3" in drift["new"]
+    probes = {probe["name"]: probe for probe in result["probes"]}
+    assert probes["world-resolve"]["success"] and probes["world-drift"]["success"] and probes["world-drift"]["data"] == drift
+    assert "information only" in probes["world-drift"]["output"] and "data" not in probes["world-resolve"]  # only a probe that collected something has data
+
+
+def test_a_world_without_drift_says_so_in_the_result(lab):
+    lab.rules = guest_rules(vm, "bios")
     assert lab.run("--scenario", "bios") == 0
+    assert lab.result()["world_drift"]["counts"] == {"upgrades": 0, "new": 0, "reinstalls": 0}
+
+
+def test_no_world_probe_means_no_drift_record(lab):
+    lab.rules = guest_rules(vm, "bios")
+    assert lab.run("--scenario", "bios", "--no-world-probe") == 0
+    assert lab.result()["world_drift"] is None
 
 
 def test_a_receipt_that_contradicts_the_manifest_fails_the_run(lab):

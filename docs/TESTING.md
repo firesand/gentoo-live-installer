@@ -202,6 +202,7 @@ images with a root login and are named like the release: move them out of `dist/
 After the first boot of the installed disk the harness runs these probes as the test user.
 Advisory probes record a finding in `result.json` (`advisory_findings`) and print it; only
 `--strict-probes` turns a finding into a failure. Every job of the matrix runs with `--strict-probes`.
+Information (`world-drift`) is kept in `result.json` and is neither.
 
 | Probe | What must be true | If it is not |
 |---|---|---|
@@ -215,8 +216,8 @@ Advisory probes record a finding in `result.json` (`advisory_findings`) and prin
 | `hardware-plan` | the installed system agrees with the plan: no `sys-firmware/intel-microcode`, every guest tool of the plan installed unless the installer itself reported it as degraded, none when they are switched off | failure |
 | `layout` | in a manual layout every row is mounted from the device the manifest named (the second disk's `/home`, its swap) | failure |
 | `world-resolve` | `emerge -pvuDN @world` resolves: no blocker, no conflict, no change the configuration would need | failure; no sudo: finding |
-| `world-drift` | the same command does not want to rebuild installed packages (USE flags that differ from the configuration) | finding |
-| `install-degraded` | the installer's final event reports no `degraded` parts (a desktop package or the NVIDIA driver that failed) and no `warnings` (a cleanup that failed after a good install) | finding |
+| `world-drift` | nothing: the same command's upgrades, new packages and reinstalls are only counted and listed (`world_drift` in `result.json`). Right after an install they come from a tree that is newer than the stage3 (new versions, changed USE defaults), not from the installer | information: never a finding, never a failure, also under `--strict-probes` |
+| `install-degraded` | the installer's final event reports no `degraded` parts (a desktop package or the NVIDIA driver that failed) and no `warnings` (a cleanup that failed after a good install). The finding carries the installer's own reasons, whole (also `install.completed` in `result.json`) | finding; a failure under `--strict-probes`: a part that did not install is a real problem |
 | `dmi` | the VM shows the DMI identity the scenario asked for | failure |
 | `sudo`, `root-lock` | the new user can use sudo with the password; root's password is locked as asked | finding |
 
@@ -331,8 +332,8 @@ an identity problem.
 ### What a run leaves behind
 
 `build/vm/<scenario>-<time>-<id>/` holds `result.json` (verdict, probes, `advisory_findings`,
-`luks_unlock`, `decoys`, `rescue`, `hardware`, `disk`, `install`, `boot_entry`, `fresh_nvram`,
-`boots`), `manifest.json`, the logs (`install.log`, `qemu-*.log`, `serial-*.log` with one pair per
+`world_drift` with the counts and the packages, `luks_unlock`, `decoys`, `rescue`, `hardware`,
+`disk`, `install`, `boot_entry`, `fresh_nvram`, `boots`), `manifest.json`, the logs (`install.log`, `qemu-*.log`, `serial-*.log` with one pair per
 boot: `serial-baseline.log`, `serial-final-uefi.log`, ...), `ssh-*-wait.log`, `verify-*.log`,
 `rescue-*.log` and the rescue audit logs, screenshots on failure (`failure-*.ppm`,
 `broken-boot.ppm`, `final-uefi.ppm`), `*-disk-guard.json`, `daemon-stderr.log`,

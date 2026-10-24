@@ -234,14 +234,43 @@ UPDATES = (
 def test_a_world_with_nothing_to_do_is_clean():
     resolve, drift = vm_probes.parse_world_probe(0, NOTHING_TO_DO)
     assert resolve.name == "world-resolve" and resolve.success and not resolve.advisory
-    assert drift.name == "world-drift" and drift.success and "0 new, 0 upgrades, 0 rebuilds" in drift.output
+    assert drift.name == "world-drift" and drift.success and not drift.advisory and "0 upgrades, 0 new, 0 reinstalls" in drift.output
+    assert drift.data["counts"] == {"upgrades": 0, "new": 0, "reinstalls": 0}
 
 
-def test_updates_resolve_and_rebuilds_are_a_finding():
+def test_updates_and_reinstalls_resolve_and_are_information_only():
+    """A tree synced at install time is newer than the stage3: Portage wants upgrades and reinstalls the installer did not cause."""
     resolve, drift = vm_probes.parse_world_probe(0, UPDATES)
     assert resolve.success
     assert vm_probes.summarize_world(UPDATES) == {"new": ["x11-libs/new-1.0"], "upgrade": ["sys-libs/zlib-1.3.1-r1"], "rebuild": ["dev-libs/foo-1.0", "dev-libs/drift-2.0"]}
-    assert not drift.success and drift.advisory and "dev-libs/drift-2.0" in drift.error and "USE flags differ" in drift.error
+    assert drift.name == "world-drift" and drift.success and not drift.advisory and drift.error == ""  # never a finding, never a failure
+    assert drift.data == {"counts": {"upgrades": 1, "new": 1, "reinstalls": 2}, "upgrades": ["sys-libs/zlib-1.3.1-r1"], "new": ["x11-libs/new-1.0"],
+                          "reinstalls": ["dev-libs/foo-1.0", "dev-libs/drift-2.0"]}
+    assert "1 upgrades, 1 new, 2 reinstalls" in drift.output and "dev-libs/drift-2.0" in drift.output and "information only" in drift.output
+
+
+def test_the_world_of_the_first_real_run_resolves_and_its_drift_is_listed():
+    """tests/vm/data/emerge-world-*.log is the output of 'emerge -pvuDN @world' in the first real VM install: 4 upgrades, 3 new packages, 5 reinstalls."""
+    text = (DATA / "emerge-world-uefi-nvme-luks-openrc.log").read_text()
+    groups = vm_probes.summarize_world(text)
+    assert (len(groups["upgrade"]), len(groups["new"]), len(groups["rebuild"])) == (4, 3, 5)
+    resolve, drift = vm_probes.parse_world_probe(0, text)
+    assert resolve.name == "world-resolve" and resolve.success and not resolve.advisory
+    assert drift.success and not drift.advisory and drift.error == ""
+    assert drift.data["counts"] == {"upgrades": 4, "new": 3, "reinstalls": 5}
+    assert drift.data["upgrades"] == ["app-misc/ca-certificates-20260816.3.131.1-1", "sys-libs/timezone-data-2026e-1", "net-misc/curl-8.23.0-1",
+                                      "dev-python/ensurepip-pip-26.2.1-r1-1"]
+    assert drift.data["reinstalls"] == ["app-arch/zstd-1.5.7-r1-10", "net-misc/iputils-20250605-r4-1", "sys-devel/gettext-0.23.2-7",
+                                        "app-crypt/libb2-0.98.1-r3-14", "app-portage/portage-utils-0.97.1-1"]  # no ::repo and no slot
+    assert drift.data["new"] == ["net-libs/nghttp2-1.70.0-3", "net-libs/nghttp3-1.18.0-1", "net-libs/ngtcp2-1.25.0-1"]
+
+
+def test_drift_is_information_even_when_the_world_does_not_resolve():
+    resolve, drift = vm_probes.parse_world_probe(1, "!!! Problem resolving dependencies for @world\n[ebuild   R    ] dev-libs/drift-2.0 USE=\"b\" 10 KiB\n")
+    assert not resolve.success and not resolve.advisory
+    assert drift.success and not drift.advisory and drift.data["reinstalls"] == ["dev-libs/drift-2.0"]
+    _resolve, nothing = vm_probes.parse_world_probe(137, "Calculating dependencies ...")
+    assert nothing.success and nothing.data["counts"] == {"upgrades": 0, "new": 0, "reinstalls": 0} and "status 137" in nothing.output
 
 
 @pytest.mark.parametrize("text", [

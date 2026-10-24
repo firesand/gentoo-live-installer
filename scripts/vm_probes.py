@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import re
 import shlex
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any, Iterable, Mapping, Sequence
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -29,6 +29,15 @@ class ProbeResult:
     error: str = ""
     # An advisory probe records a finding without failing the scenario (unless --strict-probes).
     advisory: bool = False
+    # What the probe collected for the record (world-drift: the packages), apart from its verdict.
+    data: dict[str, Any] = field(default_factory=dict)
+
+    def record(self) -> dict[str, Any]:
+        """The probe as result.json keeps it: ``data`` only when the probe collected some."""
+        record = asdict(self)
+        if not record["data"]:
+            del record["data"]
+        return record
 
 
 def parse_probe_result(name: str, returncode: int, output: str, expected: str | None = None) -> ProbeResult:
@@ -298,8 +307,42 @@ def summarize_world(output: str) -> dict[str, list[str]]:
     return groups
 
 
+DRIFT_NOTE = ("information only: the tree the installer synced is newer than the stage3, so Portage wants newer versions and "
+              "changed USE defaults; the installer did not cause it")
+DRIFT_LISTED = 40  # packages named per group in the text of the probe (the data has all of them)
+
+
+def plain_atom(atom: str) -> str:
+    """cat/pkg-version as emerge prints it, without the slot and the repository (``app-arch/zstd-1.5.7-r1-10:0/1::gentoo``)."""
+    return atom.split("::", 1)[0].split(":", 1)[0]
+
+
+def world_drift(output: str) -> dict[str, Any]:
+    """What ``emerge -pvuDN @world`` would still do after an install: how many and which upgrades, new packages and reinstalls."""
+    groups = summarize_world(ANSI_RE.sub("", output))
+    listed = {"upgrades": [plain_atom(atom) for atom in groups["upgrade"]], "new": [plain_atom(atom) for atom in groups["new"]],
+              "reinstalls": [plain_atom(atom) for atom in groups["rebuild"]]}
+    return {"counts": {name: len(atoms) for name, atoms in listed.items()}, **listed}
+
+
+def drift_text(drift: Mapping[str, Any], returncode: int) -> str:
+    counts = drift["counts"]
+    lines = [f"{counts['upgrades']} upgrades, {counts['new']} new, {counts['reinstalls']} reinstalls ({DRIFT_NOTE})"]
+    for name in ("upgrades", "new", "reinstalls"):
+        atoms = drift[name]
+        if atoms:
+            lines.append(f"{name}: " + ", ".join(atoms[:DRIFT_LISTED]) + (f" ... and {len(atoms) - DRIFT_LISTED} more" if len(atoms) > DRIFT_LISTED else ""))
+    if returncode != 0 and not any(drift[name] for name in ("upgrades", "new", "reinstalls")):
+        lines.append(f"nothing could be listed: emerge exited with status {returncode}")
+    return "\n".join(lines)
+
+
 def parse_world_probe(returncode: int, output: str) -> list[ProbeResult]:
-    """Two verdicts from one command: the world must resolve (a failure), and should not want rebuilds (a finding)."""
+    """Two results from one command: the world must resolve (a failure), and what it would still change is information.
+
+    The drift (upgrades, new packages, reinstalls) never fails a job: right after an install it comes from the tree being
+    newer than the stage3, which is not the installer's doing. It is kept in ``data`` for result.json.
+    """
     problem = _sudo_problem("world-resolve", returncode, output)
     if problem:
         return [problem]
@@ -307,16 +350,12 @@ def parse_world_probe(returncode: int, output: str) -> list[ProbeResult]:
     failures = [text for pattern, text in WORLD_FAILURES if pattern.search(clean)]
     if returncode != 0 and not failures:
         failures.append(f"emerge exited with status {returncode}")
-    groups = summarize_world(clean)
+    drift = world_drift(clean)
+    counts = drift["counts"]
     tail = "\n".join(clean.strip().splitlines()[-12:])
-    summary = f"{len(groups['new'])} new, {len(groups['upgrade'])} upgrades, {len(groups['rebuild'])} rebuilds"
+    summary = f"{counts['upgrades']} upgrades, {counts['new']} new, {counts['reinstalls']} reinstalls"
     resolve = ProbeResult("world-resolve", not failures, f"{summary}\n{tail}", "; ".join(failures))
-    drift = groups["rebuild"]
-    drift_text = ""
-    if drift:
-        drift_text = ("installed packages would be rebuilt because their USE flags differ from the configuration: "
-                      + ", ".join(drift[:12]) + (" ..." if len(drift) > 12 else ""))
-    return [resolve, ProbeResult("world-drift", not drift, summary, drift_text, advisory=True)]
+    return [resolve, ProbeResult("world-drift", True, drift_text(drift, returncode), data=drift)]
 
 
 # --- the hardware plan -------------------------------------------------------------------------------------------------
