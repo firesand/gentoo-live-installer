@@ -12,7 +12,7 @@ import time
 
 import pytest
 
-from .conftest import ROOT
+from .conftest import ROOT, write_executable
 
 pytestmark = pytest.mark.skipif(os.uname().machine != "x86_64", reason="the builder insists on an x86_64 host")
 
@@ -266,6 +266,101 @@ def test_missing_artifacts_or_unverified_manifest_fail(stubs, mode: str) -> None
     stubs.env["STUB_ISO_NAME"] = RELEASE_NAME
     result = stubs.run(extra_env={"STUB_RUN": mode})
     assert result.returncode != 0
+
+
+GPG_STUB = r'''#!__PYTHON__
+import json, os, sys
+argv = sys.argv[1:]
+with open(os.environ["STUB_GPG_LOG"], "a") as log:
+    log.write(json.dumps(argv) + "\n")
+if "--list-secret-keys" in argv:
+    sys.exit(2 if os.environ.get("STUB_GPG_NO_KEY") == "1" else 0)
+if "--detach-sign" in argv:
+    if os.environ.get("STUB_GPG_SIGN_FAILS") == "1":
+        sys.exit(2)
+    with open(argv[argv.index("--output") + 1], "w") as signature:
+        signature.write("signature of " + argv[-1] + "\n")
+    sys.exit(0)
+if "--verify" in argv:
+    sys.exit(1 if os.environ.get("STUB_GPG_BAD") == "1" else 0)
+sys.exit(0)
+'''
+FINGERPRINT = "0123456789ABCDEF0123456789ABCDEF01234567"
+
+
+def with_gpg(stubs):
+    import sys
+
+    write_executable(stubs.bin / "gpg", GPG_STUB.replace("__PYTHON__", sys.executable))
+    stubs.env["STUB_GPG_LOG"] = str(stubs.tmp / "gpg.log")
+    stubs.env["STUB_ISO_NAME"] = RELEASE_NAME
+
+    def gpg_calls() -> list[list[str]]:
+        log = stubs.tmp / "gpg.log"
+        return [json.loads(line) for line in log.read_text().splitlines()] if log.exists() else []
+
+    return gpg_calls
+
+
+def test_sign_key_signs_the_checksums_and_the_manifest_on_the_host(stubs) -> None:
+    gpg_calls = with_gpg(stubs)
+    result = stubs.run("--sign-key", FINGERPRINT)
+    assert result.returncode == 0, result.stderr + result.stdout
+    dist = stubs.tmp / "dist"
+    for suffix in (".sha512", ".manifest.json"):
+        assert (dist / f"{RELEASE_NAME}{suffix}.asc").read_text().startswith("signature of "), suffix
+    signing = [c for c in gpg_calls() if "--detach-sign" in c]
+    assert [c[-1] for c in signing] == [str(dist / f"{RELEASE_NAME}.sha512"), str(dist / f"{RELEASE_NAME}.manifest.json")]
+    assert all(option_values(c, "--local-user") == [FINGERPRINT] and "--armor" in c and "--batch" in c for c in signing)
+    assert "signatures:" in result.stdout and f"{RELEASE_NAME}.sha512.asc" in result.stdout
+    assert FINGERPRINT not in json.dumps(stubs.runs()), "the key must never be handed to the container"
+
+
+def test_no_signature_without_the_option(stubs) -> None:
+    gpg_calls = with_gpg(stubs)
+    assert stubs.run().returncode == 0
+    assert gpg_calls() == [] and not list((stubs.tmp / "dist").glob("*.asc"))
+
+
+@pytest.mark.parametrize("value", ["abc", "bob@example.org", "0123456789ABCDEG", "0123456789ABCDEF01234567", "-----"])
+def test_sign_key_must_look_like_a_key_id_or_fingerprint(stubs, value: str) -> None:
+    with_gpg(stubs)
+    result = stubs.run("--sign-key", value)
+    assert result.returncode != 0 and "--sign-key must be" in result.stderr and not stubs.runs()
+
+
+def test_sign_key_without_a_value_is_refused(stubs) -> None:
+    with_gpg(stubs)
+    assert stubs.run("--sign-key").returncode != 0
+
+
+@pytest.mark.parametrize("key", ["0x0123456789abcdef", "0123456789ABCDEF", FINGERPRINT, FINGERPRINT.lower()])
+def test_sign_key_accepts_long_ids_and_fingerprints(stubs, key: str) -> None:
+    with_gpg(stubs)
+    assert stubs.run("--check", "--sign-key", key).returncode == 0
+
+
+def test_a_missing_secret_key_is_found_before_the_build(stubs) -> None:
+    with_gpg(stubs)
+    result = stubs.run("--sign-key", FINGERPRINT, extra_env={"STUB_GPG_NO_KEY": "1"})
+    assert result.returncode != 0 and "no secret key" in result.stderr and not stubs.runs()
+    assert stubs.run("--check", "--sign-key", FINGERPRINT, extra_env={"STUB_GPG_NO_KEY": "1"}).returncode != 0
+
+
+def test_a_test_key_iso_is_never_signed(stubs) -> None:
+    with_gpg(stubs)
+    key_file = stubs.tmp / "key.pub"
+    key_file.write_text("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOyxpnq6y2K3rBtYBCPPNjpzV7cXzEvZ0NPIPXhdtJJL test\n")
+    result = stubs.run("--sign-key", FINGERPRINT, "--test-key-file", str(key_file))
+    assert result.returncode != 0 and "never signed" in result.stderr and not stubs.runs()
+
+
+def test_a_failed_signature_fails_the_build_step(stubs) -> None:
+    with_gpg(stubs)
+    failed = stubs.run("--sign-key", FINGERPRINT, extra_env={"STUB_GPG_SIGN_FAILS": "1"})
+    assert failed.returncode != 0 and "could not sign" in failed.stderr
+    bad = stubs.run("--sign-key", FINGERPRINT, extra_env={"STUB_GPG_BAD": "1"})
+    assert bad.returncode != 0 and "does not verify" in bad.stderr
 
 
 def test_stage1_only_does_not_expect_an_iso(stubs) -> None:

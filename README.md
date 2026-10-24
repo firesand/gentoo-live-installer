@@ -43,6 +43,7 @@ The build runs Catalyst in Docker (about 45 GiB of free disk, 8 GiB of RAM for t
 JOBS=4 ./scripts/build-iso.sh           # the release ISO into dist/
 ./scripts/build-iso.sh --stage2-only    # re-run only stage2 when stage1 is unchanged
 ./scripts/build-iso.sh --verify dist/gentoo-installer-amd64-*.iso
+./scripts/build-iso.sh --sign-key 0xYOURKEYID   # also sign the checksums and the manifest
 ```
 
 * The result is `dist/gentoo-installer-amd64-<stamp>.iso` with `.sha512`, `.blake2b`, `.manifest.json` and `.packages.txt`; every build writes a timestamped log to `dist/logs/`.

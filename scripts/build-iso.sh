@@ -26,6 +26,7 @@ STAGE1_ONLY=0
 VERIFY_ISO=
 VERIFY_FLAVOR=release
 TEST_KEY_FILE=
+SIGN_KEY=
 
 usage() {
 	cat <<'EOF'
@@ -49,6 +50,9 @@ ISO_LOG_DIR, BUILD_MEMORY (default 8g), BUILD_MIN_FREE_GIB (default 45), ISO_SEC
                        login (for scripts/test-vm.py). Its file name and volume label end in
                        TESTKEY, and ISO_DIST_DIR must be set to a directory of your own.
                        The environment variable GENTOO_TEST_SSH_PUBLIC_KEY does the same.
+  --sign-key KEYID     After a release build, sign the .sha512 and .manifest.json files
+                       with your OpenPGP key (16 or 40 hex digits) on the host; the key
+                       never enters the container. Refused together with --test-key-file.
   --verify ISO         Check an existing ISO (scripts/verify-iso.py) and exit. Use
                        --flavor release|testkey to say what it should be (default release).
   --clean              Remove retained chroots, partial files and stage1 archives beyond
@@ -84,6 +88,11 @@ while (($#)); do
 		--test-key-file)
 			(($# >= 2)) || die "--test-key-file needs a file"
 			TEST_KEY_FILE=$2
+			shift
+			;;
+		--sign-key)
+			(($# >= 2)) || die "--sign-key needs the ID or fingerprint of your OpenPGP key"
+			SIGN_KEY=$2
 			shift
 			;;
 		--verify)
@@ -128,6 +137,15 @@ fi
 for command_name in docker python3 realpath sha512sum b2sum sha256sum flock df awk; do
 	command -v "${command_name}" >/dev/null 2>&1 || die "missing prerequisite: ${command_name}"
 done
+if [[ -n ${SIGN_KEY} ]]; then
+	[[ ${SIGN_KEY} =~ ^(0[xX])?[0-9A-Fa-f]{16}([0-9A-Fa-f]{24})?$ ]] \
+		|| die "--sign-key must be a 16 or 40 digit hexadecimal key ID or fingerprint, not '${SIGN_KEY}'"
+	[[ -z ${TEST_KEY_FILE} && -z ${GENTOO_TEST_SSH_PUBLIC_KEY:-} ]] \
+		|| die "a test-key ISO is never signed: it has a login that must not be distributed"
+	command -v gpg >/dev/null 2>&1 || die "missing prerequisite: gpg (needed by --sign-key)"
+	gpg --batch --list-secret-keys -- "${SIGN_KEY}" >/dev/null 2>&1 \
+		|| die "there is no secret key ${SIGN_KEY} in your GnuPG keyring (--sign-key)"
+fi
 [[ $(uname -m) == x86_64 ]] || die "an x86_64 host is required for this AMD64 builder"
 [[ ${JOBS} =~ ^[1-9][0-9]*$ ]] || die "JOBS must be a positive integer"
 [[ ${LOAD_AVERAGE} =~ ^[0-9]+([.][0-9]+)?$ ]] || die "LOAD_AVERAGE must be numeric"
@@ -447,9 +465,21 @@ if manifest.get("flavor") != sys.argv[3] or manifest.get("test_ssh_enabled") != 
 if not manifest.get("verified", {}).get("ok"):
     raise SystemExit("manifest does not record a passed image verification")
 PY
+if [[ -n ${SIGN_KEY} ]]; then
+	# On the host, after the container is gone: the key and its passphrase never enter Docker.
+	for signed in "${iso}.sha512" "${iso}.manifest.json"; do
+		rm -f -- "${signed}.asc"
+		gpg --batch --yes --local-user "${SIGN_KEY}" --armor --detach-sign --output "${signed}.asc" -- "${signed}" \
+			|| die "could not sign ${signed} with key ${SIGN_KEY}"
+		gpg --batch --verify "${signed}.asc" "${signed}" >/dev/null 2>&1 || die "the new signature ${signed}.asc does not verify"
+	done
+fi
 note "verified ISO: ${iso}"
 note "SHA-512: ${iso}.sha512"
 note "BLAKE2b: ${iso}.blake2b"
 note "manifest: ${iso}.manifest.json"
+if [[ -n ${SIGN_KEY} ]]; then
+	note "signatures: ${iso}.sha512.asc, ${iso}.manifest.json.asc (key ${SIGN_KEY})"
+fi
 note "installed packages: ${iso}.packages.txt"
 note "build log: ${LOG_FILE}"
