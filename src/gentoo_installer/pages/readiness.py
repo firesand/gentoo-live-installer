@@ -31,9 +31,9 @@ WARNING_AREAS = {
 COVERED_ERRORS = ("Missing required tools", "No network connection", "Gentoo AMD64 requires", "At least 2 GiB", "Memory size could not")
 CLOCK_ACTIONS = ("sync_time", "clock-sync")
 CLOCK_EXPLAIN = "Downloads are checked with certificates that only work when the clock is right."
-# NET-06: the charger finding is a banner of its own, and the Windows note belongs to the Storage step; neither is repeated in the notes.
+# NET-06: the charger finding is a banner of its own, not one more row; the Windows note is filed under "Windows", not "Firmware".
 CHARGER_CODES = ("bat_low", "bat_ac_offline")
-STORAGE_ONLY_CODES = ("fw_win_entry",)
+WINDOWS_CODES = ("fw_win_entry",)
 PROXY_HELP = ("A proxy is a middle computer some company or school networks use for internet access; leave this empty at home. "
               "Without a password it is also kept in the installed system's Portage settings.")
 KEEP_PROXY_CREDENTIALS = "A proxy with a password is used for the installation only: the password is never written to the installed system."
@@ -80,6 +80,8 @@ def warning_area(code: str) -> str:
     """The row title of a finding: what part of the computer it is about."""
     if code.startswith("preflight."):
         return PREFLIGHT_AREAS.get(code.split(".", 1)[1], "Installer check")
+    if clean_code(code) in WINDOWS_CODES:
+        return "Windows"
     return WARNING_AREAS.get(clean_code(code).split("_", 1)[0], "Hardware")
 
 
@@ -194,6 +196,7 @@ class ReadinessPage(Page):
         self.clock_explain = wrapped_label(CLOCK_EXPLAIN, muted=True)
         self.content.addWidget(self.clock_explain)
         self.socket_path: str | None = None
+        self._forced_off = False
         self._network_row: tuple[str, str] = ("checking", "Checking…")
         self.advance_on_enter(self.proxy)
         self.load_manifest()
@@ -231,7 +234,11 @@ class ReadinessPage(Page):
         credentials = proxy_has_credentials(proxy)
         self.keep_proxy.setEnabled(bool(proxy) and not credentials)
         if credentials:
+            self._forced_off = True
             self.keep_proxy.setChecked(False)
+        elif self._forced_off:
+            self._forced_off = False
+            self.keep_proxy.setChecked(True)  # back to the default once the password is gone
         self.keep_proxy_note.setText(KEEP_PROXY_CREDENTIALS if credentials else "")
         self.keep_proxy_note.setVisible(credentials)
 
@@ -450,8 +457,8 @@ class ReadinessPage(Page):
             if code in CHARGER_CODES:
                 charger = charger or message  # an amber banner at the top of the page, not one more row
                 continue
-            if code in STORAGE_ONLY_CODES or message in seen:
-                continue  # each note once; the Windows note is explained on the Storage step
+            if message in seen:
+                continue  # each note once
             seen.add(message)
             action = str(warning.get("action", "")).strip()
             action = "" if action == "none" else action

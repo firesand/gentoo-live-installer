@@ -347,6 +347,8 @@ def test_keep_proxy_follows_the_box_and_is_forced_off_with_credentials(qtbot):
     assert not page.keep_proxy.isEnabled() and not page.keep_proxy.isChecked() and "installation only" in page.keep_proxy_note.text()
     page.save_manifest()
     assert manifest.network.keep_proxy is False and manifest.network.proxy == "http://alice:pw@proxy:3128"
+    page.proxy.setText("http://proxy:3128")
+    assert page.keep_proxy.isChecked() and page.keep_proxy.isEnabled()  # the default is back without the password
 
 
 def test_the_proxy_help_text_matches_the_behaviour(qtbot):
@@ -382,7 +384,7 @@ def test_development_mode_row_is_hidden(make_window):
     assert window.readiness.rows["service"].isHidden()
 
 
-def test_each_note_is_shown_once_and_the_windows_note_is_not_on_this_page(make_window):
+def test_each_note_is_shown_once_and_the_windows_note_has_its_own_title(make_window):
     info = sample_info(warnings=[
         {"code": "hw.fw_win_entry", "severity": "info", "message": "Windows is installed on this PC. Install next to it only if you have a backup."},
         {"code": "hw.gpu_a", "severity": "info", "message": "Same note twice."}, {"code": "hw.gpu_b", "severity": "info", "message": "Same note twice."},
@@ -390,8 +392,9 @@ def test_each_note_is_shown_once_and_the_windows_note_is_not_on_this_page(make_w
     window = make_window(info=info)
     window.apply_info(info)
     page = window.readiness
-    texts = [page.notes_box.itemAt(i).widget().detail.text() for i in range(page.notes_box.count())]
-    assert texts == ["Same note twice."]
+    rows = [page.notes_box.itemAt(i).widget() for i in range(page.notes_box.count())]
+    assert sorted(row.detail.text() for row in rows) == ["Same note twice.", "Windows is installed on this PC. Install next to it only if you have a backup."]
+    assert next(row for row in rows if row.detail.text().startswith("Windows")).title.text() == "Windows"
     assert page.charger_banner.text() == "The charger is not connected." and not page.charger_banner.isHidden()
     assert "certificates" in page.clock_explain.text()
 
@@ -558,3 +561,13 @@ def test_call_returns_the_result_data_or_a_failure(monkeypatch):
     monkeypatch.setattr(daemon_client, "request", broken)
     answer = netclient.call("/s", "x")
     assert answer["ok"] is False and answer["message"]
+
+
+def test_calls_also_work_on_a_worker_thread(qtbot):
+    widget = NetworkCard(InstallManifest(), caller=FakeService())
+    qtbot.addWidget(widget)
+    widget.refresh()
+    qtbot.waitUntil(lambda: widget.status is not None, timeout=5000)
+    assert widget.adapters.text() == "Wi-Fi: wlp4s0 (not connected)"
+    qtbot.waitUntil(lambda: widget.network_list.count() == 3, timeout=5000)
+    widget.wait()

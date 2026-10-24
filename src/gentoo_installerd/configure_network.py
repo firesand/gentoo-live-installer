@@ -129,7 +129,7 @@ class ImportedProfile:
     certificates: list[tuple[str, str]] = field(default_factory=list)  # (placeholder, live path)
 
 
-def rewrite_keyfile(text: str, *, portable: bool = False) -> ImportedProfile | None:
+def rewrite_keyfile(text: str, *, portable: bool = False, drop_wifi_interface: bool = False) -> ImportedProfile | None:
     """Prepare a live NetworkManager profile for the installed system; None when it should be skipped.
 
     ``permissions=`` names the live user, which does not exist on the target, so it is dropped to
@@ -155,8 +155,10 @@ def rewrite_keyfile(text: str, *, portable: bool = False) -> ImportedProfile | N
             section = line[1:-1]
         elif section == "connection" and line.startswith("permissions="):
             continue
-        elif portable and section == "connection" and line.startswith("interface-name=") and connection_type in {"ethernet", "802-3-ethernet", "wifi", "802-11-wireless"}:
+        elif portable and section == "connection" and line.startswith("interface-name=") and connection_type in {"ethernet", "802-3-ethernet"}:
             continue
+        elif drop_wifi_interface and section == "connection" and line.startswith("interface-name="):
+            continue  # a Wi-Fi profile copied for a portable target (network.copy_live_wifi) is not tied to this PC's card
         elif section.startswith("802-1x") and "=" in line and line.partition("=")[0] in _NM_CERTIFICATE_KEYS:
             key, _, value = line.partition("=")
             path = value[len("file://"):] if value.startswith("file://") else value
@@ -245,7 +247,7 @@ class NetworkMixin(ConfigurerBase):
                 continue
             if not pattern.search(text):
                 continue
-            profile = rewrite_keyfile(text, portable=portable)
+            profile = rewrite_keyfile(text, portable=portable, drop_wifi_interface=portable)
             if profile is None or profile.connection_type not in {"wifi", "802-11-wireless"}:
                 break
             self._write_profile(source.name, profile.text)

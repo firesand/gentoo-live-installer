@@ -136,6 +136,7 @@ def test_an_ethernet_profile_is_not_copied_by_this_setting(tmp_path):
     assert not (tmp_path / "target/etc/NetworkManager/system-connections/Home.nmconnection").exists()
 
 
-def test_rewrite_keyfile_drops_wifi_interface_only_for_portable():
+def test_rewrite_keyfile_drops_wifi_interface_only_when_asked():
     assert "interface-name" in rewrite_keyfile(WIFI).text
-    assert "interface-name" not in rewrite_keyfile(WIFI, portable=True).text
+    assert "interface-name" in rewrite_keyfile(WIFI, portable=True).text  # the all-profiles import keeps it (earlier behaviour)
+    assert "interface-name" not in rewrite_keyfile(WIFI, portable=True, drop_wifi_interface=True).text
