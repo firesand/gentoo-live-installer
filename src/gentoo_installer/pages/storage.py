@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 from .. import blockdev, keymaps, layout, theme
 from ..keyboard import start_detached
 from ..manifest import InstallManifest
-from ..system_info import MEMBER_SIGNATURES, DiskInfo, SystemInfo, device_from_disk, format_size, smallest_disk_bytes
+from ..system_info import DiskInfo, SystemInfo, device_from_disk, format_size, holder_reasons_of, smallest_disk_bytes
 from ..widgets import Card, ChoiceGroup, FlowLayout, FormGrid, Page, wrapped_label
 from .hardware import CAPACITY_CODES, blocking_findings
 from .manual_storage import ManualLayoutEditor
@@ -74,9 +74,7 @@ def holder_reasons(info: SystemInfo, devices: list[str]) -> list[str]:
             node = blockdev.find(roots, device)
         except (LookupError, ValueError):
             continue
-        reasons += [f"{volume.type} volume {volume.path}" for volume in blockdev.stacked_devices(node)]
-        reasons += [f"swap in use on {path}" for path in blockdev.active_swaps(node)]
-        reasons += [f"{sub.path} is part of {MEMBER_SIGNATURES[sub.fstype]}" for sub in node.walk() if sub.fstype in MEMBER_SIGNATURES]
+        reasons += holder_reasons_of(node)
     return list(dict.fromkeys(reasons))
 
 

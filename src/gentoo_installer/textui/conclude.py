@@ -46,6 +46,8 @@ def describe(console: Console, outcome: Outcome) -> None:
         c.para(outcome.message, indent=2)
     if outcome.state == "blocked":
         c.para("Nothing was started and nothing on your disks was changed. Close the repair tool (or unmount what it holds), then start again.")
+    if outcome.code == "storage.holders":
+        c.para("Nothing on your disks was changed: the installer stopped before it wrote anything.")
     if outcome.state in {"failed", "cancelled", "unreachable"}:
         c.para(f"The installation log is on this computer: {outcome.log_path or DEFAULT_LOG_PATH} (only root can read that file; the menu below can show it).")
     if outcome.bootable:
@@ -58,6 +60,14 @@ def tell_how_to_resume(console: Console, outcome: Outcome) -> None:
     """For unattended runs: what to type next."""
     if outcome.resumable:
         console.para("The disk was already prepared. To continue where it stopped without erasing the disk again, run the same command with --resume.")
+    if outcome.code == "storage.holders":
+        console.para("To let the installer switch these volumes off and destroy them, run the same command with --release-holders.")
+
+
+def confirm_release(console: Console) -> bool:
+    """The service refused to erase a disk with volumes, swap or RAID/LVM members alive on it: ask whether they may be destroyed."""
+    console.para("Switching them off destroys their data, and also data stored on other disks of the same volume group or RAID array.")
+    return console.confirm("Really switch them off and erase them together with the disk?", default=False, back=False)
 
 
 def show_log(console: Console, daemon: Daemon) -> None:
@@ -102,7 +112,7 @@ def restart(console: Console, host: Host) -> bool:
 
 
 def conclude(console: Console, host: Host, daemon: Daemon, outcome: Outcome, *, can_resume: bool = True) -> str:
-    """Show the result and offer what makes sense. Returns "resume", "again", "attach" or "done".
+    """Show the result and offer what makes sense. Returns "resume", "release", "again", "attach" or "done".
 
     ``can_resume`` is false when the settings of the installation are not known (a run that was only attached to)."""
     describe(console, outcome)
@@ -122,9 +132,13 @@ def conclude(console: Console, host: Host, daemon: Daemon, outcome: Outcome, *, 
             offer("Resume the installation", "resume", "Continues where it stopped. The disk is not erased again.")
         if outcome.bootable and not outcome.ok:
             offer("Restart the computer now", "restart", "The system installed so far can start. Remove the installation medium first.")
+        if outcome.state == "failed" and outcome.code == "storage.holders" and can_resume:
+            offer("Switch them off, erase them together with the disk, and try again", "release",
+                  "Their data is lost, and so is data stored on other disks of the same volume group or RAID array.")
         if outcome.state in {"failed", "cancelled", "invalid", "blocked"}:
             hint = {"invalid": "", "blocked": "Start again from the summary once the repair tool has let go of the disks."}
-            offer("Go back to the summary", "again", hint.get(outcome.state, "Change a setting, or start over. Starting over erases the disk again."))
+            default = "Change a setting or choose another disk. Nothing has been erased." if outcome.code == "storage.holders" else "Change a setting, or start over. Starting over erases the disk again."
+            offer("Go back to the summary", "again", hint.get(outcome.state, default))
         offer("Show the last lines of the installation log", "log")
         offer("Save the installation log to a file", "save")
         offer("Quit", "done")
@@ -141,5 +155,8 @@ def conclude(console: Console, host: Host, daemon: Daemon, outcome: Outcome, *, 
         elif action == "restart":
             if restart(console, host):
                 return "done"
+        elif action == "release":
+            if confirm_release(console):
+                return action
         else:
             return action

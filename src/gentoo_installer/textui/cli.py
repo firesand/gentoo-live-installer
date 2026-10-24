@@ -90,6 +90,8 @@ def build_parser(out: TextIO | None = None, err: TextIO | None = None) -> argpar
     parser.add_argument("--dry-run", action="store_true", help="with --manifest: check the settings and show the plan; start nothing")
     parser.add_argument("--json-events", action="store_true", help="print the service's events as JSON lines on standard output (with --yes, --dry-run or --attach)")
     parser.add_argument("--resume", action="store_true", help="with --manifest: continue an interrupted installation instead of erasing the disk again")
+    parser.add_argument("--release-holders", action="store_true",
+                        help="with --manifest: allow the installer to switch off, and destroy, volumes, swap and RAID/LVM members that are alive on the target disk")
     parser.add_argument("--attach", action="store_true", help="follow the installation that is running (or show how the last one ended)")
     parser.add_argument("--no-color", action="store_true", help="never use colours (NO_COLOR does the same)")
     parser.add_argument("--version", action="version", version=f"{PROGRAM} {__version__}")
@@ -108,6 +110,8 @@ def check_options(args: argparse.Namespace) -> str:
         return "--confirm-device only works together with --yes"
     if args.resume and not args.manifest:
         return "--resume needs --manifest FILE (the settings must be the same as before)"
+    if args.release_holders and not args.manifest:
+        return "--release-holders needs --manifest FILE (the questions of the wizard ask for it themselves)"
     if args.attach and (args.manifest or args.yes or args.dry_run or args.resume):
         return "--attach cannot be combined with --manifest, --yes, --dry-run or --resume"
     if args.json_events and not (args.yes or args.dry_run or args.attach):
@@ -266,6 +270,9 @@ def conclude_loop(ctx: Context, outcome: Outcome, manifest: InstallManifest | No
         action = conclude(ctx.console, ctx.host, ctx.daemon, outcome, can_resume=manifest is not None)
         if action == "resume" and manifest is not None:
             outcome = run_install(ctx, start_request(manifest, True))
+        elif action == "release" and manifest is not None:
+            manifest.storage.release_holders = True  # the user agreed in the menu
+            outcome = run_install(ctx, start_request(manifest, False))
         elif action == "attach":
             state = ctx.daemon.probe()
             if not state.reachable:
@@ -382,6 +389,8 @@ def run_manifest(ctx: Context) -> int:
     except ManifestFileError as exc:
         console.error(str(exc))
         return EXIT_USAGE
+    if args.release_holders:
+        manifest.storage.release_holders = True
     if unattended:
         problems = manifest.validate()
         if problems:

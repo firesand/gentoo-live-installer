@@ -112,9 +112,10 @@ def disk_option(entry: DiskEntry) -> Option:
     disk = entry.disk
     bus = BUS_NAMES.get(disk.transport.lower(), disk.transport.upper())
     facts = ", ".join(part for part in (human_size(disk.size), bus, layout.identity_text(disk)) if part)
-    flags = [name for name, active in (("removable", disk.removable or disk.hotplug), ("mounted", disk.mounted)) if active]
+    flags = [name for name, active in (("removable", disk.removable or disk.hotplug), ("mounted", bool(entry.mounts))) if active]
     windows = " Looks like Windows is installed here." if any(node.fstype in {"ntfs", "bitlocker"} for node in disk.walk()) else ""
-    detail = f"{facts}{' (' + ', '.join(flags) + ')' if flags else ''}\nNow on it: {layout.contents_text(disk)}.{windows}"
+    using = f"\nIn use: {'; '.join(entry.holders)}." if entry.holders else ""
+    detail = f"{facts}{' (' + ', '.join(flags) + ')' if flags else ''}\nNow on it: {layout.contents_text(disk)}.{windows}{using}"
     return Option(f"{disk.path} - {disk.model or 'unnamed disk'}", detail)
 
 
@@ -473,7 +474,7 @@ class Wizard:
     def step_disk(self) -> None:
         if self.keeps_own_partitions():
             return
-        self.substeps(self._choose_disk, self._approve_disk, self._ask_portable)
+        self.substeps(self._choose_disk, self._approve_disk, self._ask_release_holders, self._ask_portable)
 
     def _choose_disk(self) -> bool:
         c = self.console
@@ -499,10 +500,11 @@ class Wizard:
                 self.refresh_view()
                 continue
             entry = usable[choice.index]
-            if entry.disk.mounted:
-                mounts = sorted({m for node in entry.disk.walk() for m in node.mountpoints})
-                c.warn(f"{entry.disk.path} is in use ({', '.join(mounts)}). Unmount it first, for example with: umount -R <mount point>; swapoff -a. Then choose r to scan again.")
+            if entry.mounts:
+                c.warn(f"{entry.disk.path} is in use ({', '.join(entry.mounts)}). Unmount it first, for example with: umount -R <mount point>. Then choose r to scan again.")
                 continue
+            if entry.disk.path != storage.device:
+                storage.release_holders = False  # a consent is for the disk it was given for
             self.entry = entry
             return True
 
@@ -529,6 +531,21 @@ class Wizard:
         if not c.confirm("Is this the disk to install on?", default=False, detail=f"{disk.path}: {disk.model or 'unnamed disk'}, {human_size(disk.size)}"):
             raise GoBack
         apply_disk(self.manifest.storage, entry, approve_path=True)
+        return True
+
+    def _ask_release_holders(self) -> bool:
+        """Volumes, swap and RAID/LVM members that are alive on the disk are only switched off, and destroyed, with the user's consent."""
+        c = self.console
+        entry, storage = self.entry, self.manifest.storage
+        assert entry is not None
+        holders = entry.holders
+        if not holders:
+            return False
+        c.para(f"In use on {entry.disk.path}: {'; '.join(holders)}.")
+        c.para("The installer can switch these off, but their data is lost, and so is data stored on other disks of the same volume group or RAID array.")
+        storage.release_holders = c.confirm("Switch them off and erase them together with the disk?", default=storage.release_holders)
+        if not storage.release_holders:
+            raise GoBack
         return True
 
     def _ask_portable(self) -> bool:

@@ -256,7 +256,8 @@ class InstallFollower:
         self.console.quit_note = "The installation keeps running in the background. To follow it again, run: gentoo-installer-text --attach"
         outcome = self._run(request)
         if outcome.state != "detached":
-            self.console.quit_note = "" if outcome.ok or outcome.state == "blocked" else "The installation stopped; the disk may be partly installed (the log says how far it got)."
+            untouched = outcome.state == "blocked" or outcome.code == "storage.holders"  # refused before the first write
+            self.console.quit_note = "" if outcome.ok or untouched else "The installation stopped; the disk may be partly installed (the log says how far it got)."
         return outcome
 
     def _run(self, request: dict[str, Any]) -> Outcome:

@@ -541,6 +541,16 @@ def mark_shared_identities(disks: list[DiskInfo]) -> None:
         disk.identity_shared = any(seen.get(value, 0) > 1 for value in (disk.serial, disk.wwid) if value)
 
 
+def holder_reasons_of(node: blockdev.BlockDevice) -> list[str]:
+    """What is alive on a disk (or partition) and would be switched off to erase it: volumes, swap, volume-group and RAID membership.
+
+    The graphical and the text installer show the same list."""
+    reasons = [f"{volume.type} volume {volume.path}" for volume in blockdev.stacked_devices(node)]
+    reasons += [f"swap in use on {path}" for path in blockdev.active_swaps(node)]
+    reasons += [f"{sub.path} is part of {MEMBER_SIGNATURES[sub.fstype]}" for sub in node.walk() if sub.fstype in MEMBER_SIGNATURES]
+    return list(dict.fromkeys(reasons))
+
+
 def device_from_disk(disk: DiskInfo) -> blockdev.BlockDevice:
     """A BlockDevice tree for a DiskInfo that did not come from lsblk (tests, older callers)."""
     children = tuple(

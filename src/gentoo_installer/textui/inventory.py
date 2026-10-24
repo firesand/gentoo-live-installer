@@ -87,6 +87,16 @@ class DiskEntry:
         """Whether a serial number or WWN tells this disk from every other one."""
         return bool(self.disk.serial or self.disk.wwn) and not self.shared_identity
 
+    @property
+    def holders(self) -> list[str]:
+        """What is alive on the disk: volumes, swap, a volume group or RAID set it belongs to (the list of the graphical installer)."""
+        return system_info.holder_reasons_of(self.disk)
+
+    @property
+    def mounts(self) -> list[str]:
+        """Where the disk or its partitions are mounted. Active swap is not a mount: the service turns it off when it may."""
+        return sorted({mount for node in self.disk.walk() for mount in node.mountpoints if mount != system_info.SWAP_MOUNT})
+
 
 class MachineView:
     """One consistent picture of this computer, taken from an ``inspect`` reply."""
