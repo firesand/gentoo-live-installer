@@ -253,6 +253,7 @@ class InstallerWindow(QMainWindow):
         self._seed_firmware()
         self.welcome = WelcomePage(self.manifest)
         self.readiness = ReadinessPage(self.manifest)
+        self.readiness.set_service(self.socket_path)
         self.readiness.update_info(self.info)
         self.storage = StoragePage(self.manifest, self.info)
         self.system = SystemPage(self.manifest)

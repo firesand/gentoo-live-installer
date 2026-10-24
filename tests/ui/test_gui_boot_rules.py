@@ -113,6 +113,7 @@ def test_a_consistent_loaded_setup_shows_the_image_as_forced(make_window):
 def customize_page(make_window, manifest=None, info=None):
     window = make_window(manifest=manifest, info=info)
     window._show_page(4)
+    window.customize.network_more.set_open(True)
     window.customize.tabs.setCurrentIndex(2)  # Network: the tab most of these tests are about (Hardware, Portage, Network, Applications)
     return window, window.customize
 

@@ -9,6 +9,7 @@ the root daemon (``network_status``), the GUI and the text installer share one i
 
 from __future__ import annotations
 
+import ipaddress
 import json
 import re
 from dataclasses import dataclass, field
@@ -218,3 +219,31 @@ def diagnose(run: Run, *, adapters: list[Adapter] | None = None, mirror: Callabl
     else:
         by_key["mirror"].ok = None
     return Diagnosis(adapters, steps)
+
+
+# ----------------------------------------------------------------------------- static address (NET-04)
+
+
+def validate_static(address: str, gateway: str, dns: list[str]) -> tuple[str, str, list[str]]:
+    """The normalised (address/prefix, gateway, dns) or ValueError with a sentence for the user."""
+    try:
+        interface = ipaddress.ip_interface(address.strip())
+    except ValueError:
+        raise ValueError("The address must look like 192.168.1.50/24 (address, slash, prefix length).") from None
+    if "/" not in address:
+        raise ValueError("Add the prefix length to the address, for example 192.168.1.50/24.")
+    try:
+        gate = ipaddress.ip_address(gateway.strip())
+    except ValueError:
+        raise ValueError("The gateway must be an address such as 192.168.1.1.") from None
+    if gate.version != interface.version:
+        raise ValueError("The address and the gateway must both be IPv4, or both IPv6.")
+    if gate not in interface.network:
+        raise ValueError("The gateway is not in the same network as the address. Check the prefix length.")
+    servers = []
+    for server in dns:
+        try:
+            servers.append(str(ipaddress.ip_address(server.strip())))
+        except ValueError:
+            raise ValueError(f"{server!r} is not a DNS server address.") from None
+    return str(interface), str(gate), servers
