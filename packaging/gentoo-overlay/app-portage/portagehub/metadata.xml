@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<longdescription lang="en">
+		PortageHub is an egui front end for Portage: it browses packages, previews and runs
+		emerge, edits USE flags and keywords and manages overlays and kernels. Privileged
+		actions go through the portagehub-helper program and its polkit policy.
+	</longdescription>
+</pkgmetadata>

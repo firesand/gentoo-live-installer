@@ -1,14 +1,22 @@
 #!/sbin/openrc-run
 
 name="Gentoo installer daemon"
-description="Privileged backend for the Gentoo GUI installer"
+description="Privileged backend of the Gentoo GUI installer and repair tool"
 command="/usr/bin/gentoo-installerd"
+# Extra arguments go into command_args in /etc/conf.d/gentoo-installerd.
 command_background=true
-pidfile="/run/gentoo-installerd.pid"
-command_user="root:gentoo-installer"
-retry="TERM/30/KILL/5"
+pidfile="/run/${RC_SVCNAME}.pid"
+# Runs as root:root. It formats disks and mounts the target; the socket directory it
+# creates is restricted to root and the gentoo-installer group by the daemon itself.
+# The daemon logs to standard error, and there is no journal on this system.
+output_log="/var/log/gentoo-installerd.log"
+error_log="/var/log/gentoo-installerd.log"
+# SIGTERM cancels a running installation, runs its cleanup (unmount, close LUKS) and
+# exits. Give that a minute before the daemon is killed.
+retry="TERM/60/KILL/5"
 
 depend() {
-	need dbus
-	after NetworkManager
+	# No D-Bus and no network: the daemon only needs the device nodes udev creates.
+	after udev
+	use logger
 }

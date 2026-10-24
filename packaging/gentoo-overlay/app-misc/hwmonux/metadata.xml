@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<longdescription lang="en">
+		HWMonux is a PySide6 monitor for temperatures, fans, voltages, power and load. It
+		reads the kernel's hwmon interface (lm-sensors drivers), NVIDIA's NVML and USB cooler
+		controllers. Fans and voltages of the motherboard only appear when the kernel has a
+		driver for its Super I/O chip; the package loads the safe drivetemp module only and
+		leaves the others to the user (sensors-detect).
+	</longdescription>
+	<use>
+		<flag name="liquidctl">Read AIO coolers and fan controllers through liquidctl (needs the ~amd64 versions of liquidctl and hidapi)</flag>
+		<flag name="nvidia">Read NVIDIA GPU sensors through NVML (dev-python/nvidia-ml-py); harmless without an NVIDIA card</flag>
+	</use>
+</pkgmetadata>

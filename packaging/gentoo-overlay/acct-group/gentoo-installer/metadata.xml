@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<longdescription lang="en">
+		The group whose members may open the socket of the privileged installer daemon
+		(gentoo-installerd). Membership gives the right to partition and format disks, so
+		only the live user of the installer ISO is put into it.
+	</longdescription>
+</pkgmetadata>

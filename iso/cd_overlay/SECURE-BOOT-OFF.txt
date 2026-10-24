@@ -1,0 +1,44 @@
+SECURE BOOT MUST BE OFF TO START THIS DISC
+==========================================
+
+If your computer shows "Secure Boot violation", "Invalid signature
+detected", "Selected boot image did not authenticate" or just skips this USB
+stick, Secure Boot is turned on. The boot loader on this disc is not signed
+with a key that your firmware trusts, so the firmware refuses to run it
+before any of our code starts. This is the most common reason why a live USB
+stick "does not work", and it has nothing to do with the stick or the
+download.
+
+What to do
+----------
+1. Restart and open the firmware setup (also called UEFI setup or BIOS setup).
+   Common keys, pressed right after power on: F2, Del, F10, F12, Esc.
+     Dell: F2 (boot menu F12)        HP: Esc, then F10 (boot menu F9)
+     Lenovo: F1 or F2, ThinkPad: Enter, then F1 (boot menu F12)
+     ASUS: F2 or Del (boot menu F8)  Acer: F2 (boot menu F12)
+     MSI: Del (boot menu F11)        Microsoft Surface: hold Volume Up while
+                                     you press the power button
+2. Find "Secure Boot" (usually under Security, Boot or Authentication) and set
+   it to Disabled. Some firmware first wants an administrator password, or the
+   operating system type changed from "Windows UEFI mode" to "Other OS".
+3. Save and exit (usually F10) and start from the USB stick again.
+
+Before you change the setting on a PC that runs Windows
+--------------------------------------------------------
+* If Windows uses BitLocker or "Device encryption", changing firmware settings
+  can make Windows ask for its recovery key at the next start. Look the key up
+  first (https://aka.ms/myrecoverykey or your IT department) and keep it
+  at hand.
+* Secure Boot can be turned on again later. It is only this disc that needs it
+  off. Whether a Gentoo system installed from this disc uses Secure Boot is a
+  separate choice in the installer.
+* Intel Macs with a T2 chip: in the Startup Security Utility choose
+  "No Security" and allow booting from external media.
+
+Computers that cannot run this disc
+-----------------------------------
+This disc is for 64-bit x86 computers (Intel and AMD, including 32-bit UEFI
+tablets). It cannot start on Apple Silicon Macs (M1 and later), on Windows PCs
+with Snapdragon or other ARM processors, or on Raspberry Pi boards.
+
+More help: README.txt on this disc.

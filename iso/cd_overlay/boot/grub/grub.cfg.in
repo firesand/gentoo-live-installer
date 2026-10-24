@@ -1,0 +1,127 @@
+# Boot menu of the Gentoo installer and rescue disc.
+#
+# iso/builder-entrypoint.sh renders this template with iso/render-config.py: the volume
+# label comes from ISO_VOLID and the kernel arguments from ISO_BOOTARGS in iso/pins.env, the
+# same values as livecd/volid and livecd/bootargs of the stage2 spec. Catalyst writes its own
+# three-entry grub.cfg first and rsyncs this directory over the ISO tree afterwards
+# (livecd/overlay), so this file replaces it. scripts/verify-iso.py checks the result inside
+# the finished ISO.
+#
+# Rules for editing:
+#  * Every Linux entry keeps the dracut arguments Catalyst generates, in this order:
+#      root=live:CDLABEL=<volume label> rd.live.dir=/ rd.live.squashimg=image.squashfs cdroot
+#  * "dokeymap" is only for the text console entries. It makes the initramfs wait ten
+#    seconds for a keymap choice, so the default entries must not carry it.
+#  * No "safe graphics" entry: the live kernel has no generic framebuffer DRM driver
+#    (simpledrm or efidrm), so nomodeset cannot give a working desktop. Entries that need
+#    nomodeset say that they are text-only.
+#  * The Memtest86+ block mirrors memtest_grub() of Catalyst's iso-bootloader-setup.sh for the
+#    two images this ISO builds (64-bit BIOS and UEFI; sys-apps/memtest86+ has no bios32 USE
+#    flag set). Catalyst copies the files to the ISO root, so the entries are tested at boot.
+
+set default=0
+set gfxpayload=keep
+set timeout=10
+insmod all_video
+insmod png
+insmod gfxterm
+terminal_output gfxterm
+set gfxmode=auto
+set theme=/boot/grub/themes/gentoo_frosted/theme.txt
+
+# Make sure the following file tests and entries look at the disc itself.
+search --no-floppy --set=root -l @VOLID@
+
+menuentry 'Gentoo installer and rescue desktop' --class gnu-linux --class os {
+	search --no-floppy --set=root -l @VOLID@
+	linux /boot/gentoo @BOOTARGS@ root=live:CDLABEL=@VOLID@ rd.live.dir=/ rd.live.squashimg=image.squashfs cdroot
+	initrd /boot/gentoo.igz
+}
+
+menuentry 'Desktop in RAM (needs 6 GiB RAM, the USB stick can be removed)' --class gnu-linux --class os {
+	search --no-floppy --set=root -l @VOLID@
+	linux /boot/gentoo @BOOTARGS@ root=live:CDLABEL=@VOLID@ rd.live.dir=/ rd.live.squashimg=image.squashfs cdroot rd.live.ram=1
+	initrd /boot/gentoo.igz
+}
+
+menuentry 'Text console only (repair, headless, asks for a keyboard layout)' --class gnu-linux --class os {
+	search --no-floppy --set=root -l @VOLID@
+	linux /boot/gentoo @BOOTARGS@ root=live:CDLABEL=@VOLID@ rd.live.dir=/ rd.live.squashimg=image.squashfs cdroot nox dokeymap
+	initrd /boot/gentoo.igz
+}
+
+submenu 'More options (troubleshooting)' --class gnu-linux --class os {
+	menuentry 'Verbose boot (kernel and initramfs messages)' --class gnu-linux --class os {
+		search --no-floppy --set=root -l @VOLID@
+		linux /boot/gentoo @BOOTARGS@ root=live:CDLABEL=@VOLID@ rd.live.dir=/ rd.live.squashimg=image.squashfs cdroot ignore_loglevel loglevel=7 rd.debug
+		initrd /boot/gentoo.igz
+	}
+
+	menuentry 'Compatibility mode (text only, PCIe/NVMe/USB power saving off)' --class gnu-linux --class os {
+		search --no-floppy --set=root -l @VOLID@
+		linux /boot/gentoo @BOOTARGS@ root=live:CDLABEL=@VOLID@ rd.live.dir=/ rd.live.squashimg=image.squashfs cdroot nomodeset pcie_aspm=off nvme_core.default_ps_max_latency_us=0 usbcore.autosuspend=-1
+		initrd /boot/gentoo.igz
+	}
+
+	menuentry 'Serial console ttyS0 115200 (text only)' --class gnu-linux --class os {
+		search --no-floppy --set=root -l @VOLID@
+		linux /boot/gentoo @BOOTARGS@ root=live:CDLABEL=@VOLID@ rd.live.dir=/ rd.live.squashimg=image.squashfs cdroot nox console=tty0 console=ttyS0,115200n8
+		initrd /boot/gentoo.igz
+	}
+
+	menuentry 'Old firmware (no ACPI or APIC, text only)' --class gnu-linux --class os {
+		search --no-floppy --set=root -l @VOLID@
+		linux /boot/gentoo @BOOTARGS@ root=live:CDLABEL=@VOLID@ rd.live.dir=/ rd.live.squashimg=image.squashfs cdroot acpi=off noapic nomodeset
+		initrd /boot/gentoo.igz
+	}
+
+	menuentry 'IOMMU off (boards that hang with DMA remapping)' --class gnu-linux --class os {
+		search --no-floppy --set=root -l @VOLID@
+		linux /boot/gentoo @BOOTARGS@ root=live:CDLABEL=@VOLID@ rd.live.dir=/ rd.live.squashimg=image.squashfs cdroot intel_iommu=off amd_iommu=off
+		initrd /boot/gentoo.igz
+	}
+
+	menuentry 'Text console in RAM (needs 4 GiB RAM, the stick can be removed)' --class gnu-linux --class os {
+		search --no-floppy --set=root -l @VOLID@
+		linux /boot/gentoo @BOOTARGS@ root=live:CDLABEL=@VOLID@ rd.live.dir=/ rd.live.squashimg=image.squashfs cdroot nox dokeymap rd.live.ram=1
+		initrd /boot/gentoo.igz
+	}
+
+	menuentry 'Accessibility (speakup speech output)' --class gnu-linux --class os {
+		search --no-floppy --set=root -l @VOLID@
+		linux /boot/gentoo @BOOTARGS@ root=live:CDLABEL=@VOLID@ rd.live.dir=/ rd.live.squashimg=image.squashfs cdroot dospeakup
+		initrd /boot/gentoo.igz
+	}
+}
+
+if [ "x$grub_platform" = xpc ]; then
+	if [ -e /memtest64.bios ]; then
+		menuentry "Memtest86+ 64bit BIOS" {
+			linux "/memtest64.bios"
+		}
+	fi
+fi
+if [ "x$grub_platform" = xefi ]; then
+	if [ -e /memtest.efi64 ]; then
+		menuentry "Memtest86+ 64bit UEFI" {
+			chainloader "/memtest.efi64"
+		}
+	fi
+	menuentry 'UEFI firmware settings' {
+		insmod efifwsetup
+		fwsetup
+	}
+	menuentry 'Continue with the next boot device' {
+		exit
+	}
+fi
+
+menuentry 'Restart' {
+	insmod reboot
+	reboot
+}
+
+menuentry 'Power off' {
+	insmod halt
+	halt
+}

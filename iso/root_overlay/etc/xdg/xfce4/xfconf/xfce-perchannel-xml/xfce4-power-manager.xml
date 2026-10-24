@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+  Nothing may suspend, hibernate or switch off the display while the installer or the
+  rescue tool is working. The property names were taken from xfce4-power-manager 4.20.
+  presentation-mode switches off every idle action by itself; the explicit values below
+  keep the same result if somebody turns presentation mode off. 0 means "do nothing",
+  14 minutes is the "Never" position of the inactivity slider.
+-->
+<channel name="xfce4-power-manager" version="1.0">
+  <property name="xfce4-power-manager" type="empty">
+    <property name="presentation-mode" type="bool" value="true"/>
+    <property name="lid-action-on-ac" type="uint" value="0"/>
+    <property name="lid-action-on-battery" type="uint" value="0"/>
+    <property name="inactivity-on-ac" type="uint" value="14"/>
+    <property name="inactivity-on-battery" type="uint" value="14"/>
+    <property name="dpms-enabled" type="bool" value="false"/>
+    <property name="dpms-on-ac-sleep" type="uint" value="0"/>
+    <property name="dpms-on-ac-off" type="uint" value="0"/>
+    <property name="dpms-on-battery-sleep" type="uint" value="0"/>
+    <property name="dpms-on-battery-off" type="uint" value="0"/>
+    <property name="critical-power-action" type="uint" value="0"/>
+    <property name="lock-screen-suspend-hibernate" type="bool" value="false"/>
+  </property>
+</channel>

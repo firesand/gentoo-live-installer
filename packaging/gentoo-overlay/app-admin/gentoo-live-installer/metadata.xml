@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<longdescription lang="en">
+		The Qt installer wizard, the privileged installer daemon (gentoo-installerd) and the
+		repair tool for systems that no longer boot. The daemon runs as root, formats the
+		disk the user selected and installs a stage3 into it; the wizard talks to the daemon
+		over a Unix socket that only root and the gentoo-installer group can open.
+	</longdescription>
+	<use>
+		<flag name="btrfs">Install the Btrfs tools, so the installer and the repair tool can create and check Btrfs file systems</flag>
+		<flag name="efi">Install efibootmgr, so the installer and the repair tool can create and repair UEFI boot entries</flag>
+		<flag name="secureboot">Install sbsigntools, needed for installations that sign their boot files for Secure Boot</flag>
+		<flag name="xfs">Install the XFS tools, so the installer and the repair tool can create and repair XFS file systems</flag>
+	</use>
+</pkgmetadata>

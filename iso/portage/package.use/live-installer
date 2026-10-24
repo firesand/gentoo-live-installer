@@ -1,3 +1,4 @@
+# Per-package USE for the live image (stage1 and stage2 share this confdir).
 net-misc/networkmanager dhcpcd -dhclient
 sys-kernel/linux-firmware initramfs
 x11-base/xorg-server udev
@@ -5,3 +6,13 @@ dev-libs/libdbusmenu gtk3
 sys-boot/grub mount
 sys-apps/i2c-tools python
 media-libs/libwebp -tiff
+# RAM test boot entry. Catalyst copies /boot/memtest86plus/* (memtest64.bios and
+# memtest.efi64) to the ISO root and the project's grub.cfg offers them.
+sys-apps/memtest86+ boot bios64 uefi64
+# Thin-provisioned LVM volumes are common on Fedora/RHEL and server installs; the
+# repair tool cannot activate them without thin_check (thin-provisioning-tools).
+sys-fs/lvm2 thin
+# The live image keeps AIO cooler support in HWMonux (the ebuild leaves it off by default
+# because liquidctl is ~amd64) and Secure Boot signing tools for the installer's checks.
+app-misc/hwmonux liquidctl
+app-admin/gentoo-live-installer secureboot

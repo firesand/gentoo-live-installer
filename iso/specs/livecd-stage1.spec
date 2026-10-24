@@ -34,13 +34,16 @@ livecd/packages:
 	app-arch/zstd
 	app-cdr/cdrtools
 	app-crypt/gnupg
+	app-crypt/sbsigntools
 	sec-keys/openpgp-keys-gentoo-release
 	app-editors/mousepad
 	app-editors/nano
 	app-misc/hwmonux
+	app-misc/jq
 	app-misc/livecd-tools
 	app-misc/screen
 	app-misc/tmux
+	app-portage/cpuid2cpuflags
 	app-portage/eix
 	app-portage/gentoolkit
 	app-portage/portage-utils
@@ -69,12 +72,16 @@ livecd/packages:
 	sys-apps/dmidecode
 	sys-apps/ethtool
 	sys-apps/gptfdisk
+	sys-apps/hdparm
 	sys-apps/hwinfo
 	sys-apps/inxi
 	sys-apps/iproute2
 	sys-apps/kexec-tools
+	sys-apps/lshw
+	sys-apps/memtest86+
 	sys-apps/nvme-cli
 	sys-apps/pciutils
+	sys-apps/pv
 	sys-apps/smartmontools
 	sys-apps/usbutils
 	sys-apps/util-linux
@@ -83,8 +90,10 @@ livecd/packages:
 	sys-block/gparted
 	sys-block/open-iscsi
 	sys-block/parted
+	sys-block/thin-provisioning-tools
 	sys-boot/efibootmgr
 	sys-boot/grub
+	sys-boot/mokutil
 	sys-boot/os-prober
 	sys-firmware/ipw2100-firmware
 	sys-firmware/ipw2200-firmware
@@ -112,6 +121,10 @@ livecd/packages:
 	sys-power/acpid
 	sys-process/htop
 	sys-process/lsof
+	sys-process/psmisc
+	www-client/links
+	x11-apps/setxkbmap
+	x11-apps/xrandr
 	x11-base/xorg-drivers
 	x11-base/xorg-server
 	x11-misc/lightdm
@@ -119,3 +132,4 @@ livecd/packages:
 	x11-terms/xfce4-terminal
 	xfce-base/xfce4-meta
 	xfce-extra/xfce4-whiskermenu-plugin
+	xfce-extra/xfce4-xkb-plugin

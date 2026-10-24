@@ -1,0 +1,6 @@
+[Desktop Entry]
+Type=Application
+Name=Xfce Screensaver
+Comment=Disabled on the installer and rescue disc: a locked or blanked screen must not hide an installation
+Exec=xfce4-screensaver
+Hidden=true

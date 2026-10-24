@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+  The rescue tool has to see the PC's disks untouched, so Thunar does not mount
+  drives or media by itself, does not open or run anything on them and does not browse
+  new volumes. Mount a disk on purpose from the file manager when you want to.
+-->
+<channel name="thunar-volman" version="1.0">
+  <property name="automount-drives" type="empty">
+    <property name="enabled" type="bool" value="false"/>
+  </property>
+  <property name="automount-media" type="empty">
+    <property name="enabled" type="bool" value="false"/>
+  </property>
+  <property name="autobrowse" type="empty">
+    <property name="enabled" type="bool" value="false"/>
+  </property>
+  <property name="autoopen" type="empty">
+    <property name="enabled" type="bool" value="false"/>
+  </property>
+  <property name="autorun" type="empty">
+    <property name="enabled" type="bool" value="false"/>
+  </property>
+</channel>

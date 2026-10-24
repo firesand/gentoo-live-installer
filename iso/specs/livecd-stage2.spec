@@ -9,24 +9,58 @@ compression_mode: gzip
 portage_confdir: @BUILD_DIR@/portage
 repos: @BUILD_DIR@/overlay
 
-livecd/bootargs: dokeymap nodhcp secureconsole
+# Kernel arguments shared by every boot-menu entry (iso/pins.env: ISO_BOOTARGS). The
+# builder renders the same string into boot/grub/grub.cfg (iso/cd_overlay).
+#   nodhcp         livecd-tools' autoconfig must not run its own DHCP client; NetworkManager
+#                  owns the network interfaces.
+#   secureconsole  livecd-tools' fixinittab then logs in only tty1 automatically (as the live
+#                  user) and puts a normal login prompt on tty2-tty6. Without it all six
+#                  consoles log in by themselves. Do not drop it.
+# "dokeymap" is deliberately absent: the initramfs would stop on a ten second keymap prompt
+# on every boot. Only the text-console menu entry adds it.
+livecd/bootargs: @BOOTARGS@
 livecd/depclean: no
 livecd/fstype: squashfs
 livecd/fsops: -j @JOBS@ -Q 20
 livecd/iso: @ISO_NAME@
 livecd/type: gentoo-release-livecd
-livecd/volid: GENTOO_INSTALLER_AMD64
+livecd/volid: @VOLID@
 livecd/cdtar: /usr/share/catalyst/livecd/cdtar/grub-theme-gentoo_frosted.tar.bz2
 livecd/fsscript: @BUILD_DIR@/fsscript-stage2.sh
 livecd/root_overlay: @BUILD_DIR@/root_overlay
+# Catalyst writes boot/grub/grub.cfg first and rsyncs this directory over the ISO tree
+# afterwards (setup_overlay runs after the bootloader step), so the project's menu and the
+# SECURE-BOOT-OFF.txt notice replace the generic ones. It must not contain snapshots/.
+livecd/overlay: @BUILD_DIR@/cd_overlay
+# Becomes /README.txt on the ISO (Catalyst's own text is a generic boot option list).
+livecd/readme: @BUILD_DIR@/README-live.txt
+# chronyd steps a wrong hardware clock once the network is up. acpid is not started on
+# purpose: elogind owns the power, sleep and lid keys (see conf.d/autoconfig and
+# powerbtn.sh in the overlay). The same list is checked by scripts/verify-iso.py.
 livecd/rcadd:
 	udev|sysinit
-	acpid|default
 	dbus|default
 	elogind|boot
 	NetworkManager|default
+	chronyd|default
 	gentoo-installerd|default
-livecd/unmerge: net-misc/netifrc
+# dev-lang/rust-bin (about 680 MiB) is only needed to build PortageHub in stage1; nothing
+# installed depends on it at run time (checked against /var/db/pkg of the r19 image).
+livecd/unmerge:
+	net-misc/netifrc
+	dev-lang/rust-bin
+# Download and documentation caches. Man and info pages stay for the rescue console.
+# Static Qt libraries (about 270 MiB) are only needed to link against Qt privately.
+# make.conf.old (written by livecd_update) and make.conf.extra (part of portage_confdir) hold
+# the builder's job counts and caches; the wrapper reads the extra settings from the build
+# directory, not from this copy, and appends the live-safe subset to the final make.conf.
+livecd/rm:
+	/var/cache/binhost
+	/usr/share/doc
+	/usr/share/gtk-doc
+	/usr/lib64/libQt6*.a
+	/etc/portage/make.conf.old
+	/etc/portage/make.conf.extra
 livecd/empty:
 	/var/db/repos
 	/usr/src

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Keep the screen on
+Comment=Switch off the X screen saver and display power saving for the live session
+Exec=sh -c "xset s off; xset s noblank; xset -dpms"
+Terminal=false
+NoDisplay=true
+OnlyShowIn=XFCE;
+X-GNOME-Autostart-enabled=true
