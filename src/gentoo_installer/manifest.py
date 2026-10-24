@@ -18,7 +18,8 @@ ATOM_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_+.-]*/[A-Za-z0-9][A-Za-z0-9_+.-]*(?
 PROFILE_BASE = "default/linux/amd64/23.0"
 PROFILE_RE = re.compile(r"default/linux/amd64/23\.0(?:/[a-z0-9][a-z0-9-]*)*")
 KEYMAP_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._+-]{0,39}")
-LOCALE_RE = re.compile(r"(?:[a-z]{2,3}(?:_[A-Z]{2})?(?:@[a-z]+)?(?:\.[A-Za-z0-9-]+)?|C(?:\.UTF-8)?|POSIX)")
+# language[_TERRITORY][.codeset][@modifier] (glibc also accepts the modifier first, as in de_DE@euro)
+LOCALE_RE = re.compile(r"(?:[a-z]{2,3}(?:_[A-Z]{2})?(?:[.@][A-Za-z0-9-]+){0,2}|C(?:\.UTF-8)?|POSIX)")
 # wget and the stage3 downloader only speak HTTP proxies; SOCKS proxies would fail late.
 PROXY_SCHEMES = {"http", "https"}
 KDE_APPS_CHOICES = {"core", "full"}

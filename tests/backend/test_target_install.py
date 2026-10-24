@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+import unittest.mock
 from pathlib import Path
 
 from gentoo_installerd.install import RECEIPT_PATH, InstallError, Installer
@@ -354,13 +355,62 @@ class Stage3StageTests(StageHarness):
 
 
 class PlanSeamTests(unittest.TestCase):
+    def installer(self, temporary: str) -> Installer:
+        return Installer(target_manifest(), runner=ScriptedRunner(), target_root=Path(temporary) / "t", state_dir=Path(temporary) / "s",
+                         dry_run=True, inspector=FakeInspector())
+
     def test_installer_without_a_plan_behaves_as_before(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            installer = Installer(target_manifest(), runner=ScriptedRunner(), target_root=Path(temporary) / "t", state_dir=Path(temporary) / "s",
-                                  dry_run=True, inspector=FakeInspector())
+            installer = self.installer(temporary)
             self.assertIsNone(installer._plan())
             installer.hardware_plan = FakePlan()
             self.assertIsNotNone(installer._plan())
+
+    def test_the_plan_is_made_from_the_probe_when_the_hardware_module_exists(self) -> None:
+        import sys
+        import types
+
+        calls: list = []
+        module = types.ModuleType("gentoo_installerd.hwplan")
+        module.plan = lambda manifest, hardware: (calls.append((manifest, hardware)), FakePlan(summary=["Graphics: open drivers"]))[1]
+        with tempfile.TemporaryDirectory() as temporary:
+            installer = self.installer(temporary)
+            installer.inspection = types.SimpleNamespace(hardware={"cpu": {"vendor": "intel"}})
+            with unittest.mock.patch.dict(sys.modules, {"gentoo_installerd.hwplan": module}):
+                with unittest.mock.patch("gentoo_installerd.hwplan", module, create=True):
+                    plan = installer._plan()
+                    self.assertEqual(plan.summary, ["Graphics: open drivers"])
+                    self.assertIs(installer._plan(), plan)  # made once
+            self.assertEqual(len(calls), 1)
+            self.assertEqual(calls[0][1], {"cpu": {"vendor": "intel"}})
+
+    def test_a_planning_bug_falls_back_to_the_generic_setup(self) -> None:
+        import sys
+        import types
+
+        module = types.ModuleType("gentoo_installerd.hwplan")
+
+        def broken(manifest, hardware):
+            raise RuntimeError("table lookup failed")
+
+        module.plan = broken
+        with tempfile.TemporaryDirectory() as temporary:
+            installer = self.installer(temporary)
+            logs: list[str] = []
+            installer.log = logs.append  # type: ignore[method-assign]
+            installer.inspection = types.SimpleNamespace(hardware={"cpu": {}})
+            with unittest.mock.patch.dict(sys.modules, {"gentoo_installerd.hwplan": module}):
+                with unittest.mock.patch("gentoo_installerd.hwplan", module, create=True):
+                    self.assertIsNone(installer._plan())
+            self.assertTrue(any("could not be planned (table lookup failed)" in line for line in logs))
+
+    def test_no_probe_data_means_no_plan(self) -> None:
+        import types
+
+        with tempfile.TemporaryDirectory() as temporary:
+            installer = self.installer(temporary)
+            installer.inspection = types.SimpleNamespace(hardware={})
+            self.assertIsNone(installer._plan())
 
 
 if __name__ == "__main__":

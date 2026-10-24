@@ -275,8 +275,33 @@ class Installer:
         return self.__dict__.setdefault("_degraded", [])
 
     def _plan(self) -> object | None:
-        """The hardware plan (gentoo_installerd.hwplan.HardwarePlan) that _preflight builds, if any."""
-        return getattr(self, "hardware_plan", None)
+        """The hardware plan (a gentoo_installerd.hwplan.HardwarePlan), or None when there is none.
+
+        _preflight may set ``hardware_plan`` (for example restored from the saved state of a resumed
+        install). Otherwise the plan is made once from the hardware probe of the inspection, when
+        the hwplan module and the probe exist; without a plan the stages behave as they always did.
+        """
+        plan = getattr(self, "hardware_plan", None)
+        if plan is None and not self.__dict__.get("_plan_attempted"):
+            self._plan_attempted = True
+            plan = self._make_plan()
+            if plan is not None:
+                self.hardware_plan = plan
+        return plan
+
+    def _make_plan(self) -> object | None:
+        hardware = getattr(self.inspection, "hardware", None) if self.inspection is not None else None
+        if not hardware:
+            return None
+        try:
+            from . import hwplan
+        except ImportError:
+            return None
+        try:
+            return hwplan.plan(self.manifest, hardware)
+        except Exception as exc:  # noqa: BLE001 - a planning bug must not stop an install that does not need it
+            self.log(f"WARNING: the hardware-specific setup could not be planned ({exc}); continuing with the generic setup")
+            return None
 
     def _root_device(self) -> str:
         return next(entry.device for entry in self.storage.layout if entry.mountpoint == "/")

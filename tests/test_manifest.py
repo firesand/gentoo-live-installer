@@ -309,6 +309,7 @@ def test_uki_requires_uefi():
     ("keymap", "us", True), ("keymap", "de-latin1-nodeadkeys", True), ("keymap", "pt-latin9", True),
     ("keymap", 'us"; reboot', False), ("keymap", "-us", False), ("keymap", "x" * 41, False),
     ("locale", "en_US.UTF-8", True), ("locale", "de_DE@euro", True), ("locale", "C.UTF-8", True),
+    ("locale", "de_DE.UTF-8@euro", True), ("locale", "sr_RS@latin", True), ("locale", "zh_CN.GB18030", True),
     ("locale", "en_US.UTF-8; rm", False), ("locale", "english", False),
     ("timezone", "Asia/Jakarta", True), ("timezone", "UTC", True),
     ("timezone", "Asia/Jakartaa", False), ("timezone", "../etc/passwd", False), ("timezone", "Europe/Berlin\n", False),
