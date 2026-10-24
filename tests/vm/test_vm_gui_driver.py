@@ -342,7 +342,8 @@ def detect_run(qtbot, monkeypatch, tmp_path, scenario, *, uefi):
     actual = walk_wizard(window)
     assert window.current == 6, "the wizard stopped before the Review page"
     detected = {"storage.device": "/dev/vda", "storage.device_id": vm.TARGET_SERIAL, "storage.firmware": expected_manifest.storage.firmware,
-                "storage.table": "gpt" if expected_manifest.storage.firmware == "uefi" else None}
+                "storage.table": "gpt" if expected_manifest.storage.firmware == "uefi" else None,
+                "system.stage_variant": None}  # wizard-seeded: a desktop preselects the Desktop stage3
     return driver.compare_manifests(expected, actual, detected)
 
 
