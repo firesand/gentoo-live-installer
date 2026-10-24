@@ -291,17 +291,17 @@ sudo mdadm --assemble --scan --config=none      # RAID: or name the members: mda
 **Mount it** (look first with `-o ro` if you are not sure what is wrong; for Btrfs add a subvolume, for example `-o subvol=@`)
 
 ```sh
-sudo mkdir -p /mnt/rescue/root
-sudo mount /dev/mapper/cryptroot /mnt/rescue/root
-sudo mount /dev/nvme0n1p2 /mnt/rescue/root/boot            # only if /boot is separate
-sudo mount /dev/nvme0n1p1 /mnt/rescue/root/boot/efi        # the EFI system partition; on some systems it is /efi
+sudo mkdir -p /mnt/system
+sudo mount /dev/mapper/cryptroot /mnt/system
+sudo mount /dev/nvme0n1p2 /mnt/system/boot       # only if /boot is separate
+sudo mount /dev/nvme0n1p1 /mnt/system/boot/efi   # the EFI system partition; on some systems it is /efi
 for d in dev proc sys run; do
-  sudo mount --rbind /$d /mnt/rescue/root/$d && sudo mount --make-rslave /mnt/rescue/root/$d
+  sudo mount --rbind /$d /mnt/system/$d && sudo mount --make-rslave /mnt/system/$d
 done
-sudo chroot /mnt/rescue/root /bin/bash                     # use /bin/sh if there is no bash
+sudo chroot /mnt/system /bin/bash                # use /bin/sh if there is no bash
 ```
 
-Inside the chroot `efibootmgr` works when the live disc was started in UEFI mode (`ls /sys/firmware/efi` exists). When you are done: `exit`, then `sudo umount -R /mnt/rescue/root`. Do not run `rm -rf` inside the chroot while these mounts exist.
+(The repair tool keeps its own mounts below `/mnt/rescue`. Use another directory, such as `/mnt/system`, for mounts you make by hand.) Inside the chroot `efibootmgr` works when the live disc was started in UEFI mode (`ls /sys/firmware/efi` exists). When you are done: `exit`, then `sudo umount -R /mnt/system`. Do not run `rm -rf` inside the chroot while these mounts exist.
 
 **Rebuild the boot loader and initramfs**
 
