@@ -2,6 +2,7 @@
 """HWMonux - an HWMonitor-style hardware sensor viewer for Linux."""
 
 import argparse
+import logging
 import signal
 import sys
 import threading
@@ -27,6 +28,19 @@ ICONS = {
 INTERVALS_MS = (500, 1000, 2000, 5000)
 WARN_COLOR, CRIT_COLOR = QColor("#f67400"), QColor("#da4453")
 NUMERIC = Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+WINDOW_SIZE = (800, 900)
+# Largest share of the usable screen the window may start with: laptop panels (1366x768,
+# 1280x720) are smaller than the default size, and a window manager that does not shrink
+# oversized windows would put its title bar or the bottom edge out of reach.
+SCREEN_SHARE = 0.9
+POLLER_JOIN_SECONDS = 1.0
+
+log = logging.getLogger("hwmonux")
+
+
+def clamp_size(width, height, available_width, available_height, share=SCREEN_SHARE):
+    """The requested window size, shrunk to at most `share` of the available screen area."""
+    return min(width, int(available_width * share)), min(height, int(available_height * share))
 
 
 def themed_icon(key):
@@ -55,14 +69,26 @@ class MainWindow(QMainWindow):
         self._populate()
 
         self._poller = None
+        self._closing = False
         self.polled.connect(self._show_values)
         self.timer = QTimer(self, timeout=self.poll)
         self._build_menus()
         self._show_values()
         self._size_columns()
-        self.resize(800, 900)
+        self.resize(*WINDOW_SIZE)
         self.restoreGeometry(self.settings.value("geometry", b""))
+        self._fit_to_screen()
         self.timer.start()
+
+    def _fit_to_screen(self):
+        # self.screen() can still be None before the window is shown (offscreen platform).
+        screen = self.screen() or QApplication.primaryScreen()
+        if screen is None:
+            return
+        area = screen.availableGeometry()
+        size = clamp_size(self.width(), self.height(), area.width(), area.height())
+        if size != (self.width(), self.height()):
+            self.resize(*size)
 
     def _populate(self):
         root = QTreeWidgetItem(self.tree, [self.monitor.hostname])
@@ -156,8 +182,17 @@ class MainWindow(QMainWindow):
             self._poller.start()
 
     def _poll_worker(self):
-        self.monitor.poll()
-        self.polled.emit()
+        try:
+            self.monitor.poll()
+        except Exception:
+            log.warning("polling the sensors failed", exc_info=True)
+        finally:
+            # Always report back, so one failing poll never leaves the values frozen.
+            if not self._closing:
+                try:
+                    self.polled.emit()
+                except RuntimeError:
+                    pass  # the window was destroyed while this poll was still running
 
     def _show_values(self):
         for item, sensor in self._rows:
@@ -196,9 +231,12 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Save Report", f"Could not write {path}:\n{e.strerror}")
 
     def closeEvent(self, event):
+        self._closing = True
         self.timer.stop()
         if self._poller:
-            self._poller.join()
+            # A stuck sensor read (NVML, USB, a hung drive) must not keep the window open:
+            # the poller is a daemon thread and dies with the process.
+            self._poller.join(timeout=POLLER_JOIN_SECONDS)
         self.settings.setValue("geometry", self.saveGeometry())
         super().closeEvent(event)
 
