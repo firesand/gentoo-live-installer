@@ -99,3 +99,6 @@ class WelcomePage(Page):
     def load_manifest(self) -> None:
         if self.manifest is not None:
             self.keyboard.set_selection(self.manifest.system.keyboard_layout, self.manifest.system.keyboard_variant)
+
+    def focus_first(self) -> None:
+        self.install_button.setFocus()

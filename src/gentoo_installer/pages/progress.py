@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
 )
 
@@ -69,6 +70,12 @@ def format_elapsed(seconds: int) -> str:
     return f"{seconds // 3600:02d}:{seconds % 3600 // 60:02d}:{seconds % 60:02d}"
 
 
+def soft_breaks(text: str, chunk: int = 40) -> str:
+    """Allow a line break inside very long unbroken tokens (paths, hashes) so a
+    wrapped label never forces the page wider than the window."""
+    return re.sub(rf"(\S{{{chunk}}})(?=\S)", "\\1\u200b", text)
+
+
 def summarize(message: str) -> str:
     """One readable line for the status card; the log pane keeps the full text."""
     lines = message.strip().splitlines()
@@ -77,7 +84,7 @@ def summarize(message: str) -> str:
     if len(first) > SUMMARY_CHARS:
         first = first[: SUMMARY_CHARS - 1].rstrip() + "…"
         truncated = True
-    return first + SUMMARY_SUFFIX if truncated else first
+    return soft_breaks(first) + (SUMMARY_SUFFIX if truncated else "")
 
 
 class ProgressModel:
@@ -240,6 +247,7 @@ class ProgressPage(Page):
         self._failure_reported = False
         self._finished_emitted = False
         self._merged_files = 0
+        self._detail_dirty = False
         self._base_detail = ""
         self._pending: list[str] = []
         self._lines_seen = 0
@@ -264,6 +272,9 @@ class ProgressPage(Page):
         row = QHBoxLayout()
         self.detail = wrapped_label("Connecting to the installer backend", muted=True, selectable=True)
         self.detail.setMinimumWidth(0)
+        policy = QSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        policy.setHeightForWidth(True)
+        self.detail.setSizePolicy(policy)  # the label follows the window, never the other way round
         row.addWidget(self.detail, 1)
         self.elapsed = QLabel(format_elapsed(0))
         row.addWidget(self.elapsed, 0, Qt.AlignmentFlag.AlignTop)
@@ -390,6 +401,7 @@ class ProgressPage(Page):
         self.detail.setText("Connecting to the installer backend")
         self._base_detail = ""
         self.secondary.hide()
+        self.secondary.setProperty("package", False)
         self.cancel.setEnabled(True)
         self.cancel.setVisible(True)
         self.reboot.setVisible(False)
@@ -445,6 +457,8 @@ class ProgressPage(Page):
 
     def _stage_event(self, kind: str, stage: str, message: str, data: dict, event: dict) -> None:
         status = str(data.get("status", ""))
+        if stage and stage != self._stage:
+            self.secondary.setProperty("package", False)  # a new step: back to "Step N of M"
         if stage:
             self._stage = stage
         if stage == "storage":
@@ -485,8 +499,10 @@ class ProgressPage(Page):
             if MERGE_LISTING.match(line):
                 if MERGED_FILE.match(line):
                     self._merged_files += 1
-                    if self._merged_files % 50 == 1:
-                        self._refresh_detail()
+                    self._detail_dirty = True
+                    if not self._flush_timer.isActive():
+                        self.flush_log()
+                        self._flush_timer.start()
                 continue
             emerging = EMERGING.match(line)
             if emerging:
@@ -510,6 +526,9 @@ class ProgressPage(Page):
             self._flush_timer.start()
 
     def flush_log(self) -> None:
+        if self._detail_dirty:
+            self._detail_dirty = False
+            self._refresh_detail()
         if not self._pending:
             return
         chunk = "\n".join(self._pending)
@@ -522,7 +541,7 @@ class ProgressPage(Page):
             self.log.appendPlainText(TRUNCATED_NOTE)
 
     def _flush_tick(self) -> None:
-        if self._pending:
+        if self._pending or self._detail_dirty:
             self.flush_log()
         else:
             self._flush_timer.stop()

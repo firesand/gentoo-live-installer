@@ -85,3 +85,41 @@ def fake_daemon(tmp_path):
     yield make
     for daemon in daemons:
         daemon.close()
+
+
+def sample_info(**overrides):
+    from gentoo_installer.system_info import DiskInfo, SystemInfo
+
+    info = SystemInfo(
+        architecture="x86_64", memory_gib=16, uefi=True,
+        disks=[DiskInfo("/dev/sda", "Virtual disk", 64 * 1024**3, serial="test-disk")],
+        network=True, synchronized_clock=True, missing_tools=[],
+    )
+    for name, value in overrides.items():
+        setattr(info, name, value)
+    return info
+
+
+@pytest.fixture
+def info():
+    return sample_info()
+
+
+@pytest.fixture
+def make_window(qtbot, monkeypatch, tmp_path):
+    """Build an InstallerWindow whose inspection is patched (synchronous by default)."""
+    from gentoo_installer.app import InstallerWindow
+    from gentoo_installer.manifest import InstallManifest
+
+    def build(info=None, manifest=None, **kwargs):
+        chosen = info if info is not None else sample_info()
+        monkeypatch.setattr("gentoo_installer.app.inspect_system", lambda: chosen)
+        # A test that leaves an "installation" running must not block at teardown on the close dialog.
+        monkeypatch.setattr(InstallerWindow, "_confirm_close_during_install", lambda self: True)
+        kwargs.setdefault("background_inspection", False)
+        window = InstallerWindow(manifest if manifest is not None else InstallManifest(), str(tmp_path / "backend.sock"), **kwargs)
+        qtbot.addWidget(window)
+        window.show()
+        return window
+
+    return build
