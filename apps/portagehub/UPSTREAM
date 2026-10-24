@@ -1,0 +1,4 @@
+source: /home/edo/Downloads/Gentoo_package_mananger
+commit: d8c5dc72afa0bff728f69f7117edcf9b6b9525d5
+date: 2026-10-24 23:36:02 +0700
+subject: Fix a race in the streams_lines test

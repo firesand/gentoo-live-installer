@@ -79,11 +79,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 "Helper binary: {}",
                 app.exec.helper_path.as_ref().map(|p| p.display().to_string()).unwrap_or_else(|| "not found".into())
             )));
-            ui.add(egui::Label::new(RichText::new("While an admin session is open, PortageHub can run package-manager commands (emerge, emaint, eselect, …), rewrite /etc/portage, replace configuration files below /etc, change boot files and kernels and remount boot partitions, all as root. That is equivalent to full administrator access: start a session only on a desktop you trust.").color(ORANGE)).wrap());
-            ui.add(egui::Label::new(w::dim("The helper checks every request (a fixed list of programs, emerge options and targets it recognises, writes only below /etc/portage, a log of everything in /var/log/portagehub), but those checks guard against mistakes, not against whoever uses the session. Multi-file changes are recorded and can be undone (Configuration → Recent changes). It asks for your password once when it starts, and closes after 15 minutes without activity, when you end it, or when you quit PortageHub.")).wrap());
-            if let Some(note) = &app.audit_note {
-                ui.label(RichText::new(format!("{} {note}", icon::WARNING)).color(ORANGE));
-            }
+            ui.label(w::dim("The helper only runs Portage tools (emerge, emaint, eselect, …), writes files only below /etc/portage, and otherwise only accepts or discards ._cfgXXXX_ configuration updates below /etc."));
             ui.horizontal(|ui| {
                 if !app.exec.root_ready() && w::primary(ui, icon::LOCK_OPEN, "Start admin session now").clicked() {
                     app.push(Action::StartHelper);

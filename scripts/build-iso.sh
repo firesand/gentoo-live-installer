@@ -220,6 +220,9 @@ required_files=(
 	apps/hwmonux/sensors.py
 	apps/portagehub/Cargo.toml
 	apps/portagehub/Cargo.lock
+	apps/portagehub/README.md
+	apps/portagehub/SECURITY.md
+	apps/portagehub/UPSTREAM
 	apps/portagehub/dist/portagehub.desktop
 	apps/portagehub/dist/org.portagehub.helper.policy
 )

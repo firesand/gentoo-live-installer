@@ -30,6 +30,7 @@ pub struct PlanEntry {
     pub use_vars: Vec<(String, String)>,
     pub size: String,
     pub depth: usize,
+    pub raw: String,
 }
 
 impl PlanEntry {
@@ -135,20 +136,54 @@ pub struct SlotConflict {
 
 #[derive(Debug, Clone)]
 pub enum Problem {
-    Masked { atom: String, candidates: Vec<MaskedCandidate>, comments: Vec<String> },
-    NoEbuilds { atom: String },
-    Ambiguous { name: String, options: Vec<String> },
+    Masked {
+        atom: String,
+        candidates: Vec<MaskedCandidate>,
+        comments: Vec<String>,
+    },
+    NoEbuilds {
+        atom: String,
+    },
+    Ambiguous {
+        name: String,
+        options: Vec<String>,
+    },
     SlotConflict(SlotConflict),
-    Blocker { blocker: String, blocked: String, hard: bool, resolved: bool },
-    RequiredUse { pkg: String, constraint: Vec<String>, use_line: String },
-    Circular { lines: Vec<String>, use_fixes: Vec<(String, String)> },
-    Unsatisfied { lines: Vec<String> },
+    Blocker {
+        blocker: String,
+        blocked: String,
+        hard: bool,
+        resolved: bool,
+    },
+    RequiredUse {
+        pkg: String,
+        constraint: Vec<String>,
+        use_line: String,
+    },
+    Circular {
+        lines: Vec<String>,
+        use_fixes: Vec<(String, String)>,
+    },
+    Unsatisfied {
+        lines: Vec<String>,
+    },
     /// "One or more updates/rebuilds have been skipped due to a dependency conflict"
-    Skipped { slot_key: String, candidate: String, required: Vec<(String, String)> },
+    Skipped {
+        slot_key: String,
+        candidate: String,
+        required: Vec<(String, String)>,
+    },
     PreservedLibs,
-    News { count: usize },
-    ConfigUpdates { count: usize },
-    Generic { title: String, lines: Vec<String> },
+    News {
+        count: usize,
+    },
+    ConfigUpdates {
+        count: usize,
+    },
+    Generic {
+        title: String,
+        lines: Vec<String>,
+    },
 }
 
 impl Problem {
@@ -195,10 +230,6 @@ impl Plan {
         self.entries.iter().filter(|e| matches!(e.kind, EntryType::Ebuild | EntryType::Binary))
     }
 }
-
-/// A skipped update while it is being read: (slot key, the candidate that was skipped, what requires
-/// the package it conflicts with as (atom, required by)).
-type SkipGroup = (String, String, Vec<(String, String)>);
 
 fn re(cell: &'static OnceLock<Regex>, pat: &str) -> &'static Regex {
     cell.get_or_init(|| Regex::new(pat).unwrap())
@@ -249,7 +280,7 @@ pub fn parse_entry(line: &str) -> Option<PlanEntry> {
     static SIZE: OnceLock<Regex> = OnceLock::new();
     let size_re = re(&SIZE, r"([\d,.]+ [KMG]i?B)\s*$");
     let size = size_re.captures(rest_s.trim_end()).map(|s| s[1].to_string()).unwrap_or_default();
-    Some(PlanEntry { kind, flags, cpv, key, version, slot, repo, old, use_vars, size, depth })
+    Some(PlanEntry { kind, flags, cpv, key, version, slot, repo, old, use_vars, size, depth, raw: line.to_string() })
 }
 
 fn suggestion_kind(header: &str) -> Option<ConfKind> {
@@ -342,7 +373,9 @@ pub fn parse(output: &str, exit_code: Option<i32>) -> Plan {
                 let l = lines[i].trim();
                 if l.is_empty() {
                     // A blank line ends the block once we've seen entries.
-                    if plan.suggestions.last().is_some_and(|s| s.kind == kind) && !lines.get(i + 1).is_some_and(|n| n.trim().starts_with('#') || looks_like_conf_line(n.trim())) {
+                    if plan.suggestions.last().is_some_and(|s| s.kind == kind)
+                        && !lines.get(i + 1).is_some_and(|n| n.trim().starts_with('#') || looks_like_conf_line(n.trim()))
+                    {
                         break;
                     }
                     i += 1;
@@ -431,7 +464,9 @@ pub fn parse(output: &str, exit_code: Option<i32>) -> Plan {
             static SKREQ: OnceLock<Regex> = OnceLock::new();
             let skreq = re(&SKREQ, r"^\s+(\S+) required by (.+?)\s*$");
             i += 1;
-            let mut current: Option<SkipGroup> = None;
+            // (package, slot, [(requirement, required by)])
+            type Skipped = (String, String, Vec<(String, String)>);
+            let mut current: Option<Skipped> = None;
             while i < lines.len() {
                 let l = lines[i];
                 let lt = l.trim();
@@ -470,7 +505,10 @@ pub fn parse(output: &str, exit_code: Option<i32>) -> Plan {
             while i < lines.len() {
                 let l = lines[i];
                 let lt = l.trim();
-                if lt.starts_with("It may be possible to solve") || lt.starts_with("NOTE: Use the '--verbose-conflicts'") || lt.starts_with("!!! Enabling --newuse") {
+                if lt.starts_with("It may be possible to solve")
+                    || lt.starts_with("NOTE: Use the '--verbose-conflicts'")
+                    || lt.starts_with("!!! Enabling --newuse")
+                {
                     break;
                 }
                 if lt.starts_with("!!!") && current.is_none() {
@@ -516,7 +554,7 @@ pub fn parse(output: &str, exit_code: Option<i32>) -> Plan {
                     pkg = parts.next().unwrap_or("").to_string();
                     use_line = parts.next().unwrap_or("").to_string();
                 } else if l.starts_with("The following REQUIRED_USE flag constraints are unsatisfied") || l.starts_with("The above constraints are a subset") {
-                    // Headings: nothing to record.
+                    // Headings between the package line and the constraints.
                 } else if (l.is_empty() && !constraint.is_empty()) || l.starts_with("(dependency required by") || l.starts_with("!!!") {
                     break;
                 } else if !l.is_empty() && !pkg.is_empty() {
@@ -668,6 +706,7 @@ The following USE changes are necessary to proceed:
         assert_eq!(p.suggestions[1].line, ">=media-libs/baz-1.2 qt6 -qt5");
         assert!(p.problems.iter().any(|x| matches!(x, Problem::News { count: 2 })));
         assert!(p.problems.iter().any(|x| matches!(x, Problem::Blocker { resolved: true, .. })));
+        assert!(p.problems.iter().any(|x| x.is_blocking()) || !p.suggestions.is_empty());
     }
 
     #[test]

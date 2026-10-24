@@ -7,20 +7,27 @@ inherit desktop multiprocessing
 
 DESCRIPTION="Rust egui graphical front end for Gentoo Portage"
 HOMEPAGE="https://wiki.gentoo.org/wiki/No_homepage"
-# The distfile is made by the ISO builder (scripts/build-iso.sh) from this repository.
+# The distfile is made by the ISO builder (scripts/build-iso.sh) from apps/portagehub, which
+# scripts/sync-portagehub.sh fills from the PortageHub repository (apps/portagehub/UPSTREAM
+# says which commit). The live CD's own changes to it are the patches in files/.
 SRC_URI="${P}.tar.zst"
 S="${WORKDIR}/${P}"
 
 # The project is GPL-2+; the rest are the licences of the vendored Rust crates (Cargo.lock).
-# Regenerate with pycargoebuild or `cargo metadata` whenever the dependencies change.
+# Regenerate from `cargo metadata --locked --format-version 1` whenever the dependencies change.
 LICENSE="GPL-2+ 0BSD Apache-2.0 Apache-2.0-with-LLVM-exceptions Boost-1.0 BSD BSD-2 GPL-2 ISC LGPL-2.1+ MIT OFL-1.1 UbuntuFontLicense-1.0 Unicode-3.0 Unlicense ZLIB"
 SLOT="0"
 KEYWORDS="amd64"
 RESTRICT="mirror fetch"
 
+# libglvnd (through mesa) provides the libGL/libEGL the OpenGL fallback renderer opens at run
+# time; fontconfig's fc-match finds the interface font. portage is what PortageHub manages.
 RDEPEND="
 	dev-libs/wayland
+	media-libs/fontconfig
+	media-libs/libglvnd
 	media-libs/mesa
+	sys-apps/portage
 	sys-auth/polkit
 	x11-libs/libX11
 	x11-libs/libXcursor
@@ -30,9 +37,10 @@ RDEPEND="
 	x11-libs/libxkbcommon
 "
 DEPEND="${RDEPEND}"
+# Cargo.toml says rust-version = "1.95".
 BDEPEND="
 	app-arch/zstd
-	|| ( dev-lang/rust-bin dev-lang/rust )
+	|| ( >=dev-lang/rust-bin-1.95.0 >=dev-lang/rust-1.95.0 )
 	virtual/pkgconfig
 "
 
@@ -43,6 +51,13 @@ pkg_nofetch() {
 
 src_unpack() {
 	tar --zstd -xf "${DISTDIR}/${P}.tar.zst" -C "${WORKDIR}" || die "failed to unpack ${P}.tar.zst"
+}
+
+src_prepare() {
+	# Not in the PortageHub repository: plain OpenGL when wgpu cannot open a window (virtual
+	# machines, graphics without Vulkan). A later sync keeps it; see files/.
+	eapply "${FILESDIR}/0001-opengl-renderer-fallback.patch"
+	default
 }
 
 src_compile() {
@@ -57,4 +72,5 @@ src_install() {
 	domenu dist/portagehub.desktop
 	insinto /usr/share/polkit-1/actions
 	doins dist/org.portagehub.helper.policy
+	dodoc README.md SECURITY.md UPSTREAM
 }

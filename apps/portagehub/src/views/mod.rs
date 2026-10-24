@@ -7,6 +7,7 @@ pub mod emerge;
 pub mod history;
 pub mod library;
 pub mod maintenance;
+pub mod makeconf_guide;
 pub mod overlays;
 pub mod settings;
 pub mod store;
