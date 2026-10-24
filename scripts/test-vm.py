@@ -2533,7 +2533,8 @@ class ScenarioRunner:
         vm.cleanup()
         why = {"waiting": f"no login prompt within {limit}s", "exited": "QEMU stopped before a login prompt",
                "rebooted": f"the machine restarted {evidence['restarts'] + 1} times without reaching a login prompt"}.get(state, f"the machine cannot start ({state.partition(':')[2]})")
-        raise HarnessError(f"{label} ({evidence['firmware'].upper()}): {why}; see {vm.serial_log.name}, {name}.ppm and {name}-serial.txt")
+        kept = [name for name in (vm.serial_log.name, evidence.get("screenshot"), evidence.get("serial_excerpt")) if name]  # a machine that stopped has no screen to photograph
+        raise HarnessError(f"{label} ({evidence['firmware'].upper()}): {why}; see {', '.join(kept[:-1])} and {kept[-1]}")
 
     def prove_unbootable(self, mode: str, details: dict, *, reference_seconds: float = 0.0) -> dict:
         """The damage must be real: the machine, which reached a login prompt before, does not reach one now.

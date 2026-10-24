@@ -183,6 +183,15 @@ harness reads `/proc/cmdline` in the live system and requires every argument of 
 there. An entry with `nox` starts no desktop, so it cannot be combined with `--install-mode gui` or
 the graphical check of `--live-only`. `text-install` uses `--boot-entry text`.
 
+`text` is the plain text console entry ("Text console only ..."). It must not be an entry that
+starts `gentoo-installer-text` or `gentoo-rescue` by itself on tty1 (`gentoo.autostart=`): such an
+installer would compete with the one the harness runs over SSH. `text-installer` and `rescue` are
+the names for those autostart entries, matched by title (`ALIASES` in `scripts/vm_iso.py`); the
+menu of `iso/cd_overlay/boot/grub/grub.cfg.in` has neither yet, so they match nothing until it does.
+The text console entry also asks for a keyboard layout; the initramfs waits ten seconds for an
+answer and then goes on, which the boot timeout covers. The ISOs built before Wave 1 (`dist/test*`)
+have only three "Boot LiveCD" entries, so every entry except `default` is missing there.
+
 ### What is checked after an install
 
 After the first boot of the installed disk the harness runs these probes as the test user.
@@ -465,6 +474,10 @@ to every job.
 | `rescue-ubuntu` | `rescue-ubuntu` | 4 GiB | 2 | 30 |
 | `rescue-debian` | `rescue-debian` | 4 GiB | 2 | 25 |
 | `rescue-arch` | `rescue-arch` | 4 GiB | 2 | 15 |
+
+The matrix needs an ISO built from the merged tree: `text-install` asks the boot menu for the
+text console entry, and the check before the first job stops the whole matrix with exit status 2
+when the menu has none (`--matrix-only` leaves such an entry out).
 
 The minutes are estimates for a machine with KVM. The `defaults` entry needs the wizard to offer a
 disk without a serial number (known gap G3 below); without that it fails at the disk page, which

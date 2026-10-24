@@ -130,6 +130,20 @@ def test_the_real_template_of_the_iso_parses():
     assert vm_iso.select_entry(menu, "default") is menu[0]
 
 
+def test_the_names_the_harness_relies_on_resolve_in_the_menu_of_this_tree():
+    """`text` (the text-install scenario) and `serial` must find their entries in the template; `text` must be the plain console entry."""
+    template = (ROOT / "iso" / "cd_overlay" / "boot" / "grub" / "grub.cfg.in").read_text()
+    menu = vm_iso.parse_boot_menu(template.replace("@VOLID@", "GENTOO-LIVE").replace("@BOOTARGS@", "quiet"))
+    text = vm_iso.select_entry(menu, "text")
+    assert "nox" in text.arguments
+    assert not [argument for argument in text.arguments if argument.startswith("gentoo.autostart=")], "an installer that starts itself on tty1 would compete with the one run over SSH"
+    assert "console=ttyS0,115200n8" in vm_iso.select_entry(menu, "serial").arguments
+    for alias, token in (("text-installer", "gentoo.autostart=installer-text"), ("rescue", "gentoo.autostart=rescue")):
+        autostarting = [entry for entry in menu if token in entry.arguments]
+        if autostarting:  # the entries of the live-medium contract: the alias must find them (else name them so, or change ALIASES)
+            assert vm_iso.select_entry(menu, alias) in autostarting
+
+
 # --- choosing an entry -------------------------------------------------------------------------------------------
 
 def test_default_is_the_first_entry_that_boots_linux(entries):

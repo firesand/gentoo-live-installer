@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -175,7 +176,11 @@ def test_a_machine_that_keeps_restarting_is_a_failure_after_two_restarts(lab, im
     prepare(lab, "debian", mode="grub-cfg", serial=[{"phase": "live", "text": ""}, {"phase": "target", "requires": "rescue-break.json", "absent": "repaired", "text": BROKEN_GRUB},
                                                     restarting, {"phase": "target", "text": console()}])
     assert run(lab, images, "rescue-debian") == 1
-    assert "restarted 3 times without reaching a login prompt" in lab.result()["error"]
+    error = lab.result()["error"]
+    assert "restarted 3 times without reaching a login prompt" in error
+    named = [name for name in re.split(r", | and ", error.rpartition("; see ")[2]) if name]
+    assert len(named) >= 2 and all((lab.run_dir() / name).is_file() for name in named), f"the message must name files that exist: {error}"
+    assert "final-uefi-serial.txt" in named and "serial-final-uefi-3.log" in named  # the excerpt is kept under the boot's label, the log under the last start
 
 
 # --- what must fail -----------------------------------------------------------------------------------------------------
