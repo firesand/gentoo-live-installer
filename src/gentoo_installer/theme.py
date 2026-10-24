@@ -35,6 +35,7 @@ BADGE_COLORS = {
         "Recommended": ("#a8e6c6", "#1f4a36"),
     },
 }
+FONT_FAMILY = "'Fira Sans', 'Noto Sans', 'DejaVu Sans', sans-serif"  # the live image ships media-fonts/fira-sans
 DARK = False  # set by apply_theme from the colour scheme
 
 
@@ -79,7 +80,7 @@ def apply_theme(app: QApplication) -> None:
     # rule: any border/background rule makes Qt drop Fusion's native arrows and
     # spin buttons, and they follow the palette above anyway.
     app.setStyleSheet(f"""
-        QWidget {{ color: {TEXT}; font-family: 'Noto Sans', 'DejaVu Sans', sans-serif; font-size: 13px; }}
+        QWidget {{ color: {TEXT}; font-family: {FONT_FAMILY}; font-size: 13px; }}
         QMainWindow, QWidget#appRoot {{ background: {BACKGROUND}; }}
         QFrame#sidebar {{ background: {SIDEBAR}; border: 0; }}
         QFrame#sidebar QLabel {{ color: #c9c4d8; }}

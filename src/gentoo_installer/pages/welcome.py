@@ -42,7 +42,7 @@ class WelcomePage(Page):
         self.install_button.clicked.connect(self.installRequested)
         install.content.addWidget(self.install_button)
         choices.addWidget(install, 1)
-        repair = Card("Repair a Gentoo system that does not start", "Fix a Gentoo system that will not boot: reinstall the bootloader, rebuild the initramfs, repair /etc/fstab, reset a password or look at the logs. Other Linux distributions are not supported.")
+        repair = Card("Fix a Gentoo system that will not boot", "Reinstall the bootloader, rebuild the initramfs, repair /etc/fstab, reset a password or look at the logs. This tool works on Gentoo systems only.")
         self.repair_button = QPushButton("Repair a Gentoo system")
         self.repair_button.setAccessibleDescription("Open the repair tools for a Gentoo system that does not start")
         self.repair_button.clicked.connect(self.repairRequested)

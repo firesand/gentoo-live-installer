@@ -2,6 +2,8 @@
 
 This guide is for people who have the installer disc and want to use it on their own PC or laptop. You do not need to know Gentoo. The build side (how the disc is made) is in [ISO.md](ISO.md).
 
+**Scope: Gentoo only.** The installer installs Gentoo, and the repair tool repairs Gentoo systems. It does not install or repair other Linux systems. It does keep Windows on the disk when you ask for that (dual boot).
+
 Contents: [what you need](#1-what-you-need) · [write the disc](#2-write-the-disc-to-a-usb-stick) · [start it: Secure Boot, UEFI and BIOS](#3-start-the-disc) · [if it does not start](#4-if-the-disc-does-not-start-or-the-screen-stays-black) · [network, keyboard, clock](#5-network-keyboard-and-clock) · [install Gentoo](#6-install-gentoo-with-the-desktop-wizard) · [install in text mode](#7-install-in-text-mode) · [laptops, graphics and special hardware](#8-laptops-graphics-and-special-hardware) · [repair a Gentoo system](#9-repair-a-gentoo-system-that-does-not-start) · [repair by hand](#10-repair-by-hand-cheat-sheet) · [logs for a bug report](#11-logs-and-diagnostics-for-a-bug-report) · [troubleshooting](#12-troubleshooting-table) · [limits](#13-what-the-disc-cannot-do)
 
 ## 1. What you need
