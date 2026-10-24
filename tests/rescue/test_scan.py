@@ -132,6 +132,27 @@ def test_locked_encryption_lvm_and_raid_hints(lab_factory) -> None:
     assert md.stacks["arrays"][0]["state"] == "not_assembled" and md.stacks["arrays"][0]["devices"] == 2
 
 
+@pytest.mark.parametrize("method", ["lvm_inventory", "md_inventory"])
+def test_a_parsing_surprise_in_lvm_or_raid_degrades_the_scan_instead_of_killing_it(lab_factory, monkeypatch, method) -> None:
+    """The scan is the first thing the window does: one tool that prints something unexpected must cost that part of the list, not the whole answer."""
+    from gentoo_installerd.rescue.stack import StackManager
+
+    from .fakes import MdSpec, VgSpec
+
+    lab = lab_factory(lf.lvm_inactive() if method == "lvm_inventory" else lf.md_raid1_unassembled())
+    lab.system.vgs["ubuntu-vg"] = VgSpec("ubuntu-vg", "vguuid-1", ["/dev/sda2"], [{"name": "root"}])
+    lab.system.md["x"] = MdSpec("aaaa1111:bbbb2222:cccc3333:44445555", ["/dev/sdb1", "/dev/sdc1"], name="host:root")
+
+    def surprise(*_args, **_kwargs):
+        raise ValueError("lvm printed something new")
+
+    monkeypatch.setattr(StackManager, method, surprise)
+    result = run_scan(lab)
+    assert result.stacks["vgs" if method == "lvm_inventory" else "arrays"] == []
+    assert any("could not be read" in warning for warning in result.warnings)
+    assert [device["path"] for device in result.to_dict()["devices"]]  # the disks are still listed
+
+
 def test_firmware_mismatch_hints(lab_factory) -> None:
     bios_live = lab_factory(lf.debian_cloud(), uefi=False, name="bios")
     assert "fw_mismatch" in [hint["id"] for hint in run_scan(bios_live).hints]

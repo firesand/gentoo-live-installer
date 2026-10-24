@@ -375,10 +375,29 @@ class FakeSystem:
                 found.append((vg, pv))
         return found
 
+    @staticmethod
+    def _lvm_size(size: int, argv: tuple[str, ...]) -> str:
+        """A size the way lvm2 prints it: ``--units b --nosuffix`` gives bare bytes, otherwise the default style (units "r"): rounded, human readable, with a suffix.
+
+        A size that is not exact in two decimals gets ``<`` (shown value above the real one) or ``>``: a 19 GiB volume of 19.99 GiB prints as ``<20.00g``.
+        """
+        units = argv[argv.index("--units") + 1] if "--units" in argv else "r"
+        if units.lower() == "b":
+            return str(size) if "--nosuffix" in argv else f"{size}B"
+        for exponent, letter in ((6, "e"), (5, "p"), (4, "t"), (3, "g"), (2, "m"), (1, "k")):
+            if size >= 1024 ** exponent:
+                break
+        else:
+            exponent, letter = 0, "b"
+        value = size / 1024 ** exponent
+        shown = round(value, 2)
+        mark = "<" if shown > value else ">" if shown < value else ""
+        return f"{mark}{shown:.2f}" + ("" if "--nosuffix" in argv else letter)
+
     def _do_pvs(self, argv: tuple[str, ...], call: Call) -> tuple[int, str]:
         rows = [
             {"pv_name": pv, "pv_uuid": "pvuuid-" + pv.rsplit("/", 1)[-1], "vg_name": vg.name, "vg_uuid": vg.uuid, "vg_pv_count": str(len(vg.pvs)), "vg_missing_pv_count": str(vg.missing),
-             "pv_size": "1000"}
+             "pv_size": self._lvm_size(1000, argv)}
             for vg, pv in self._visible_pvs()
         ]
         return 0, "  WARNING: stray warning on stderr\n" + json.dumps({"report": [{"pv": rows}]})
@@ -394,7 +413,7 @@ class FakeSystem:
                 continue
             for lv in vg.lvs:
                 rows.append({"lv_name": lv["name"], "vg_name": vg.name, "lv_path": f"/dev/{vg.name}/{lv['name']}", "lv_attr": "-wi-a-----" if vg.active else "-wi-------",
-                             "lv_size": str(lv.get("size", 1000)), "segtype": lv.get("segtype", "linear"), "pool_lv": "", "origin": "", "lv_uuid": "lvuuid"})
+                             "lv_size": self._lvm_size(int(lv.get("size", 1000)), argv), "segtype": lv.get("segtype", "linear"), "pool_lv": "", "origin": "", "lv_uuid": "lvuuid"})
         return 0, json.dumps({"report": [{"lv": rows}]})
 
     def _do_vgchange(self, argv: tuple[str, ...], call: Call) -> tuple[int, str]:

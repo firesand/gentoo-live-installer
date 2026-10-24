@@ -213,10 +213,19 @@ class Scanner:
         vgs: list[dict[str, Any]] = []
         arrays: list[dict[str, Any]] = []
         if any(node.role == "lvm_pv" and not node.live_medium for node in graph):
-            vgs = [group.to_dict() for group in manager.lvm_inventory()]
+            vgs = self._inventory("LVM volume groups", lambda: [group.to_dict() for group in manager.lvm_inventory()])
         if any(node.role == "md_member" and not node.live_medium for node in graph):
-            arrays = [array.to_dict() for array in manager.md_inventory(graph)]
+            arrays = self._inventory("RAID arrays", lambda: [array.to_dict() for array in manager.md_inventory(graph)])
         return {"luks": luks, "vgs": vgs, "arrays": arrays}
+
+    def _inventory(self, what: str, read: Callable[[], list[dict[str, Any]]]) -> list[dict[str, Any]]:
+        """A tool that prints something unexpected costs that part of the list, never the whole scan."""
+        try:
+            return read()
+        except (RescueError, ValueError, TypeError, KeyError, AttributeError, OSError) as exc:
+            self.emit("log", f"{what}: {type(exc).__name__}: {exc}")
+            self.warnings.append(f"The {what} could not be read, so they are not listed.")
+            return []
 
     # ---- probing ---------------------------------------------------------------------------------------
     def _probe_node(self, node: DeviceNode, graph: DeviceGraph) -> list[dict[str, Any]]:
