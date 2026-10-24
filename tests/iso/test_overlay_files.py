@@ -245,3 +245,14 @@ def test_xml_files_are_well_formed() -> None:
     for path in files:
         result = subprocess.run(["xmllint", "--noout", str(path)], capture_output=True, text=True, check=False)
         assert result.returncode == 0, f"{path}: {result.stderr}"
+
+
+def test_the_greeting_does_not_name_a_command_the_package_lacks() -> None:
+    """Integration tripwire: once the repair tool is in the tree, pyproject.toml must define `gentoo-rescue`."""
+    if not (ROOT / "src/gentoo_installerd/rescue/__init__.py").exists():
+        pytest.skip("the repair tool is not part of this tree")
+    pyproject = (ROOT / "pyproject.toml").read_text()
+    assert re.search(r'^gentoo-rescue\s*=', pyproject, re.M), (
+        "iso/root_overlay/etc/motd, etc/issue, the profile hint and iso/README-live.txt send users to `gentoo-rescue`; "
+        "add it to [project.scripts] in pyproject.toml (for example gentoo-rescue = \"gentoo_installerd.rescue.cli:main\")"
+    )
