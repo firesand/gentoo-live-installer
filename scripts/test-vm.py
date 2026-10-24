@@ -32,7 +32,7 @@ import time
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Sequence
+from typing import Any, Callable, Mapping, Sequence
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.dont_write_bytecode = True
@@ -122,6 +122,18 @@ def install_termination_handlers() -> dict[int, Any]:
     return previous
 
 
+def _bind_prctl() -> Any:
+    """libc's prctl, bound here in the parent: the pre-exec hook runs between fork and exec and must not load anything."""
+    try:
+        import ctypes
+        return ctypes.CDLL(None, use_errno=True).prctl
+    except Exception:
+        return None
+
+
+_PRCTL = _bind_prctl()
+
+
 def die_with_parent(parent_pid: int | None = None) -> None:
     """preexec hook: QEMU gets SIGKILL when the harness dies without running its cleanup.
 
@@ -129,9 +141,10 @@ def die_with_parent(parent_pid: int | None = None) -> None:
     thread. ``parent_pid`` closes the race where the harness already died
     before the flag was set.
     """
+    if _PRCTL is None:
+        return
     try:
-        import ctypes
-        ctypes.CDLL(None, use_errno=True).prctl(1, int(signal.SIGKILL), 0, 0, 0)  # PR_SET_PDEATHSIG
+        _PRCTL(1, int(signal.SIGKILL), 0, 0, 0)  # PR_SET_PDEATHSIG
         if parent_pid is not None and os.getppid() != parent_pid:
             os._exit(1)
     except Exception:
@@ -947,7 +960,7 @@ def desktop_probe_plan(manifest: InstallManifest) -> list[tuple[str, str, Callab
     return [("desktop", f"{installed} && {enabled}", lambda code, output: parse_probe_result("desktop", code, output))]
 
 
-def parse_static_network_probe(returncode: int, output: str, expected: dict[str, object]) -> ProbeResult:
+def parse_static_network_probe(returncode: int, output: str, expected: Mapping[str, object]) -> ProbeResult:
     name = "network-static"
     if returncode != 0:
         return ProbeResult(name, False, output.strip(), f"Read-only NetworkManager probe exited with status {returncode}")
@@ -1915,8 +1928,9 @@ class ScenarioRunner:
             code, log = self.ssh(self.args.ssh_user, f"cat > {remote_path}", log_name, self.args.command_timeout, stdin=data)
             if code != 0:
                 raise HarnessError(f"Could not upload {remote_path}; see {log}")
-        setup = (f"chown gentoo:gentoo-installer {remote_manifest} && chmod 600 {remote_manifest} && "
-                 "chmod 644 /run/vm-gui-install.py /run/vm_guard.py /run/vm-gui-plan.json")
+        # The manifest and the plan hold the test credentials: readable by the GUI user only.
+        setup = (f"chown gentoo:gentoo-installer {remote_manifest} /run/vm-gui-plan.json && "
+                 f"chmod 600 {remote_manifest} /run/vm-gui-plan.json && chmod 644 /run/vm-gui-install.py /run/vm_guard.py")
         code, log = self.ssh(self.args.ssh_user, setup, "gui-access.log", self.args.command_timeout)
         if code != 0:
             raise HarnessError(f"Could not prepare the non-root GUI session; see {log}")

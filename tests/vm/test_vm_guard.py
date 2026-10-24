@@ -116,6 +116,35 @@ def test_dmi_oem_strings_are_parsed_from_the_raw_record():
     assert vm_guard.parse_dmi_strings(b"") == []
 
 
+def dmi_record(kind: int, strings: list[str], handle: int = 0x100) -> bytes:
+    body = b"".join(item.encode() + b"\0" for item in strings) or b"\0"
+    return bytes([kind, 5]) + handle.to_bytes(2, "little") + bytes([len(strings)]) + body + b"\0"
+
+
+def test_oem_strings_are_found_in_the_raw_dmi_table():
+    table = (dmi_record(1, ["QEMU", "Standard PC"]) + dmi_record(3, ["LENOVO"]) +
+             dmi_record(11, [f"{vm_guard.NONCE_KEY}=cafe", "other"]) + dmi_record(127, []))
+    assert vm_guard.parse_dmi_table(table) == [f"{vm_guard.NONCE_KEY}=cafe", "other"]
+    assert vm_guard.parse_dmi_table(b"") == [] and vm_guard.parse_dmi_table(b"\x0b\x02") == []  # truncated: no crash
+
+
+def test_the_nonce_is_read_from_the_raw_table_when_dmi_sysfs_is_not_available(tmp_path):
+    expectation = spec(extra=0)
+    devices = guard_fixtures.lsblk_tree(expectation)
+    sysfs, dev = tmp_path / "sys", tmp_path / "dev"
+    make_sysfs(sysfs, "vda", "0x1af4")  # no firmware/dmi/entries
+    table = sysfs / "firmware" / "dmi" / "tables"
+    table.mkdir(parents=True)
+    (table / "DMI").write_bytes(dmi_record(11, [f"{vm_guard.NONCE_KEY}=cafe"]) + dmi_record(127, []))
+    (dev / "disk" / "by-path").mkdir(parents=True)
+
+    def fake_run(argv, **kwargs):
+        return subprocess.CompletedProcess(argv, 0, json.dumps({"blockdevices": devices}) if argv[0] == "lsblk" else "", "")
+
+    report = vm_guard.collect(expectation, sysfs=str(sysfs), dev=str(dev), run=fake_run)
+    assert report["ok"] and report["nonce_ok"] is True
+
+
 def test_spec_round_trips_through_json():
     original = spec(extra=1)
     assert vm_guard.GuardSpec.from_json(original.to_json()) == original

@@ -159,6 +159,24 @@ def parse_dmi_strings(raw: bytes) -> list[str]:
     return [part.decode(errors="replace") for part in area.split(b"\0") if part]
 
 
+def parse_dmi_table(table: bytes) -> list[str]:
+    """OEM strings (SMBIOS type 11) from the raw table /sys/firmware/dmi/tables/DMI."""
+    strings: list[str] = []
+    offset = 0
+    while offset + 4 <= len(table):
+        kind, length = table[offset], table[offset + 1]
+        if length < 4 or kind == 127:  # a malformed record, or the end-of-table marker
+            break
+        end = table.find(b"\0\0", offset + length)
+        area = table[offset + length:end if end >= 0 else len(table)]
+        if kind == 11:
+            strings += [part.decode(errors="replace") for part in area.split(b"\0") if part]
+        if end < 0:
+            break
+        offset = end + 2
+    return strings
+
+
 def evaluate(spec: GuardSpec, devices: list[dict], *, by_path: dict[str, list[str]] | None = None,
              pci_vendor: dict[str, str] | None = None, dmi_strings: list[str] | None = None,
              signatures: dict[str, bool] | None = None) -> dict:
@@ -282,6 +300,12 @@ def collect(spec: GuardSpec, *, sysfs: str = "/sys", dev: str = "/dev", run=subp
         except OSError:
             dmi = None
             break
+    if dmi is None:  # dmi-sysfs may be off in the kernel: the raw table is always there (root only)
+        try:
+            with open(os.path.join(sysfs, "firmware", "dmi", "tables", "DMI"), "rb") as stream:
+                dmi = parse_dmi_table(stream.read())
+        except OSError:
+            dmi = None
     signatures: dict[str, bool] = {}
     for expected in spec.disks:
         if expected.blank is None:
