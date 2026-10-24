@@ -929,8 +929,30 @@ def _firmware_issues(m: InstallManifest, hw: HardwareProfile) -> list[Issue]:
                          + ("GRUB will be installed with the fallback boot path only; restart the installer in UEFI mode for a normal install."
                             if severity == "warning" else "Choose GRUB, or restart the installer in UEFI mode.")))
     if requested == "uefi" and live == "uefi" and hw.firmware.efi_bits == 32:
-        out.append(Issue("hw.fw_uefi32", "warning", "This PC has 32-bit UEFI firmware: the 32-bit boot files are needed. If it does not start, use legacy BIOS/CSM mode."))
+        problem = _uefi32_problem(m)
+        if problem:
+            out.append(Issue("hw.fw_uefi32", "error", problem))
+        else:
+            out.append(Issue("hw.fw_uefi32", "warning", "This PC has 32-bit UEFI firmware: the 32-bit boot files are needed. If it does not start, use legacy BIOS/CSM mode."))
     return out
+
+
+def _uefi32_problem(m: InstallManifest) -> str:
+    """Why this boot setup cannot start on 32-bit UEFI firmware ("" when it can).
+
+    Only a 32-bit program starts there: GRUB is installed for i386-efi, and systemd-boot has an ia32 image on a
+    multilib system. A Unified Kernel Image and the bare kernel of the EFI stub are 64-bit programs.
+    """
+    system = m.system
+    alternatives = "GRUB" + (" or systemd-boot" if system.multilib else "")
+    if system.uki:
+        what = "a Unified Kernel Image, which is a 64-bit program"
+        return f"This PC has 32-bit UEFI firmware, which cannot start {what}. Turn the Unified Kernel Image off and choose {alternatives}, or use legacy BIOS mode if the firmware offers it."
+    if system.bootloader == "efi-stub":
+        return f"This PC has 32-bit UEFI firmware, which cannot start the 64-bit kernel that the EFI stub boots directly. Choose {alternatives}, or use legacy BIOS mode if the firmware offers it."
+    if system.bootloader == "systemd-boot" and not system.multilib:
+        return "This PC has 32-bit UEFI firmware, and systemd-boot has no 32-bit image on a pure 64-bit (no-multilib) system. Choose GRUB, or use legacy BIOS mode if the firmware offers it."
+    return ""
 
 
 def _target_disk_issues(m: InstallManifest, hw: HardwareProfile) -> list[Issue]:
