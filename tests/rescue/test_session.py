@@ -287,6 +287,65 @@ def test_resolv_conf_is_bound_not_replaced(lab_factory) -> None:
     assert tree_digest(original) == before  # the target's own file was never modified
 
 
+def bind_target(lab, session) -> str:
+    return session.ledger.find("bind", virtual_name="resolv").data["path"]
+
+
+def test_the_empty_resolv_conf_made_for_the_bind_is_removed_after_the_bind_is_gone(lab_factory) -> None:
+    """The cleanup used to run while the live file was still bound over the placeholder, so it saw content, kept the empty file and let go of the bind afterwards."""
+    lab = gentoo_lab(lab_factory)
+    tree = lab.system.device_trees["/dev/nvme0n1p5"]
+    assert not (tree / "etc/resolv.conf").exists()  # the system has none: a placeholder has to be made to bind over
+    session = lab.session("/dev/nvme0n1p5")
+    session.mount_ro(lab.graph_obj)
+    run_all(session, session.enter_write_steps(with_virtual=False))
+    assert session.ensure_virtual()
+    assert [entry.data["path"] for entry in session.ledger.of_kind("placeholder")] == ["/etc/resolv.conf"]
+    assert (Path(session.root) / "etc/resolv.conf").read_text().startswith("nameserver")  # the live resolver file shows through the bind
+    result = session.release()
+    assert result.complete
+    assert not (tree / "etc/resolv.conf").exists() and session.ledger.of_kind("placeholder") == []
+
+
+def test_going_back_to_read_only_removes_the_placeholder_before_the_root_is_unmounted(lab_factory) -> None:
+    lab = gentoo_lab(lab_factory)
+    tree = lab.system.device_trees["/dev/nvme0n1p5"]
+    session = lab.session("/dev/nvme0n1p5")
+    session.mount_ro(lab.graph_obj)
+    run_all(session, session.enter_write_steps(with_virtual=False))
+    assert session.ensure_virtual()
+    run_all(session, session.leave_write_steps())
+    assert session.mode == "ro" and session.ledger.of_kind("placeholder") == []
+    assert not (tree / "etc/resolv.conf").exists()  # written back to the device when the read-write root was unmounted
+    assert session.release().complete
+    assert not (tree / "etc/resolv.conf").exists()
+
+
+def test_removing_the_virtual_mounts_after_a_failure_removes_the_placeholder_too(lab_factory) -> None:
+    lab = gentoo_lab(lab_factory)
+    tree = lab.system.device_trees["/dev/nvme0n1p5"]
+    session = lab.session("/dev/nvme0n1p5")
+    session.mount_ro(lab.graph_obj)
+    run_all(session, session.enter_write_steps(with_virtual=False))
+    assert session.ensure_virtual()
+    session.remove_virtual()
+    assert not session.has_virtual_mounts() and session.ledger.of_kind("placeholder") == []
+    assert session.release().complete
+    assert not (tree / "etc/resolv.conf").exists()
+
+
+def test_a_resolv_conf_that_gained_content_under_the_bind_is_never_removed(lab_factory) -> None:
+    lab = gentoo_lab(lab_factory)
+    tree = lab.system.device_trees["/dev/nvme0n1p5"]
+    session = lab.session("/dev/nvme0n1p5")
+    session.mount_ro(lab.graph_obj)
+    run_all(session, session.enter_write_steps(with_virtual=False))
+    assert session.ensure_virtual()
+    lab.system.mounts[bind_target(lab, session)].shadowed = b"nameserver 192.168.7.1\n"  # somebody wrote the file underneath
+    assert session.release().complete
+    assert (tree / "etc/resolv.conf").read_text() == "nameserver 192.168.7.1\n"
+
+
 def test_resolv_conf_symlink_into_a_fresh_run_is_followed_chroot_style(lab_factory) -> None:
     lab = gentoo_lab(lab_factory)
     fr.put(lab.host_root, "run/NetworkManager/resolv.conf", "nameserver 10.0.0.1\n")

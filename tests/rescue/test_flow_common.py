@@ -127,6 +127,20 @@ def test_the_cleanup_remounts_even_when_the_check_fails(lab_factory) -> None:
     unmount(manager, sid)
 
 
+def test_a_file_system_check_after_a_repair_leaves_no_empty_resolv_conf_behind(lab_factory) -> None:
+    """The check unmounts the bind and the system and mounts it read-only again; the placeholder made for the bind has to go before the read-write root does."""
+    lab, tree = uefi_gentoo_lab(lab_factory)
+    manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    plan_and_run(manager, sid, "boot.initramfs")
+    session = manager.session(sid)
+    assert [entry.data["path"] for entry in session.ledger.of_kind("placeholder")] == ["/etc/resolv.conf"]
+    plan, result, _ = plan_and_run(manager, sid, "fs.check")
+    assert result["outcome"] == "success"
+    assert session.ledger.of_kind("placeholder") == [] and session.mode == "ro"
+    assert not (tree / "etc/resolv.conf").exists()
+    unmount(manager, sid)
+
+
 def test_fs_check_only_accepts_devices_of_the_session_and_known_file_systems(lab_factory) -> None:
     lab, _ = uefi_gentoo_lab(lab_factory)
     manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")

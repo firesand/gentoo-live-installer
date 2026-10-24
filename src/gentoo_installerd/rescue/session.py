@@ -482,7 +482,7 @@ class RescueSession:
         elif kind == "mount_remove":
             for entry in list(self.ledger.entries):
                 if entry.kind in {"mount", "bind", "cmdline"} and entry.data.get("path") == effect["path"]:
-                    self.ledger.remove(entry)
+                    self._forget_mount(entry)
         elif kind == "blockro":
             for entry in self.ledger.of_kind("blockro"):
                 if entry.data["device"] == effect["device"]:
@@ -613,11 +613,34 @@ class RescueSession:
         return True
 
     def remove_virtual(self) -> None:
-        for entry in reversed(self.ledger.entries):
+        for entry in reversed(list(self.ledger.entries)):  # a copy: unmounting changes the ledger
             if entry.data.get("virtual") or entry.kind == "cmdline":
                 self._unmount_entry(entry, force=True, tries=1)
 
     # ---- release (review: clean release, also after failures) --------------------------------------------------------------------
+    def _forget_mount(self, entry: LedgerEntry) -> None:
+        """A mount is gone: take it out of the ledger. Once the resolver file is no longer bound, the empty file made for it can be deleted."""
+        self.ledger.remove(entry)
+        if entry.data.get("virtual_name") == "resolv":
+            self._remove_placeholders()
+
+    def _remove_placeholders(self) -> None:
+        """Delete the empty files that were made only to bind over (/etc/resolv.conf), if they are still empty.
+
+        This must happen after the bind is gone and before the read-write root is unmounted: while the live file is bound over the placeholder, it shows through
+        and cannot be unlinked. A read-only mount can only forget the entry.
+        """
+        for entry in self.ledger.of_kind("placeholder"):
+            if self.mode == "rw":
+                try:
+                    with self.fs(writable=True) as fs:
+                        path = entry.data["path"]
+                        if fs.exists(path) and not fs.read_bytes(path, 1):
+                            fs.remove(path)
+                except (OSError, RescueError):
+                    pass
+            self.ledger.remove(entry)
+
     def _unmount_entry(self, entry: LedgerEntry, *, force: bool, tries: int = 3) -> tuple[bool, list[dict[str, Any]], str]:
         path = entry.data["path"]
         argv = ("umount", "-R", path) if entry.data.get("recursive") else ("umount", path)
@@ -625,7 +648,7 @@ class RescueSession:
         for attempt in range(tries):
             result = self.runner.execute(argv, timeout=60)
             if result.returncode == 0 or "not mounted" in result.stdout:
-                self.ledger.remove(entry)
+                self._forget_mount(entry)
                 return True, [], ""
             error = result.stdout.strip()
             if attempt + 1 < tries:
@@ -637,7 +660,7 @@ class RescueSession:
             lazy = self.runner.execute(("umount", "-l", path), timeout=60)
             if lazy.returncode == 0:
                 self.audit.record("release", message="lazy unmount", path=path, sync=True)
-                self.ledger.remove(entry)
+                self._forget_mount(entry)
                 return True, holders, ""
             error = lazy.stdout.strip() or error
         return False, holders, error
@@ -649,19 +672,8 @@ class RescueSession:
         self.state = "closing"
         for shell in list(self.shells):
             self.shells.remove(shell)
-        if self.mode == "rw":
-            for entry in self.ledger.of_kind("placeholder"):
-                try:
-                    with self.fs(writable=True) as fs:
-                        data = fs.read_bytes(entry.data["path"], 1) if fs.exists(entry.data["path"]) else b""
-                        if not data:
-                            fs.remove(entry.data["path"])
-                except (OSError, RescueError):
-                    pass
-                self.ledger.remove(entry)
-        else:
-            for entry in self.ledger.of_kind("placeholder"):
-                self.ledger.remove(entry)
+        if not any(entry.data.get("virtual_name") == "resolv" for entry in self.ledger.entries):
+            self._remove_placeholders()  # nothing is bound over them; otherwise this happens when the bind is unmounted below
         self.runner.execute(("sync",), timeout=120)
         for entry in reversed(self._mount_entries()):
             ok, holders, error = self._unmount_entry(entry, force=force)
