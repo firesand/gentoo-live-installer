@@ -160,6 +160,25 @@ def test_console_hint_is_printed_on_text_consoles_only() -> None:
     assert script_mode.stdout == "", "scripts and scp must not see the hint"
 
 
+def test_the_live_session_starts_a_polkit_agent_without_gnome_only_conditions() -> None:
+    """GParted and other pkexec programs need a password dialog. The packaged autostart file of polkit-gnome carries
+    AutostartCondition=GNOME3 ... and NotShowIn=MATE;KDE;, so the overlay replaces it (same file name) with one for Xfce."""
+    entry = desktop_entry("etc/xdg/autostart/polkit-gnome-authentication-agent-1.desktop")
+    assert entry["Exec"] == "/usr/libexec/polkit-gnome-authentication-agent-1"
+    assert entry["OnlyShowIn"] == "XFCE;" and entry["Type"] == "Application" and entry["NoDisplay"] == "true"
+    assert not {"AutostartCondition", "NotShowIn", "Hidden"} & set(entry)
+    assert "gnome-extra/polkit-gnome" in stage1_packages(), "the agent program comes from this package"
+    assert "polkit-gnome-authentication-agent-1" in read("etc/xdg/autostart/polkit-gnome-authentication-agent-1.desktop")
+
+
+def test_the_polkit_agent_file_has_the_name_the_package_uses(pinned_tree: Path) -> None:
+    """The overlay only replaces the packaged file when the names are equal; otherwise two agents would start."""
+    ebuild = sorted((pinned_tree / "gnome-extra/polkit-gnome").glob("*.ebuild"))[-1].read_text()
+    assert "polkit-gnome-authentication-agent-1.desktop" in ebuild
+    assert "Exec=/usr/libexec/polkit-gnome-authentication-agent-1" in ebuild
+    assert "insinto /etc/xdg/autostart" in ebuild
+
+
 def stage1_packages() -> set[str]:
     spec = verify.parse_spec((ROOT / "iso/specs/livecd-stage1.spec").read_text())
     return {re.sub(r"^=", "", a) for a in verify.spec_list(spec, "livecd/packages")}
@@ -215,6 +234,8 @@ def test_every_overlay_file_is_covered_by_the_image_contract() -> None:
         "usr/bin/gentoo-rescue-gui", "usr/share/applications/gentoo-installer.desktop", "usr/share/applications/gentoo-rescue.desktop",
         "etc/modules-load.d/hwmonux.conf", "boot/memtest86plus/memtest64.bios", "boot/memtest86plus/memtest.efi64",
         "mnt/gentoo", "mnt/rescue", "home/gentoo", "usr/lib/modules", "usr/lib/firmware",
+        "usr/bin/gentoo-installer-text", "usr/bin/gentoo-chroot", "usr/libexec/polkit-gnome-authentication-agent-1",
+        "usr/lib/grub/i386-pc", "usr/lib/grub/x86_64-efi",
     }
     for path in listed - package_provided:
         assert (OVERLAY / path).exists(), f"{path} is in the contract but neither in the overlay nor provided by a package"

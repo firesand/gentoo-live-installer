@@ -8,8 +8,10 @@ if [[ -f /tmp/envscript ]]; then
 fi
 set -u
 
-# /mnt/gentoo is the installer's target, /mnt/rescue holds the repair tool's sessions.
-install -d -m 0755 /mnt/gentoo /mnt/rescue
+# /mnt/gentoo is the installer's target. /mnt/rescue holds the repair tool's sessions (one
+# directory per session, made by the tool); only root may look into it.
+install -d -m 0755 /mnt/gentoo
+install -d -m 0700 /mnt/rescue
 install -d -m 0700 -o gentoo -g users /home/gentoo
 chown -R gentoo:users /home/gentoo
 passwd -d gentoo
@@ -35,7 +37,8 @@ for command_path in \
 	/usr/bin/gentoo-installerd \
 	/usr/bin/hwmonux \
 	/usr/bin/portagehub \
-	/usr/libexec/portagehub-helper; do
+	/usr/libexec/portagehub-helper \
+	/usr/libexec/polkit-gnome-authentication-agent-1; do
 	if [[ ! -x "${command_path}" ]]; then
 		fail "Required live application is missing: ${command_path}"
 	fi
@@ -51,18 +54,35 @@ required_commands=(
 	cpuid2cpuflags setxkbmap xrandr xset
 	# helpers
 	chronyd chronyc jq pv links gpg gpgv tar rsync gparted lsof lvs lscpu
+	# the repair tool on the live side (hostenv.TOOLS_WANTED, fsprobe.CHECK_TOOLS and the
+	# host policy of src/gentoo_installerd/rescue; tests/iso/test_ebuilds.py keeps them in step)
+	blockdev mount umount dmesg script setsid chroot timeout sync modprobe
+	dumpe2fs tune2fs xfs_db jfs_fsck lsinitrd pvs vgs vgchange zstd
 )
 for command_name in "${required_commands[@]}"; do
 	command -v "${command_name}" >/dev/null 2>&1 || fail "Required live tool is missing: ${command_name}"
 done
 
-# The repair tool is a separate deliverable of the same Python package. When the package
-# contains it, its console scripts must exist as well.
+# The repair tool and the text installer are parts of the same Python package. When the
+# package contains one, its console script must exist as well: the boot menu entries
+# "Repair a system" and "Install in text mode" start them. This is a warning here because
+# scripts/verify-iso.py (iso/image-contract.json) fails the build for a script that
+# pyproject.toml declares, and tests/iso keeps the declaration in step.
 if compgen -G '/usr/lib/python3*/site-packages/gentoo_installerd/rescue/__init__.py' >/dev/null; then
-	for command_path in /usr/bin/gentoo-rescue /usr/bin/gentoo-rescue-gui; do
+	for command_path in /usr/bin/gentoo-rescue /usr/bin/gentoo-chroot; do
 		[[ -x "${command_path}" ]] || echo "warning: the rescue package is installed but ${command_path} is missing" >&2
 	done
 fi
+if compgen -G '/usr/lib/python3*/site-packages/gentoo_installer/textui/__init__.py' >/dev/null; then
+	[[ -x /usr/bin/gentoo-installer-text ]] \
+		|| echo "warning: the text installer package is installed but /usr/bin/gentoo-installer-text is missing" >&2
+fi
+
+# The repair tool falls back to the live GRUB when the repaired system cannot run its own
+# grub-install. iso/portage/make.conf builds it for GRUB_PLATFORMS="pc efi-64".
+for grub_platform_dir in /usr/lib/grub/i386-pc /usr/lib/grub/x86_64-efi; do
+	[[ -d "${grub_platform_dir}" ]] || fail "GRUB platform files are missing: ${grub_platform_dir}"
+done
 
 # Configuration that keeps the live system away from the PC's own disks and power state.
 grep -q '^[[:space:]]*event_activation[[:space:]]*=[[:space:]]*0' /etc/lvm/lvmlocal.conf \

@@ -642,6 +642,8 @@ def check_squashfs(
             wrong.append(f"{path} is a {entry.kind}, expected {item['type']}")
         elif item.get("executable") and not entry.mode & 0o111 and entry.kind == "file":
             wrong.append(f"{path} is not executable")
+        elif item.get("mode") and entry.mode & 0o7777 != int(item["mode"], 8):
+            wrong.append(f"{path} has mode {entry.mode & 0o7777:04o}, expected {item['mode']}")
     report.expect(not missing, "squashfs.required", "", "missing from the image: " + ", ".join(missing))
     report.expect(not wrong, "squashfs.required_types", "", "; ".join(wrong))
 

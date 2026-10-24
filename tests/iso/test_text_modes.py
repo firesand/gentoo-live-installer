@@ -339,3 +339,42 @@ def test_the_text_installer_script_exists_wherever_the_disc_names_it() -> None:
     assert re.search(r'^gentoo-installer-text\s*=\s*"gentoo_installer\.textui\.cli:main"', pyproject, re.M), (
         "add gentoo-installer-text = \"gentoo_installer.textui.cli:main\" to [project.scripts] in pyproject.toml"
     )
+
+
+# --- gentoo-chroot: the short form of "gentoo-rescue chroot" ----------------------------------
+
+CHROOT_HELPER = ROOT / "packaging/gentoo-overlay/app-admin/gentoo-live-installer/files/gentoo-chroot"
+
+
+def run_helper(tmp_path: Path, *arguments: str, with_tool: bool = True) -> tuple[subprocess.CompletedProcess, list[str]]:
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "calls.log"
+    if with_tool:
+        write_executable(bin_dir / "gentoo-rescue", '#!/bin/sh\nprintf "%s\\n" "$@" >> "$CALL_LOG"\nexit 7\n')
+    env = {"PATH": f"{bin_dir}:/usr/bin:/bin", "CALL_LOG": str(log)}
+    result = subprocess.run(["sh", str(CHROOT_HELPER), *arguments], capture_output=True, text=True, env=env, check=False, timeout=30)
+    return result, (log.read_text().splitlines() if log.exists() else [])
+
+
+def test_gentoo_chroot_hands_everything_to_the_repair_tool(tmp_path: Path) -> None:
+    result, calls = run_helper(tmp_path, "s1", "--writable", "--typed", "nvme0n1p2")
+    assert calls == ["chroot", "s1", "--writable", "--typed", "nvme0n1p2"]
+    assert result.returncode == 7, "the exit status of the shell is the helper's exit status (exec)"
+
+
+def test_gentoo_chroot_help_reaches_the_repair_tool(tmp_path: Path) -> None:
+    _, calls = run_helper(tmp_path, "--help")
+    assert calls == ["chroot", "--help"]
+
+
+def test_gentoo_chroot_without_arguments_explains_instead_of_failing_in_argparse(tmp_path: Path) -> None:
+    result, calls = run_helper(tmp_path)
+    assert calls == [] and result.returncode == 2 and result.stdout == ""
+    assert "Usage: gentoo-chroot SESSION" in result.stderr and "sudo gentoo-rescue" in result.stderr and "gentoo-rescue status" in result.stderr
+
+
+def test_gentoo_chroot_uses_only_names_the_repair_tool_knows() -> None:
+    """'chroot' is an alias of the shell sub-command and 'status' lists sessions: both are in rescue/cli.py."""
+    cli = (ROOT / "src/gentoo_installerd/rescue/cli.py").read_text()
+    assert 'aliases=["chroot"]' in cli and 'sub.add_parser("status"' in cli

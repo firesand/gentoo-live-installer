@@ -72,7 +72,18 @@ TOOL_PACKAGE = {
     # storage preflight and clean-up: holders, device-mapper maps, Btrfs, wiping
     "wipefs": "sys-apps/util-linux", "blkdiscard": "sys-apps/util-linux", "lscpu": "sys-apps/util-linux", "lsof": "sys-process/lsof",
     "dmsetup": "sys-fs/lvm2", "lvs": "sys-fs/lvm2", "btrfs": "sys-fs/btrfs-progs",
+    # the repair tool on the live side: hostenv.TOOLS_WANTED, fsprobe.CHECK_TOOLS and the host policy of rescue/safety.py
+    "blockdev": "sys-apps/util-linux", "dmesg": "sys-apps/util-linux", "script": "sys-apps/util-linux", "setsid": "sys-apps/util-linux",
+    "chroot": "sys-apps/coreutils", "timeout": "sys-apps/coreutils", "sync": "sys-apps/coreutils", "modprobe": "sys-apps/kmod",
+    "vgs": "sys-fs/lvm2", "vgchange": "sys-fs/lvm2", "grub-install": "sys-boot/grub", "lsinitrd": "sys-kernel/dracut",
+    "dumpe2fs": "sys-fs/e2fsprogs", "tune2fs": "sys-fs/e2fsprogs", "fsck.ext2": "sys-fs/e2fsprogs", "fsck.ext3": "sys-fs/e2fsprogs",
+    "fsck.ext4": "sys-fs/e2fsprogs", "fsck.vfat": "sys-fs/dosfstools", "fsck.fat": "sys-fs/dosfstools", "xfs_repair": "sys-fs/xfsprogs",
+    "xfs_db": "sys-fs/xfsprogs", "fsck.f2fs": "sys-fs/f2fs-tools", "fsck.exfat": "sys-fs/exfatprogs", "jfs_fsck": "sys-fs/jfsutils",
+    "ntfsfix": "sys-fs/ntfs3g", "mokutil": "sys-boot/mokutil", "zstd": "app-arch/zstd",
 }
+# The host policy also accepts these names, but no repair plan runs them (fsck.ext2 and fsck.ext3 are e2fsck, fsck.fat is
+# fsck.vfat), so the image does not have to be checked for them.
+POLICY_ALIASES = {"fsck.ext2", "fsck.ext3", "fsck.ext4", "fsck.fat"}
 
 
 def daemon_tools() -> list[str]:
@@ -94,6 +105,60 @@ def test_every_tool_the_daemon_checks_is_pulled_in_by_the_ebuild() -> None:
     assert not missing, f"RDEPEND of the installer lacks the package of {missing}"
 
 
+def normalized(program: str) -> str:
+    """The method name HostPolicy looks up for a program (rescue/safety.py)."""
+    return re.sub(r"[^a-z0-9]", "_", program.lower())
+
+
+def rescue_programs() -> tuple[set[str], set[str]]:
+    """(programs named by the repair tool, normalized names of every program its host policy has a checker for)."""
+    import inspect
+
+    from gentoo_installerd.rescue import fsprobe, hostenv, safety
+
+    named = set(hostenv.TOOLS_WANTED) | set(fsprobe.CHECK_TOOLS.values())
+    checkers = {
+        name[1:] for name, member in vars(safety.HostPolicy).items()
+        if name.startswith("_") and not name.startswith("__") and callable(member)
+        and list(inspect.signature(member).parameters) == ["self", "args", "argv"]
+    }
+    return named, checkers
+
+
+def test_every_program_the_repair_tool_runs_is_mapped_to_a_package() -> None:
+    named, checkers = rescue_programs()
+    assert {"lsblk", "mdadm", "grub-install", "lsinitrd"} <= named and {"cryptsetup", "pvs", "e2fsck"} <= checkers, "the repair tool's lists were not found"
+    unmapped = sorted(program for program in named if program not in TOOL_PACKAGE)
+    assert not unmapped, f"add {unmapped} to TOOL_PACKAGE, and its package to RDEPEND, in the same change"
+    known = {normalized(program) for program in TOOL_PACKAGE}
+    unknown = sorted(checkers - known)
+    assert not unknown, f"the host policy of the repair tool checks {unknown}: add the programs to TOOL_PACKAGE and their packages to RDEPEND"
+
+
+def test_the_ebuild_pulls_in_the_package_of_every_repair_program() -> None:
+    named, checkers = rescue_programs()
+    wanted = {program for program in TOOL_PACKAGE if program in named or normalized(program) in checkers}
+    rdepend = set(atoms(variable(ebuild_of(INSTALLER).read_text(), "RDEPEND")))
+    missing = {program: TOOL_PACKAGE[program] for program in sorted(wanted) if TOOL_PACKAGE[program] not in rdepend}
+    assert not missing, f"RDEPEND of the installer lacks the package of {missing}"
+    assert {"sys-fs/f2fs-tools", "sys-fs/exfatprogs", "sys-fs/jfsutils", "sys-fs/ntfs3g", "sys-boot/grub", "sys-kernel/dracut"} <= rdepend
+
+
+def test_the_image_is_checked_for_every_repair_program() -> None:
+    """The stage2 fsscript fails the build and the image contract fails the ISO when one of them is missing."""
+    import json
+
+    named, checkers = rescue_programs()
+    wanted = sorted(p for p in TOOL_PACKAGE if (p in named or normalized(p) in checkers) and p not in POLICY_ALIASES)
+    fsscript = (ROOT / "iso/fsscript-stage2.sh").read_text()
+    block = re.search(r"required_commands=\(\n(.*?)\n\)", fsscript, re.S)
+    assert block
+    in_script = set(re.sub(r"#.*", "", block.group(1)).split())
+    in_contract = set(json.loads((ROOT / "iso/image-contract.json").read_text())["squashfs"]["commands"])
+    assert [p for p in wanted if p not in in_script] == [], "add these programs to required_commands in iso/fsscript-stage2.sh"
+    assert [p for p in wanted if p not in in_contract] == [], "add these programs to squashfs.commands in iso/image-contract.json"
+
+
 def test_polkit_is_not_a_dependency_of_the_installer() -> None:
     """Nothing in src/ uses polkit; the PortageHub package brings its own."""
     assert "sys-auth/polkit" not in atoms(variable(ebuild_of(INSTALLER).read_text(), "RDEPEND"))
@@ -105,7 +170,8 @@ def test_installer_ebuild_declares_optional_features_by_use_flag() -> None:
     assert variable(text, "IUSE").split() == ["+btrfs", "+efi", "secureboot", "+xfs"]
     rdepend = variable(text, "RDEPEND")
     for flag, atom in (("btrfs", "sys-fs/btrfs-progs"), ("efi", "sys-boot/efibootmgr"), ("secureboot", "app-crypt/sbsigntools"), ("xfs", "sys-fs/xfsprogs")):
-        assert re.search(rf"{flag}\?\s*\(\s*{re.escape(atom)}\s*\)", rdepend), flag
+        assert re.search(rf"{flag}\?\s*\([^)]*{re.escape(atom)}[^)]*\)", rdepend), flag
+    assert re.search(r"secureboot\?\s*\([^)]*sys-boot/mokutil[^)]*\)", rdepend), "the repair tool reads the Secure Boot state with mokutil"
     assert "dev-python/pyside[gui,widgets,${PYTHON_USEDEP}]" in rdepend
 
 
@@ -124,6 +190,10 @@ def test_installer_installs_the_service_files_and_the_rescue_launcher_when_prese
     assert 'systemd_dounit "${FILESDIR}/gentoo-installerd.service"' in text
     # the launcher follows the source tree, not the names of console scripts that pyproject.toml may define
     assert re.search(r'if \[\[ -d \$\{S\}/src/gentoo_installerd/rescue \]\]; then\s+domenu "\$\{S\}/data/gentoo-rescue.desktop"', text)
+    # ...and so does the short form of "gentoo-rescue chroot"
+    guarded = text.split("if [[ -d ${S}/src/gentoo_installerd/rescue ]]; then", 1)[1].split("\n\tfi", 1)[0]
+    assert 'dobin "${FILESDIR}/gentoo-chroot"' in guarded
+    assert not (INSTALLER / "files/gentoo-chroot").stat().st_mode & 0o111, "pkgcheck: dobin makes it executable, a file in files/ is not"
 
 
 def test_rescue_desktop_entry_is_valid() -> None:

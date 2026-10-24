@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=PolicyKit Authentication Agent
+Comment=Asks for a password when a program needs administrator rights (GParted, for example)
+Exec=/usr/libexec/polkit-gnome-authentication-agent-1
+Terminal=false
+NoDisplay=true
+OnlyShowIn=XFCE;
+X-GNOME-Autostart-enabled=true

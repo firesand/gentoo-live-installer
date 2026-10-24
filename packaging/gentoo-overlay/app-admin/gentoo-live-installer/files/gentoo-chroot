@@ -1,0 +1,13 @@
+#!/bin/sh
+# Open a shell inside a system that the repair tool has mounted. This is the short form of
+#     gentoo-rescue chroot SESSION
+# Mount a system first with "sudo gentoo-rescue"; "gentoo-rescue status" lists the sessions.
+if [ "$#" -eq 0 ]; then
+	echo "Usage: gentoo-chroot SESSION [options]" >&2
+	echo "Opens a shell inside a system that the repair tool has mounted." >&2
+	echo "Mount a system first: sudo gentoo-rescue" >&2
+	echo "List the mounted systems (sessions): gentoo-rescue status" >&2
+	echo "More options: gentoo-chroot --help" >&2
+	exit 2
+fi
+exec gentoo-rescue chroot "$@"

@@ -30,7 +30,7 @@ REQUIRED_ATOMS = {
     "sys-block/thin-provisioning-tools", "app-misc/jq", "sys-apps/pv", "sys-apps/hdparm", "sys-apps/lshw",
     "app-portage/cpuid2cpuflags", "x11-apps/setxkbmap", "x11-apps/xrandr", "sys-apps/pciutils",
     "sys-apps/smartmontools", "sys-apps/nvme-cli", "sys-fs/ddrescue", "sys-fs/ntfs3g", "sys-fs/exfatprogs",
-    "sys-fs/f2fs-tools", "sys-fs/btrfs-progs", "sys-fs/xfsprogs", "sys-fs/dosfstools", "sys-fs/lvm2",
+    "sys-fs/f2fs-tools", "sys-fs/jfsutils", "sys-boot/grub", "sys-fs/btrfs-progs", "sys-fs/xfsprogs", "sys-fs/dosfstools", "sys-fs/lvm2",
     "sys-fs/mdadm", "sys-fs/cryptsetup", "sys-boot/efibootmgr", "sys-boot/os-prober", "app-admin/testdisk",
     "sys-block/gparted", "x11-terms/xfce4-terminal", "net-misc/chrony", "www-client/links",
     "xfce-extra/xfce4-xkb-plugin",

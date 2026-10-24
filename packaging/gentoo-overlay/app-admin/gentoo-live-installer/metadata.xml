@@ -10,7 +10,7 @@
 	<use>
 		<flag name="btrfs">Install the Btrfs tools, so the installer and the repair tool can create and check Btrfs file systems</flag>
 		<flag name="efi">Install efibootmgr, so the installer and the repair tool can create and repair UEFI boot entries</flag>
-		<flag name="secureboot">Install sbsigntools, needed for installations that sign their boot files for Secure Boot</flag>
+		<flag name="secureboot">Install sbsigntools and mokutil, needed for installations that sign their boot files for Secure Boot and for the repair tool's Secure Boot checks</flag>
 		<flag name="xfs">Install the XFS tools, so the installer and the repair tool can create and repair XFS file systems</flag>
 	</use>
 </pkgmetadata>

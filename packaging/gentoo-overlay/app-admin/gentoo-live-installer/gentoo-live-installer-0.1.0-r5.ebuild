@@ -19,28 +19,42 @@ KEYWORDS="amd64"
 IUSE="+btrfs +efi secureboot +xfs"
 RESTRICT="mirror fetch"
 
-# Everything the daemon and the repair tool run (see REQUIRED_TOOLS in
-# src/gentoo_installerd/inspect.py and the rescue plans). Programs that every Gentoo
-# system has anyway (coreutils, mount, ...) are not listed; those that a minimal system may
-# lack are.
+# Everything the daemon and the repair tool run: REQUIRED_TOOLS and OPTIONAL_TOOLS in
+# src/gentoo_installerd/inspect.py, TOOLS_WANTED in rescue/hostenv.py, CHECK_TOOLS in
+# rescue/fsprobe.py and the host policy in rescue/safety.py. tests/iso/test_ebuilds.py maps
+# every program to its package and fails when one is missing here. The file system checks
+# of the repair tool (F2FS, exFAT, JFS, NTFS) are not behind flags: a disk from another
+# PC can have any of them. coreutils, kmod and zstd are in every Gentoo system anyway; they
+# are listed because the repair tool runs timeout, chroot, modprobe and zstd by name.
+# lsinitrd comes from dracut; grub-install of the live GRUB (pc and efi-64) is the fallback
+# when the repaired system cannot run its own.
 RDEPEND="
 	acct-group/gentoo-installer
 	app-arch/tar
+	app-arch/zstd
 	app-crypt/gnupg
 	app-portage/cpuid2cpuflags
 	dev-python/pyside[gui,widgets,${PYTHON_USEDEP}]
 	sec-keys/openpgp-keys-gentoo-release
+	sys-apps/coreutils
 	sys-apps/gptfdisk
+	sys-apps/kmod
 	sys-apps/nvme-cli
 	sys-apps/pciutils
 	sys-apps/smartmontools
 	sys-apps/util-linux
 	sys-block/parted
+	sys-boot/grub
 	sys-fs/cryptsetup
 	sys-fs/dosfstools
 	sys-fs/e2fsprogs
+	sys-fs/exfatprogs
+	sys-fs/f2fs-tools
+	sys-fs/jfsutils
 	sys-fs/lvm2
 	sys-fs/mdadm
+	sys-fs/ntfs3g
+	sys-kernel/dracut
 	sys-process/lsof
 	sys-process/psmisc
 	virtual/udev
@@ -48,7 +62,10 @@ RDEPEND="
 	x11-apps/xrandr
 	btrfs? ( sys-fs/btrfs-progs )
 	efi? ( sys-boot/efibootmgr )
-	secureboot? ( app-crypt/sbsigntools )
+	secureboot? (
+		app-crypt/sbsigntools
+		sys-boot/mokutil
+	)
 	xfs? ( sys-fs/xfsprogs )
 "
 BDEPEND="
@@ -69,10 +86,12 @@ src_install() {
 	distutils-r1_src_install
 	domenu "${FILESDIR}/gentoo-installer.desktop"
 	# The repair tool belongs to the same Python package once the sources contain it. Its
-	# launcher starts the installer GUI in repair mode; the console scripts (gentoo-rescue)
-	# come from pyproject.toml and are installed by distutils-r1 when it declares them.
+	# launcher starts the installer GUI in repair mode; the console scripts (gentoo-rescue,
+	# gentoo-installer-text) come from pyproject.toml and are installed by distutils-r1 when
+	# it declares them. gentoo-chroot is the short form of "gentoo-rescue chroot".
 	if [[ -d ${S}/src/gentoo_installerd/rescue ]]; then
 		domenu "${S}/data/gentoo-rescue.desktop"
+		dobin "${FILESDIR}/gentoo-chroot"
 	fi
 	newinitd "${FILESDIR}/gentoo-installerd.initd" gentoo-installerd
 	newconfd "${FILESDIR}/gentoo-installerd.confd" gentoo-installerd
