@@ -90,6 +90,8 @@ pub enum Action {
     Reload(Reload),
     Toast(ToastKind, String),
     Cancel(u64),
+    /// Stop with SIGINT now, SIGTERM after ten seconds and SIGKILL after ten more if it still runs.
+    ForceStop(u64),
     StartHelper,
     LoadDetail(String),
     LoadEbuild(PathBuf),
@@ -138,6 +140,8 @@ pub struct Job {
     pub exit: Option<Option<i32>>,
     pub error: Option<String>,
     pub reload: Vec<Reload>,
+    /// Set once the user asked to stop it: the last signal sent and when.
+    pub stop: Option<(crate::stop::Stage, Instant)>,
 }
 
 impl Job {
@@ -240,6 +244,8 @@ pub struct App {
     pub exec: Executor,
     pub jobs: Vec<Job>,
     pub batches: Vec<Batch>,
+    /// The admin helper's audit log is not recording (shown in Settings).
+    pub audit_note: Option<String>,
     /// The change that can be undone with one click (a multi-file batch that was committed).
     pub last_change: Option<LastChange>,
     /// The helper's journal, newest first (loaded on demand: the journal is root-only).
@@ -260,6 +266,8 @@ pub struct App {
     pub history_view: views::history::State,
     pub settings_view: views::settings::State,
     last_log_poll: Instant,
+    /// The window has been fitted to its monitor (done once, on the first frame).
+    size_checked: bool,
     fonts_applied: Option<String>,
     script: Option<crate::shot::Script>,
     confirm_close: bool,
@@ -367,6 +375,7 @@ impl App {
             exec,
             jobs: Vec::new(),
             batches: Vec::new(),
+            audit_note: None,
             last_change: None,
             recent_changes: None,
             captures: HashMap::new(),
@@ -386,6 +395,7 @@ impl App {
             history_view: Default::default(),
             settings_view: Default::default(),
             last_log_poll: Instant::now(),
+            size_checked: false,
             script: crate::shot::Script::from_env(),
             confirm_close: false,
             allow_close: false,
@@ -440,6 +450,7 @@ impl App {
             exit: None,
             error: None,
             reload: vec![],
+            stop: None,
         });
         self.emerge.active_job = Some(id);
         let sink = self.exec.sink();
@@ -473,6 +484,34 @@ impl App {
 
     pub fn push(&mut self, a: Action) {
         self.actions.push(a);
+    }
+
+    /// Send the next signal of the stop schedule to job `id` (see `stop.rs`).
+    fn stop_job(&mut self, id: u64) {
+        let Some(job) = self.jobs.iter_mut().find(|j| j.id == id && j.running()) else { return };
+        let since = job.stop.map(|(_, at)| at.elapsed()).unwrap_or_default();
+        let Some(stage) = crate::stop::next_stop(job.stop.map(|(s, _)| s), since) else { return };
+        job.stop = Some((stage, Instant::now()));
+        let privilege = job.privilege;
+        self.exec.cancel(id, privilege, stage.signal());
+        self.toast(ToastKind::Info, stage.describe());
+    }
+
+    /// Jobs the user asked to stop that still run get the next, harder signal on time.
+    fn escalate_stops(&mut self) {
+        let due: Vec<u64> = self
+            .jobs
+            .iter()
+            .filter(|j| j.running())
+            .filter_map(|j| j.stop.map(|(stage, at)| (j.id, crate::stop::next_stop(Some(stage), at.elapsed()))))
+            .filter_map(|(id, next)| next.map(|_| id))
+            .collect();
+        for id in due {
+            self.stop_job(id);
+        }
+        if self.jobs.iter().any(|j| j.running() && j.stop.is_some_and(|(s, _)| s != crate::stop::Stage::Killed)) {
+            self.ctx.request_repaint_after(Duration::from_secs(1));
+        }
     }
 
     pub fn toast(&mut self, kind: ToastKind, text: impl Into<String>) {
@@ -746,6 +785,7 @@ impl App {
             exit: None,
             error: None,
             reload,
+            stop: None,
         });
         // Keep the job list bounded.
         if self.jobs.len() > 60 {
@@ -765,8 +805,18 @@ impl App {
 
     fn handle_exec(&mut self, msg: ExecMsg) {
         match msg {
-            ExecMsg::HelperReady(version) => {
+            ExecMsg::Notice(msg) => {
+                if msg.starts_with("Audit log:") {
+                    self.audit_note = Some(msg.clone());
+                }
+                self.toast(ToastKind::Warn, msg);
+            }
+            ExecMsg::HelperReady(version, warnings) => {
                 self.exec.on_helper_ready(version.as_deref());
+                self.audit_note = warnings.iter().find(|w| w.starts_with("Audit log:")).cloned();
+                for w in warnings {
+                    self.toast(ToastKind::Warn, w);
+                }
                 let mine = env!("CARGO_PKG_VERSION");
                 if self.exec.helper_outdated {
                     self.toast(
@@ -777,14 +827,17 @@ impl App {
                         ),
                     );
                 } else {
-                    self.toast(ToastKind::Success, "Administrator session started — privileged actions won't ask again.");
+                    self.toast(ToastKind::Success, "Administrator session started — privileged actions won't ask again until it ends (End admin session, quitting PortageHub, or 15 minutes without activity).");
                 }
             }
-            ExecMsg::HelperGone(reason) => {
+            ExecMsg::HelperGone(exit) => {
                 let was = self.exec.helper_state.clone();
-                self.exec.on_helper_gone(reason.clone());
+                self.exec.on_helper_gone(exit.clone());
                 if was != HelperState::NotStarted {
-                    self.toast(ToastKind::Warn, format!("Administrator session ended: {reason}"));
+                    match exit.problem() {
+                        Some(reason) => self.toast(ToastKind::Warn, format!("Administrator session ended: {reason}")),
+                        None => self.toast(ToastKind::Info, "Admin session closed after 15 minutes idle — you will be asked again when needed."),
+                    }
                 }
             }
             ExecMsg::Event(ev, at) => self.handle_event(ev, at),
@@ -815,7 +868,7 @@ impl App {
         let history = self.data.history.clone().unwrap_or_default();
         let job = &mut self.jobs[ji];
         match ev {
-            Event::Started { .. } | Event::Ready { .. } => {}
+            Event::Started { .. } | Event::Ready { .. } | Event::Notice { .. } => {}
             Event::Data { text, .. } => {
                 job.lines.push((false, text));
             }
@@ -1239,9 +1292,10 @@ impl App {
                 if let Some(j) = self.jobs.iter().find(|j| j.id == id) {
                     let p = j.privilege;
                     self.exec.cancel(id, p, libc::SIGINT);
-                    self.toast(ToastKind::Info, "Stop requested (SIGINT). emerge will stop after cleaning up.");
+                    self.toast(ToastKind::Info, crate::stop::Stage::Interrupted.describe());
                 }
             }
+            Action::ForceStop(id) => self.stop_job(id),
             Action::StartHelper => {
                 if !self.exec.root_ready() && self.exec.helper_state != HelperState::Starting {
                     self.exec.start_helper();
@@ -1267,6 +1321,7 @@ impl App {
                     exit: None,
                     error: None,
                     reload,
+                    stop: None,
                 });
                 if needs_new_helper && !self.exec.is_root && self.exec.helper_state == HelperState::Ready {
                     let ji = self.jobs.len() - 1;
@@ -1670,6 +1725,7 @@ impl App {
             return;
         }
         let in_process = self.exec.is_root;
+        let emerge = self.running_emerge().map(|j| (j.id, j.privilege));
         egui::Modal::new(egui::Id::new("close-guard"))
             .frame(Frame::new().fill(PANEL).corner_radius(CornerRadius::same(6)).inner_margin(Margin::same(18)))
             .show(ctx, |ui| {
@@ -1687,6 +1743,13 @@ impl App {
                 ui.horizontal(|ui| {
                     if w::primary(ui, icon::ARROW_LEFT, "Keep PortageHub open").clicked() {
                         self.confirm_close = false;
+                    }
+                    if !in_process && let Some((id, privilege)) = emerge && w::button(ui, icon::STOP, "Stop emerge and quit").on_hover_text("Sends SIGINT (like Ctrl+C) and quits. Continue later with “Resume interrupted emerge”.").clicked() {
+                        // Otherwise the emerge would go on without a window to watch it, held by a helper nobody can address any more.
+                        self.exec.cancel(id, privilege, libc::SIGINT);
+                        self.allow_close = true;
+                        self.confirm_close = false;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                     if w::danger(ui, icon::SIGN_OUT, "Quit anyway").clicked() {
                         self.allow_close = true;
@@ -1782,6 +1845,7 @@ impl eframe::App for App {
             self.handle_exec(m);
         }
         self.poll_build_logs();
+        self.escalate_stops();
         if !self.world_auto_done && self.data.catalog.is_some() && self.data.vdb.is_some() && self.data.repos.is_some() {
             self.world_auto_done = true;
             let last_sync = self.data.last_sync().unwrap_or(0);
@@ -1798,6 +1862,16 @@ impl eframe::App for App {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        if !self.size_checked
+            && let Some(monitor) = ctx.input(|i| i.viewport().monitor_size)
+        {
+            // A 1366x768 laptop panel is smaller than the 1380x860 the window asks for.
+            self.size_checked = true;
+            let (w, h) = crate::window::fit(crate::window::WANTED, (monitor.x, monitor.y));
+            if (w, h) != crate::window::WANTED {
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
+            }
+        }
         if self.fonts_applied != self.settings.font_family {
             theme::install_fonts(&ctx, self.settings.font_family.as_deref());
             self.fonts_applied = self.settings.font_family.clone();

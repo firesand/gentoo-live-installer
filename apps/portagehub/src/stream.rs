@@ -1,6 +1,6 @@
 //! Spawning a process and streaming its stdout/stderr line by line.
 
-use crate::protocol::{Event, StreamKind};
+use crate::protocol::{Event, MAX_OUTPUT_LINE, StreamKind};
 use std::io::Read;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Command, Stdio};
@@ -100,6 +100,24 @@ pub fn spawn_streaming(
     Ok(pid)
 }
 
+/// How much of `line` can be sent now without cutting a UTF-8 sequence in two.
+fn complete_prefix(line: &[u8]) -> usize {
+    let mut cut = line.len();
+    // At most the last 3 bytes can be the start of a sequence that continues in the next chunk.
+    for back in 1..=line.len().min(3) {
+        let b = line[line.len() - back];
+        if b & 0xC0 == 0x80 {
+            continue; // a continuation byte: keep looking for its lead byte
+        }
+        let need = if b >= 0xF0 { 4 } else if b >= 0xE0 { 3 } else if b >= 0xC0 { 2 } else { 1 };
+        if need > back {
+            cut = line.len() - back;
+        }
+        break;
+    }
+    cut
+}
+
 fn pump(id: u64, stream: StreamKind, mut src: impl Read, sink: Arc<dyn Fn(Event) + Send + Sync>) {
     let mut buf = [0u8; 8192];
     let mut line: Vec<u8> = Vec::with_capacity(256);
@@ -124,7 +142,17 @@ fn pump(id: u64, stream: StreamKind, mut src: impl Read, sink: Arc<dyn Fn(Event)
                         line.clear();
                     }
                 }
-                _ => line.push(b),
+                _ => {
+                    line.push(b);
+                    // A program that prints megabytes without a newline must not grow this buffer
+                    // (or the event that carries it) without limit: long lines are split.
+                    if line.len() >= MAX_OUTPUT_LINE {
+                        let cut = complete_prefix(&line);
+                        let text = strip_ansi(&String::from_utf8_lossy(&line[..cut]));
+                        sink(Event::Line { id, stream, text });
+                        line.drain(..cut);
+                    }
+                }
             }
         }
     }
@@ -143,6 +171,46 @@ mod tests {
         assert_eq!(strip_ansi("\u{1b}[32;01m>>>\u{1b}[39;49;00m done"), ">>> done");
         assert_eq!(strip_ansi("\u{1b}]0;title\u{7}text"), "text");
         assert_eq!(strip_ansi("plain"), "plain");
+    }
+
+    #[test]
+    fn utf8_sequences_are_never_cut_by_a_split() {
+        assert_eq!(complete_prefix(b"abc"), 3);
+        assert_eq!(complete_prefix("abé".as_bytes()), 4);
+        assert_eq!(complete_prefix(&"abé".as_bytes()[..3]), 2, "the lead byte of é without its continuation waits");
+        assert_eq!(complete_prefix(&"€".as_bytes()[..1]), 0);
+        assert_eq!(complete_prefix(&"€".as_bytes()[..2]), 0);
+        assert_eq!(complete_prefix("€".as_bytes()), 3);
+        assert_eq!(complete_prefix(&"😀".as_bytes()[..3]), 0);
+        assert_eq!(complete_prefix(b""), 0);
+    }
+
+    fn collect_pump(input: &[u8]) -> Vec<Event> {
+        let got = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let g = got.clone();
+        pump(7, StreamKind::Stdout, input, Arc::new(move |e| g.lock().unwrap().push(e)));
+        let v = got.lock().unwrap().clone();
+        v
+    }
+
+    #[test]
+    fn a_line_without_a_newline_is_split_instead_of_growing_forever() {
+        let input = vec![b'x'; 200 * 1024];
+        let lines: Vec<String> = collect_pump(&input).into_iter().filter_map(|e| if let Event::Line { text, .. } = e { Some(text) } else { None }).collect();
+        assert!(lines.len() >= 4, "{} lines", lines.len());
+        assert!(lines.iter().all(|l| l.len() <= MAX_OUTPUT_LINE));
+        assert_eq!(lines.iter().map(String::len).sum::<usize>(), 200 * 1024, "nothing is lost");
+    }
+
+    #[test]
+    fn splitting_keeps_multibyte_characters_whole() {
+        let mut input = vec![b'x'; MAX_OUTPUT_LINE - 1];
+        input.extend("é".bytes());
+        input.extend(b"tail\n");
+        let lines: Vec<String> = collect_pump(&input).into_iter().filter_map(|e| if let Event::Line { text, .. } = e { Some(text) } else { None }).collect();
+        let joined: String = lines.concat();
+        assert!(!joined.contains('\u{fffd}'), "no replacement characters");
+        assert!(joined.ends_with("étail"));
     }
 
     #[test]

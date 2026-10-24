@@ -10,8 +10,10 @@ mod fmt;
 mod portage;
 mod settings;
 mod shot;
+mod stop;
 mod ui;
 mod views;
+mod window;
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -144,9 +146,38 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_title("PortageHub")
             .with_app_id("portagehub")
-            .with_inner_size([1380.0, 860.0])
-            .with_min_inner_size([980.0, 620.0]),
+            .with_inner_size([window::WANTED.0, window::WANTED.1])
+            .with_min_inner_size([window::MIN.0, window::MIN.1]),
         ..Default::default()
     };
-    eframe::run_native("PortageHub", options, Box::new(|cc| Ok(Box::new(app::App::new(cc)))))
+    if let Err(e) = eframe::run_native("PortageHub", options, Box::new(|cc| Ok(Box::new(app::App::new(cc))))) {
+        let has_display = std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some();
+        eprintln!("{}", window_error_text(&e.to_string(), has_display));
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// What to print when no window can be opened: the reason, and what usually helps.
+fn window_error_text(reason: &str, has_display: bool) -> String {
+    let mut text = format!("PortageHub could not open a window: {reason}");
+    if !has_display {
+        text.push_str("\nNo display was found (DISPLAY and WAYLAND_DISPLAY are both unset): start it from a desktop session.");
+    }
+    text.push_str("\nOn machines without a working Vulkan driver (older hardware, virtual machines) try: WGPU_BACKEND=gl portagehub");
+    text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::window_error_text;
+
+    #[test]
+    fn a_failed_window_is_explained() {
+        let t = window_error_text("FailedToCreateSurfaceForAnyBackend", true);
+        assert!(t.starts_with("PortageHub could not open a window: FailedToCreateSurfaceForAnyBackend"));
+        assert!(t.contains("WGPU_BACKEND=gl portagehub") && !t.contains("No display"));
+        let t = window_error_text("x", false);
+        assert!(t.contains("No display was found") && t.contains("WGPU_BACKEND=gl"));
+    }
 }

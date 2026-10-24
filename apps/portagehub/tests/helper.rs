@@ -5,7 +5,6 @@ mod common;
 
 use common::Helper;
 use portagehub::protocol::{Event, Op};
-use std::io::Write;
 
 #[test]
 fn protocol_roundtrip() {
@@ -43,9 +42,7 @@ fn protocol_roundtrip() {
     h.until(|e| matches!(e, Event::Err { id: 7, .. }), 10);
 
     // Closing stdin makes the helper exit.
-    drop(h.stdin);
-    let status = h.child.wait().unwrap();
-    assert!(status.success());
+    assert!(h.quit().success());
 }
 
 #[test]
@@ -93,13 +90,11 @@ fn kernel_ops_refuse_unsafe_requests() {
     assert_eq!(scan.root, unsafe { libc::geteuid() } == 0);
 
     // An unknown operation is answered with the request id (old/new mismatch).
-    writeln!(h.stdin, r#"{{"id":6,"op":"does_not_exist"}}"#).unwrap();
-    h.stdin.flush().unwrap();
+    h.send_raw(b"{\"id\":6,\"op\":\"does_not_exist\"}\n");
     let evs = h.until(|e| matches!(e, Event::Err { id: 6, .. }), 10);
     assert!(err(&evs, 6).contains("unsupported"), "{evs:?}");
 
-    drop(h.stdin);
-    let _ = h.child.wait();
+    let _ = h.quit();
 }
 
 #[test]
@@ -111,6 +106,5 @@ fn remount_only_boot_partitions() {
         let evs = h.until(|e| matches!(e, Event::Err { id: i, .. } | Event::Started { id: i, .. } if *i == id), 10);
         assert!(matches!(evs.last(), Some(Event::Err { msg, .. }) if msg.contains("not a boot mount point")), "{target}: {evs:?}");
     }
-    drop(h.stdin);
-    let _ = h.child.wait();
+    let _ = h.quit();
 }

@@ -16,6 +16,7 @@ use crate::stream::spawn_streaming;
 use std::collections::HashMap;
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 pub type Sink = Arc<dyn Fn(Event) + Send + Sync>;
@@ -27,6 +28,8 @@ pub struct Server {
     root: Arc<PathBuf>,
     journal: Arc<Journal>,
     audit: Arc<Audit>,
+    /// The audit log stopped recording and the user has been told.
+    audit_notified: Arc<AtomicBool>,
 }
 
 impl Default for Server {
@@ -93,8 +96,22 @@ impl Server {
             running: Arc::default(),
             journal: Arc::new(Journal::new(&root)),
             audit: Arc::new(Audit::open(&root)),
+            audit_notified: Arc::new(AtomicBool::new(false)),
             root: Arc::new(root),
         }
+    }
+
+    /// Why the audit log may be missing records (it could not be opened or written), if it may.
+    pub fn audit_problem(&self) -> Option<String> {
+        self.audit.problem()
+    }
+
+    /// [`Server::audit_problem`], for the caller that tells the user now: no separate `Notice` follows
+    /// for a problem that was already reported.
+    pub fn report_audit_problem(&self) -> Option<String> {
+        let problem = self.audit.problem()?;
+        self.audit_notified.store(true, Ordering::SeqCst);
+        Some(problem)
     }
 
     pub fn root(&self) -> &Path {
@@ -107,6 +124,12 @@ impl Server {
 
     pub fn handle(&self, req: Request, sink: Sink) {
         let Request { id, tx, op } = req;
+        if let Some(why) = self.audit.problem()
+            && !self.audit_notified.swap(true, Ordering::SeqCst)
+        {
+            // Fail-open on purpose (an unwritable log must not stop an upgrade), but never silent.
+            sink(Event::Notice { msg: format!("Audit log: not recording ({why})") });
+        }
         let sink = if matches!(op, Op::Ping) {
             sink
         } else {
@@ -150,7 +173,7 @@ impl Server {
             Op::MarkGood { kver, state_dir, backup } => {
                 let me = self.clone();
                 let tx = tx.map(String::from);
-                self.blocking(id, sink, move |log| me.mark_good(tx.as_deref(), &kver, &state_dir, backup, log));
+                self.blocking(id, sink, move |log| me.mark_good(id, tx.as_deref(), &kver, &state_dir, backup, log));
             }
             Op::RemoveKernelLeftovers { kver, old_only } => {
                 let root = self.root.clone();
@@ -164,11 +187,12 @@ impl Server {
                 let root = self.root.clone();
                 self.blocking(id, sink, move |log| rootops::clean_build_dirs(&root, log));
             }
-            Op::WriteFile { path, content, backup, expect } => reply(self.write_file(tx, &path, content.as_bytes(), backup, expect)),
-            Op::DeleteFile { path, expect } => reply(self.delete_file(tx, &path, expect)),
-            Op::Mkdir { path } => reply(self.mkdir(tx, &path)),
-            Op::Rename { from, to, expect } => reply(self.rename(tx, &from, &to, expect)),
-            Op::ConfigUpdate { path, accept, expect } => reply(self.config_update(tx, &path, accept, expect)),
+            Op::WriteFile { path, content, backup, expect } => reply(self.write_file_for(id, tx, &path, content.as_bytes(), backup, expect)),
+            Op::DeleteFile { path, expect } => reply(self.delete_file(id, tx, &path, expect)),
+            Op::Mkdir { path } => reply(self.mkdir(id, tx, &path)),
+            Op::Rename { from, to, expect } => reply(self.rename(id, tx, &from, &to, expect)),
+            Op::ConfigUpdate { path, accept, expect } => reply(self.config_update(id, tx, &path, accept, expect)),
+            Op::Signal { signal, .. } if !protocol::ALLOWED_SIGNALS.contains(&signal) => reply(Err(format!("signal not allowed: {signal}"))),
             Op::Signal { target, signal } => {
                 let pid = self.pgids.lock().unwrap().get(&target).copied();
                 match pid {
@@ -253,13 +277,13 @@ impl Server {
 
     /// Run `f` in transaction `tx`, or in a transaction of its own that is
     /// committed on success and rolled back on failure.
-    fn in_tx(&self, tx: Option<&str>, label: &str, f: impl FnOnce(&str) -> Result<(), String>) -> Result<(), String> {
+    fn in_tx(&self, id: u64, tx: Option<&str>, label: &str, f: impl FnOnce(&str) -> Result<(), String>) -> Result<(), String> {
         if let Some(t) = tx {
             return f(t);
         }
         let t = self.journal.begin(label).map_err(|e| format!("cannot record the change for undo: {e}"))?;
         match f(&t) {
-            Ok(()) => self.commit(0, &t),
+            Ok(()) => self.commit(id, &t),
             Err(e) => {
                 let _ = self.journal.rollback(&t, true, &|p| self.confine(p));
                 Err(e)
@@ -326,14 +350,23 @@ impl Server {
         if expect.holds(current.as_deref()) { Ok(()) } else { Err(format!("changed on disk: {path}")) }
     }
 
+    /// [`Server::write_file_for`] outside of any request (tests, tools).
     pub fn write_file(&self, tx: Option<&str>, path: &str, content: &[u8], backup: bool, expect: Option<Expect>) -> Result<(), String> {
+        self.write_file_for(0, tx, path, content, backup, expect)
+    }
+
+    /// Replace a file below /etc/portage for request `id` (which the audit log's commit record carries).
+    pub fn write_file_for(&self, id: u64, tx: Option<&str>, path: &str, content: &[u8], backup: bool, expect: Option<Expect>) -> Result<(), String> {
         const P: &str = "/etc/portage";
+        if content.len() > protocol::MAX_WRITE {
+            return Err(format!("{path}: {} bytes is more than the {} MiB a configuration file may have", content.len(), protocol::MAX_WRITE >> 20));
+        }
         let (b, rel) = self.portage(path)?;
         if b.is_dir(&rel).map_err(es)? {
             return Err(format!("{path} is a directory"));
         }
         Server::check_expect(&b, &rel, path, expect)?;
-        self.in_tx(tx, &format!("write {path}"), |t| {
+        self.in_tx(id, tx, &format!("write {path}"), |t| {
             self.record_new_dirs(t, &b, P, &rel, false)?;
             if backup && let Some(old) = b.read(&rel).map_err(es)? {
                 // `~` suffix: Portage ignores these files.
@@ -348,7 +381,7 @@ impl Server {
         })
     }
 
-    fn delete_file(&self, tx: Option<&str>, path: &str, expect: Option<Expect>) -> Result<(), String> {
+    fn delete_file(&self, id: u64, tx: Option<&str>, path: &str, expect: Option<Expect>) -> Result<(), String> {
         let (b, rel) = self.portage(path)?;
         if b.is_dir(&rel).map_err(es)? {
             return Err(format!("{path} is a directory"));
@@ -357,24 +390,24 @@ impl Server {
             return Err(format!("{path} does not exist"));
         }
         Server::check_expect(&b, &rel, path, expect)?;
-        self.in_tx(tx, &format!("delete {path}"), |t| {
+        self.in_tx(id, tx, &format!("delete {path}"), |t| {
             self.record(t, "/etc/portage", &b, &rel)?;
             b.unlink(&rel).map_err(es)
         })
     }
 
-    fn mkdir(&self, tx: Option<&str>, path: &str) -> Result<(), String> {
+    fn mkdir(&self, id: u64, tx: Option<&str>, path: &str) -> Result<(), String> {
         let (b, rel) = self.portage(path)?;
         if b.is_dir(&rel).map_err(es)? {
             return Ok(());
         }
-        self.in_tx(tx, &format!("mkdir {path}"), |t| {
+        self.in_tx(id, tx, &format!("mkdir {path}"), |t| {
             self.record_new_dirs(t, &b, "/etc/portage", &rel, true)?;
             b.mkdirs(&rel).map_err(es)
         })
     }
 
-    fn rename(&self, tx: Option<&str>, from: &str, to: &str, expect: Option<Expect>) -> Result<(), String> {
+    fn rename(&self, id: u64, tx: Option<&str>, from: &str, to: &str, expect: Option<Expect>) -> Result<(), String> {
         const P: &str = "/etc/portage";
         let (b, fr) = self.portage(from)?;
         let (_, tr) = self.portage(to)?;
@@ -388,7 +421,7 @@ impl Server {
             return Err(format!("{from} is a directory; only files can be moved"));
         }
         Server::check_expect(&b, &fr, from, expect)?;
-        self.in_tx(tx, &format!("rename {from} → {to}"), |t| {
+        self.in_tx(id, tx, &format!("rename {from} → {to}"), |t| {
             self.record_new_dirs(t, &b, P, &tr, false)?;
             self.record(t, P, &b, &fr)?;
             self.record(t, P, &b, &tr)?;
@@ -396,7 +429,7 @@ impl Server {
         })
     }
 
-    fn config_update(&self, tx: Option<&str>, path: &str, accept: bool, expect: Option<Expect>) -> Result<(), String> {
+    fn config_update(&self, id: u64, tx: Option<&str>, path: &str, accept: bool, expect: Option<Expect>) -> Result<(), String> {
         const E: &str = "/etc";
         let (upd, target) = protocol::config_update_paths(path).ok_or_else(|| format!("not a config update file: {path}"))?;
         let b = Beneath::open(&at(&self.root, E)).map_err(|e| format!("/etc: {e}"))?;
@@ -408,7 +441,7 @@ impl Server {
             Server::check_expect(&b, &target, &format!("/etc/{}", target.display()), expect)?;
         }
         let label = format!("{} config update {path}", if accept { "accept" } else { "discard" });
-        self.in_tx(tx, &label, |t| {
+        self.in_tx(id, tx, &label, |t| {
             if accept {
                 self.record(t, E, &b, &target)?;
                 self.record(t, E, &b, &upd)?;
@@ -420,12 +453,12 @@ impl Server {
         })
     }
 
-    fn mark_good(&self, tx: Option<&str>, kver: &str, state_dir: &str, backup: bool, log: &dyn Fn(String)) -> Result<(), String> {
+    fn mark_good(&self, id: u64, tx: Option<&str>, kver: &str, state_dir: &str, backup: bool, log: &dyn Fn(String)) -> Result<(), String> {
         if !protocol::valid_kver(kver) {
             return Err(format!("invalid kernel version {kver}"));
         }
         let dir = rootops::state_dir_handle(&self.root, state_dir)?;
-        self.in_tx(tx, &format!("mark kernel {kver} known-good"), |t| {
+        self.in_tx(id, tx, &format!("mark kernel {kver} known-good"), |t| {
             for f in ["last-good", "previous-good"] {
                 self.record(t, state_dir, &dir, Path::new(f))?;
             }

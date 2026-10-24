@@ -235,6 +235,22 @@ impl Op {
     }
 }
 
+/// Longest request line the helper reads (a `WriteFile` of [`MAX_WRITE`] bytes, escaped, fits).
+pub const MAX_REQUEST_LINE: usize = 16 << 20;
+/// Largest file content `WriteFile` accepts.
+pub const MAX_WRITE: usize = 4 << 20;
+/// Longest output line forwarded as one `Line` event (longer ones are split).
+pub const MAX_OUTPUT_LINE: usize = 64 << 10;
+/// Output events the helper keeps for a slow GUI before dropping the oldest lines.
+pub const MAX_QUEUED_EVENTS: usize = 100_000;
+/// A helper session with no request and no running job ends after this long.
+pub const IDLE_EXIT_SECS: u64 = 15 * 60;
+/// What the helper prints on stderr when it ends because of [`IDLE_EXIT_SECS`].
+pub const IDLE_EXIT_MESSAGE: &str = "portagehub-helper: idle for 15 minutes, exiting";
+
+/// Signals `Op::Signal` forwards to a job: hang up, interrupt, kill, terminate, continue.
+pub const ALLOWED_SIGNALS: &[i32] = &[1, 2, 9, 15, 18];
+
 /// "0.3.0" -> (0, 3); a helper that sends no version is 0.1.
 pub fn parse_version(v: Option<&str>) -> (u32, u32) {
     let Some(v) = v else { return (0, 1) };
@@ -381,12 +397,18 @@ pub enum StreamKind {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(tag = "ev", rename_all = "snake_case")]
 pub enum Event {
-    /// Sent once by the helper right after start-up.
+    /// Sent once by the helper right after start-up. `warnings` are problems the session starts
+    /// with (for example an audit log that cannot be written); the GUI shows them.
     Ready {
         uid: u32,
         #[serde(default)]
         version: Option<String>,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        warnings: Vec<String>,
     },
+    /// Something the user should know that belongs to no request (output was dropped, the audit
+    /// log stopped recording). Older GUIs cannot parse it and ignore the line.
+    Notice { msg: String },
     /// Structured result of a request (JSON text).
     Data { id: u64, text: String },
     Started { id: u64, pid: u32 },
@@ -402,7 +424,7 @@ pub enum Event {
 impl Event {
     pub fn id(&self) -> Option<u64> {
         match self {
-            Event::Ready { .. } => None,
+            Event::Ready { .. } | Event::Notice { .. } => None,
             Event::Started { id, .. }
             | Event::Line { id, .. }
             | Event::Data { id, .. }
@@ -599,7 +621,9 @@ mod tests {
     #[test]
     fn roundtrip_all_events() {
         let events = vec![
-            Event::Ready { uid: 1000, version: Some("0.4.0".into()) },
+            Event::Ready { uid: 1000, version: Some("0.4.0".into()), warnings: vec![] },
+            Event::Ready { uid: 0, version: None, warnings: vec!["audit log: Permission denied".into()] },
+            Event::Notice { msg: "12 output lines dropped".into() },
             Event::Data { id: 1, text: "{}".into() },
             Event::Started { id: 2, pid: 77 },
             Event::Line { id: 3, stream: StreamKind::Stderr, text: "x".into() },

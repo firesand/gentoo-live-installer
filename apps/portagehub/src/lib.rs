@@ -6,8 +6,10 @@
 pub mod audit;
 pub mod emerge_opts;
 pub mod journal;
+pub mod peer;
 pub mod policy;
 pub mod protocol;
+pub mod queue;
 pub mod rootops;
 pub mod safefs;
 pub mod server;

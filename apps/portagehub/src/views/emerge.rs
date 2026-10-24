@@ -1192,8 +1192,17 @@ fn job_header(app: &mut App, ui: &mut Ui, job: &Job) {
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if job.running() {
-                if w::danger(ui, icon::STOP, "Stop").on_hover_text("Send SIGINT (like Ctrl+C). You can resume later with “Resume interrupted emerge”.").clicked() {
-                    app.push(Action::Cancel(job.id));
+                if job.stop.is_some_and(|(s, _)| s == crate::stop::Stage::Killed) {
+                    ui.label(w::dim("SIGKILL sent"));
+                } else if job.stop.is_some() {
+                    ui.label(w::dim("Stopping…"));
+                } else {
+                    if w::danger(ui, icon::SKULL, "Force stop").on_hover_text("SIGINT now; if it still runs after 10 seconds SIGTERM, after 10 more SIGKILL. Build directories may be left behind.").clicked() {
+                        app.push(Action::ForceStop(job.id));
+                    }
+                    if w::danger(ui, icon::STOP, "Stop").on_hover_text("Send SIGINT (like Ctrl+C). You can resume later with “Resume interrupted emerge”.").clicked() {
+                        app.push(Action::Cancel(job.id));
+                    }
                 }
             } else if matches!(job.kind, JobKind::Emerge { .. }) && !job.success() {
                 if w::primary(ui, icon::PLAY, "Resume").on_hover_text("emerge --resume").clicked() {

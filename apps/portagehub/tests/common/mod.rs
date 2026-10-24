@@ -8,13 +8,14 @@ use portagehub::protocol::{Event, Op, Request};
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{Arc, Mutex, mpsc};
 use std::time::Duration;
 
 pub struct Helper {
     pub child: std::process::Child,
-    pub stdin: std::process::ChildStdin,
+    stdin: Option<std::process::ChildStdin>,
     rx: mpsc::Receiver<Event>,
+    stderr: Arc<Mutex<String>>,
 }
 
 impl Helper {
@@ -29,7 +30,7 @@ impl Helper {
 
     pub fn spawn(root: Option<&Path>, env: &[(&str, &str)]) -> Helper {
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_portagehub-helper"));
-        cmd.stdin(Stdio::piped()).stdout(Stdio::piped());
+        cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         if let Some(root) = root {
             cmd.env("PORTAGEHUB_ROOT", root);
         }
@@ -39,6 +40,15 @@ impl Helper {
         let mut child = cmd.spawn().expect("spawn helper");
         let stdin = child.stdin.take().unwrap();
         let stdout = child.stdout.take().unwrap();
+        let stderr = Arc::new(Mutex::new(String::new()));
+        let (err, pipe) = (stderr.clone(), child.stderr.take().unwrap());
+        std::thread::spawn(move || {
+            for line in BufReader::new(pipe).lines().map_while(Result::ok) {
+                let mut text = err.lock().unwrap();
+                text.push_str(&line);
+                text.push('\n');
+            }
+        });
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
@@ -48,7 +58,7 @@ impl Helper {
                 }
             }
         });
-        Helper { child, stdin, rx }
+        Helper { child, stdin: Some(stdin), rx, stderr }
     }
 
     pub fn send(&mut self, id: u64, op: Op) {
@@ -61,15 +71,21 @@ impl Helper {
     }
 
     pub fn send_request(&mut self, req: Request) {
-        let s = serde_json::to_string(&req).unwrap();
-        writeln!(self.stdin, "{s}").unwrap();
-        self.stdin.flush().unwrap();
+        let mut line = serde_json::to_vec(&req).unwrap();
+        line.push(b'\n');
+        self.send_raw(&line);
     }
 
     /// Raw bytes exactly as given (no newline added).
     pub fn send_raw(&mut self, bytes: &[u8]) {
-        self.stdin.write_all(bytes).unwrap();
-        self.stdin.flush().unwrap();
+        let stdin = self.stdin.as_mut().expect("stdin is still open");
+        stdin.write_all(bytes).unwrap();
+        stdin.flush().unwrap();
+    }
+
+    /// End of input: the helper finishes its jobs and exits.
+    pub fn close_stdin(&mut self) {
+        self.stdin = None;
     }
 
     pub fn until(&self, mut pred: impl FnMut(&Event) -> bool, secs: u64) -> Vec<Event> {
@@ -100,9 +116,27 @@ impl Helper {
         Ok(data)
     }
 
+    /// Everything the helper wrote to stderr so far.
+    pub fn stderr_text(&self) -> String {
+        self.stderr.lock().unwrap().clone()
+    }
+
+    /// Wait up to `secs` for the helper to exit by itself.
+    pub fn wait_exit(&mut self, secs: u64) -> Option<std::process::ExitStatus> {
+        let deadline = std::time::Instant::now() + Duration::from_secs(secs);
+        while std::time::Instant::now() < deadline {
+            if let Some(st) = self.child.try_wait().unwrap() {
+                std::thread::sleep(Duration::from_millis(50)); // let the stderr reader catch up
+                return Some(st);
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        None
+    }
+
     /// Close stdin and wait for the helper to exit.
     pub fn quit(mut self) -> std::process::ExitStatus {
-        drop(self.stdin);
+        self.close_stdin();
         self.child.wait().unwrap()
     }
 }
