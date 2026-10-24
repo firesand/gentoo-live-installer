@@ -204,3 +204,21 @@ def test_ctrl_c_while_the_program_is_busy_asks_in_the_same_way(installer, host: 
     ])
     assert run_main(["--socket", fake.path], script, host).code == 130
     script.assert_finished()
+
+
+def test_a_mistyped_passphrase_is_asked_again_in_the_whole_flow_and_the_matching_one_is_installed(installer, host: FakeHost) -> None:
+    fake = installer(inspect_reply("qemu-q35-virtio"))  # a disk without a serial number as well: approved by its hardware path
+    script = Script([
+        *to_disk_step(), ("Step 4 of 9: Disk", "1"), ("neither a serial number nor a WWN", "y"),
+        ("Step 5 of 9", ""), ("Encrypt the system disk", "y"),
+        ("Passphrase", "first-passphrase-1"), ("Type it again", "first-passphrase-2"),
+        ("The two passphrases are not the same", "first-passphrase-1"), ("Type it again", "first-passphrase-1"),
+        ("Step 6 of 9", ""), ("init system", ""), *accounts(), *region(),
+        ("Step 9 of 9", "/dev/vda"), ("The installation finished", "4"),
+    ])
+    result = run_main(["--socket", fake.path], script, host)
+    script.assert_finished()
+    sent = fake.manifests[0]
+    assert result.code == 0 and sent["storage"]["luks"] is True and sent["storage"]["luks_passphrase"] == "first-passphrase-1"
+    assert sent["storage"]["device_id_kind"] == "path" and sent["storage"]["device_id"].startswith("pci-0000:00:03.0|")
+    assert "first-passphrase" not in script.text
