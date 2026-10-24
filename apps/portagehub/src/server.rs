@@ -570,10 +570,15 @@ mod cancellation_tests {
         let sink: Sink = Arc::new(move |event| {
             let _ = tx.send(event);
         });
-        let fixture = "import signal,time\ndef stop(_sig,_frame): raise SystemExit(42)\nsignal.signal(signal.SIGINT,stop)\nprint('READY',flush=True)\ntime.sleep(60)";
+        // A POSIX shell is all this needs. A shell runs a trap between commands, never inside one,
+        // and READY is seen before the first `sleep` is even forked: a signal sent at once can
+        // reach that child while it is still a copy of the shell (it then runs the shell's
+        // handler and goes on to sleep the full time). The loop makes the trap run within a
+        // second whichever way the race goes; with a single long `sleep` this test was flaky.
+        let fixture = "trap 'exit 42' INT; echo READY; while :; do sleep 1; done; echo not reached";
         server.spawn_tracked(
             1,
-            "/usr/bin/python3",
+            "/bin/sh",
             &["-c".into(), fixture.into()],
             &[],
             sink.clone(),

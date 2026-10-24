@@ -14,12 +14,16 @@ fn protocol_roundtrip() {
     h.send(1, Op::Ping);
     h.until(|e| matches!(e, Event::Ok { id: 1 }), 10);
 
-    // Allowed program, streamed output, exit code.
-    h.send(2, Op::Run { argv: vec!["emerge".into(), "--version".into()], env: vec![], cwd: None });
-    let evs = h.until(|e| matches!(e, Event::Exit { id: 2, .. }), 60);
-    assert!(evs.iter().any(|e| matches!(e, Event::Started { id: 2, .. })));
-    assert!(evs.iter().any(|e| matches!(e, Event::Line { id: 2, text, .. } if text.contains("Portage"))), "{evs:?}");
-    assert!(evs.iter().any(|e| matches!(e, Event::Exit { id: 2, code: Some(0), .. })));
+    // Allowed program, streamed output, exit code (needs Portage on the machine running the test).
+    if portagehub::server::resolve_program("emerge").is_some() {
+        h.send(2, Op::Run { argv: vec!["emerge".into(), "--version".into()], env: vec![], cwd: None });
+        let evs = h.until(|e| matches!(e, Event::Exit { id: 2, .. }), 60);
+        assert!(evs.iter().any(|e| matches!(e, Event::Started { id: 2, .. })));
+        assert!(evs.iter().any(|e| matches!(e, Event::Line { id: 2, text, .. } if text.contains("Portage"))), "{evs:?}");
+        assert!(evs.iter().any(|e| matches!(e, Event::Exit { id: 2, code: Some(0), .. })));
+    } else {
+        eprintln!("SKIP: emerge is not installed, the streamed-output check is skipped");
+    }
 
     // Disallowed program.
     h.send(3, Op::Run { argv: vec!["rm".into(), "-rf".into(), "/tmp/nothing".into()], env: vec![], cwd: None });

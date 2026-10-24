@@ -66,6 +66,16 @@ pub fn spawn_streaming(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .process_group(0);
+    // A GUI started from a background job (or by a launcher) can have SIGINT/SIGQUIT ignored, and
+    // ignored signals stay ignored across exec: the Stop button (SIGINT, like Ctrl+C) would then do
+    // nothing to emerge. Programs start with the default dispositions.
+    unsafe {
+        cmd.pre_exec(|| {
+            libc::signal(libc::SIGINT, libc::SIG_DFL);
+            libc::signal(libc::SIGQUIT, libc::SIG_DFL);
+            Ok(())
+        });
+    }
     for (k, v) in env {
         cmd.env(k, v);
     }
@@ -211,6 +221,51 @@ mod tests {
         let joined: String = lines.concat();
         assert!(!joined.contains('\u{fffd}'), "no replacement characters");
         assert!(joined.ends_with("étail"));
+    }
+
+    #[test]
+    fn programs_start_with_sigint_enabled_even_if_the_parent_ignores_it() {
+        const CHILD: &str = "PORTAGEHUB_SIGINT_PROBE_CHILD";
+        let me = "stream::tests::programs_start_with_sigint_enabled_even_if_the_parent_ignores_it";
+        if std::env::var_os(CHILD).is_none() {
+            // Run this test again in a copy of the test binary that starts with SIGINT ignored, as
+            // a GUI started from a background job would. The signal state of this process (which
+            // the other tests share) is never touched.
+            let mut cmd = Command::new(std::env::current_exe().unwrap());
+            cmd.args(["--exact", me, "--test-threads=1"]).env(CHILD, "1");
+            unsafe {
+                cmd.pre_exec(|| {
+                    libc::signal(libc::SIGINT, libc::SIG_IGN);
+                    Ok(())
+                });
+            }
+            let out = cmd.output().unwrap();
+            assert!(out.status.success(), "{}{}", String::from_utf8_lossy(&out.stdout), String::from_utf8_lossy(&out.stderr));
+            return;
+        }
+        // SigIgn in /proc/<pid>/status is a mask: bit 1 (value 2) is SIGINT.
+        let ignored = |status: &str| {
+            let line = status.lines().find(|l| l.starts_with("SigIgn")).expect("SigIgn line").to_string();
+            (u64::from_str_radix(line.split_whitespace().last().unwrap(), 16).unwrap(), line)
+        };
+        let own = std::fs::read_to_string("/proc/self/status").unwrap();
+        assert_ne!(ignored(&own).0 & 0b10, 0, "the probe must start with SIGINT ignored: {}", ignored(&own).1);
+
+        let got = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let g = got.clone();
+        let sink: Arc<dyn Fn(Event) + Send + Sync> = Arc::new(move |e| {
+            if matches!(e, Event::Exit { .. }) {
+                let _ = tx.send(());
+            }
+            g.lock().unwrap().push(e);
+        });
+        spawn_streaming(1, "/bin/sh", &["-c".into(), "grep '^SigIgn' /proc/self/status".into()], &[], None, sink).unwrap();
+        rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        let ev = got.lock().unwrap();
+        let line = ev.iter().find_map(|e| if let Event::Line { text, .. } = e { Some(text.clone()) } else { None }).expect("SigIgn line");
+        let (mask, _) = ignored(&line);
+        assert_eq!(mask & 0b11, 0, "SIGHUP and SIGINT must not be ignored in the child: {line}");
     }
 
     #[test]
