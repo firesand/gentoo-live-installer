@@ -19,7 +19,7 @@ from .inventory import MachineView
 MAX_ADVICE = 5
 INIT_NAMES = {"openrc": "OpenRC", "systemd": "systemd"}
 # Advice about choices the text installer does not offer.
-ONLY_ELSEWHERE_FIELDS = frozenset({"hardware.gpu_driver", "hardware.prime", "hardware.cpu_flags_mode"})
+ONLY_ELSEWHERE_FIELDS = frozenset({"hardware.gpu_driver", "hardware.prime", "hardware.cpu_flags_mode", "options.install_hwmonux"})
 ONLY_ELSEWHERE = "(The text installer cannot change this: use the graphical installer or a settings file.)"
 # HWMonux needs PySide6, and the binary host has no matching PySide6 package, so it is compiled on every installation.
 HWMONUX_LOW_MEMORY = "HWMonux needs PySide6, which is compiled from source: about 40 minutes and up to 4 GiB of memory per compile job."
@@ -136,14 +136,12 @@ def build_summary(manifest: InstallManifest, view: MachineView, *, require_ident
         if finding.severity == "warning":
             notes.append(finding.message)
     try:
-        summary.advice = [
-            item.message + (f" {ONLY_ELSEWHERE}" if item.field in ONLY_ELSEWHERE_FIELDS else "")
-            for item in recommend.recommend(view.hardware, manifest)
-        ][:MAX_ADVICE]
+        given = recommend.recommend(view.hardware, manifest)[:MAX_ADVICE]
     except Exception:  # noqa: BLE001
-        summary.advice = []
+        given = []
+    summary.advice = [item.message + (f" {ONLY_ELSEWHERE}" if item.field in ONLY_ELSEWHERE_FIELDS else "") for item in given]
     note = hwmonux_note(manifest, view)
-    if note and note not in summary.advice:
+    if note and note not in [item.message for item in given]:  # said once: the advice may already carry it
         notes.append(note)
     summary.problems = list(dict.fromkeys(problems))
     summary.notes = [note for note in dict.fromkeys(notes) if note not in summary.problems]

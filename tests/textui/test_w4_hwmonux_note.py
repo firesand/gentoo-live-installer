@@ -9,7 +9,7 @@ from gentoo_installer.recommend import Recommendation
 from gentoo_installer.textui.console import Console
 from gentoo_installer.textui.daemon import Daemon
 from gentoo_installer.textui.inventory import MachineView
-from gentoo_installer.textui.summary import HWMONUX_LOW_MEMORY, build_summary
+from gentoo_installer.textui.summary import HWMONUX_LOW_MEMORY, ONLY_ELSEWHERE, Summary, build_summary
 from gentoo_installer.textui.wizard import Wizard
 
 from tests.textui.support import FakeHost, FakeInstaller, Script, inspect_reply, valid_manifest
@@ -74,11 +74,23 @@ def small_view() -> MachineView:
     return MachineView(inspect_reply("qemu-q35-virtio", serials=SERIALS))
 
 
-def test_the_summary_lists_the_note_when_hwmonux_will_be_installed() -> None:
+def pyside_lines(summary: Summary) -> list[str]:
+    return [line for line in summary.notes + summary.advice if "PySide6" in line]
+
+
+def test_the_summary_says_it_once_when_hwmonux_will_be_installed() -> None:
+    """The service advises about HWMonux below 8 GiB (rec.hwmonux_low_memory): the summary shows that advice once, and where to change it."""
     manifest = valid_manifest()
     assert manifest.options.install_hwmonux
-    notes = build_summary(manifest, small_view()).notes
-    assert [note for note in notes if "PySide6" in note] == [NOTE]
+    summary = build_summary(manifest, small_view())
+    [line] = pyside_lines(summary)
+    assert line in summary.advice and NOTE in line and line.endswith(ONLY_ELSEWHERE)
+
+
+def test_without_advice_from_the_service_the_summary_has_its_own_note(monkeypatch) -> None:
+    monkeypatch.setattr(recommend, "recommend", lambda profile, manifest: [])
+    summary = build_summary(valid_manifest(), small_view())
+    assert pyside_lines(summary) == [NOTE] and NOTE in summary.notes
 
 
 def test_the_summary_has_no_note_when_it_is_left_out_or_the_memory_is_large() -> None:
@@ -103,7 +115,7 @@ def test_the_advice_of_the_service_is_used_when_it_gives_one(monkeypatch, start)
     monkeypatch.setattr(recommend, "recommend", lambda profile, manifest: [advice])
     manifest = valid_manifest()
     summary = build_summary(manifest, small_view())
-    assert summary.advice == [advice.message]
+    assert summary.advice == [f"{advice.message} {ONLY_ELSEWHERE}"]  # the text installer has no question for HWMonux
     assert advice.message not in summary.notes and NOTE not in summary.notes  # said once: the advice already carries it
     wizard, script, _ = start([("Which desktop", "3"), ("Which init system", "")])
     wizard.step_system()
@@ -115,5 +127,4 @@ def test_the_memory_rule_reads_the_reply(memory_bytes: int, shown: bool) -> None
     reply = inspect_reply("asus-desktop-rtx4090")
     reply["hardware"]["memory"]["total_kib"] = memory_bytes // 1024
     reply["memory_bytes"] = memory_bytes
-    notes = build_summary(valid_manifest(), MachineView(reply)).notes
-    assert any("PySide6" in note for note in notes) is shown
+    assert len(pyside_lines(build_summary(valid_manifest(), MachineView(reply)))) == int(shown)
