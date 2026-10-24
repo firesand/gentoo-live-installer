@@ -1008,7 +1008,7 @@ class StorageManager:
                     continue
         except OSError:
             pass
-        return found
+        return sorted(found)  # by pid: the order of a directory listing depends on the file system (tmpfs lists newest first)
 
     def _busy_report(self) -> str:
         users = [f"{pid}:{name}" for pid, name in self._chroot_processes()]

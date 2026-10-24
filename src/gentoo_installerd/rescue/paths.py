@@ -541,8 +541,11 @@ class RootFS:
         try:
             _write_all(tmp_fd, data)
             os.fchmod(tmp_fd, final_mode)
-            with contextlib.suppress(PermissionError):  # unprivileged test runs keep their own ids
+            try:
                 os.fchown(tmp_fd, final_uid, final_gid)
+            except OSError as exc:  # unprivileged test runs keep their own ids; in a user namespace (scripts/sandbox.sh) an unmapped id is EINVAL
+                if not isinstance(exc, PermissionError) and exc.errno != errno.EINVAL:
+                    raise
             if old_fd >= 0:
                 _copy_xattrs(old_fd, tmp_fd)
             os.fsync(tmp_fd)
