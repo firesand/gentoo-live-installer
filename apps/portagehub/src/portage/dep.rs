@@ -4,11 +4,21 @@
 use super::atom::Atom;
 use std::collections::HashSet;
 
+// Leaves (with their parsed atom) are the common case; boxing them would cost
+// an allocation per token.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug, Clone)]
 pub enum DepNode {
     /// A leaf token; `atom` is filled in when the token parses as an atom.
-    Leaf { text: String, atom: Option<Box<Atom>> },
-    UseCond { flag: String, negate: bool, children: Vec<DepNode> },
+    Leaf {
+        text: String,
+        atom: Option<Atom>,
+    },
+    UseCond {
+        flag: String,
+        negate: bool,
+        children: Vec<DepNode>,
+    },
     AnyOf(Vec<DepNode>),
     ExactlyOne(Vec<DepNode>),
     AtMostOne(Vec<DepNode>),
@@ -64,7 +74,7 @@ fn parse_list(tokens: &[&str], pos: &mut usize) -> Vec<DepNode> {
             }
             t => {
                 *pos += 1;
-                out.push(DepNode::Leaf { text: t.to_string(), atom: Atom::parse(t).map(Box::new) });
+                out.push(DepNode::Leaf { text: t.to_string(), atom: Atom::parse(t) });
             }
         }
     }
@@ -76,7 +86,7 @@ fn parse_list(tokens: &[&str], pos: &mut usize) -> Vec<DepNode> {
 pub fn collect_atoms<'a>(nodes: &'a [DepNode], enabled: Option<&HashSet<String>>, out: &mut Vec<&'a Atom>) {
     for n in nodes {
         match n {
-            DepNode::Leaf { atom: Some(a), .. } => out.push(&**a),
+            DepNode::Leaf { atom: Some(a), .. } => out.push(a),
             DepNode::Leaf { .. } => {}
             DepNode::UseCond { flag, negate, children } => {
                 let active = match enabled {
@@ -87,9 +97,7 @@ pub fn collect_atoms<'a>(nodes: &'a [DepNode], enabled: Option<&HashSet<String>>
                     collect_atoms(children, enabled, out);
                 }
             }
-            DepNode::AnyOf(c) | DepNode::ExactlyOne(c) | DepNode::AtMostOne(c) | DepNode::All(c) => {
-                collect_atoms(c, enabled, out)
-            }
+            DepNode::AnyOf(c) | DepNode::ExactlyOne(c) | DepNode::AtMostOne(c) | DepNode::All(c) => collect_atoms(c, enabled, out),
         }
     }
 }
@@ -100,7 +108,7 @@ pub fn collect_atoms<'a>(nodes: &'a [DepNode], enabled: Option<&HashSet<String>>
 pub fn collect_required_atoms<'a>(nodes: &'a [DepNode], out: &mut Vec<&'a Atom>) {
     for n in nodes {
         match n {
-            DepNode::Leaf { atom: Some(a), .. } => out.push(&**a),
+            DepNode::Leaf { atom: Some(a), .. } => out.push(a),
             DepNode::Leaf { .. } => {}
             DepNode::UseCond { children, .. } | DepNode::All(children) => collect_required_atoms(children, out),
             DepNode::AnyOf(_) | DepNode::ExactlyOne(_) | DepNode::AtMostOne(_) => {}
@@ -123,9 +131,7 @@ pub fn collect_leaves(nodes: &[DepNode], enabled: Option<&HashSet<String>>, out:
                     collect_leaves(children, enabled, out);
                 }
             }
-            DepNode::AnyOf(c) | DepNode::ExactlyOne(c) | DepNode::AtMostOne(c) | DepNode::All(c) => {
-                collect_leaves(c, enabled, out)
-            }
+            DepNode::AnyOf(c) | DepNode::ExactlyOne(c) | DepNode::AtMostOne(c) | DepNode::All(c) => collect_leaves(c, enabled, out),
         }
     }
 }

@@ -432,7 +432,7 @@ class PlanSeamTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             installer = self.installer(temporary)
             installer.inspection = types.SimpleNamespace(hardware={"cpu": {"vendor": "intel"}})
-            with unittest.mock.patch("gentoo_installerd.install.plan_hardware", fake_plan):
+            with unittest.mock.patch("gentoo_installerd.stages.plan.plan_hardware", fake_plan):
                 plan = installer._plan()
                 self.assertEqual(plan.summary, ["Graphics: open drivers"])
                 self.assertIs(installer._plan(), plan)  # made once
@@ -454,7 +454,7 @@ class PlanSeamTests(unittest.TestCase):
             logs: list[str] = []
             installer.log = logs.append  # type: ignore[method-assign]
             installer.inspection = types.SimpleNamespace(hardware={"cpu": {"vendor": "intel"}})
-            with unittest.mock.patch("gentoo_installerd.install.plan_hardware", fake_plan):
+            with unittest.mock.patch("gentoo_installerd.stages.plan.plan_hardware", fake_plan):
                 self.assertIs(installer._plan(), generic)
             self.assertTrue(any("could not be planned (table lookup failed)" in line for line in logs))
             self.assertEqual(installer.degraded, [])
@@ -465,7 +465,7 @@ class PlanSeamTests(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temporary:
             installer = self.installer(temporary)
-            with unittest.mock.patch("gentoo_installerd.install.plan_hardware", broken):
+            with unittest.mock.patch("gentoo_installerd.stages.plan.plan_hardware", broken):
                 self.assertIsNone(installer._plan())
             self.assertEqual(len(installer.degraded), 1)
             self.assertIn("could not be planned", installer.degraded[0])

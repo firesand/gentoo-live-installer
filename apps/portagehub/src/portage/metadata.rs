@@ -68,10 +68,7 @@ pub fn ebuild_path(repo_loc: &Path, cat: &str, pn: &str, ver: &str) -> PathBuf {
 }
 
 fn parse_cache(text: &str) -> HashMap<String, String> {
-    text.lines()
-        .filter_map(|l| l.split_once('='))
-        .map(|(k, v)| (k.to_string(), v.to_string()))
-        .collect()
+    text.lines().filter_map(|l| l.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).collect()
 }
 
 pub fn load(repo_loc: &Path, cat: &str, pn: &str, ver: &str) -> EbuildMeta {

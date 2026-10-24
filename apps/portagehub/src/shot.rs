@@ -23,6 +23,9 @@ pub enum Step {
     Apply,
     CheckWorld,
     MPage(String),
+    HPage(String),
+    Scroll(f32),
+    MkOpt(String),
     BootScan,
     CleanScan(String),
     Wait(f32),
@@ -67,6 +70,9 @@ impl Script {
                 "apply" => Step::Apply,
                 "checkworld" => Step::CheckWorld,
                 "mpage" => Step::MPage(v.to_string()),
+                "hpage" => Step::HPage(v.to_string()),
+                "scroll" => Step::Scroll(v.parse().unwrap_or(0.0)),
+                "mkopt" => Step::MkOpt(v.to_string()),
                 "bootscan" => Step::BootScan,
                 "cleanscan" => Step::CleanScan(v.to_string()),
                 "wait" => Step::Wait(v.parse().unwrap_or(1.0)),
@@ -183,20 +189,31 @@ pub fn run(app: &mut App, ctx: &egui::Context, script: &mut Script) {
             }
             Step::WriteTest => {
                 let path = PathBuf::from(format!("/etc/portage/package.use/{}", app.settings.target_file));
-                match crate::portage::config::read_utf8(&path) {
-                    Ok(old) => {
-                        let new = crate::portage::config::append_line(&old, "# portagehub write test");
-                        app.push(Action::Write {
-                            title: "Write test".into(),
-                            changes: vec![crate::app::FileChange { path, old, new: Some(new) }],
-                            reload: vec![crate::data::Reload::Config],
-                            then: None,
-                        });
-                    }
-                    Err(why) => app.toast(crate::app::ToastKind::Error, why),
-                }
+                let old = std::fs::read_to_string(&path).unwrap_or_default();
+                let new = crate::portage::config::append_line(&old, "# portagehub write test");
+                app.push(Action::Write {
+                    title: "Write test".into(),
+                    changes: vec![crate::app::FileChange { path, old, new: Some(new) }],
+                    reload: vec![crate::data::Reload::Config],
+                    then: None,
+                });
             }
             Step::CheckWorld => app.push(Action::CheckWorld),
+            Step::MkOpt(o) => app.config_view.mk_opt = Some(o),
+            Step::Scroll(off) => {
+                ctx.data_mut(|d| d.insert_temp(egui::Id::new("script-scroll"), off));
+            }
+            Step::HPage(p) => {
+                use crate::views::history::Show;
+                app.tab = Tab::History;
+                app.history_view.show = match p.as_str() {
+                    "changes" => Show::Changes,
+                    "failed" => Show::Failed,
+                    "removals" => Show::Unmerges,
+                    "commands" => Show::Sessions,
+                    _ => Show::All,
+                };
+            }
             Step::MPage(p) => {
                 app.tab = Tab::Maintenance;
                 app.maintenance.page = if p == "cleanup" { crate::views::maintenance::Page::Cleanup } else { crate::views::maintenance::Page::Kernels };

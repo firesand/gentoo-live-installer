@@ -4,10 +4,13 @@ license = "GPL-2.0-or-later"
 name = "portagehub"
 version = "0.4.0"
 edition = "2024"
+rust-version = "1.95"
+repository = "https://github.com/firesand/portagehub"
+readme = "README.md"
 
 [dependencies]
 chrono = "0.4.45"
-eframe = { version = "0.36.1", features = ["glow"] }
+eframe = "0.36.1"
 egui = "0.36.2"
 egui-phosphor = "0.14.0"
 libc = "0.2.191"

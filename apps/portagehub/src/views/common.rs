@@ -188,7 +188,12 @@ pub fn subnav<T: PartialEq + Copy>(ui: &mut Ui, current: &mut T, items: &[(T, &s
 
 /// Page container with consistent margins and vertical scrolling.
 pub fn page(ui: &mut Ui, id: &str, add: impl FnOnce(&mut Ui)) {
-    egui::ScrollArea::vertical().id_salt(id).auto_shrink([false, false]).show(ui, |ui| {
+    let mut area = egui::ScrollArea::vertical().id_salt(id).auto_shrink([false, false]);
+    // PORTAGEHUB_SCRIPT "scroll=N" (screenshots of long pages).
+    if let Some(off) = ui.ctx().data_mut(|d| d.remove_temp::<f32>(egui::Id::new("script-scroll"))) {
+        area = area.vertical_scroll_offset(off);
+    }
+    area.show(ui, |ui| {
         egui::Frame::new().inner_margin(egui::Margin::symmetric(24, 16)).show(ui, |ui| {
             ui.set_width(ui.available_width());
             add(ui);

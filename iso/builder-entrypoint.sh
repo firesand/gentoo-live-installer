@@ -92,7 +92,7 @@ prepare_source_archives() {
 	tar -C "${WORKSPACE}/apps/hwmonux" --exclude=__pycache__ --exclude='*.pyc' -cf - \
 		pyproject.toml hwmonux.py sensors.py hwmonux.desktop \
 		| tar -C "${sources}/${hwmonux}" -xf -
-	tar -C "${WORKSPACE}/apps/portagehub" -cf - Cargo.toml Cargo.lock src dist \
+	tar -C "${WORKSPACE}/apps/portagehub" -cf - Cargo.toml Cargo.lock README.md SECURITY.md UPSTREAM src dist \
 		| tar -C "${sources}/${portagehub}" -xf -
 
 	install -d "${sources}/${portagehub}/.cargo"

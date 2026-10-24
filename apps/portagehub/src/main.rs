@@ -1,21 +1,16 @@
 //! PortageHub — a Steam-styled graphical front end for Gentoo's Portage.
 
 mod app;
-mod batch;
-mod danger;
+mod changes;
 mod data;
 mod edits;
 mod exec;
 mod fmt;
 mod portage;
-mod render;
 mod settings;
 mod shot;
-mod stop;
 mod ui;
-mod util;
 mod views;
-mod window;
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -47,10 +42,7 @@ fn self_test() {
     println!("vdb: {} installed, world {} ({:?})", vdb.pkgs.len(), vdb.world_raw.len(), t.elapsed());
     let t = std::time::Instant::now();
     let h = portage::history::load();
-    match &h.problem {
-        Some(p) => println!("history: unavailable — {} ({:?})", p.message().0, t.elapsed()),
-        None => println!("history: {} merges, {} syncs, median {:?} ({:?})", h.merges.len(), h.syncs.len(), h.median_build, t.elapsed()),
-    }
+    println!("history: {} merges, {} syncs, median {:?} ({:?})", h.merges.len(), h.syncs.len(), h.median_build, t.elapsed());
     let cfg = portage::config::load();
     for s in &cfg.sets {
         println!("  {:<26} exists={} dir={} files={} entries={}", s.kind.file_name(), s.exists, s.is_dir, s.files.len(), s.entry_count());
@@ -83,7 +75,17 @@ fn self_test() {
     }
     let t = std::time::Instant::now();
     let ks = portage::kernel::load(data.vdb.as_ref().unwrap(), "kernels-keep");
-    println!("kernels ({:?}): running {} · last-good {:?} · previous-good {:?} · bootloader {:?} (detected {:?}, current {:?}) · initramfs {:?}", t.elapsed(), ks.running, ks.last_good, ks.previous_good, ks.boot.primary, ks.boot.detected, ks.boot.current, ks.boot.initramfs_tool);
+    println!(
+        "kernels ({:?}): running {} · last-good {:?} · previous-good {:?} · bootloader {:?} (detected {:?}, current {:?}) · initramfs {:?}",
+        t.elapsed(),
+        ks.running,
+        ks.last_good,
+        ks.previous_good,
+        ks.boot.primary,
+        ks.boot.detected,
+        ks.boot.current,
+        ks.boot.initramfs_tool
+    );
     for k in &ks.kernels {
         println!(
             "  {:<22} pkg={:<38} image={} initramfs={} modules={} sources={} old={} nvidia={:?}",
@@ -97,7 +99,10 @@ fn self_test() {
             ks.nvidia_status(k)
         );
     }
-    println!("  orphan kernel packages: {:?} · keep set {:?} in world: {} · nvidia {:?}", ks.orphan_packages, ks.keep_set_atoms, ks.keep_set_in_world, ks.nvidia);
+    println!(
+        "  orphan kernel packages: {:?} · keep set {:?} in world: {} · nvidia {:?}",
+        ks.orphan_packages, ks.keep_set_atoms, ks.keep_set_in_world, ks.nvidia
+    );
     for f in portage::kernel::check(&ks, None, true, 2, true) {
         println!("  [{:?}] {} — {}", f.severity, f.title, f.detail);
     }
@@ -106,7 +111,14 @@ fn self_test() {
     println!("updates: {} ({:?})", u.len(), t.elapsed());
     for c in u.iter() {
         let held: Vec<String> = c.held_by.iter().map(|(p, a)| format!("{p} needs {a}")).collect();
-        println!("  {} {} -> {} ::{}{}", c.key, c.installed, c.available, c.repo, if held.is_empty() { String::new() } else { format!("   [held back: {}]", held.join("; ")) });
+        println!(
+            "  {} {} -> {} ::{}{}",
+            c.key,
+            c.installed,
+            c.available,
+            c.repo,
+            if held.is_empty() { String::new() } else { format!("   [held back: {}]", held.join("; ")) }
+        );
     }
 }
 
@@ -119,7 +131,13 @@ fn boot_check_cli(path: &str) {
         .lines()
         .find_map(|l| {
             let v: serde_json::Value = serde_json::from_str(l).ok()?;
-            if v.get("ev").and_then(|e| e.as_str()) == Some("data") { v.get("text").and_then(|t| t.as_str()).map(String::from) } else if v.get("files").is_some() { Some(l.to_string()) } else { None }
+            if v.get("ev").and_then(|e| e.as_str()) == Some("data") {
+                v.get("text").and_then(|t| t.as_str()).map(String::from)
+            } else if v.get("files").is_some() {
+                Some(l.to_string())
+            } else {
+                None
+            }
         })
         .unwrap_or(text);
     let scan: portagehub::protocol::BootScan = match serde_json::from_str(&json) {
@@ -130,14 +148,67 @@ fn boot_check_cli(path: &str) {
         }
     };
     let vdb = portage::vdb::load();
-    let (settings, _) = settings::Settings::load();
+    let settings = settings::Settings::load();
     let ks = portage::kernel::load(&vdb, &settings.kernel_keep_set);
     for f in portage::kernel::check(&ks, Some(&scan), settings.kernel_protect, 2, settings.nvidia_alerts) {
         println!("[{:?}] {}\n    {}{}", f.severity, f.title, f.detail, if f.fixes.is_empty() { String::new() } else { format!("\n    fixes: {:?}", f.fixes) });
     }
 }
 
+/// `--makeconf-check`: the make.conf health check on this system, with every
+/// fix's candidate make.conf checked by Portage's parser. Writes nothing.
+fn makeconf_check_cli() {
+    use portage::{makeconf_check, makeconf_validate};
+    let repos = portage::repos::load();
+    let repo = repos.get(&repos.main_repo).map(|r| r.location.clone());
+    let locs: Vec<&std::path::Path> = repos.repos.iter().filter(|r| r.exists).map(|r| r.location.as_path()).collect();
+    let usedesc = portage::useflags::load(&locs);
+    let mc = portage::makeconf::load();
+    let cfg = portage::config::load();
+    let env = portage::system::load_env();
+    let vdb = portage::vdb::load();
+    let tuning = portage::tuning::load();
+    let parse = makeconf_validate::strict_parse(std::path::Path::new(portage::makeconf::MAKE_CONF));
+    let arch = env.arch().to_string();
+    let findings = makeconf_check::check(&makeconf_check::Input {
+        mc: &mc,
+        cfg: Some(&cfg),
+        arch: &arch,
+        effective: &env.vars,
+        tuning: Some(&tuning),
+        usedesc: Some(&usedesc),
+        vdb: Some(&vdb),
+        repo: repo.as_deref(),
+        parse: Some(&parse),
+    });
+    println!("strict parse of make.conf: {}", if matches!(parse, makeconf_validate::ParseCheck::Ok(_)) { "OK".to_string() } else { format!("{parse:?}") });
+    for f in &findings {
+        println!("[{}] {} ({})", f.severity.label(), f.title, f.var);
+        if let Some(fix) = &f.fix {
+            let mc_changes: Vec<(std::path::PathBuf, String)> =
+                fix.changes.iter().filter(|c| portage::makeconf::is_make_conf(&c.path)).filter_map(|c| c.new.clone().map(|n| (c.path.clone(), n))).collect();
+            let files: Vec<String> = fix.changes.iter().map(|c| c.path.display().to_string()).collect();
+            let verdict = if mc_changes.is_empty() {
+                "no make.conf change".to_string()
+            } else {
+                match makeconf_validate::check_candidate(&mc_changes) {
+                    makeconf_validate::ParseCheck::Ok(_) => match makeconf_validate::preview(&mc_changes, &[f.var.as_str()]) {
+                        Ok(m) => format!("parses OK; {} would be {:?}", f.var, m.get(&f.var).cloned().unwrap_or_default()),
+                        Err(e) => format!("parses OK; preview failed: {e}"),
+                    },
+                    other => format!("REJECTED: {other:?}"),
+                }
+            };
+            println!("    fix: {} -> {} [{verdict}]", fix.label, files.join(", "));
+        }
+    }
+}
+
 fn main() -> eframe::Result {
+    if std::env::args().any(|a| a == "--makeconf-check") {
+        makeconf_check_cli();
+        return Ok(());
+    }
     if std::env::args().any(|a| a == "--self-test") {
         self_test();
         return Ok(());
@@ -147,65 +218,13 @@ fn main() -> eframe::Result {
         boot_check_cli(args.get(i + 1).map(|s| s.as_str()).unwrap_or(""));
         return Ok(());
     }
-    let choice = render::Choice::parse(std::env::var(render::VAR).ok().as_deref()).unwrap_or_else(|why| {
-        eprintln!("PortageHub: {why}; using auto.");
-        render::Choice::Auto
-    });
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("PortageHub")
             .with_app_id("portagehub")
-            .with_inner_size([window::WANTED.0, window::WANTED.1])
-            .with_min_inner_size([window::MIN.0, window::MIN.1]),
-        renderer: choice.first(),
+            .with_inner_size([1380.0, 860.0])
+            .with_min_inner_size([980.0, 620.0]),
         ..Default::default()
     };
-    let started = std::time::Instant::now();
-    if let Err(e) = eframe::run_native("PortageHub", options, Box::new(|cc| Ok(Box::new(app::App::new(cc))))) {
-        let has_display = std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some();
-        if choice.falls_back(has_display, started.elapsed()) {
-            eprintln!("PortageHub: the GPU renderer could not open a window ({e}); trying plain OpenGL.");
-            // Does not return unless the restart itself fails.
-            let why = restart_with_glow();
-            eprintln!("PortageHub: cannot restart ({why}).");
-        }
-        eprintln!("{}", window_error_text(&e.to_string(), has_display));
-        std::process::exit(1);
-    }
-    Ok(())
-}
-
-/// Replace this process by a new PortageHub that uses the OpenGL renderer.
-fn restart_with_glow() -> std::io::Error {
-    use std::os::unix::process::CommandExt;
-    let exe = match std::env::current_exe() {
-        Ok(exe) => exe,
-        Err(e) => return e,
-    };
-    std::process::Command::new(exe).args(std::env::args_os().skip(1)).env(render::VAR, "glow").exec()
-}
-
-/// What to print when no window can be opened: the reason, and what usually helps.
-fn window_error_text(reason: &str, has_display: bool) -> String {
-    let mut text = format!("PortageHub could not open a window: {reason}");
-    if !has_display {
-        text.push_str("\nNo display was found (DISPLAY and WAYLAND_DISPLAY are both unset): start it from a desktop session.");
-    }
-    text.push_str("\nOn machines without a working Vulkan driver (older hardware, virtual machines) try: WGPU_BACKEND=gl portagehub");
-    text.push_str("\nOr use plain OpenGL: PORTAGEHUB_RENDERER=glow portagehub");
-    text
-}
-
-#[cfg(test)]
-mod tests {
-    use super::window_error_text;
-
-    #[test]
-    fn a_failed_window_is_explained() {
-        let t = window_error_text("FailedToCreateSurfaceForAnyBackend", true);
-        assert!(t.starts_with("PortageHub could not open a window: FailedToCreateSurfaceForAnyBackend"));
-        assert!(t.contains("WGPU_BACKEND=gl portagehub") && t.contains("PORTAGEHUB_RENDERER=glow portagehub") && !t.contains("No display"));
-        let t = window_error_text("x", false);
-        assert!(t.contains("No display was found") && t.contains("WGPU_BACKEND=gl"));
-    }
+    eframe::run_native("PortageHub", options, Box::new(|cc| Ok(Box::new(app::App::new(cc)))))
 }

@@ -15,13 +15,7 @@ pub enum Suffix {
 impl Suffix {
     fn parse(s: &str) -> Option<(Suffix, &str)> {
         // Longest names first so "pre" is not read as "p" + "re".
-        for (name, suf) in [
-            ("alpha", Suffix::Alpha),
-            ("beta", Suffix::Beta),
-            ("pre", Suffix::Pre),
-            ("rc", Suffix::Rc),
-            ("p", Suffix::P),
-        ] {
+        for (name, suf) in [("alpha", Suffix::Alpha), ("beta", Suffix::Beta), ("pre", Suffix::Pre), ("rc", Suffix::Rc), ("p", Suffix::P)] {
             if let Some(rest) = s.strip_prefix(name) {
                 return Some((suf, rest));
             }
@@ -43,9 +37,7 @@ impl Version {
     pub fn parse(s: &str) -> Option<Version> {
         let raw = s.to_string();
         let (main, revision) = match s.rfind("-r") {
-            Some(i) if !s[i + 2..].is_empty() && s[i + 2..].bytes().all(|b| b.is_ascii_digit()) => {
-                (&s[..i], s[i + 2..].parse().ok()?)
-            }
+            Some(i) if !s[i + 2..].is_empty() && s[i + 2..].bytes().all(|b| b.is_ascii_digit()) => (&s[..i], s[i + 2..].parse().ok()?),
             _ => (s, 0),
         };
         let mut rest = main;
@@ -155,11 +147,8 @@ impl Ord for Version {
             }
         }
         if self.suffixes.len() != other.suffixes.len() {
-            let (longer, sign) = if self.suffixes.len() > other.suffixes.len() {
-                (&self.suffixes, Ordering::Greater)
-            } else {
-                (&other.suffixes, Ordering::Less)
-            };
+            let (longer, sign) =
+                if self.suffixes.len() > other.suffixes.len() { (&self.suffixes, Ordering::Greater) } else { (&other.suffixes, Ordering::Less) };
             return if longer[n].0 == Suffix::P { sign } else { sign.reverse() };
         }
         self.revision.cmp(&other.revision)
@@ -190,7 +179,8 @@ pub fn split_pv(s: &str) -> Option<(&str, Version)> {
     let bytes = s.as_bytes();
     let mut i = s.len();
     while let Some(pos) = s[..i].rfind('-') {
-        if pos + 1 < bytes.len() && bytes[pos + 1].is_ascii_digit()
+        if pos + 1 < bytes.len()
+            && bytes[pos + 1].is_ascii_digit()
             && let Some(v) = Version::parse(&s[pos + 1..])
         {
             return Some((&s[..pos], v));

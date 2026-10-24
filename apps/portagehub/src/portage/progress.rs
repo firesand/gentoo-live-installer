@@ -40,6 +40,7 @@ impl Stage {
 pub struct Item {
     pub cpv: String,
     pub key: String,
+    pub repo: String,
     pub stage: Stage,
     /// Build phase reported by the build log (unpack, configure, compile …).
     pub phase: String,
@@ -100,12 +101,13 @@ impl Tracker {
     pub fn new(planned: &[(String, String, bool)], history: &History) -> Tracker {
         let items = planned
             .iter()
-            .map(|(cpv, _, binary)| {
+            .map(|(cpv, repo, binary)| {
                 let key = split_cpv(cpv).map(|(c, p, _)| format!("{c}/{p}")).unwrap_or_else(|| cpv.clone());
                 let (estimate, known) = if *binary { (Duration::from_secs(20), true) } else { history.estimate_or_default(&key) };
                 Item {
                     cpv: cpv.clone(),
                     key,
+                    repo: repo.clone(),
                     stage: Stage::Queued,
                     phase: String::new(),
                     started: None,
@@ -136,6 +138,7 @@ impl Tracker {
         self.items.push(Item {
             cpv: cpv.to_string(),
             key,
+            repo: String::new(),
             stage: Stage::Queued,
             phase: String::new(),
             started: None,
@@ -362,10 +365,7 @@ mod tests {
     #[test]
     fn feed_parallel() {
         let h = History::default();
-        let mut t = Tracker::new(
-            &[("app-misc/a-1".into(), "gentoo".into(), false), ("app-misc/b-2".into(), "gentoo".into(), false)],
-            &h,
-        );
+        let mut t = Tracker::new(&[("app-misc/a-1".into(), "gentoo".into(), false), ("app-misc/b-2".into(), "gentoo".into(), false)], &h);
         t.feed(">>> Emerging (1 of 2) app-misc/a-1::gentoo", &h, Instant::now());
         t.feed(">>> Emerging (2 of 2) app-misc/b-2::gentoo", &h, Instant::now());
         assert_eq!(t.counts().2, 2);

@@ -372,13 +372,16 @@ class InstallerWindow(QMainWindow):
         titles.addWidget(self.header_subtitle)
         layout.addLayout(titles)
         layout.addStretch()
-        mode_label = QLabel("&Experience")
+        mode_label = QLabel("&Detail level")
         mode_label.setProperty("muted", True)
         layout.addWidget(mode_label)
         self.mode = QComboBox()
-        self.mode.addItem("Guided", "guided")
-        self.mode.addItem("Advanced", "advanced")
-        self.mode.setAccessibleName("Installer experience")
+        self.mode.addItem("Guided (recommended choices)", "guided")
+        self.mode.addItem("Advanced (every option)", "advanced")
+        self.mode.setAccessibleName("Detail level")
+        self.mode.setToolTip(
+            "Guided shows the recommended choices and keeps the rest under \"More options\". "
+            "Advanced opens every option. Values you entered are kept when you switch.")
         mode_label.setBuddy(self.mode)
         self.mode.currentIndexChanged.connect(self._mode_changed)
         layout.addWidget(self.mode)
@@ -495,8 +498,8 @@ class InstallerWindow(QMainWindow):
 
     def _mode_changed(self) -> None:
         advanced = self.mode.currentData() == "advanced"
-        self.storage.set_advanced(advanced)
-        self.customize.set_advanced(advanced)
+        for page in self.pages:
+            page.set_advanced(advanced)
         suffix = " · All available controls are shown" if advanced else " · Recommended choices are selected for you"
         self.header_subtitle.setText(STEPS[self.current][1] + suffix)
 

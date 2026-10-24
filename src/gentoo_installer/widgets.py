@@ -280,6 +280,10 @@ class Page(QWidget):
     def save_manifest(self) -> None:
         pass
 
+    def set_advanced(self, advanced: bool) -> None:
+        """The window's detail level changed (Guided or Advanced). A page with options that only an expert needs
+        overrides this: Advanced shows them all, Guided collapses them, and values already entered survive the switch."""
+
     def advance_on_enter(self, *edits: QLineEdit) -> None:
         """Pressing Return in one of these fields presses Continue."""
         for edit in edits:

@@ -70,7 +70,11 @@ pub fn install_fonts(ctx: &egui::Context, family_override: Option<&str>) {
     let med = load_font(&[&format!("{noto}NotoSans-Medium.ttf")], &format!("{base}:style=Medium"));
     let lite = load_font(&[&format!("{noto}NotoSans-Light.ttf")], &format!("{base}:style=Light"));
     let mono = load_font(
-        &["/usr/share/fonts/jetbrains-mono/JetBrainsMonoNL-Regular.ttf", "/usr/share/fonts/hack/Hack-Regular.ttf", "/usr/share/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf"],
+        &[
+            "/usr/share/fonts/jetbrains-mono/JetBrainsMonoNL-Regular.ttf",
+            "/usr/share/fonts/hack/Hack-Regular.ttf",
+            "/usr/share/fonts/jetbrains-mono/JetBrainsMono-Regular.ttf",
+        ],
         "monospace",
     );
 
@@ -98,7 +102,11 @@ pub fn install_fonts(ctx: &egui::Context, family_override: Option<&str>) {
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
     // Noto Sans has no arrows/box symbols (U+2190…); fall back to a font that does.
     if let Some(b) = load_font(
-        &["/usr/share/fonts/liberation-fonts/LiberationSans-Regular.ttf", "/usr/share/fonts/dejavu/DejaVuSans.ttf", "/usr/share/fonts/noto/NotoSansMono-Regular.ttf"],
+        &[
+            "/usr/share/fonts/liberation-fonts/LiberationSans-Regular.ttf",
+            "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+            "/usr/share/fonts/noto/NotoSansMono-Regular.ttf",
+        ],
         "sans-serif:charset=2192",
     ) {
         fonts.font_data.insert("ui-symbols".into(), Arc::new(FontData::from_owned(b)));

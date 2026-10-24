@@ -377,3 +377,46 @@ about hardware. Its public API only grows:
   behaviour you changed.
 * Keep shared public APIs additive. Write behaviour changes to someone else's module as
   integration notes in your final report; do not make them yourself.
+
+## Module ownership
+
+One owner per module, so that six engineers can work in parallel without editing the same file. `configure.py` is a
+facade: it re-exports every name the old single module had, and `Configurer` is the sum of the mixins below
+(`ConfigurerBase` plus one mixin per domain). Code calls `Configurer` as before; put new code in the module of its domain.
+A call from one domain into another is declared once in `ConfigurerBase` (the `TYPE_CHECKING` block of
+`configure_base.py`); keep that declaration in step with the owner's signature.
+
+Owners: CORE (app shell, review, progress, manifest), STOR (storage), NET (network), PORT (Portage), BOOT (system, kernel,
+bootloader, hardware), ACCT (accounts, tools, text installer).
+
+| Module | Owner | Holds |
+| --- | --- | --- |
+| `gentoo_installerd/configure_base.py` | CORE | `ConfigurerBase` (target paths, files, chroot), `Resources`, install receipt, `efi_mountpoint`, `systemd_package` |
+| `gentoo_installerd/configure_fstab.py` | STOR | `render_fstab`, the existing LVM/RAID/LUKS stack of a manual layout, filesystem and storage-tool atoms |
+| `gentoo_installerd/configure_network.py` | NET | systemd-networkd/netifrc/dhcpcd files, NetworkManager keyfiles, live profile import |
+| `gentoo_installerd/configure_portage.py` | PORT | make.conf, package.use/env/license, binhost, `PortageHub` and `HWMonux` companions on the target (`prepare_companions`, `configure_companion_overlay`) |
+| `gentoo_installerd/configure_packages.py` | PORT | the emerge engine, package sets, failure diagnosis, cycle breaking |
+| `gentoo_installerd/configure_desktop.py` | PORT | desktop atoms, `install_desktop`, desktop session files |
+| `gentoo_installerd/configure_boot.py` | BOOT | kernel and bootloader atoms, initramfs, GRUB/systemd-boot/EFI stub, UKI, Secure Boot, `verify_boot_setup` |
+| `gentoo_installerd/configure_hardware.py` | BOOT | applying the hardware plan (`run_plan_steps`, `write_plan_files`) |
+| `gentoo_installerd/configure_system.py` | BOOT | hostname, locale, time zone, keyboard, hosts, services, logger, cron, sshd, `live_input_problems` |
+| `gentoo_installerd/configure_accounts.py` | ACCT | users, groups, privileges |
+| `gentoo_installerd/install.py` | CORE | stage list and weights, dispatch, preflight, validation and cleanup stages, checkpoints, events |
+| `gentoo_installerd/stages/context.py` | CORE | `InstallError`, `StageContext` (what every stage may use) |
+| `gentoo_installerd/stages/plan.py` | BOOT | the hardware plan of a job (plan, save, restore) |
+| `gentoo_installerd/stages/storage.py` | STOR | storage, mounts and target (fstab) stages, root device and storage stack |
+| `gentoo_installerd/stages/stage3.py`, `repository.py`, `portage.py`, `desktop.py` | PORT | the stage3, repository, portage and desktop stages |
+| `gentoo_installerd/stages/kernel.py`, `bootloader.py` | BOOT | the kernel and bootloader stages and their checkpoint checks |
+| `gentoo_installerd/stages/base.py` | CORE | the base stage (essential packages and services) |
+| `gentoo_installer/pages/customize.py` | CORE | the tab host and the Hardware tab embedding |
+| `gentoo_installer/pages/portage_tab.py` | PORT | Portage tab (mixin of `CustomizePage`; `load_portage`, `save_portage`) |
+| `gentoo_installer/pages/network_tab.py` | NET | Network tab (`load_network`, `save_network`) |
+| `gentoo_installer/pages/tools_tab.py` | ACCT | Applications && tools tab (`load_tools`, `save_tools`) |
+| `gentoo_installer/pages/system.py` | CORE | init system, stage3 and profile, and the layout that embeds the two sections |
+| `gentoo_installer/pages/desktop_section.py` | PORT | desktop cards, stage3 family rules (`load`, `collect`, `set_advanced`) |
+| `gentoo_installer/pages/boot_section.py` | BOOT | kernel, initramfs, bootloader, Secure Boot and UKI controls (`load`, `collect`, `set_advanced`) |
+| `gentoo_installer/pages/help.py` | CORE | `HelpNote`, `Badge`, `AdvancedSection`, `HANDBOOK_LINKS`; every page adopts them for its own text |
+
+The window's Detail level (Guided or Advanced) calls `set_advanced(bool)` on every page (`Page.set_advanced` does nothing by
+default). A page puts its expert-only controls in an `AdvancedSection`; the section opens in Advanced, collapses in Guided, and
+never clears a value.

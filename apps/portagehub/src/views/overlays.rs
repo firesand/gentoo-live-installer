@@ -104,14 +104,26 @@ fn installed(app: &mut App, ui: &mut Ui) {
 }
 
 fn repo_card(app: &mut App, ui: &mut Ui, r: &Repo, ebuilds: Option<usize>) {
-    let tint = if !r.exists { RED } else if r.is_main { GREEN } else { ACCENT_DIM };
+    let tint = if !r.exists {
+        RED
+    } else if r.is_main {
+        GREEN
+    } else {
+        ACCENT_DIM
+    };
     w::card_tinted(tint).show(ui, |ui| {
         ui.set_width(ui.available_width());
         ui.horizontal(|ui| {
             let (rect, _) = ui.allocate_exact_size(egui::vec2(46.0, 46.0), egui::Sense::hover());
             let base = common::category_color(&r.name);
             w::paint_vgradient(ui.painter(), rect, w::lerp_color(base, WHITE, 0.15), w::lerp_color(base, Color32::BLACK, 0.3));
-            ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, if r.is_main { icon::CUBE } else { icon::GIT_BRANCH }, egui::FontId::proportional(24.0), WHITE);
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                if r.is_main { icon::CUBE } else { icon::GIT_BRANCH },
+                egui::FontId::proportional(24.0),
+                WHITE,
+            );
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(&r.name).size(18.0).family(theme::bold()).color(WHITE));
@@ -119,7 +131,8 @@ fn repo_card(app: &mut App, ui: &mut Ui, r: &Repo, ebuilds: Option<usize>) {
                         w::badge(ui, "MAIN", GREEN_TEXT, GREEN_DARK);
                     }
                     if !r.exists {
-                        w::badge(ui, "MISSING", WHITE, Color32::from_rgb(0xa3, 0x2e, 0x2e)).on_hover_text("The location does not exist — sync it or fix the path");
+                        w::badge(ui, "MISSING", WHITE, Color32::from_rgb(0xa3, 0x2e, 0x2e))
+                            .on_hover_text("The location does not exist — sync it or fix the path");
                     }
                     if r.sync_type() == "none" {
                         w::badge(ui, "LOCAL", TEXT, Color32::from_rgb(0x3a, 0x46, 0x55));
@@ -149,7 +162,11 @@ fn repo_card(app: &mut App, ui: &mut Ui, r: &Repo, ebuilds: Option<usize>) {
                         app.overlays.editing = Some((r.name.clone(), r.keys.clone()));
                         ui.close();
                     }
-                    if ui.button(format!("{}  Regenerate metadata cache (egencache)", icon::DATABASE)).on_hover_text("Speeds up overlays without a cache").clicked() {
+                    if ui
+                        .button(format!("{}  Regenerate metadata cache (egencache)", icon::DATABASE))
+                        .on_hover_text("Speeds up overlays without a cache")
+                        .clicked()
+                    {
                         app.push(Action::Root {
                             title: format!("egencache {}", r.name),
                             argv: vec!["egencache".into(), "--update".into(), format!("--repo={}", r.name), "--jobs=8".into()],
@@ -235,19 +252,18 @@ fn repo_card(app: &mut App, ui: &mut Ui, r: &Repo, ebuilds: Option<usize>) {
                     }
                 });
             }
-            if save && let Some((name, keys)) = app.overlays.editing.take() && let Some(file) = r.user_file() {
-                match crate::portage::config::read_utf8(file) {
-                    Ok(old) => {
-                        let new = repos::replace_section(&old, &name, Some(&repos::render_section(&name, &keys)));
-                        app.push(Action::Write {
-                            title: format!("Update repository {name}"),
-                            changes: vec![FileChange { path: file.to_path_buf(), old, new: Some(new) }],
-                            reload: vec![Reload::Repos],
-                            then: None,
-                        });
-                    }
-                    Err(why) => app.toast(crate::app::ToastKind::Error, why),
-                }
+            if save
+                && let Some((name, keys)) = app.overlays.editing.take()
+                && let Some(file) = r.user_file()
+            {
+                let old = std::fs::read_to_string(file).unwrap_or_default();
+                let new = repos::replace_section(&old, &name, Some(&repos::render_section(&name, &keys)));
+                app.push(Action::Write {
+                    title: format!("Update repository {name}"),
+                    changes: vec![FileChange { path: file.to_path_buf(), old, new: Some(new) }],
+                    reload: vec![Reload::Repos],
+                    then: None,
+                });
             }
             if cancel {
                 app.overlays.editing = None;
@@ -288,14 +304,14 @@ fn remove_dialog(app: &mut App, ctx: &egui::Context) {
         } else if let Some(file) = repo.as_ref().and_then(|r| r.user_file().map(|f| f.to_path_buf())) {
             ui.label(format!("Its section will be removed from {}. The repository files on disk are left alone.", file.display()));
             if w::danger(ui, icon::TRASH, "Remove section").clicked() {
-                match crate::portage::config::read_utf8(&file) {
-                    Ok(old) => {
-                        let new = repos::replace_section(&old, &name, None);
-                        let change = if new.trim().is_empty() { FileChange { path: file.clone(), old, new: None } } else { FileChange { path: file.clone(), old, new: Some(new) } };
-                        app.push(Action::Write { title: format!("Remove repository {name}"), changes: vec![change], reload: vec![Reload::Repos], then: None });
-                    }
-                    Err(why) => app.toast(crate::app::ToastKind::Error, why),
-                }
+                let old = std::fs::read_to_string(&file).unwrap_or_default();
+                let new = repos::replace_section(&old, &name, None);
+                let change = if new.trim().is_empty() {
+                    FileChange { path: file.clone(), old, new: None }
+                } else {
+                    FileChange { path: file.clone(), old, new: Some(new) }
+                };
+                app.push(Action::Write { title: format!("Remove repository {name}"), changes: vec![change], reload: vec![Reload::Repos], then: None });
                 close = true;
             }
         } else {
@@ -385,7 +401,8 @@ fn add_official(app: &mut App, ui: &mut Ui) {
                         });
                     }
                     RemoteState::Custom => {
-                        w::badge(ui, "ENABLED (CUSTOM)", WHITE, Color32::from_rgb(0x2a, 0x6f, 0x97)).on_hover_text("Configured manually with different settings");
+                        w::badge(ui, "ENABLED (CUSTOM)", WHITE, Color32::from_rgb(0x2a, 0x6f, 0x97))
+                            .on_hover_text("Configured manually with different settings");
                     }
                     RemoteState::Local => {
                         w::badge(ui, "LOCAL", TEXT, Color32::from_rgb(0x3a, 0x46, 0x55));
@@ -416,7 +433,13 @@ fn add_custom(app: &mut App, ui: &mut Ui) {
                 w::segmented(
                     ui,
                     &mut s.new_type,
-                    &[(SyncType::Git, "git"), (SyncType::Rsync, "rsync"), (SyncType::Mercurial, "mercurial"), (SyncType::Svn, "svn"), (SyncType::Local, "Local (no sync)")],
+                    &[
+                        (SyncType::Git, "git"),
+                        (SyncType::Rsync, "rsync"),
+                        (SyncType::Mercurial, "mercurial"),
+                        (SyncType::Svn, "svn"),
+                        (SyncType::Local, "Local (no sync)"),
+                    ],
                 );
                 ui.end_row();
                 if s.new_type != SyncType::Local {
@@ -497,32 +520,26 @@ fn add_custom(app: &mut App, ui: &mut Ui) {
                     });
                 } else {
                     let conf = std::path::Path::new(repos::USER_REPOS_CONF);
-                    let target = if conf.is_file() {
+                    let (path, old, new) = if conf.is_file() {
                         // Single-file repos.conf: append the section.
-                        crate::portage::config::read_utf8(conf).map(|old| {
-                            let new = repos::replace_section(&old, &name, Some(&section));
-                            (conf.to_path_buf(), old, new)
-                        })
+                        let old = std::fs::read_to_string(conf).unwrap_or_default();
+                        let new = repos::replace_section(&old, &name, Some(&section));
+                        (conf.to_path_buf(), old, new)
                     } else {
-                        Ok((PathBuf::from(format!("{}/{name}.conf", repos::USER_REPOS_CONF)), String::new(), section.clone()))
+                        (PathBuf::from(format!("{}/{name}.conf", repos::USER_REPOS_CONF)), String::new(), section.clone())
                     };
-                    match target {
-                        Ok((path, old, new)) => {
-                            let then = Some(Box::new(Action::Root {
-                                title: format!("Sync {name}"),
-                                argv: vec!["emaint".into(), "sync".into(), "-r".into(), name.clone()],
-                                reload: vec![Reload::Repos],
-                                kind: JobKind::Sync,
-                            }));
-                            app.push(Action::Write {
-                                title: format!("Add repository {name}"),
-                                changes: vec![FileChange { path, old, new: Some(new) }],
-                                reload: vec![Reload::Repos],
-                                then,
-                            });
-                        }
-                        Err(why) => app.toast(crate::app::ToastKind::Error, why),
-                    }
+                    let then = Some(Box::new(Action::Root {
+                        title: format!("Sync {name}"),
+                        argv: vec!["emaint".into(), "sync".into(), "-r".into(), name.clone()],
+                        reload: vec![Reload::Repos],
+                        kind: JobKind::Sync,
+                    }));
+                    app.push(Action::Write {
+                        title: format!("Add repository {name}"),
+                        changes: vec![FileChange { path, old, new: Some(new) }],
+                        reload: vec![Reload::Repos],
+                        then,
+                    });
                 }
             }
             if !valid && !name.is_empty() {
