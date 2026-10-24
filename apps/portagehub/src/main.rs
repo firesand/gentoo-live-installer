@@ -12,6 +12,7 @@ mod settings;
 mod shot;
 mod stop;
 mod ui;
+mod util;
 mod views;
 mod window;
 
@@ -125,7 +126,7 @@ fn boot_check_cli(path: &str) {
         }
     };
     let vdb = portage::vdb::load();
-    let settings = settings::Settings::load();
+    let (settings, _) = settings::Settings::load();
     let ks = portage::kernel::load(&vdb, &settings.kernel_keep_set);
     for f in portage::kernel::check(&ks, Some(&scan), settings.kernel_protect, 2, settings.nvidia_alerts) {
         println!("[{:?}] {}\n    {}{}", f.severity, f.title, f.detail, if f.fixes.is_empty() { String::new() } else { format!("\n    fixes: {:?}", f.fixes) });

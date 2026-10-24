@@ -237,6 +237,8 @@ pub struct App {
     pub loading: HashSet<Reload>,
     pending_reload: HashSet<Reload>,
     pub detail_loading: HashSet<String>,
+    /// Kernels whose NVIDIA driver check is running.
+    nvidia_probing: HashSet<String>,
     ebuild_loading: HashSet<PathBuf>,
     data_tx: Sender<DataMsg>,
     data_rx: Receiver<DataMsg>,
@@ -266,6 +268,9 @@ pub struct App {
     pub history_view: views::history::State,
     pub settings_view: views::settings::State,
     last_log_poll: Instant,
+    /// The settings as last written, and when: a change is saved within a second, not at exit only.
+    saved_settings: Settings,
+    settings_saved_at: Instant,
     /// The window has been fitted to its monitor (done once, on the first frame).
     size_checked: bool,
     fonts_applied: Option<String>,
@@ -285,6 +290,25 @@ pub struct App {
     boot_mounts_cache: (Instant, Vec<crate::portage::mounts::BootMount>),
     /// Boot partitions PortageHub made writable that go back to read-only after the emerge.
     pub remount_restore: Vec<String>,
+}
+
+/// A detail page with nothing in it, so a page that cannot be built stops spinning.
+fn empty_detail(key: &str) -> PkgDetail {
+    PkgDetail {
+        key: key.to_string(),
+        cat: key.split('/').next().unwrap_or("").into(),
+        pn: key.split('/').nth(1).unwrap_or("").into(),
+        versions: Vec::new(),
+        xml: Default::default(),
+        pkg_dir: None,
+        files: Vec::new(),
+    }
+}
+
+/// A load failed: it no longer counts as running, and nothing waits to redo it.
+fn forget_load(loading: &mut HashSet<Reload>, pending: &mut HashSet<Reload>, r: Reload) {
+    loading.remove(&r);
+    pending.remove(&r);
 }
 
 /// What a refused write means for a person.
@@ -353,7 +377,7 @@ fn load_cleanup_cache() -> HashMap<String, (String, Option<i32>, i64)> {
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> App {
-        let settings = Settings::load();
+        let (settings, settings_note) = Settings::load();
         let ctx = cc.egui_ctx.clone();
         theme::install_fonts(&ctx, settings.font_family.as_deref());
         theme::apply(&ctx);
@@ -361,6 +385,7 @@ impl App {
         let (data_tx, data_rx) = channel();
         let (exec_tx, exec_rx) = channel();
         let exec = Executor::new(exec_tx, ctx.clone());
+        let settings_on_disk = settings.clone();
         let mut app = App {
             data: Data::default(),
             details: HashMap::new(),
@@ -368,6 +393,7 @@ impl App {
             loading: HashSet::new(),
             pending_reload: HashSet::new(),
             detail_loading: HashSet::new(),
+            nvidia_probing: HashSet::new(),
             ebuild_loading: HashSet::new(),
             data_tx,
             data_rx,
@@ -395,6 +421,8 @@ impl App {
             history_view: Default::default(),
             settings_view: Default::default(),
             last_log_poll: Instant::now(),
+            saved_settings: settings_on_disk,
+            settings_saved_at: Instant::now(),
             size_checked: false,
             script: crate::shot::Script::from_env(),
             confirm_close: false,
@@ -409,6 +437,9 @@ impl App {
             boot_mounts_cache: (Instant::now() - Duration::from_secs(60), Vec::new()),
             remount_restore: Vec::new(),
         };
+        if let Some(note) = settings_note {
+            app.toast(ToastKind::Warn, note);
+        }
         for r in [Reload::Repos, Reload::Vdb, Reload::History, Reload::Config, Reload::MakeConf, Reload::Env] {
             app.spawn_load(r);
         }
@@ -497,6 +528,21 @@ impl App {
         self.toast(ToastKind::Info, stage.describe());
     }
 
+    /// Write the settings when they differ from what is on disk (at most once a second), so a
+    /// crash or a SIGTERM no longer loses the toggles of the whole session.
+    fn save_settings_if_changed(&mut self) {
+        if self.settings == self.saved_settings {
+            return;
+        }
+        if self.settings_saved_at.elapsed() < Duration::from_secs(1) {
+            self.ctx.request_repaint_after(Duration::from_secs(1));
+            return;
+        }
+        self.settings.save();
+        self.saved_settings = self.settings.clone();
+        self.settings_saved_at = Instant::now();
+    }
+
     /// Jobs the user asked to stop that still run get the next, harder signal on time.
     fn escalate_stops(&mut self) {
         let due: Vec<u64> = self
@@ -573,7 +619,7 @@ impl App {
         let keep_set = self.settings.kernel_keep_set.clone();
         let log_days = self.settings.log_keep_days;
         std::thread::spawn(move || {
-            let msg = match r {
+            let msg = data::run_loader(r, move || match r {
                 Reload::Repos => DataMsg::Repos(Arc::new(repos::load())),
                 Reload::Catalog => DataMsg::Catalog(Arc::new(catalog::scan(snapshot.repos.as_ref().unwrap()))),
                 Reload::Vdb => DataMsg::Vdb(Arc::new(vdb::load())),
@@ -619,7 +665,7 @@ impl App {
                         log_days,
                     )))
                 }
-            };
+            });
             let _ = tx.send(msg);
             ctx.request_repaint();
         });
@@ -635,22 +681,11 @@ impl App {
         let ctx = self.ctx.clone();
         let key = key.to_string();
         std::thread::spawn(move || {
-            if let Some(d) = data::build_detail(&key, &snapshot) {
-                let _ = tx.send(DataMsg::Detail(key, Arc::new(d)));
-            } else {
-                let _ = tx.send(DataMsg::Detail(
-                    key.clone(),
-                    Arc::new(PkgDetail {
-                        key: key.clone(),
-                        cat: key.split('/').next().unwrap_or("").into(),
-                        pn: key.split('/').nth(1).unwrap_or("").into(),
-                        versions: Vec::new(),
-                        xml: Default::default(),
-                        pkg_dir: None,
-                        files: Vec::new(),
-                    }),
-                ));
-            }
+            let msg = data::run_detail(&key.clone(), || match data::build_detail(&key, &snapshot) {
+                Some(d) => DataMsg::Detail(key.clone(), Arc::new(d)),
+                None => DataMsg::Detail(key.clone(), Arc::new(empty_detail(&key))),
+            });
+            let _ = tx.send(msg);
             ctx.request_repaint();
         });
     }
@@ -758,6 +793,23 @@ impl App {
             DataMsg::Ebuild(p, t) => {
                 self.ebuild_loading.remove(&p);
                 self.ebuilds.insert(p, t);
+            }
+            DataMsg::Failed(r, why) => {
+                forget_load(&mut self.loading, &mut self.pending_reload, r);
+                self.toast(ToastKind::Error, format!("Loading {} failed: {why}. Press F5 to try again.", r.name()));
+            }
+            DataMsg::DetailFailed(key, why) => {
+                self.detail_loading.remove(&key);
+                self.details.insert(key.clone(), Arc::new(empty_detail(&key)));
+                self.toast(ToastKind::Error, format!("The page of {key} could not be built: {why}"));
+            }
+            DataMsg::NvidiaProbe { kver, ok, detail } => {
+                self.nvidia_probing.remove(&kver);
+                if ok {
+                    self.mark_kernel_good_after_probe(kver);
+                } else {
+                    self.toast(ToastKind::Error, format!("nvidia-smi failed ({detail}): the NVIDIA driver does not work on this kernel, so it is not marked known-good. Rebuild nvidia-drivers first."));
+                }
             }
         }
         let ready: Vec<Reload> = self.pending_reload.iter().filter(|r| !self.loading.contains(r)).copied().collect();
@@ -1453,12 +1505,29 @@ impl App {
             return;
         }
         if self.settings.kernel_mark_requires_nvidia && ks.nvidia.gpu && ks.nvidia.drivers.is_some() {
-            let ok = std::process::Command::new("nvidia-smi").arg("-L").output().is_ok_and(|o| o.status.success());
-            if !ok {
-                self.toast(ToastKind::Error, "nvidia-smi failed: the NVIDIA driver does not work on this kernel, so it is not marked known-good. Rebuild nvidia-drivers first.");
-                return;
+            // A wedged NVIDIA driver can make nvidia-smi hang: ask on a thread, with a limit, and go on when it answers.
+            if self.nvidia_probing.insert(kver.clone()) {
+                self.toast(ToastKind::Info, "Checking the NVIDIA driver…");
+                let (tx, ctx) = (self.data_tx.clone(), self.ctx.clone());
+                std::thread::spawn(move || {
+                    let mut cmd = std::process::Command::new("nvidia-smi");
+                    cmd.arg("-L");
+                    let (ok, detail) = match crate::util::run_with_timeout(cmd, Duration::from_secs(10)) {
+                        Ok(out) if out.status.success() => (true, String::new()),
+                        Ok(out) => (false, String::from_utf8_lossy(&out.stderr).lines().next().unwrap_or("it reported an error").to_string()),
+                        Err(e) => (false, format!("nvidia-smi {e}")),
+                    };
+                    let _ = tx.send(DataMsg::NvidiaProbe { kver, ok, detail });
+                    ctx.request_repaint();
+                });
             }
+            return;
         }
+        self.mark_kernel_good_after_probe(kver);
+    }
+
+    fn mark_kernel_good_after_probe(&mut self, kver: String) {
+        let Some(ks) = self.data.kernels.clone() else { return };
         if (Op::MarkGood { kver: String::new(), state_dir: String::new(), backup: false }).min_helper() > self.exec.helper_version && !self.exec.is_root {
             self.toast(ToastKind::Error, "The installed admin helper is too old for this — run sudo dist/install.sh, then restart PortageHub.");
             return;
@@ -1846,6 +1915,7 @@ impl eframe::App for App {
         }
         self.poll_build_logs();
         self.escalate_stops();
+        self.save_settings_if_changed();
         if !self.world_auto_done && self.data.catalog.is_some() && self.data.vdb.is_some() && self.data.repos.is_some() {
             self.world_auto_done = true;
             let last_sync = self.data.last_sync().unwrap_or(0);
@@ -1917,5 +1987,38 @@ impl eframe::App for App {
     fn on_exit(&mut self) {
         self.settings.save();
         self.exec.stop_helper();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_load_stops_waiting_and_is_not_redone_by_itself() {
+        let mut loading: HashSet<Reload> = [Reload::Config, Reload::Vdb].into();
+        let mut pending: HashSet<Reload> = [Reload::Config].into();
+        forget_load(&mut loading, &mut pending, Reload::Config);
+        assert_eq!(loading, [Reload::Vdb].into());
+        assert!(pending.is_empty(), "a queued reload of a loader that just panicked would panic again at once");
+        // Unrelated loads are untouched.
+        forget_load(&mut loading, &mut pending, Reload::Kernels);
+        assert_eq!(loading, [Reload::Vdb].into());
+    }
+
+    #[test]
+    fn a_page_that_cannot_be_built_is_empty_not_endless() {
+        let d = empty_detail("app-misc/foo");
+        assert_eq!((d.cat.as_str(), d.pn.as_str(), d.key.as_str()), ("app-misc", "foo", "app-misc/foo"));
+        assert!(d.versions.is_empty());
+    }
+
+    #[test]
+    fn write_errors_are_explained() {
+        let e = explain_write_error("changed on disk: /etc/portage/package.use/zz");
+        assert!(e.contains("/etc/portage/package.use/zz was changed outside PortageHub"), "{e}");
+        assert_eq!(explain_write_error("disk full"), "disk full");
+        assert_eq!(stale_file_reloads("changed on disk: /x"), vec![Reload::Config, Reload::MakeConf, Reload::Repos]);
+        assert!(stale_file_reloads("disk full").is_empty());
     }
 }

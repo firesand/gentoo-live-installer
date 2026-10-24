@@ -87,6 +87,50 @@ pub enum DataMsg {
     Leftovers(Arc<crate::portage::cleanup::Leftovers>),
     Detail(String, Arc<PkgDetail>),
     Ebuild(PathBuf, Arc<String>),
+    /// A loader panicked: the page it feeds must stop waiting.
+    Failed(Reload, String),
+    /// Building the detail page of a package panicked.
+    DetailFailed(String, String),
+    /// Result of the `nvidia-smi -L` check before marking a kernel known-good.
+    NvidiaProbe { kver: String, ok: bool, detail: String },
+}
+
+fn panic_text(payload: Box<dyn std::any::Any + Send>) -> String {
+    payload.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| payload.downcast_ref::<String>().cloned()).unwrap_or_else(|| "unknown error".into())
+}
+
+/// Run a loader. A panic in it becomes [`DataMsg::Failed`]: otherwise its page would show
+/// "loading" for ever, because only a finished load clears the flag.
+pub fn run_loader(r: Reload, f: impl FnOnce() -> DataMsg) -> DataMsg {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|p| DataMsg::Failed(r, panic_text(p)))
+}
+
+/// Like [`run_loader`] for the detail page of `key`.
+pub fn run_detail(key: &str, f: impl FnOnce() -> DataMsg) -> DataMsg {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|p| DataMsg::DetailFailed(key.to_string(), panic_text(p)))
+}
+
+impl Reload {
+    /// What the load is called in a message.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Reload::Repos => "repositories",
+            Reload::Catalog => "the package tree",
+            Reload::Vdb => "installed packages",
+            Reload::History => "the build history",
+            Reload::Config => "/etc/portage",
+            Reload::MakeConf => "make.conf",
+            Reload::Env => "the Portage settings",
+            Reload::UseDesc => "USE flag descriptions",
+            Reload::RemoteRepos => "the overlay list",
+            Reload::Profiles => "profiles",
+            Reload::News => "news",
+            Reload::Updates => "the update check",
+            Reload::Masks => "package masks",
+            Reload::Kernels => "kernels",
+            Reload::Leftovers => "leftovers",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -513,5 +557,22 @@ mod tests {
         assert!(keywords_accept(KwState::Testing, &s(&["~*"]), "amd64"));
         assert!(!keywords_accept(KwState::Testing, &s(&[]), "amd64"));
         assert!(keywords_accept(KwState::Stable, &s(&[]), "amd64"));
+    }
+
+    #[test]
+    fn a_panicking_loader_becomes_a_failure_not_a_spinner() {
+        let ok = run_loader(Reload::Vdb, || DataMsg::Vdb(Arc::new(Default::default())));
+        assert!(matches!(ok, DataMsg::Vdb(_)));
+        let failed = run_loader(Reload::Config, || panic!("bad config file"));
+        match failed {
+            DataMsg::Failed(Reload::Config, why) => assert_eq!(why, "bad config file"),
+            other => panic!("{}", matches!(other, DataMsg::Vdb(_))),
+        }
+        // String payloads (panic!("{x}")) are reported too.
+        let x = 5;
+        assert!(matches!(run_loader(Reload::Env, || panic!("value {x}")), DataMsg::Failed(Reload::Env, w) if w == "value 5"));
+        assert!(matches!(run_detail("app-misc/foo", || panic!("boom")), DataMsg::DetailFailed(k, w) if k == "app-misc/foo" && w == "boom"));
+        assert!(matches!(run_detail("app-misc/foo", || DataMsg::Detail("app-misc/foo".into(), Arc::new(PkgDetail { key: "app-misc/foo".into(), cat: "app-misc".into(), pn: "foo".into(), versions: vec![], xml: Default::default(), pkg_dir: None, files: vec![] }))), DataMsg::Detail(..)));
+        assert_eq!(Reload::Kernels.name(), "kernels");
     }
 }
