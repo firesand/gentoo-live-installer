@@ -4,6 +4,9 @@ from __future__ import annotations
 
 from typing import Any
 
+from gentoo_installer.mirrors import mirror_list
+from gentoo_installer.stagechoice import effective_stage_variant
+
 from .storage import StorageStages
 
 
@@ -19,11 +22,18 @@ class Stage3Stage(StorageStages):
         extra: dict[str, Any] = {"allowed_existing": allowed}
         if self.manifest.network.proxy:
             extra["proxy"] = self.manifest.network.proxy
-        if self.manifest.portage.mirror_fallbacks:
-            extra["fallback_mirrors"] = tuple(self.manifest.portage.mirror_fallbacks)
+        # The chosen mirrors in order (else the one mirror), then the fallbacks: the first is tried first, the others when it fails.
+        portage, system = self.manifest.portage, self.manifest.system
+        servers = mirror_list(portage.mirror, portage.mirrors, portage.mirror_fallbacks)
+        if servers[1:]:
+            extra["fallback_mirrors"] = tuple(servers[1:])
+        # The Desktop stage3 for a graphical system, the Standard one for Minimal (Handbook), unless the user chose Hardened or No multilib.
+        variant = effective_stage_variant(system.stage_variant, system.desktop, system.init, system.multilib, system.stage_auto)
+        if variant != system.stage_variant:
+            self.log(f"Using the {variant} stage3 that matches the chosen desktop")
         self._stage3_archive = self.stage3.install(
-            self.manifest.portage.mirror,
-            self.manifest.system.stage_variant,
+            servers[0],
+            variant,
             self.target_root,
             lambda current, total: self.emit("progress", "stage3", "Downloading stage3", current * 100 / total if total else None, downloaded=current, total=total),
             **extra,

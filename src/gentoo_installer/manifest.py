@@ -8,6 +8,10 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Callable, ClassVar, get_args, get_origin, get_type_hints
 
+from .licenses import license_problems
+from .optimize import optimize_problem
+from .usedesc import STAR_MESSAGE, video_cards_problem
+
 
 SCHEMA_VERSION = 1
 SECRET_KEYS = {"password", "root_password", "luks_passphrase", "wifi_password"}
@@ -506,6 +510,7 @@ class Portage:
     license_groups: list[str] = field(default_factory=list)  # ACCEPT_LICENSE groups; accept_license stays the source of truth
     depclean: bool = False  # run emerge --depclean at the end
     profile_override: str = ""  # a published profile path that replaces the derived one ("" for none)
+    package_license: dict[str, list[str]] = field(default_factory=dict)  # package.license: licences accepted for single packages
 
 
 @dataclass
@@ -1173,8 +1178,13 @@ class InstallManifest:
                 break
         if any(not mirror.startswith("https://") for mirror in portage.mirror_fallbacks):
             errors.append("Fallback stage3 mirrors must use HTTPS")
-        if portage.rsync_mirror and not portage.rsync_mirror.startswith(("rsync://", "https://")):
-            errors.append("The repository sync mirror must use rsync or HTTPS")
+        if portage.rsync_mirror and not portage.rsync_mirror.startswith("rsync://"):
+            errors.append("The repository sync mirror must be an rsync:// address: the installer verifies what rsync delivers, "
+                          "and an HTTPS address would be a git checkout, which it does not set up")
+        if portage.rsync_mirror and (has_control_characters(portage.rsync_mirror) or " " in portage.rsync_mirror):
+            errors.append("The repository sync mirror cannot contain spaces or line breaks")
+        if optimize_problem(portage, self.hardware.target == "portable"):
+            errors.append(optimize_problem(portage, self.hardware.target == "portable"))
         errors.extend(_choice_error(portage.optimize, OPTIMIZE_CHOICES, "Optimisation"))
         errors.extend(_choice_error(portage.binhost_variant, BINHOST_VARIANTS, "The binary package variant"))
         errors.extend(_choice_error(portage.rsync_mode, RSYNC_MODES, "The repository sync mode"))
@@ -1184,6 +1194,13 @@ class InstallManifest:
             errors.append("Licence groups may contain only letters, numbers, and @ + _ . -")
         if portage.profile_override and not PROFILE_RE.fullmatch(portage.profile_override):
             errors.append("The profile override must be a published default/linux/amd64/23.0 profile or empty")
+        elif profile_problem(portage.profile_override, self.system.init, self.system.stage_variant):
+            errors.append(profile_problem(portage.profile_override, self.system.init, self.system.stage_variant))
+        errors.extend(license_problems(portage.accept_license, portage.package_license))
+        if any(token.startswith("-*") or token == "*" for token in portage.use_flags):
+            errors.append(STAR_MESSAGE)
+        if video_cards_problem(portage.video_cards):
+            errors.append(video_cards_problem(portage.video_cards))
         errors.extend(_make_opts_errors(portage.make_opts))
         for label, value in (("CFLAGS", portage.cflags), ("CXXFLAGS", portage.cxxflags), ("RUSTFLAGS", portage.rustflags),
                              ("EMERGE_DEFAULT_OPTS", portage.emerge_opts), ("ACCEPT_LICENSE", portage.accept_license),
@@ -1256,7 +1273,7 @@ class InstallManifest:
     def effective_profile(self) -> str:
         """The Portage profile that will be selected: the explicit one or the derived one."""
         system = self.system
-        return system.profile or derive_profile(
+        return self.portage.profile_override or system.profile or derive_profile(
             system.init, system.desktop, multilib=system.multilib, hardened="hardened" in system.stage_variant)
 
     def warnings(self) -> list[str]:

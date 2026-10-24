@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from gentoo_installer.manifest import InstallManifest
+from gentoo_installer.world import should_depclean, should_update_world
 
 from .configure_base import _plan_list
 from .configure_packages import PackageInstallError, PackagesMixin
@@ -92,9 +93,11 @@ class DesktopMixin(PackagesMixin):
         if problem:
             result.degraded.append("The companion applications were skipped: " + problem)
             atoms.optional = [atom for atom in atoms.optional if atom not in COMPANION_ATOMS]
-        if manifest.system.world_update == "now":
+        world_updated = False
+        if should_update_world(manifest):
             try:
                 self.emerge(manifest, ("--update", "--deep", "--newuse", "--keep-going", "@world"))
+                world_updated = True
             except RunnerError as exc:
                 result.degraded.append("The @world update did not finish: " + self.explain(exc).summary[:200])
         # TLP goes first: KDE and GNOME need a power-profiles provider, and when TLP is not there yet they
@@ -131,6 +134,14 @@ class DesktopMixin(PackagesMixin):
                 result.failed.append(atom)
                 result.degraded.append(f"{atom} could not be installed: {outcome.reason}"[:300])
         result.degraded.extend(problem[:300] for problem in self.restore_cycle_breaks(manifest))
+        if manifest.portage.depclean and not world_updated:
+            result.degraded.append("Removing programs that are no longer needed was skipped: it runs only after the whole system was updated during the installation.")
+        if should_depclean(manifest, world_updated):
+            # Last, when everything the installer wants is in place, so that nothing it still needs is removed.
+            try:
+                self.emerge(manifest, ("--depclean",))
+            except RunnerError as exc:
+                result.degraded.append("Removing programs that are no longer needed did not finish: " + self.explain(exc).summary[:200])
         return result
 
     def configure_desktop_session(self, manifest: InstallManifest) -> None:

@@ -24,11 +24,11 @@ class RenderingTests(unittest.TestCase):
         self.assertIn("getbinpkg", text)
         self.assertIn("binpkg-request-signature", text)
         self.assertEqual(text.count("FEATURES="), 1)
-        self.assertIn("PORTAGE_BINHOST=", text)
+        self.assertNotIn("PORTAGE_BINHOST", text)  # the host is in binrepos.conf (PORT-04)
 
     def test_make_conf_keeps_the_stage3_compiler_and_locale_settings(self) -> None:
         text = render_make_conf(manifest())
-        for line in ("FCFLAGS='${COMMON_FLAGS}'", "FFLAGS='${COMMON_FLAGS}'", "LC_MESSAGES=C.UTF-8", "CXXFLAGS='${CFLAGS}'"):
+        for line in ("FCFLAGS='${COMMON_FLAGS}'", "FFLAGS='${COMMON_FLAGS}'", "LC_MESSAGES=C.UTF-8", "CXXFLAGS='${COMMON_FLAGS}'"):
             self.assertIn(line, text.splitlines())
 
     def test_empty_values_never_override_profile_defaults(self) -> None:
@@ -310,7 +310,7 @@ class PackageAndServiceTests(unittest.TestCase):
             self.assertIn("sys-apps/systemd-utils boot kernel-install ukify",
                           (root / "etc/portage/package.use/installer").read_text())
             self.assertIn("sys-apps/systemd-utils", configurer.package_atoms(m))
-            self.assertIn("sync-uri = https://", (root / "etc/portage/binrepos.conf/gentoo.conf").read_text())
+            self.assertIn("sync-uri = https://", (root / "etc/portage/binrepos.conf/gentoobinhost.conf").read_text())
 
     def test_hwmonux_enables_liquidctl_i2c_python_dependency(self) -> None:
         m = manifest()
