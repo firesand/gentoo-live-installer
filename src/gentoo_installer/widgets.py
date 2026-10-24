@@ -136,11 +136,9 @@ class ChoiceCardAccessible(QAccessibleWidget):
     def actionNames(self):
         return [QAccessibleActionInterface.pressAction()]
 
-    def doAction(self, action_name: str) -> bool:
+    def doAction(self, action_name: str) -> None:
         if action_name == QAccessibleActionInterface.pressAction() and self._card().isEnabled():
             self._card().setChecked(True)
-            return True
-        return False
 
 
 def _accessible_factory(class_name: str, obj: QObject):
@@ -159,12 +157,12 @@ class Page(QWidget):
         super().__init__(parent)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        self.scroll = QScrollArea()
-        self.scroll.setWidgetResizable(True)
-        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        outer.addWidget(self.scroll)
+        self.scroll_area = QScrollArea()  # not "scroll": that is a QWidget method
+        self.scroll_area.setWidgetResizable(True)
+        self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        outer.addWidget(self.scroll_area)
         body = QWidget()
-        self.scroll.setWidget(body)
+        self.scroll_area.setWidget(body)
         self.content = QVBoxLayout(body)
         self.content.setContentsMargins(32, 28, 32, 28)
         self.content.setSpacing(18)
@@ -195,9 +193,9 @@ class Page(QWidget):
 
     def focus_first(self) -> None:
         """Put the keyboard focus on the first useful control of the page."""
-        for widget in self.findChildren(QLineEdit):
-            if widget.isEnabled() and widget.isVisibleTo(self) and not widget.isReadOnly():
-                widget.setFocus(Qt.FocusReason.TabFocusReason)
+        for edit in self.findChildren(QLineEdit):
+            if edit.isEnabled() and edit.isVisibleTo(self) and not edit.isReadOnly():
+                edit.setFocus(Qt.FocusReason.TabFocusReason)
                 return
         for card in self.findChildren(ChoiceCard):
             if card.isEnabled() and card.isVisibleTo(self) and card.focusPolicy() != Qt.FocusPolicy.NoFocus:

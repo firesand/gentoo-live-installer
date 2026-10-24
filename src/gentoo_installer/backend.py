@@ -26,6 +26,7 @@ from .daemon_client import (  # noqa: F401  (re-exported)
     probe,
     request,
     request_cancel,
+    status,
 )
 from .manifest import InstallManifest
 

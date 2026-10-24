@@ -423,7 +423,8 @@ class ProgressPage(Page):
     def handle_event(self, event: dict) -> None:
         kind = event.get("event") or event.get("type") or event.get("ev")
         stage = event.get("stage", "") or ""
-        data = event.get("data") if isinstance(event.get("data"), dict) else {}
+        raw_data = event.get("data")
+        data: dict = raw_data if isinstance(raw_data, dict) else {}
         message = event.get("message") or event.get("text") or event.get("line") or ""
         seq = event.get("seq")
         if isinstance(seq, int):

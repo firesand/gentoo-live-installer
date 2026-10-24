@@ -185,7 +185,8 @@ class ReadinessPage(Page):
             row.set_status("ok" if info.memory_gib >= 2 else "warning", f"{info.memory_gib:.1f} GiB available · 2 GiB or more recommended")
 
     def _firmware(self, info: SystemInfo) -> None:
-        details = info.hardware.get("firmware") if isinstance(info.hardware.get("firmware"), dict) else {}
+        firmware = info.hardware.get("firmware")
+        details: dict = firmware if isinstance(firmware, dict) else {}
         text = "UEFI" if info.uefi else "Legacy BIOS"
         if info.uefi and details.get("efi_bits") in (32, 64):
             text = f"UEFI {details['efi_bits']}-bit"
@@ -256,8 +257,9 @@ class ReadinessPage(Page):
     def _notes(self, info: SystemInfo) -> None:
         while self.notes_box.count():
             item = self.notes_box.takeAt(0)
-            if item is not None and item.widget() is not None:
-                item.widget().deleteLater()
+            widget = item.widget() if item is not None else None
+            if widget is not None:
+                widget.deleteLater()
         shown = 0
         for warning in info.warnings:
             code = clean_code(str(warning.get("code", "")))

@@ -556,7 +556,7 @@ def test_a_dead_service_blocks_the_start_with_instructions(make_window, monkeypa
 
 
 def test_a_running_job_is_offered_instead_of_a_second_start(make_window, monkeypatch, fake_daemon):
-    daemon = fake_daemon(lambda request: [{"type": "status", "data": {"status": "running"}}])
+    daemon = running_daemon(fake_daemon)
     window = window_with_fake_workers(make_window, monkeypatch)
     monkeypatch.delenv("GENTOO_INSTALLER_DEV")
     window.socket_path = daemon.path
@@ -577,6 +577,27 @@ def test_banner_offers_to_attach_to_a_running_installation(make_window, monkeypa
     window.banner.buttons["attach"].click()
     assert FakeWorker.instances[-1].kwargs == {"attach": True, "after_seq": 0}
     assert window.current == 7 and not window.banner.isVisible()
+
+
+def test_a_daemon_without_attach_is_never_asked_to_attach(make_window, monkeypatch, fake_daemon):
+    def handler(request):  # an old daemon: status works, capabilities is an unknown action
+        if request["action"] == "status":
+            return [{"type": "status", "data": {"status": "running"}}]
+        return [{"type": "error", "error": "Action must be inspect, start, status, or cancel"}]
+
+    daemon = fake_daemon(handler)
+    window = window_with_fake_workers(make_window, monkeypatch)
+    state = daemon_probe = DaemonState("running", status={"status": "running", "stage": "base"})
+    window.apply_info(sample_info(daemon=state))
+    assert set(window.banner.buttons) == {"cancel", "ignore"}
+    assert "cannot show a running installation again" in window.banner.label.text()
+    monkeypatch.delenv("GENTOO_INSTALLER_DEV")
+    window.socket_path = daemon.path
+    shown = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, text, *a, **k: shown.append(text))
+    window.manifest.storage.device = "/dev/sda"
+    window.start_installation()
+    assert shown and "cannot show it again" in shown[0] and not FakeWorker.instances
 
 
 def test_banner_ignore_dismisses_it(make_window, monkeypatch):

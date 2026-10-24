@@ -279,8 +279,8 @@ class InstallerWindow(QMainWindow):
         quit_action.setShortcut(QKeySequence.StandardKey.Quit)
         quit_action.triggered.connect(self.close)
         self.addAction(quit_action)
-        QShortcut(QKeySequence("Alt+Left"), self, activated=self.previous_page)
-        QShortcut(QKeySequence("Alt+Right"), self, activated=self._advance_requested)
+        QShortcut(QKeySequence("Alt+Left"), self).activated.connect(self.previous_page)
+        QShortcut(QKeySequence("Alt+Right"), self).activated.connect(self._advance_requested)
 
         if background_inspection:
             self._start_inspection()
@@ -533,10 +533,13 @@ class InstallerWindow(QMainWindow):
             started = status.get("started_at")
             when = time.strftime("%H:%M", time.localtime(started)) if isinstance(started, (int, float)) else "earlier"
             stage = str(status.get("stage") or "")
-            self.banner.show_message(
-                f"An installation started at {when} is still running" + (f" (stage: {stage})" if stage else "") + ".",
-                [("attach", "Show progress", self.attach_running_job), ("cancel", "Cancel it", self.cancel_running_job), ("ignore", "Ignore", self.banner.dismiss)],
-            )
+            text = f"An installation started at {when} is still running" + (f" (stage: {stage})" if stage else "") + "."
+            actions = [("cancel", "Cancel it", self.cancel_running_job), ("ignore", "Ignore", self.banner.dismiss)]
+            if state.supports("attach.v1"):
+                actions.insert(0, ("attach", "Attach (show progress)", self.attach_running_job))
+            else:
+                text += " This installer service cannot show a running installation again; wait for it to finish, or cancel it."
+            self.banner.show_message(text, actions)
         elif state.job_status in {"failed", "cancelled"} and status.get("resumable"):
             self.banner.show_message(
                 f"An earlier installation stopped ({state.job_status}) after the disk was prepared"
@@ -579,6 +582,9 @@ class InstallerWindow(QMainWindow):
             QMessageBox.warning(self, "Installer service unavailable", state.message)
             return False
         if state.job_running:
+            if not daemon_client.probe(self.socket_path, timeout=1.5).supports("attach.v1"):
+                QMessageBox.warning(self, "An installation is already running", "The installer service is already running an installation, and this version cannot show it again. Wait for it to finish.")
+                return False
             answer = QMessageBox.question(
                 self, "An installation is already running",
                 "The installer service is already running an installation. Show its progress instead?",

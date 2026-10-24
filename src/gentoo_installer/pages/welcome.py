@@ -84,13 +84,13 @@ class WelcomePage(Page):
         self.content.addLayout(actions)
 
         companions = QHBoxLayout()
-        label = QLabel("Explore the included tools:")
-        label.setProperty("muted", True)
-        companions.addWidget(label)
-        for app, title in (("hwmonux", "HWMonux"), ("portagehub", "PortageHub")):
-            button = QPushButton(title)
+        explore = QLabel("Explore the included tools:")
+        explore.setProperty("muted", True)
+        companions.addWidget(explore)
+        for tool, caption in (("hwmonux", "HWMonux"), ("portagehub", "PortageHub")):
+            button = QPushButton(caption)
             button.setObjectName("linkButton")
-            button.clicked.connect(lambda _=False, name=app: self.applicationRequested.emit(name))
+            button.clicked.connect(lambda _=False, name=tool: self.applicationRequested.emit(name))
             companions.addWidget(button)
         companions.addStretch()
         self.content.addLayout(companions)

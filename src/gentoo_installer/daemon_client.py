@@ -172,6 +172,15 @@ def ping(socket_path: str = DEFAULT_SOCKET, timeout: float = 3.0) -> DaemonState
     return DaemonState("error", "The installer service sent an unexpected reply.")
 
 
+def status(socket_path: str = DEFAULT_SOCKET, timeout: float = 3.0) -> dict[str, Any]:
+    """The daemon's status data (``status``, ``stage``, ``progress``, ``seq``, ``resumable``,
+    ``error`` ...). Raises OSError when the daemon cannot be reached."""
+    for event in request(socket_path, "status", timeout=timeout):
+        if event.get("type") == "status":
+            return event_data(event)
+    return {}
+
+
 def capabilities(socket_path: str = DEFAULT_SOCKET, timeout: float = 3.0) -> tuple[frozenset[str], frozenset[str]]:
     """(features, actions) advertised by the daemon; empty for an old daemon."""
     try:

@@ -650,8 +650,35 @@ def merge_inspection(info: SystemInfo, data: dict[str, Any], state: DaemonState 
         info.synchronized_clock = info.hardware["clock"]["ntp_synced"]
     if not info.disks and isinstance(data.get("disks"), list):
         info.disks = disks_from_inspection(data["disks"])
+    apply_daemon_disk_facts(info, data)
     info.inspected = True
     return info
+
+
+def apply_daemon_disk_facts(info: SystemInfo, data: dict[str, Any]) -> None:
+    """The daemon sees the disks as root and decides the by-path identity it will
+    later verify, so its answer wins over the GUI's own guess."""
+    by_path: dict[str, str] = {}
+    live: set[str] = set()
+    sources: list[Any] = [data.get("disks")]
+    hardware = data.get("hardware")
+    if isinstance(hardware, dict):
+        sources.append(hardware.get("disks"))
+    for source in sources:
+        for item in source if isinstance(source, list) else []:
+            if not isinstance(item, dict) or not item.get("path"):
+                continue
+            path = os.path.realpath(str(item["path"]))
+            if isinstance(item.get("by_path"), str) and item["by_path"]:
+                by_path[path] = item["by_path"]
+            if item.get("live_medium") is True:
+                live.add(path)
+    for disk in info.disks:
+        path = os.path.realpath(disk.path)
+        if path in by_path:
+            disk.by_path = by_path[path]
+        if path in live:
+            disk.live_medium = True
 
 
 def inspect_with_daemon(

@@ -159,7 +159,8 @@ class ManualLayoutEditor(QWidget):
             fs.addItem(label, value)
         fs.setAccessibleName("Filesystem")
         self.table.setCellWidget(row, 2, fs)
-        self.table.setCellWidget(row, 3, _Check(partition.format if partition else False))
+        check = _Check(partition.format if partition else False)
+        self.table.setCellWidget(row, 3, check)
         self.table.setItem(row, 4, QTableWidgetItem(partition.label if partition else ""))
         contents = QTableWidgetItem("")
         contents.setFlags(contents.flags() & ~Qt.ItemFlag.ItemIsEditable)
@@ -172,7 +173,7 @@ class ManualLayoutEditor(QWidget):
         device.currentIndexChanged.connect(lambda _=0, w=device: self._device_picked(w))
         mount.currentTextChanged.connect(lambda _=None, w=mount: self._mount_edited(w))
         fs.currentIndexChanged.connect(lambda _=0: self.changed.emit())
-        self.table.cellWidget(row, 3).check.toggled.connect(lambda _=False: self.changed.emit())  # type: ignore[union-attr]
+        check.check.toggled.connect(lambda _=False: self.changed.emit())
         self._show_contents(row)
         self._update_note()
         self.changed.emit()

@@ -276,6 +276,22 @@ def test_merge_inspection_prefers_the_daemons_view_of_tools_network_and_warnings
     assert [d.path for d in merged.disks] == ["/dev/sda"]  # local lsblk wins when it found disks
 
 
+def test_the_daemons_by_path_and_live_medium_win_over_the_guis_guess():
+    local = SystemInfo("x86_64", 8, True, [
+        DiskInfo("/dev/vda", "QEMU", 64 * GIB, by_path="gui-guess"),
+        DiskInfo("/dev/sdb", "Stick", 16 * GIB, serial="u"),
+    ], True, True, [])
+    data = {
+        "architecture": "x86_64",
+        "disks": [{"name": "vda", "path": "/dev/vda", "type": "disk", "size": 64 * GIB, "by_path": "pci-0000:00:04.0"}],
+        "hardware": {"disks": [{"path": "/dev/sdb", "live_medium": True}, {"path": "/dev/vda", "live_medium": False}]},
+    }
+    merged = system_info.merge_inspection(local, data)
+    by_path = {disk.path: disk for disk in merged.disks}
+    assert by_path["/dev/vda"].by_path == "pci-0000:00:04.0" and not by_path["/dev/vda"].live_medium
+    assert by_path["/dev/sdb"].live_medium and not by_path["/dev/sdb"].selectable
+
+
 def test_merge_inspection_falls_back_to_the_daemons_disks():
     local = SystemInfo("x86_64", 8, True, [], True, True, [])
     data = {"architecture": "x86_64", "disks": [{"name": "vdz", "path": "/dev/vdz", "type": "disk", "size": 64 * GIB, "serial": "abc", "children": []}]}
