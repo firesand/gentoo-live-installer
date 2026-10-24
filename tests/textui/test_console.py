@@ -209,7 +209,7 @@ def test_pick_by_number_search_and_page() -> None:
     items = [f"Entry {n:02d}" for n in range(1, 61)] + ["Special case"]
     console, script = console_for([("", "n"), ("", "1"), ("", "special"), ("", "entry 5"), ("", "3")])
     first = console.pick(items)
-    assert items[first] == "Entry 31"  # page 2, entry 1
+    assert items[first] == "Entry 27"  # page 2, entry 1: a page holds 26 entries (two columns of 13) on a 24-row screen
     assert items[console.pick(items)] == "Special case"  # a single match is taken
     assert items[console.pick(items)] == "Entry 52"  # "entry 5" matches Entry 50 to 59; number 3 of that list
     assert "next page" in script.text and "10 entries match" in script.text

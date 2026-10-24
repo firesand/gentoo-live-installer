@@ -288,3 +288,13 @@ def test_the_terminal_echo_is_back_on_when_the_program_is_stopped_while_a_passwo
     shell.proc.send_signal(signal.SIGTERM)
     assert shell.finish() == 128 + signal.SIGTERM
     assert termios.tcgetattr(shell.master)[3] & termios.ECHO  # the program switched the echo back on before it left
+
+
+def test_the_first_question_fits_a_24_row_screen(installer, terminal) -> None:
+    fake = installer(inspect_reply("qemu-q35-virtio", serials={"/dev/vda": "VDA-SERIAL-0001"}))
+    shell = terminal(fake, rows=24, cols=80)
+    shown = shell.expect("Your choice [Enter = English (US)]: ")
+    screen = ANSI.sub("", shown[shown.index("Step 1 of 9"):]).replace("\r\n", "\n")
+    assert len(screen.splitlines()) + 1 <= 24  # the heading, the list and the prompt are on one screen (plus the line the heading started on)
+    shell.proc.send_signal(signal.SIGTERM)
+    shell.finish()

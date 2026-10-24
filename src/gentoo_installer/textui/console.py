@@ -454,7 +454,7 @@ class Console:
         if title:
             self.para(title)
         shown = list(range(len(items)))
-        page_size = max(10, (self.rows - 9) * 2)
+        page_size = max(10, (self.rows - 11) * 2)  # two columns; the heading, the legend and the prompt need the other 11 rows of a 24-row screen
         offset = 0
         while True:
             window = shown[offset:offset + page_size]
