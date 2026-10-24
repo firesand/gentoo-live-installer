@@ -33,7 +33,7 @@ def world_update_reason(manifest: "InstallManifest") -> str:
     """Why @world needs an update here ("" when it does not): the profile differs from the stage3's, or USE was changed."""
     system, portage = manifest.system, manifest.portage
     variant = effective_stage_variant(system.stage_variant, system.desktop, system.init, system.multilib, system.stage_auto)
-    chosen = portage.profile_override or manifest.effective_profile()
+    chosen = manifest.effective_profile()  # the override, else the profile set by the user, else the derived one
     if chosen != stage_profile(variant):
         return "the chosen profile differs from the one the stage3 was built with"
     if portage.use_flags or any(flags for flags in portage.package_use.values()):
