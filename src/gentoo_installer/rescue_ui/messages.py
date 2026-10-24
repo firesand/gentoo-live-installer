@@ -98,7 +98,6 @@ CANNOT_CLOSE_TEXT = (
 ERROR_TEXTS = {
     "rescue.busy_install": INSTALL_RUNNING_TEXT,
     "rescue.live_medium": LIVE_MEDIUM_NOTICE,
-    "rescue.busy": "Another step is still running. Wait a moment and try again.",
     "rescue.needs_network": "{message}\n\nConnect to a network (use the network icon in the panel) and try again.",
     "rescue.plan_stale": "The system changed since this plan was made. A new plan was prepared. Please read it again.",
     "rescue.plan_expired": "The plan was ready for too long and expired. A new plan was prepared. Please read it again.",
