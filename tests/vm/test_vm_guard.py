@@ -76,6 +76,16 @@ def test_a_real_disk_with_the_right_serial_but_the_wrong_size_is_refused():
     assert not report["ok"] and report["target"] is None
 
 
+def test_a_floppy_drive_and_ram_disks_are_not_other_disks():
+    """The i440FX machine ('pc') has an fd0 the guest lists as a disk; zram and loop devices appear on the live system."""
+    expectation = spec()
+    devices = guard_fixtures.lsblk_tree(expectation)
+    for name, size in (("fd0", 4096), ("zram0", 8 << 30), ("ram0", 64 << 20), ("nbd0", 0)):
+        devices.append({"name": name, "kname": name, "path": f"/dev/{name}", "type": "disk", "size": size, "mountpoints": [None]})
+    report = vm_guard.evaluate(expectation, devices, dmi_strings=[f"{vm_guard.NONCE_KEY}=cafe"])
+    assert report["ok"], report["problems"]
+
+
 def test_each_extra_disk_is_guarded_on_its_own():
     expectation = spec(extra=2)
     ok = guard_fixtures.fabricated_report(expectation)

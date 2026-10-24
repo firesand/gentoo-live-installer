@@ -34,8 +34,8 @@ NONCE_KEY = "org.gentoo-installer.vm-nonce"
 MIB = 1 << 20
 GIB = 1 << 30
 LSBLK_COLUMNS = "PATH,KNAME,TYPE,SIZE,SERIAL,MODEL,TRAN,RM,RO,LOG-SEC,PHY-SEC,PTTYPE,FSTYPE,MOUNTPOINTS"
-# Block devices that are not disks the installer could be pointed at.
-IGNORED_PREFIXES = ("zram", "ram", "loop", "nbd")
+# Block devices that are not disks the installer could be pointed at (fd0: the i440FX machine's floppy drive).
+IGNORED_PREFIXES = ("zram", "ram", "loop", "nbd", "fd")
 
 # What each emulated bus looks like from inside the guest.
 BUS_FACTS = {
