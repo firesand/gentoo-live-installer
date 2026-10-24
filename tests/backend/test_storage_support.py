@@ -33,7 +33,7 @@ def is_write(argv: tuple[str, ...]) -> bool:
     return (
         exe.startswith("mkfs.")
         or exe in WRITE_EXECUTABLES
-        or (exe == "parted" and ("mklabel" in argv or "mkpart" in argv))
+        or (exe == "parted" and any(word in argv for word in ("mklabel", "mkpart", "set", "disk_set")))
         or (exe == "cryptsetup" and "luksFormat" in argv)
         or (exe == "btrfs" and "mkswapfile" in argv)
     )
@@ -76,7 +76,8 @@ class FakeDisk:
     ) -> None:
         self.path, self.size, self.serial, self.wwn, self.model, self.pttype, self.kind = path, size, serial, wwn, model, pttype, kind
         self.log_sec, self.ro, self.removable = log_sec, ro, removable
-        self.parts = [dict(p) for p in (partitions or [])]  # num, start, size, fstype, parttype, label, mounts, holders
+        self.pmbr_boot = False  # GPT: the protective MBR entry carries the boot flag (parted disk_set pmbr_boot on)
+        self.parts = [dict(p) for p in (partitions or [])]  # num, start, size, fstype, parttype, label, mounts, holders, flags
         for part in self.parts:
             part.setdefault("start", 1 * MiB)
             part.setdefault("holders", [])
@@ -265,6 +266,7 @@ class StatefulRunner:
         if args[1] == "--zap-all":
             disk.parts.clear()
             disk.pttype = "gpt"
+            disk.pmbr_boot = False  # a fresh protective MBR: sgdisk writes its entry with status 0x00 (mbr.cc: "unbootable")
             return self.ok(args, "GPT data structures destroyed!")
         m = re.match(r"--new=(\d+):0:(.+)", args[1])
         if m:
@@ -279,11 +281,35 @@ class StatefulRunner:
             disk.parts.append({"num": num, "start": start, "size": length, "fstype": None, "parttype": guid, "mounts": [], "holders": []})
         return self.ok(args)
 
+    def _parted_print(self, disk: FakeDisk) -> str:
+        """`parted --script --machine DISK print`: one line for the disk, one per partition (flags last, joined by ", ")."""
+        lines = ["BYT;", f"{disk.path}:{disk.size}B:file:{disk.log_sec}:{disk.log_sec}:{'msdos' if disk.pttype == 'dos' else disk.pttype}::{'pmbr_boot' if disk.pmbr_boot else ''};"]
+        for part in sorted(disk.parts, key=lambda p: p["num"]):
+            end = part["start"] + part["size"] - 1
+            lines.append(f"{part['num']}:{part['start']}B:{end}B:{part['size']}B:{part.get('fstype') or ''}::{', '.join(sorted(part.get('flags', ())))};")
+        return "\n".join(lines) + "\n"
+
     def _cmd_parted(self, args):
+        if "--machine" in args:
+            return self.ok(args, self._parted_print(self.disks[args[-2]]))
         disk = self.disks[args[2]]
         if args[3] == "mklabel":
             disk.parts.clear()
             disk.pttype = "dos"
+            disk.pmbr_boot = False
+        elif args[3] == "set":  # parted DISK set NUMBER FLAG on|off
+            part = next((p for p in disk.parts if p["num"] == int(args[4])), None)
+            if part is None:
+                raise RunnerError(args, 1, "Error: Partition doesn't exist.")
+            flags = part.setdefault("flags", set())
+            if args[6] == "on":
+                flags.add(args[5])
+            else:
+                flags.discard(args[5])
+        elif args[3] == "disk_set":  # parted DISK disk_set FLAG on|off
+            if disk.pttype != "gpt" or args[4] != "pmbr_boot":
+                raise RunnerError(args, 1, f"parted: invalid token: {args[4]}")
+            disk.pmbr_boot = args[5] == "on"
         elif args[3] == "mkpart":
             def mib(x: str) -> int:
                 return disk.size if x == "100%" else int(x.removesuffix("MiB")) * MiB
