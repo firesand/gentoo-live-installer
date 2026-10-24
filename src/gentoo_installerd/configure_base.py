@@ -20,6 +20,7 @@ from .runner import accepts_keyword, CommandResult, Runner, RunnerError
 from .storage import LayoutEntry
 
 if TYPE_CHECKING:
+    from .configure_desktop import DesktopAtoms
     from .configure_fstab import ExistingStack
 
 
@@ -85,6 +86,7 @@ class ConfigurerBase:
         def luks_prompt_uses_console_keymap(self, manifest: InstallManifest) -> bool: ...  # configure_system
         def wants_cron(self, manifest: InstallManifest) -> bool: ...  # configure_system
         def service_installed(self, name: str, init: str) -> bool: ...  # configure_system
+        def desktop_atoms(self, manifest: InstallManifest, plan: object | None = None) -> DesktopAtoms: ...  # configure_desktop
         def early_boot_atoms(self, manifest: InstallManifest, plan: object | None = None) -> list[str]: ...  # configure_boot
         def bootloader_atoms(self, manifest: InstallManifest) -> list[str]: ...  # configure_boot
 

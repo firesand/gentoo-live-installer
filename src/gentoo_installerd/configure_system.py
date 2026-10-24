@@ -269,17 +269,3 @@ class SystemMixin(ConfigurerBase):
             else:
                 self.chroot(("systemctl", "enable", name))
         return warnings
-
-    def configure_desktop_session(self, manifest: InstallManifest) -> None:
-        """Files and steps that need the desktop packages: polkit agent autostart, dconf database."""
-        system = manifest.system
-        if system.desktop == "xfce":
-            # polkit-gnome's own entry only starts under GNOME; PortageHub and settings tools need an agent.
-            self.write("etc/xdg/autostart/gentoo-installer-polkit-agent.desktop",
-                       "[Desktop Entry]\nType=Application\nName=PolicyKit Authentication Agent\n"
-                       "Exec=/usr/libexec/polkit-gnome-authentication-agent-1\nOnlyShowIn=XFCE;\nNoDisplay=true\n")
-        if system.desktop == "gnome" and not _keyboard_is_default(system):
-            try:
-                self.chroot(("dconf", "update"))
-            except RunnerError:
-                self.notify("warning: dconf update failed; the keyboard layout may need to be chosen again in GNOME settings")

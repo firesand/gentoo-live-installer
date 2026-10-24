@@ -16,6 +16,12 @@ from .configure_base import (  # noqa: F401
     _plan_list,
     _plan_scalar,
 )
+from .configure_desktop import (  # noqa: F401
+    DesktopAtoms,
+    DesktopMixin,
+    DesktopResult,
+    PREFERRED_FIRST,
+)
 from .configure_fstab import (  # noqa: F401
     detect_existing_stack,
     ExistingStack,
@@ -70,8 +76,6 @@ from .configure_packages import (  # noqa: F401
     CYCLE_BREAK_RECORD,
     cycle_break_suggestion,
     CYCLE_BREAK_USE,
-    DesktopAtoms,
-    DesktopResult,
     EmergeDiagnosis,
     explain_emerge_failure,
     FailedBuild,
@@ -81,7 +85,6 @@ from .configure_packages import (  # noqa: F401
     package_of,
     PackageInstallError,
     PackagesMixin,
-    PREFERRED_FIRST,
     _ANSI,
     _BUILD_LOG,
     _build_log_findings,
@@ -132,5 +135,5 @@ from .configure_accounts import (  # noqa: F401
 )
 
 
-class Configurer(FstabMixin, NetworkMixin, PackagesMixin, HardwareMixin, PortageMixin, BootMixin, SystemMixin, AccountsMixin):
+class Configurer(FstabMixin, NetworkMixin, DesktopMixin, PackagesMixin, HardwareMixin, PortageMixin, BootMixin, SystemMixin, AccountsMixin):
     """The sum of the per-domain mixins; ConfigurerBase holds the shared plumbing."""
