@@ -178,12 +178,14 @@ def extended_cells() -> list[Cell]:
 
 
 def known_limitation_cells() -> list[Cell]:
-    """Combinations that cannot resolve today because the published profiles have no desktop settings."""
+    """Combinations that cannot resolve today because the published profiles have no desktop settings.
+
+    KDE on these stage3 families is refused by the manifest itself (it needs a Standard or Desktop
+    stage3), so only the desktops the manifest still allows, with a warning, are listed.
+    """
     note = "profile without desktop settings (no-multilib/hardened have no desktop variant)"
     return [
-        Cell("kde-openrc-nomultilib", "openrc", "kde", (("system.multilib", False), ("system.stage_variant", "amd64-nomultilib-openrc")), note, True),
         Cell("xfce-openrc-nomultilib", "openrc", "xfce", (("system.multilib", False), ("system.stage_variant", "amd64-nomultilib-openrc")), note, True),
-        Cell("kde-openrc-hardened", "openrc", "kde", (("system.stage_variant", "amd64-hardened-openrc"),), note, True),
     ]
 
 
@@ -210,6 +212,7 @@ class RenderedCell:
     config: Path  # scratch PORTAGE_CONFIGROOT
     profile: str
     atoms: list[str]
+    plan: Any = None  # the hardware plan the configuration was rendered with
 
 
 def load_stage3(init: str, data_dir: Path = DATA) -> set[str]:
@@ -248,11 +251,19 @@ def _layout_for(manifest):
 
 
 def render_cell(cell: Cell, tree: Path, scratch: Path, plan=None) -> RenderedCell:
-    """Write the installer's Portage configuration for the cell and build a scratch config root from it."""
+    """Write the installer's Portage configuration for the cell and build a scratch config root from it.
+
+    Without a plan the cell gets the generic plan an installation builds when nothing was probed
+    (Installer._plan: hwplan.plan(manifest, None)), so firmware and microcode are configured as on
+    a real machine of unknown vendor.
+    """
+    from gentoo_installerd import hwplan
     from gentoo_installerd.configure import Configurer, Resources
     from gentoo_installerd.runner import DryRunRunner
 
     manifest = cell.manifest()
+    if plan is None:
+        plan = hwplan.plan(manifest, None)
     work = scratch / "cells" / cell.name
     if work.exists():
         shutil.rmtree(work)
@@ -288,7 +299,7 @@ def render_cell(cell: Cell, tree: Path, scratch: Path, plan=None) -> RenderedCel
     with (config / "etc/portage/make.conf").open("a") as handle:
         handle.write("\n".join((f'PORTAGE_TMPDIR="{scratch / "tmp"}"', f'PORTAGE_DEPCACHEDIR="{scratch / "depcache"}"',
                                 f'DISTDIR="{scratch / "distfiles"}"', f'PKGDIR="{scratch / "pkgdir"}"', "")))
-    return RenderedCell(target, config, profile, atoms)
+    return RenderedCell(target, config, profile, atoms, plan)
 
 
 # --- the closure walk --------------------------------------------------------------------------------

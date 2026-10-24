@@ -2000,7 +2000,10 @@ class ScenarioRunner:
             table = self.scenario.table or ("gpt" if storage.firmware == "uefi" else None)
             plan["detected"] = {"storage.device": storage.device, "storage.device_id": storage.device_id,
                                 "storage.device_id_kind": storage.device_id_kind, "storage.firmware": storage.firmware,
-                                "storage.table": table}
+                                "storage.table": table,
+                                # Seeded by the wizard from the hardware report (recommend.defaults_for): recorded,
+                                # not asserted; the target probes check what they lead to (no microcode in a VM).
+                                "storage.swap_mib": None, "options.bluetooth": None, "options.microcode": None}
         return plan
 
     def install(self, *, cancel_at_stage3: bool = False, reinstall: bool = False) -> dict | None:

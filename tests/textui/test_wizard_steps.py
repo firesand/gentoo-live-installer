@@ -545,7 +545,9 @@ def test_the_stage3_family_of_a_settings_file_is_kept_when_the_init_system_chang
     wizard._ask_init()
     assert (wizard.manifest.system.stage_variant, wizard.manifest.system.multilib) == ("amd64-hardened-systemd", True)
     wizard2, _, _ = start([("Which init system", "2")], from_file=True)
+    # KDE needs a Standard or Desktop stage3 (manifest rule), so this settings file uses Xfce.
     wizard2.manifest.system.stage_variant, wizard2.manifest.system.multilib = "amd64-nomultilib-openrc", False
+    wizard2.manifest.system.desktop = "xfce"
     wizard2._ask_init()
     assert (wizard2.manifest.system.stage_variant, wizard2.manifest.system.multilib) == ("amd64-nomultilib-systemd", False)
     assert wizard2.manifest.validate_sections()["system"] == []

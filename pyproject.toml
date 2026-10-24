@@ -18,6 +18,7 @@ gentoo-installer = "gentoo_installer.app:main"
 gentoo-installerd = "gentoo_installerd.server:main"
 gentoo-installer-text = "gentoo_installer.textui.cli:main"
 gentoo-rescue = "gentoo_installerd.rescue.cli:main"
+gentoo-rescue-gui = "gentoo_installer.rescue_app:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

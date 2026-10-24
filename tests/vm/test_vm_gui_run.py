@@ -53,7 +53,9 @@ def test_the_defaults_scenario_leaves_firmware_table_and_disk_to_the_gui(lab):
     assert plan["detect"] is True
     assert set(plan["overrides"]) == {"accounts", "options"}  # credentials and the SSH probe access, nothing else
     assert plan["detected"] == {"storage.device": "/dev/vda", "storage.device_id": vm.TARGET_SERIAL, "storage.device_id_kind": "",
-                                "storage.firmware": "uefi", "storage.table": "gpt"}
+                                "storage.firmware": "uefi", "storage.table": "gpt",
+                                # seeded from the hardware report: recorded, not asserted
+                                "storage.swap_mib": None, "options.bluetooth": None, "options.microcode": None}
     assert json.loads((lab.run_dir() / "gui-detected.json").read_text()) == detected  # the GUI's own choices are kept as evidence
 
 

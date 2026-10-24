@@ -681,6 +681,39 @@ def explain_emerge_failure(output: str) -> EmergeDiagnosis:
     return EmergeDiagnosis(resolution, summary, build_failure, bool(fetch) or bool(_TRANSIENT_PATTERN.search(output)), memory)
 
 
+# emerge's own way out of a dependency cycle, for example "- dev-python/pillow-12.3.0 (Change USE: -truetype)".
+_CYCLE_BREAK_RE = re.compile(r"^- (?P<cpv>[A-Za-z0-9+_.-]+/[A-Za-z0-9+_.-]+) \(Change USE: (?P<flags>[^)]+)\)\s*$", re.M)
+CYCLE_BREAK_USE = "etc/portage/package.use/zz-installer-cycle-break"
+CYCLE_BREAK_RECORD = "var/lib/gentoo-installer/cycle-breaks"
+MAX_CYCLE_BREAKS = 3
+
+
+def package_of(cpv: str) -> str:
+    """'dev-python/pillow-12.3.0' -> 'dev-python/pillow' (a package name never ends in -<digit>...)."""
+    category, _, rest = cpv.partition("/")
+    match = re.match(r"(.+?)-[0-9]", rest)
+    return f"{category}/{match.group(1) if match else rest}"
+
+
+def cycle_break_suggestion(output: str) -> tuple[str, list[str]] | None:
+    """The package and USE change emerge suggests to break a dependency cycle, or None.
+
+    Building from source on a desktop profile can hit cycles a binary install never sees (in 2026
+    glib -> docutils -> pillow[truetype] -> harfbuzz -> glib). emerge names a change that breaks the
+    cycle; the first one it offers is used.
+    """
+    start = output.find("break this cycle")
+    if start < 0 or "ircular dependencies" not in output:
+        return None
+    match = _CYCLE_BREAK_RE.search(output, start)
+    if not match:
+        return None
+    flags = [flag.lstrip("+") for flag in match.group("flags").split()]
+    if not flags or not all(USE_TOKEN_RE.fullmatch(flag) for flag in flags) or not ATOM_RE.fullmatch(package_of(match.group("cpv"))):
+        return None
+    return match.group("cpv"), flags
+
+
 # --- package sets ---------------------------------------------------------------------------------
 
 
@@ -904,6 +937,11 @@ class Configurer:
         if options.install_hwmonux or options.install_portagehub:
             # Both companions can pull in Mesa[X], which requires libglvnd[X] on the minimal profile.
             _require_use(package_use, "media-libs/libglvnd", "X")
+        # The official binary QtWebEngine (KDE pulls it in) is built with bindist; without the flag the
+        # binary is ignored and Chromium is compiled from source for hours. bindist only leaves out
+        # proprietary codecs in embedded web views. Set with and without the binary host, so switching
+        # it later rebuilds nothing; a user's own choice for the flag wins.
+        _default_use(package_use, "dev-qt/qtwebengine", "bindist")
         if manifest.network.manager == "networkmanager":
             # NetworkManager uses wpa_supplicant's D-Bus interface for Wi-Fi.
             _require_use(package_use, "net-wireless/wpa_supplicant", "dbus")
@@ -1317,19 +1355,67 @@ class Configurer:
         return directory.is_dir() and any(re.fullmatch(re.escape(name) + r"-[0-9].*", entry.name) for entry in directory.iterdir())
 
     def pretend(self, manifest: InstallManifest, atoms: Sequence[str]) -> None:
-        """Resolve the package set without installing it, so impossible choices fail in minutes."""
+        """Resolve the package set without installing it, so impossible choices fail in minutes.
+
+        A dependency cycle that emerge knows how to break is broken here, before the stages run.
+        """
         if not atoms:
             return
+        for attempt in range(MAX_CYCLE_BREAKS + 1):
+            try:
+                # Same sources as the real install (binary packages included): the gate must predict
+                # whether the installation would fail, not be stricter than it. scripts/lint-plan.py is
+                # the strict, source-only check that runs in development.
+                self.emerge(manifest, ("--pretend", "--noreplace", "--verbose=n", *atoms))
+                return
+            except RunnerError as exc:
+                suggestion = cycle_break_suggestion(exc.output)
+                if suggestion is not None and attempt < MAX_CYCLE_BREAKS:
+                    self.break_cycle(manifest, *suggestion)
+                    continue
+                diagnosis = explain_emerge_failure(exc.output)
+                if diagnosis.resolution:
+                    raise PackageInstallError(f"Portage cannot resolve the selected packages: {diagnosis.summary}", resolution=True) from exc
+                self.notify("warning: the package resolution check could not run (" + diagnosis.summary[:200] + "); continuing")
+                return
+
+    def break_cycle(self, manifest: InstallManifest, cpv: str, flags: Sequence[str]) -> None:
+        """Build one package with the USE change emerge suggested, as a Gentoo user breaks a cycle by hand.
+
+        The change applies to that package only (a temporary package.use file), and the package is
+        recorded in the new system so the desktop stage rebuilds it with the configured flags, also
+        after a resume.
+        """
+        change = " ".join(flags)
+        self.notify(f"Breaking a dependency cycle: building {cpv} once with USE=\"{change}\"")
+        self.write(CYCLE_BREAK_USE, f"={cpv} {change}\n")
         try:
-            # Same sources as the real install (binary packages included): the gate must predict
-            # whether the installation would fail, not be stricter than it. scripts/lint-plan.py is
-            # the strict, source-only check that runs in development.
-            self.emerge(manifest, ("--pretend", "--noreplace", "--verbose=n", *atoms))
+            self.emerge(manifest, ("--oneshot", f"={cpv}"))
         except RunnerError as exc:
-            diagnosis = explain_emerge_failure(exc.output)
-            if diagnosis.resolution:
-                raise PackageInstallError(f"Portage cannot resolve the selected packages: {diagnosis.summary}", resolution=True) from exc
-            self.notify("warning: the package resolution check could not run (" + diagnosis.summary[:200] + "); continuing")
+            raise PackageInstallError(f"A dependency cycle could not be broken by building {cpv} with USE=\"{change}\": "
+                                      + explain_emerge_failure(exc.output).summary, resolution=True) from exc
+        finally:
+            if not self.dry_run:
+                self.path(CYCLE_BREAK_USE).unlink(missing_ok=True)
+        record = self.path(CYCLE_BREAK_RECORD)
+        recorded = record.read_text().split() if record.is_file() else []
+        if package_of(cpv) not in recorded:
+            self.write(CYCLE_BREAK_RECORD, "\n".join([*recorded, package_of(cpv)]) + "\n")
+
+    def restore_cycle_breaks(self, manifest: InstallManifest) -> list[str]:
+        """Rebuild the packages a cycle break built with other flags; returns what is still left over."""
+        record = self.path(CYCLE_BREAK_RECORD)
+        if self.dry_run or not record.is_file():
+            return []
+        problems: list[str] = []
+        for package in record.read_text().split():
+            try:
+                self.emerge(manifest, ("--oneshot", "--update", "--newuse", package))
+            except RunnerError as exc:
+                problems.append(f"{package} keeps the flags used to break a dependency cycle; later run: emerge --oneshot --newuse {package} "
+                                f"({explain_emerge_failure(exc.output).summary[:160]})")
+        record.unlink(missing_ok=True)
+        return problems
 
     def install_packages(self, manifest: InstallManifest, plan: object | None = None) -> None:
         """Install the whole package set with one emerge (the stages use install_essential/install_desktop)."""
@@ -1467,6 +1553,7 @@ class Configurer:
             if outcome.missing:
                 result.failed.append(atom)
                 result.degraded.append(f"{atom} could not be installed: {outcome.reason}"[:300])
+        result.degraded.extend(problem[:300] for problem in self.restore_cycle_breaks(manifest))
         return result
 
     # ----- services ---------------------------------------------------------------------------------

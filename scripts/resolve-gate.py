@@ -178,7 +178,7 @@ def run_cell(lint: Any, cell: Any, args: argparse.Namespace, images: dict[str, s
         result.error = f"Could not render the installer configuration: {type(exc).__name__}: {exc}"
         return result
     # The kernel stage emerges the plan's drivers on their own, right after the kernel.
-    drivers = [str(atom) for atom in getattr(plan, "driver_atoms", None) or []]
+    drivers = [str(atom) for atom in getattr(rendered.plan, "driver_atoms", None) or []]
     result.profile, result.atoms = rendered.profile, list(dict.fromkeys([*rendered.atoms, *drivers]))
     portage_dir = container_config(rendered)
     scratch.mkdir(parents=True, exist_ok=True)
