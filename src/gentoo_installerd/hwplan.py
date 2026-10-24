@@ -69,7 +69,8 @@ A_NOTO_CJK = "media-fonts/noto-cjk"
 # Packages the installer can pull in that need far more memory per compile job than the machine-wide MAKEOPTS assumes (about
 # 2 GiB per job). The binary host installs them ready-made; compiled, a few big C++ compiles or links at once exhaust the memory
 # (the first VM acceptance run: the compiler of dev-python/pyside was killed on a 4 GiB machine). Every atom is in the pinned tree
-# and reached by a package set, and the ebuilds of all but pyside say why they are heavy (tests/hardware/test_plan_memory.py).
+# and reached by a package set; the ebuilds of qtwebengine, llvm and webkit-gtk say why they are heavy, pyside has the acceptance run
+# and clang is built with LLVM (tests/hardware/test_plan_memory.py checks all of it with GENTOO_PINNED_TREE).
 # Left out on purpose: dev-lang/rust (rust.eclass prefers rust-bin) and sys-devel/gcc (in the stage3; a job needs little memory).
 MEMORY_HEAVY_ATOMS = (
     "dev-python/pyside",     # HWMonux's Qt bindings: unity builds of the Qt modules

@@ -65,7 +65,7 @@ MEMORY_ENV_NAME = "installer-memory"
 MEMORY_ENV_FILE = f"etc/portage/env/{MEMORY_ENV_NAME}"
 PACKAGE_ENV_FILE = "etc/portage/package.env/installer-hardware"
 # What an out-of-memory failure says when the build already had one compile job: nothing is left to lower.
-NOT_ENOUGH_MEMORY = "It still ran out of memory with one compile job: this PC needs more memory or swap for it."
+NOT_ENOUGH_MEMORY = "It ran out of memory even with one compile job: this PC needs more memory or swap for it."
 # Where a live profile's certificates may be read from (never arbitrary files such as /etc/shadow).
 CERTIFICATE_ROOTS = ("/home/", "/root/", "/etc/NetworkManager/", "/etc/ssl/", "/etc/pki/", "/etc/ca-certificates/",
                      "/usr/share/ca-certificates/", "/usr/local/share/ca-certificates/")
@@ -672,7 +672,8 @@ _LOG_ERROR_PATTERNS = (
 )
 # What Portage prints about failed packages. Its summary block (only when several failed or --keep-going is on):
 #   " *  (dev-python/pyside-6.11.2:6/6.11.2::gentoo, ebuild scheduled for merge), Log file:" and "'/var/tmp/.../build.log'"
-_FAILED_ENTRY = re.compile(r"\((?P<package>[^\s:,()]+)(?::[^\s,()]*)?::[^\s,()]+, (?:ebuild|binary) scheduled for merge[^)]*\)(?P<postinst> \(postinst failed\))?")
+# It is an error message, so it starts with " * ": a slot conflict names its packages in the very same words, without that prefix.
+_FAILED_ENTRY = re.compile(r"\s*\*\s+\((?P<package>[^\s:,()]+)(?::[^\s,()]*)?::[^\s,()]+, (?:ebuild|binary) scheduled for merge[^)]*\)(?P<postinst> \(postinst failed\))?")
 #   " * ERROR: dev-python/pyside-6.11.2::gentoo failed (compile phase):" (the messages of the package; always printed)
 _FAILED_PHASE = re.compile(r"ERROR: (?P<package>\S+?)(?:::\S+)? failed \((?P<phase>\w+) phase\)")
 #   ">>> Failed to emerge dev-python/pyside-6.11.2, Log file:"
@@ -773,7 +774,7 @@ def explain_emerge_failure(output: str, read_log: Callable[[str], str] | None = 
             items.append("blocked packages: " + line.strip()[:160])
         if "Multiple package instances within a single package slot" in line:
             items.append("slot conflict between packages")
-        for found in (_FAILED_ENTRY.search(line), _FAILED_PHASE.search(line), _FAILED_TO_EMERGE.search(line), _NUMBERED_ENTRY.match(line)):
+        for found in (_FAILED_ENTRY.match(line), _FAILED_PHASE.search(line), _FAILED_TO_EMERGE.search(line), _NUMBERED_ENTRY.match(line)):
             if found:
                 groups = found.groupdict()
                 package = groups["package"]
@@ -2074,10 +2075,31 @@ class Configurer:
         return self.run_plan_steps(plan)
 
     def write_plan_files(self, plan: object | None = None) -> None:
-        """Files the hardware plan wants on the target (written as root:root)."""
-        for item in _plan_list(self._plan(plan), "files"):
-            path, content, mode = item
-            self.write(str(path), str(content), int(mode))
+        """Files the hardware plan wants on the target (written as root:root).
+
+        The plan sized its limit for the memory-heavy packages from what the probe saw. The setting in force is MAKEOPTS in
+        make.conf of the new system, and package.env replaces it for the packages it names: a limit that is not below that
+        setting would raise those packages, so the two files are left out then.
+        """
+        files = [(str(path), str(content), int(mode)) for path, content, mode in _plan_list(self._plan(plan), "files")]
+        if self.memory_limit_raises(files):
+            self.notify("The compile-job limit for memory-heavy packages is not below MAKEOPTS of the new system, so it is not needed")
+            files = [item for item in files if item[0].lstrip("/") not in (MEMORY_ENV_FILE, PACKAGE_ENV_FILE)]
+        for path, content, mode in files:
+            self.write(path, content, mode)
+
+    def memory_limit_raises(self, files: Sequence[tuple[str, str, int]]) -> bool:
+        """Whether the plan's limit for the memory-heavy packages is not below MAKEOPTS of the new system."""
+        text = next((content for path, content, _mode in files if path.lstrip("/") == MEMORY_ENV_FILE), "")
+        match = re.search(r'(?m)^MAKEOPTS="?([^"\n]*)', text)
+        if not match or self.dry_run:
+            return False
+        try:
+            machine = recommend.make_opts_jobs(self._variable("etc/portage/make.conf", "MAKEOPTS"))
+        except (OSError, ValueError, ConfigurationError):
+            return False
+        limit = recommend.make_opts_jobs(match.group(1))
+        return limit is not None and machine is not None and limit >= machine
 
     # ----- LVM volumes and md arrays that existed before the installation ------------------------------
 

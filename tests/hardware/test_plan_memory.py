@@ -130,6 +130,7 @@ def test_the_list_is_short_and_made_of_atoms_without_a_version():
 def test_configure_and_the_planner_agree_on_the_names():
     assert configure.MEMORY_ENV_FILE == ENV_FILE.lstrip("/")
     assert configure.PACKAGE_ENV_FILE == PACKAGE_ENV.lstrip("/")
+    assert configure.MEMORY_ENV_NAME == hwplan.MEMORY_ENV_NAME
 
 
 def test_the_written_files_are_what_the_configurer_reads_back():

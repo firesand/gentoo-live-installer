@@ -226,8 +226,11 @@ creates), the plan adds `/etc/portage/env/installer-memory` (`MAKEOPTS="-jN"`),
 `/etc/portage/package.env/installer-hardware` (one `atom installer-memory` line per package) and the
 scalar `memory_heavy_jobs`. It adds nothing otherwise, and nothing when the memory is not known. Both
 files are plan `files`, so they are written before the base and desktop stages and kept in the new
-system (later updates of those packages keep the limit). Portage reads `package.env` per package, so
-everything else keeps MAKEOPTS. The calling environment of emerge still wins over `package.env` (checked
+system (later updates of those packages keep the limit). The plan sizes the limit from what the probe
+saw, while the setting in force is MAKEOPTS in the new system's `make.conf` (sized from the live memory
+when the repository stage wrote it), and `package.env` replaces MAKEOPTS for the packages it names:
+`Configurer.write_plan_files` therefore leaves both files out when the limit is not below that MAKEOPTS,
+so the limit only ever lowers. Portage reads `package.env` per package, so everything else keeps MAKEOPTS. The calling environment of emerge still wins over `package.env` (checked
 with Portage's own API: environment, then `package.env`, then `make.conf`), which is why the retry of a
 build that was killed for lack of memory (`Configurer.emerge(..., one_job=True)`: `MAKEOPTS=-j1`,
 `NINJAOPTS=-j1`, `--jobs=1`) really runs one job, and needs no change to these files.
@@ -326,7 +329,7 @@ about hardware. Its public API only grows:
 * `Configurer.emerge(..., one_job=True)` is the retry of a build that was killed for lack of
   memory (one compile job, one package at a time); `install_essential` and `emerge_keep_going` use it
   once and then stop: when the packages already had one job (`compile_jobs(package)` reads MAKEOPTS and
-  the plan's package.env limit from the new system) the message says "It still ran out of memory with
+  the plan's package.env limit from the new system) the message says "It ran out of memory even with
   one compile job: this PC needs more memory or swap for it."
 
 ## Rescue (`src/gentoo_installerd/rescue/`)

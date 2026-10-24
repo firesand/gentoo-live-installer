@@ -92,6 +92,22 @@ class CurrentPortageOutputTests(unittest.TestCase):
         self.assertTrue(diagnosis.summary.startswith("app-misc/one-1.0 "))
         self.assertIn("app-misc/two-2.0-1", diagnosis.summary)
 
+    def test_the_packages_of_a_slot_conflict_are_not_failed_builds(self) -> None:
+        # emerge's own layout of a slot conflict (_emerge/resolver/slot_collision.py): the same "(cat/pkg-ver:slot::repo, ebuild scheduled for merge)"
+        # text as the failure list, but without the " * " of the error messages
+        output = ("\n!!! Multiple package instances within a single package slot have been pulled\n"
+                  "!!! into the dependency graph, resulting in a slot conflict:\n\ndev-libs/foo:0\n\n"
+                  '  (dev-libs/foo-2.0:0/0::gentoo, ebuild scheduled for merge) USE="static" ABI_X86="(64)" pulled in by\n'
+                  "    >=dev-libs/foo-2 required by (app-misc/bar-1.0:0/0::gentoo, ebuild scheduled for merge)\n"
+                  "    ^^^^^^^^^^^^^^^^\n\n"
+                  '  (dev-libs/foo-1.0:0/0::gentoo, installed) USE="static" ABI_X86="(64)" pulled in by\n'
+                  "    =dev-libs/foo-1* required by (app-misc/baz-1.0:0/0::gentoo, installed)\n")
+        asked: list[str] = []
+        diagnosis = explain_emerge_failure(output, lambda path: asked.append(path) or "")
+        self.assertEqual((diagnosis.kind, diagnosis.failures, diagnosis.build_failure), ("resolution", (), False))
+        self.assertEqual(diagnosis.summary, "slot conflict between packages")
+        self.assertEqual(asked, [])
+
     def test_the_summary_block_of_older_portage_is_still_understood(self) -> None:
         diagnosis = explain_emerge_failure(" * The following 2 packages failed to build:\n * 1) dev-qt/qtwebengine-6.11.2::gentoo (/log)\n * 2) www-client/falkon-26.04.3::gentoo (/log)\n")
         self.assertEqual([item.package for item in diagnosis.failures], ["dev-qt/qtwebengine-6.11.2", "www-client/falkon-26.04.3"])
@@ -338,7 +354,7 @@ class OutOfMemoryRetryTests(unittest.TestCase):
         self.assertEqual(result.failed, ["app-misc/hwmonux"])
         self.assertEqual(len(result.degraded), 1)
         self.assertEqual(result.degraded, [f"app-misc/hwmonux could not be installed: {PYSIDE} ran out of memory while compiling: {KILLED}. "
-                                           "It still ran out of memory with one compile job: this PC needs more memory or swap for it."])
+                                           "It ran out of memory even with one compile job: this PC needs more memory or swap for it."])
         self.assertEqual(len(self.emerges()), 2)
 
     def test_a_failed_world_update_names_the_package_too(self) -> None:
