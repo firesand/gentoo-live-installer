@@ -263,7 +263,7 @@ class CustomizePage(Page):
         portage.binhost = self.binhost.isChecked()
         portage.binhost_url = self.binhost_url.text().strip()
         if self.jobs_auto.isChecked():
-            portage.make_opts = auto_make_opts()
+            portage.make_opts = ""  # the installer sizes the jobs from this computer's processors, memory and swap
         elif self._loaded_make_opts and parse_jobs(self._loaded_make_opts) == self.jobs.value():
             portage.make_opts = self._loaded_make_opts  # untouched: keep extra flags such as -l
         else:

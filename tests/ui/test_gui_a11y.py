@@ -518,7 +518,7 @@ def test_main_install_mode_marks_a_command_line_manifest_as_explicit(fake_main, 
     seen.clear()
     assert app_module.main([]) == 0
     assert seen["firmware_explicit"] is False
-    assert seen["manifest"].portage.make_opts.startswith("-j")  # a fresh install builds with what this computer can sustain
+    assert seen["manifest"].portage.make_opts == ""  # empty: the installer sizes the build jobs for this computer
 
 
 def test_main_reports_a_broken_manifest_file(fake_main, monkeypatch, tmp_path):

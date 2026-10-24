@@ -4,7 +4,7 @@ from PySide6.QtCore import Signal
 from PySide6.QtGui import QStandardItemModel
 from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QLabel, QLineEdit
 
-from ..manifest import InstallManifest
+from ..manifest import InstallManifest, derive_profile
 from ..widgets import Card, ChoiceGroup, Page, wrapped_label
 
 PROFILE_BASE = "default/linux/amd64/23.0"
@@ -33,24 +33,8 @@ KDE_NEEDS_DESKTOP_STAGE = (
 )
 
 
-def profile_path(init: str, desktop: str, *, multilib: bool, hardened: bool = False) -> str:
-    """Return a published 23.0 profile for the selected init and profile family."""
-    path = PROFILE_BASE
-    if hardened:
-        path += "/no-multilib/hardened" if not multilib else "/hardened"
-    elif not multilib:
-        # The pinned tree has no desktop/no-multilib profiles. Desktop package
-        # selection remains independent, while this chooses the valid ABI profile.
-        path += "/no-multilib"
-    elif desktop == "kde":
-        path += "/desktop/plasma"
-    elif desktop == "gnome":
-        path += "/desktop/gnome"
-    elif desktop == "xfce":
-        path += "/desktop"
-    if init == "systemd":
-        path += "/systemd"
-    return path
+# One derivation for the wizard, the daemon and the plan lint.
+profile_path = derive_profile
 
 
 PUBLISHED_PROFILES = frozenset(
@@ -99,6 +83,8 @@ class SystemPage(Page):
     def __init__(self, manifest: InstallManifest):
         super().__init__("Choose your Gentoo foundation", "These choices determine the stage3, profile, kernel, boot process, and desktop. Recommended choices work well for a first installation.")
         self.manifest = manifest
+        self._derived_profile = ""
+        self._loaded_profile = ""
         self._updating = False
         self._loading = 0
         self.init_group = ChoiceGroup([
@@ -237,6 +223,7 @@ class SystemPage(Page):
         desktop = self.desktop_group.value() if hasattr(self, "desktop_group") else "kde"
         variant = self.stage.currentData() or ""
         derived = profile_path(init, desktop or "minimal", multilib="nomultilib" not in variant, hardened="hardened" in variant)
+        self._derived_profile = derived
         self.profile.clear()
         self.profile.addItem(derived, derived)
         if keep and keep != derived:
@@ -312,6 +299,7 @@ class SystemPage(Page):
             self.desktop_group.set_value(system.desktop)
             self._refresh_stages()
             self.stage.setCurrentIndex(max(0, self.stage.findData(system.stage_variant)))
+            self._loaded_profile = system.profile
             self._refresh_profiles(keep=system.profile)
             self._select(self.kernel, system.kernel)
             self._select(self.initramfs, system.initramfs)
@@ -334,7 +322,10 @@ class SystemPage(Page):
         system.init = self.init_group.value() or "openrc"
         system.stage_variant = self.stage.currentData()
         system.multilib = self.multilib.isChecked()
-        system.profile = str(self.profile.currentData() or self.profile.currentText()).strip()
+        chosen = str(self.profile.currentData() or self.profile.currentText()).strip()
+        # Empty means "derive from init, stage3 and desktop", so the profile follows later desktop
+        # changes. A profile the loaded settings named explicitly is kept as it was.
+        system.profile = "" if chosen == self._derived_profile and chosen != self._loaded_profile else chosen
         system.desktop = self.desktop_group.value() or "minimal"
         system.kernel = self.kernel.currentData()
         system.initramfs = self.initramfs.currentData()
@@ -353,7 +344,7 @@ class SystemPage(Page):
             return False, f"The kernel choice “{system.kernel}” is not available in the graphical installer. Choose a distribution kernel."
         if system.initramfs != "dracut":
             return False, f"The initramfs choice “{system.initramfs}” is not available in the graphical installer: distribution kernels need Dracut."
-        problem = desktop_problem(system.stage_variant, system.desktop) or profile_problem(system.profile, system.init, system.stage_variant)
+        problem = desktop_problem(system.stage_variant, system.desktop) or profile_problem(self.manifest.effective_profile(), system.init, system.stage_variant)
         if problem:
             return False, problem
         if system.secure_boot and (not system.secure_boot_key or not system.secure_boot_certificate):

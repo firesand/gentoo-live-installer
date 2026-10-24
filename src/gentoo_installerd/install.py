@@ -859,23 +859,10 @@ class Installer:
                     problems.append(f"The initramfs lacks the {wanted} module, so the root filesystem could not be opened at boot")
         if problems:
             raise InstallError("The installed system failed its final checks: " + "; ".join(problems))
-        self._keep_install_log()
         if self.manifest.system.desktop != "minimal":
             self.log("Desktop packages installed; graphical session will be available after reboot")
         # Last: nothing after this point needs name resolution inside the target.
         cfg.finalize_network(self.manifest)
-
-    def _keep_install_log(self) -> None:
-        """Leave the (already redacted) log and manifest on the new system for later troubleshooting."""
-        if self.dry_run:
-            return
-        for name in ("install.log", "manifest.json"):
-            source = self.state_dir / name
-            try:
-                if source.is_file():
-                    self.configurer.write_bytes(f"var/log/gentoo-installer/{name}", source.read_bytes(), 0o600)
-            except OSError as exc:
-                self.log(f"Could not keep {name} on the new system: {exc}")
 
     def _cleanup(self) -> None:
         if self._cleanup_done:

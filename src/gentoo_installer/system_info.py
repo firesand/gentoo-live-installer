@@ -39,7 +39,7 @@ CLOCK_WARN_SECONDS = 24 * 3600.0
 # plus the tools the GUI always relied on. Used only when the daemon cannot be
 # asked; a test keeps this a superset of the daemon list.
 REQUIRED_TOOLS = (
-    "lsblk", "findmnt", "blkid", "sgdisk", "parted", "partprobe", "udevadm", "mkfs.ext4",
+    "lsblk", "findmnt", "blkid", "sgdisk", "parted", "partprobe", "udevadm", "wipefs", "mkfs.ext4",
     "mkswap", "mount", "umount", "tar", "gpg", "gpgv", "chroot", "grub-install",
 )
 

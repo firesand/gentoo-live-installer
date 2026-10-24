@@ -29,7 +29,9 @@ def application_version(name: str) -> str:
 
 
 def ebuild_versions(category: str, name: str) -> list[str]:
-    return [path.stem.removeprefix(f"{name}-") for path in (OVERLAY / category / name).glob(f"{name}-*.ebuild")]
+    """Upstream versions of the overlay ebuilds; the Gentoo revision (-rN) is packaging-only."""
+    stems = (path.stem.removeprefix(f"{name}-") for path in (OVERLAY / category / name).glob(f"{name}-*.ebuild"))
+    return [re.sub(r"-r[0-9]+$", "", stem) for stem in stems]
 
 
 @pytest.mark.parametrize("name", sorted(COMPANIONS))

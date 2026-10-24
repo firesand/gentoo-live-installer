@@ -32,7 +32,7 @@ from . import daemon_client, diagnostics, keyboard, system_info
 from .backend import DEFAULT_SOCKET, BackendWorker
 from .manifest import SECRET_KEYS, InstallManifest, ManifestError
 from .pages.accounts import AccountsPage
-from .pages.customize import CustomizePage, auto_make_opts
+from .pages.customize import CustomizePage
 from .pages.progress import ProgressPage
 from .pages.readiness import ReadinessPage
 from .pages.review import ReviewPage, disk_description, format_lines, selection_problems
@@ -852,8 +852,6 @@ def main(argv: list[str] | None = None) -> int:
             manifest = InstallManifest.load(args.manifest)
         else:
             manifest = load_draft()
-            if not QSettings("GentooLive", "Installer").value("draft"):
-                manifest.portage.make_opts = auto_make_opts()  # a fresh install builds with what this computer can sustain
     except (OSError, ManifestError) as exc:
         QMessageBox.critical(None, "Cannot load installation settings", str(exc))
         return 2

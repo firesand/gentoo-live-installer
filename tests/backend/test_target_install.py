@@ -276,6 +276,12 @@ class BootloaderAndValidationTests(StageHarness):
         (fallback / "BOOTX64.EFI").write_bytes(b"grub")
         self.assertTrue(installer._verify_bootloader())
 
+    def keep_install_log(self, installer: Installer) -> Path:
+        """Run the copy cleanup makes before unmounting (the target is a plain directory here)."""
+        with unittest.mock.patch.object(installer, "_target_holds_system", return_value=True):
+            installer._preserve_install_log()
+        return self.target / "var/log/gentoo-installer"
+
     def test_validation_passes_keeps_the_log_and_hands_resolv_conf_to_resolved(self) -> None:
         m = target_manifest(system={"init": "systemd", "stage_variant": "amd64-systemd", "desktop": "minimal"}, network={"manager": "systemd-networkd"})
         installer = self.prepare(m)
@@ -283,7 +289,7 @@ class BootloaderAndValidationTests(StageHarness):
         (self.target / "etc/resolv.conf").write_text("nameserver 10.0.0.1\n")
         installer._validate()
         self.assertEqual(os.readlink(self.target / "etc/resolv.conf"), "../run/systemd/resolve/stub-resolv.conf")
-        kept = self.target / "var/log/gentoo-installer"
+        kept = self.keep_install_log(installer)
         self.assertEqual(sorted(path.name for path in kept.iterdir()), ["install.log", "manifest.json"])
         self.assertEqual((kept / "install.log").stat().st_mode & 0o777, 0o600)
         self.assertNotIn("user-password", (kept / "manifest.json").read_text())
@@ -292,10 +298,11 @@ class BootloaderAndValidationTests(StageHarness):
         installer = self.prepare(target_manifest(network={"proxy": "http://user:hunter2-secret@proxy.example:3128"}))
         self.finish_install(installer)
         installer._validate()
-        kept = (self.target / "var/log/gentoo-installer/manifest.json").read_text()
-        self.assertNotIn("hunter2-secret", kept)
-        self.assertIn("http://user:<redacted>@proxy.example:3128", kept)
-        self.assertNotIn("hunter2-secret", (self.target / "var/log/gentoo-installer/install.log").read_text())
+        kept = self.keep_install_log(installer)
+        manifest_text = (kept / "manifest.json").read_text()
+        self.assertNotIn("hunter2-secret", manifest_text)
+        self.assertIn("<redacted>@proxy.example:3128", manifest_text)
+        self.assertNotIn("hunter2-secret", (kept / "install.log").read_text())
 
     def test_validation_does_not_touch_resolv_conf_when_it_fails(self) -> None:
         m = target_manifest(system={"init": "systemd", "stage_variant": "amd64-systemd", "desktop": "minimal"}, network={"manager": "systemd-networkd"})

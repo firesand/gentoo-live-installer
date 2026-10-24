@@ -543,7 +543,7 @@ def test_automatic_jobs_are_computed_for_this_machine(make_window, monkeypatch):
     window._show_page(4)
     assert window.customize.jobs_auto.isChecked() and window.customize.jobs.value() == 12
     window.customize.save_manifest()
-    assert manifest.portage.make_opts == "-j12 -l12"
+    assert manifest.portage.make_opts == ""  # automatic: the installer sizes MAKEOPTS from the same machine
 
 
 # --- G7: the saved draft ----------------------------------------------------------------------------------------------------------------------------------
