@@ -93,7 +93,9 @@ explanations for newcomers and every expert option still within reach.
   compile-time totals and a per-day chart.
 
 Every write to `/etc/portage` is shown as a diff first (can be turned off) and written
-atomically; new entries go to a dedicated `zz-portagehub` file in each directory.
+atomically; new entries go to a dedicated `zz-portagehub` file in each directory. A file
+that cannot be read as UTF-8 text, or that is a symlink, is shown with the reason and never
+edited, and a write is refused if the file changed on disk after PortageHub read it.
 
 ## Build and run
 
@@ -103,30 +105,87 @@ cargo build --release
 ```
 
 Keep `portagehub` and `portagehub-helper` next to each other (or install them, below).
-Your user should be in the `portage` group so the history and live build logs are readable.
+Your user should be in the `portage` group so the History page and the *Recently installed*
+list can read `/var/log/emerge.log`. The live per-package phase in Activity does not need
+it: it follows emerge's own output, because Portage keeps its build directories private to
+the `portage` user.
 
 ### Administrator rights
 
 Browsing and previews run as your user. The first action that needs root starts
-`portagehub-helper` through **pkexec** (polkit asks for your password once per session).
-The helper only runs Portage tools (`emerge`, `emaint`, `eselect`, `egencache`, …),
-writes only below `/etc/portage`, and otherwise only performs a few operations whose
-arguments it checks itself: accepting or discarding `._cfg` config updates below `/etc`,
-a read-only boot scan, grub-mkconfig/lilo/bootctl/dracut with fixed arguments, remounting
-only /boot, /boot/efi or /efi read-write/read-only, recording
-known-good kernels in `/var/lib/kernel-fallback` (or `/var/lib/portagehub/kernels`), and
-deleting files of kernels that no installed package owns (never the running or a
-known-good kernel). After updating PortageHub, run `sudo dist/install.sh` again — the
-app warns when the installed helper is older than the GUI. If you close PortageHub during an emerge, the helper keeps it
-running until it finishes.
+`portagehub-helper` through **pkexec**; polkit asks for your password once, when that admin
+session starts.
 
-To install system-wide (adds the polkit policy so the prompt shows a proper message and
-is remembered briefly):
+**What an admin session is.** While it is open, PortageHub can run package-manager
+commands and rewrite `/etc/portage` as root, replace configuration files below `/etc`,
+change boot files and kernels and remount boot partitions. That is equivalent to full
+administrator access, so start a session only on a desktop you trust. The helper checks
+every request: it runs only `emerge`, `emaint`, `eselect`, `egencache`, `emerge-webrsync`,
+`env-update`, `glsa-check`, `eclean-dist`, `eclean-pkg` and `portageq`; for `emerge` it accepts
+only options it knows, spelled in full (Portage resolves abbreviations such as `--sys=` to
+`--sysroot`), and package atoms or `@sets` as targets, never a path; it writes only below
+`/etc/portage`, without following symlinks, and refuses `bashrc`, `postsync.d`,
+`env/<category>/<package>` (sourced as bash by every build), `patches/` and `._cfg` names. These
+checks guard against mistakes and against other programs of the same user riding along; they
+are not a sandbox against the person who authenticated. A few settings run commands as
+root by design (`FETCHCOMMAND` and `PORTAGE_BASHRC` in make.conf, a `repos.conf` entry that
+points outside `/var/db/repos`): the review dialog flags them in red before you apply.
+
+The other operations have arguments the helper fixes or validates itself: accepting or
+discarding `._cfg` config updates below `/etc`, a read-only boot scan,
+grub-mkconfig/lilo/bootctl/dracut, remounting only /boot, /boot/efi or /efi
+read-write/read-only, recording known-good kernels in `/var/lib/kernel-fallback` (or
+`/var/lib/portagehub/kernels`) with a pruned backup in `/boot/kernel-backup`, and deleting
+files of kernels that no installed package owns (never the running or a known-good kernel).
+
+**How long it lasts.** The session stays open until you press *End admin session* in
+Settings, quit PortageHub, or it has been idle for 15 minutes (no request and no running
+job); the next admin action then asks for your password again. If you close PortageHub during
+an emerge, the helper keeps the emerge running until it finishes (or choose *Stop emerge and
+quit* in the close dialog). *Force stop* in Activity sends SIGINT, then SIGTERM after 10
+seconds and SIGKILL after 10 more.
+
+**Log and undo.** Everything the helper is asked to do and how it ended goes to
+`/var/log/portagehub/audit.log` (readable by the `portage` group, rotated once at 5 MiB);
+PortageHub tells you if the log cannot be written. Changes to several files at once (turning
+`package.use` into a directory, accepting config updates, marking a kernel known-good) run as
+one recorded transaction: if a step fails, everything is rolled back, and
+*Configuration → Recent changes* (or the *Undo* strip right after saving) restores the files,
+refusing when one of them was edited since. *Accept all* for config updates shows every diff
+first and leaves out files that can lock you out (SSH, PAM, sudo, fstab, polkit, accounts,
+GRUB defaults).
+
+After updating PortageHub, run `sudo dist/install.sh` again — the app warns when the
+installed helper is older than the GUI.
+
+To install system-wide (adds the polkit policy so the prompt shows a proper message):
 
 ```sh
 cargo build --release
-sudo dist/install.sh
+sudo dist/install.sh                      # /usr/bin and /usr/libexec
+sudo PREFIX=/usr/local dist/install.sh    # /usr/local/bin and /usr/local/libexec
 ```
+
+`PREFIX` chooses where the program and the helper go; the polkit policy is written for that
+helper path (polkit identifies the helper by it) and always lands in
+`/usr/share/polkit-1/actions`. `DESTDIR` stages everything below another directory for
+packaging. The Gentoo ebuild installs to `/usr`.
+
+### Troubleshooting
+
+- *"No polkit authentication agent is running in this session"* — pkexec has nobody to ask
+  for the password. Start your desktop's polkit agent (`polkit-kde-agent`,
+  `polkit-gnome-authentication-agent-1`, `lxqt-policykit`, …); minimal window managers do not.
+- *PortageHub cannot open a window* — it prints the reason and a hint. It draws with wgpu
+  (Vulkan, or OpenGL through Mesa). When that cannot open a window, PortageHub starts itself
+  once more with a plain OpenGL renderer (glow), which older graphics hardware and some virtual
+  machines can still use; the first attempt's error is printed before the restart.
+  `PORTAGEHUB_RENDERER=wgpu` or `=glow` pins one renderer (and never falls back);
+  `WGPU_BACKEND=gl` or `=vulkan` picks the wgpu backend. Without a display (`DISPLAY` and
+  `WAYLAND_DISPLAY` both unset) nothing can open: start it from a desktop session.
+- *Everything is read-only for one file* — the Configuration page says why: not valid UTF-8,
+  not readable by your user, or a symlink (the helper never writes through one, because the
+  link target would decide where root writes).
 
 ### Environment variables
 
@@ -134,6 +193,9 @@ sudo dist/install.sh
 | --- | --- |
 | `PORTAGEHUB_ELEVATE` | Launcher for the helper: `pkexec` (default), another command such as `doas`, or `none` to run it unprivileged (testing). |
 | `PORTAGEHUB_HELPER` | Absolute path of the helper binary to use instead of the one next to the GUI or in `/usr/libexec`. |
+| `PORTAGEHUB_RENDERER` | `auto` (default: wgpu, then plain OpenGL if no window opens), `wgpu` or `glow`. |
+| `PORTAGEHUB_ROOT` | Work on a scratch tree instead of `/` (used by the tests; honoured only when not running as root). |
+| `PORTAGEHUB_IDLE_SECS` | Idle limit of the helper in seconds (tests only; honoured only when not root; the real limit is 15 minutes). |
 | `PORTAGEHUB_DEMO=1` | Replays a synthetic parallel emerge to try the progress view without building anything. |
 | `PORTAGEHUB_SCRIPT` | UI automation for screenshots, e.g. `tab=library;open=app-editors/vim;dtab=use;wait=2;shot=/tmp/vim.png;exit`. |
 

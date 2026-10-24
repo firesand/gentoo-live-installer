@@ -39,8 +39,11 @@ pub enum ExecMsg {
     /// An event and when it arrived (output is timestamped on arrival, so
     /// progress stays accurate even when the window is hidden and not repainting).
     Event(Event, std::time::Instant),
-    HelperReady(Option<String>),
-    HelperGone(String),
+    /// The helper's version and the problems its session starts with.
+    HelperReady(Option<String>, Vec<String>),
+    HelperGone(HelperExit),
+    /// Something the helper wants the user to know that belongs to no request.
+    Notice(String),
 }
 
 struct HelperConn {
@@ -81,20 +84,59 @@ fn ev_msg(e: Event) -> ExecMsg {
     ExecMsg::Event(e, std::time::Instant::now())
 }
 
+/// Where the helper may be installed: next to the GUI, then the system locations (a `PREFIX=/usr/local`
+/// install puts it in /usr/local/libexec).
+pub fn helper_candidates(exe_dir: Option<&std::path::Path>) -> Vec<PathBuf> {
+    let mut cands = Vec::new();
+    if let Some(dir) = exe_dir {
+        cands.push(dir.join("portagehub-helper"));
+    }
+    for dir in ["/usr/libexec", "/usr/bin", "/usr/local/libexec", "/usr/local/bin", "/usr/local/sbin"] {
+        cands.push(PathBuf::from(dir).join("portagehub-helper"));
+    }
+    cands
+}
+
 pub fn find_helper() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("PORTAGEHUB_HELPER").map(PathBuf::from).filter(|p| p.is_absolute() && p.is_file()) {
         return Some(p);
     }
-    let mut cands = Vec::new();
-    if let Ok(exe) = std::env::current_exe()
-        && let Some(dir) = exe.parent()
-    {
-        cands.push(dir.join("portagehub-helper"));
+    let exe = std::env::current_exe().ok();
+    helper_candidates(exe.as_deref().and_then(|e| e.parent())).into_iter().find(|p| p.is_file())
+}
+
+/// Why the helper process ended, from what it wrote on stderr.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HelperExit {
+    /// The session was idle for 15 minutes and closed itself: not an error; the next admin action asks again.
+    Idle,
+    /// pkexec found no polkit agent to ask for the password.
+    NoAgent,
+    /// Anything else, as the helper or pkexec said it (empty: it was cancelled or exited silently).
+    Other(String),
+}
+
+pub fn explain_helper_exit(stderr: &str) -> HelperExit {
+    let text = stderr.trim();
+    if text.contains(portagehub::protocol::IDLE_EXIT_MESSAGE) {
+        HelperExit::Idle
+    } else if text.contains("No authentication agent found") || text.contains("Error creating textual authentication agent") {
+        HelperExit::NoAgent
+    } else {
+        HelperExit::Other(text.to_string())
     }
-    cands.push(PathBuf::from("/usr/libexec/portagehub-helper"));
-    cands.push(PathBuf::from("/usr/bin/portagehub-helper"));
-    cands.push(PathBuf::from("/usr/local/bin/portagehub-helper"));
-    cands.into_iter().find(|p| p.is_file())
+}
+
+impl HelperExit {
+    /// The message for the user (`None` for an idle close, which gets its own, milder one).
+    pub fn problem(&self) -> Option<String> {
+        match self {
+            HelperExit::Idle => None,
+            HelperExit::NoAgent => Some("No polkit authentication agent is running in this session, so there is nobody to ask for your password. Start one (for example polkit-kde-agent, lxqt-policykit or polkit-gnome-authentication-agent-1 from your desktop's autostart) and try again.".into()),
+            HelperExit::Other(t) if t.is_empty() => Some("authentication cancelled or helper exited".into()),
+            HelperExit::Other(t) => Some(t.clone()),
+        }
+    }
 }
 
 impl Executor {
@@ -163,10 +205,6 @@ impl Executor {
         id
     }
 
-    pub fn root_op(&mut self, op: Op) -> u64 {
-        self.root_op_tx(op, None)
-    }
-
     /// A root operation that belongs to transaction `tx` (from `Op::Begin`).
     pub fn root_op_tx(&mut self, op: Op, tx: Option<String>) -> u64 {
         let id = self.alloc_id();
@@ -176,11 +214,6 @@ impl Executor {
 
     pub fn root_op_with_id(&mut self, id: u64, op: Op) {
         self.submit_root(Request::new(id, op));
-    }
-
-    /// Does the running helper understand `op`?
-    pub fn supports(&self, op: &Op) -> bool {
-        self.is_root || op.min_helper() <= self.helper_version
     }
 
     pub fn cancel(&mut self, id: u64, privilege: Priv, signal: i32) {
@@ -304,8 +337,11 @@ impl Executor {
         std::thread::spawn(move || {
             for line in BufReader::new(stdout).lines().map_while(Result::ok) {
                 match serde_json::from_str::<Event>(&line) {
-                    Ok(Event::Ready { version, .. }) => {
-                        let _ = tx.send(ExecMsg::HelperReady(version));
+                    Ok(Event::Ready { version, warnings, .. }) => {
+                        let _ = tx.send(ExecMsg::HelperReady(version, warnings));
+                    }
+                    Ok(Event::Notice { msg }) => {
+                        let _ = tx.send(ExecMsg::Notice(msg));
                     }
                     Ok(ev) => {
                         if let Some(id) = ev.id()
@@ -325,8 +361,8 @@ impl Executor {
             for id in ids {
                 let _ = tx.send(ev_msg(Event::Err { id, msg: "root helper exited".into() }));
             }
-            let reason = err_text.lock().unwrap().trim().to_string();
-            let _ = tx.send(ExecMsg::HelperGone(if reason.is_empty() { "authentication cancelled or helper exited".into() } else { reason }));
+            let exit = explain_helper_exit(&err_text.lock().unwrap());
+            let _ = tx.send(ExecMsg::HelperGone(exit));
             ctx.request_repaint();
         });
         self.helper = Some(HelperConn { sock, child });
@@ -350,7 +386,7 @@ impl Executor {
         }
     }
 
-    pub fn on_helper_gone(&mut self, reason: String) {
+    pub fn on_helper_gone(&mut self, exit: HelperExit) {
         if self.helper.is_none() && self.helper_state == HelperState::NotStarted {
             // We closed it ourselves.
             return;
@@ -358,7 +394,15 @@ impl Executor {
         if let Some(mut h) = self.helper.take() {
             let _ = h.child.try_wait();
         }
-        self.fail_queued(reason);
+        match exit.problem() {
+            Some(reason) => self.fail_queued(reason),
+            None => {
+                // An idle session closed itself: the next admin action starts a new one (and asks
+                // for the password again), as if none had been started yet.
+                self.helper_state = HelperState::NotStarted;
+                self.ctx.request_repaint();
+            }
+        }
     }
 
     pub fn stop_helper(&mut self) {
@@ -367,5 +411,38 @@ impl Executor {
         if !self.is_root {
             self.helper_state = HelperState::NotStarted;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_helper_says_why_it_ended() {
+        assert_eq!(explain_helper_exit("portagehub-helper: idle for 15 minutes, exiting\n"), HelperExit::Idle);
+        assert_eq!(explain_helper_exit("Error getting authority: ...\nNo authentication agent found.\n"), HelperExit::NoAgent);
+        assert_eq!(explain_helper_exit("Error creating textual authentication agent: Error opening current controlling terminal for the process (`/dev/tty'): No such device or address\n"), HelperExit::NoAgent);
+        assert_eq!(explain_helper_exit("  \n"), HelperExit::Other(String::new()));
+        assert_eq!(explain_helper_exit("portagehub-helper: peer uid 1001 is not the authenticated user 1000\n"), HelperExit::Other("portagehub-helper: peer uid 1001 is not the authenticated user 1000".into()));
+    }
+
+    #[test]
+    fn messages_for_the_user() {
+        assert_eq!(HelperExit::Idle.problem(), None);
+        let agent = HelperExit::NoAgent.problem().unwrap();
+        assert!(agent.starts_with("No polkit authentication agent is running in this session") && agent.contains("polkit-kde-agent"), "{agent}");
+        assert_eq!(HelperExit::Other(String::new()).problem().as_deref(), Some("authentication cancelled or helper exited"));
+        assert_eq!(HelperExit::Other("boom".into()).problem().as_deref(), Some("boom"));
+    }
+
+    #[test]
+    fn the_helper_is_found_where_a_prefix_install_puts_it() {
+        let c = helper_candidates(Some(std::path::Path::new("/opt/ph")));
+        assert_eq!(c[0], PathBuf::from("/opt/ph/portagehub-helper"));
+        for want in ["/usr/libexec", "/usr/bin", "/usr/local/libexec", "/usr/local/bin", "/usr/local/sbin"] {
+            assert!(c.contains(&PathBuf::from(want).join("portagehub-helper")), "{want}");
+        }
+        assert_eq!(helper_candidates(None).len(), 5);
     }
 }

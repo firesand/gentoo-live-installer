@@ -1,5 +1,6 @@
 //! Application state, background loading, job bookkeeping and the window shell.
 
+use crate::batch;
 use crate::data::{self, Data, DataMsg, PkgDetail, Reload};
 use crate::exec::{ExecMsg, Executor, HelperState, Priv};
 use crate::portage::emerge::EmergeOptions;
@@ -12,8 +13,8 @@ use crate::ui::widgets as w;
 use crate::views;
 use egui::{Align, Color32, CornerRadius, Frame, Layout, Margin, RichText, Stroke};
 use egui_phosphor::regular as icon;
-use portagehub::protocol::{Event, Op};
-use std::collections::{HashMap, HashSet, VecDeque};
+use portagehub::protocol::{Event, Expect, Op, TxInfo};
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender, channel};
@@ -82,9 +83,14 @@ pub enum Action {
     Capture { tag: String, argv: Vec<String>, privilege: Priv },
     Batch { title: String, ops: Vec<Op>, reload: Vec<Reload>, then: Option<Box<Action>> },
     Write { title: String, changes: Vec<FileChange>, reload: Vec<Reload>, then: Option<Box<Action>> },
+    /// Ask before running `ops` as one batch. `changes` only make the dialog show what will happen
+    /// (a diff per file); `unreadable` files cannot be previewed and `notes` explain what is left out.
+    /// The confirmation is not optional, whatever the "review changes" setting says.
+    ReviewOps { title: String, changes: Vec<FileChange>, unreadable: Vec<PathBuf>, notes: Vec<String>, ops: Vec<Op>, reload: Vec<Reload> },
     Reload(Reload),
-    Toast(ToastKind, String),
     Cancel(u64),
+    /// Stop with SIGINT now, SIGTERM after ten seconds and SIGKILL after ten more if it still runs.
+    ForceStop(u64),
     StartHelper,
     LoadDetail(String),
     LoadEbuild(PathBuf),
@@ -100,7 +106,7 @@ pub enum Action {
 pub enum JobKind {
     Generic,
     Pretend { opts: EmergeOptions },
-    Emerge { opts: EmergeOptions, tracker: Box<Tracker> },
+    Emerge { tracker: Box<Tracker> },
     Sync,
     Capture { tag: String },
     /// Background `emerge -uDN @world --pretend` for the Store's update list.
@@ -113,6 +119,10 @@ pub enum JobKind {
     CleanupScan { tag: String },
     /// mount -o remount of a boot partition.
     Remount,
+    /// The helper's journal of recent changes (JSON from `Op::ListTx`).
+    ChangeList,
+    /// Undo of a recorded change.
+    Undo,
 }
 
 #[derive(Debug, Clone)]
@@ -122,13 +132,18 @@ pub struct Job {
     pub kind: JobKind,
     pub privilege: Priv,
     pub argv: Vec<String>,
-    pub lines: Vec<(bool, String)>,
+    /// Output lines (is it stderr?, text). Shared with the views: appending copies only if one still holds it.
+    pub lines: Arc<Vec<(bool, String)>>,
+    /// How many of the oldest lines were dropped to keep the log bounded.
+    pub dropped_lines: usize,
     pub partial: Option<String>,
     pub started: Instant,
     pub ended: Option<Instant>,
     pub exit: Option<Option<i32>>,
     pub error: Option<String>,
     pub reload: Vec<Reload>,
+    /// Set once the user asked to stop it: the last signal sent and when.
+    pub stop: Option<(crate::stop::Stage, Instant)>,
 }
 
 impl Job {
@@ -142,7 +157,7 @@ impl Job {
 
     pub fn output(&self) -> String {
         let mut s = String::new();
-        for (_, l) in &self.lines {
+        for (_, l) in self.lines.iter() {
             s.push_str(l);
             s.push('\n');
         }
@@ -167,11 +182,24 @@ impl Job {
 
 pub struct Batch {
     pub title: String,
-    pub ops: VecDeque<Op>,
+    pub run: batch::Run,
     pub current: Option<u64>,
     pub reload: Vec<Reload>,
     pub then: Option<Box<Action>>,
-    pub done: usize,
+}
+
+impl Batch {
+    /// (operations finished, operations in total).
+    pub fn progress(&self) -> (usize, usize) {
+        self.run.progress()
+    }
+}
+
+/// The newest change the helper recorded for undo.
+#[derive(Debug, Clone)]
+pub struct LastChange {
+    pub tx: String,
+    pub title: String,
 }
 
 #[derive(Default)]
@@ -179,7 +207,6 @@ pub struct Captured {
     pub output: String,
     pub code: Option<i32>,
     pub done: bool,
-    pub job: u64,
 }
 
 pub struct ReviewDialog {
@@ -188,6 +215,20 @@ pub struct ReviewDialog {
     pub reload: Vec<Reload>,
     pub then: Option<Box<Action>>,
     pub expanded: usize,
+    /// Run these operations instead of writing `changes` (which then only illustrate them).
+    pub ops: Option<Vec<Op>>,
+    /// Files that exist but cannot be shown as a diff (root-only).
+    pub unreadable: Vec<PathBuf>,
+    pub notes: Vec<String>,
+    /// Lines per change that make Portage run commands as root (see `danger.rs`).
+    pub warnings: Vec<Vec<crate::danger::Warning>>,
+}
+
+impl ReviewDialog {
+    pub fn new(title: String, changes: Vec<FileChange>, reload: Vec<Reload>, then: Option<Box<Action>>) -> ReviewDialog {
+        let warnings = changes.iter().map(crate::danger::flag_dangerous_lines).collect();
+        ReviewDialog { title, changes, reload, then, expanded: 0, ops: None, unreadable: Vec::new(), notes: Vec::new(), warnings }
+    }
 }
 
 pub struct App {
@@ -197,6 +238,8 @@ pub struct App {
     pub loading: HashSet<Reload>,
     pending_reload: HashSet<Reload>,
     pub detail_loading: HashSet<String>,
+    /// Kernels whose NVIDIA driver check is running.
+    nvidia_probing: HashSet<String>,
     ebuild_loading: HashSet<PathBuf>,
     data_tx: Sender<DataMsg>,
     data_rx: Receiver<DataMsg>,
@@ -204,6 +247,15 @@ pub struct App {
     pub exec: Executor,
     pub jobs: Vec<Job>,
     pub batches: Vec<Batch>,
+    /// The build directories of the running emerge are private to the portage user, so only emerge's
+    /// own output feeds the live phases (Activity says so).
+    pub build_logs_private: bool,
+    /// The admin helper's audit log is not recording (shown in Settings).
+    pub audit_note: Option<String>,
+    /// The change that can be undone with one click (a multi-file batch that was committed).
+    pub last_change: Option<LastChange>,
+    /// The helper's journal, newest first (loaded on demand: the journal is root-only).
+    pub recent_changes: Option<Vec<TxInfo>>,
     pub captures: HashMap<String, Captured>,
     pub actions: Vec<Action>,
     pub toasts: Vec<Toast>,
@@ -220,6 +272,11 @@ pub struct App {
     pub history_view: views::history::State,
     pub settings_view: views::settings::State,
     last_log_poll: Instant,
+    /// The settings as last written, and when: a change is saved within a second, not at exit only.
+    saved_settings: Settings,
+    settings_saved_at: Instant,
+    /// The window has been fitted to its monitor (done once, on the first frame).
+    size_checked: bool,
     fonts_applied: Option<String>,
     script: Option<crate::shot::Script>,
     confirm_close: bool,
@@ -237,6 +294,45 @@ pub struct App {
     boot_mounts_cache: (Instant, Vec<crate::portage::mounts::BootMount>),
     /// Boot partitions PortageHub made writable that go back to read-only after the emerge.
     pub remount_restore: Vec<String>,
+}
+
+/// A detail page with nothing in it, so a page that cannot be built stops spinning.
+fn empty_detail(key: &str) -> PkgDetail {
+    PkgDetail {
+        key: key.to_string(),
+        cat: key.split('/').next().unwrap_or("").into(),
+        pn: key.split('/').nth(1).unwrap_or("").into(),
+        versions: Vec::new(),
+        xml: Default::default(),
+        pkg_dir: None,
+        files: Vec::new(),
+        installed_meta: Vec::new(),
+    }
+}
+
+/// A load failed: it no longer counts as running, and nothing waits to redo it.
+fn forget_load(loading: &mut HashSet<Reload>, pending: &mut HashSet<Reload>, r: Reload) {
+    loading.remove(&r);
+    pending.remove(&r);
+}
+
+/// What a refused write means for a person.
+fn explain_write_error(msg: &str) -> String {
+    match msg.split_once("changed on disk: ") {
+        Some((_, path)) => format!(
+            "{path} was changed outside PortageHub after it was read, so PortageHub left it alone. The settings are being reloaded: make the edit again on the current content."
+        ),
+        None => msg.to_string(),
+    }
+}
+
+/// Settings to read again after a write was refused because a file had changed.
+fn stale_file_reloads(msg: &str) -> Vec<Reload> {
+    if msg.contains("changed on disk: ") {
+        vec![Reload::Config, Reload::MakeConf, Reload::Repos]
+    } else {
+        Vec::new()
+    }
 }
 
 fn world_cache_path() -> PathBuf {
@@ -286,7 +382,7 @@ fn load_cleanup_cache() -> HashMap<String, (String, Option<i32>, i64)> {
 
 impl App {
     pub fn new(cc: &eframe::CreationContext<'_>) -> App {
-        let settings = Settings::load();
+        let (settings, settings_note) = Settings::load();
         let ctx = cc.egui_ctx.clone();
         theme::install_fonts(&ctx, settings.font_family.as_deref());
         theme::apply(&ctx);
@@ -294,6 +390,7 @@ impl App {
         let (data_tx, data_rx) = channel();
         let (exec_tx, exec_rx) = channel();
         let exec = Executor::new(exec_tx, ctx.clone());
+        let settings_on_disk = settings.clone();
         let mut app = App {
             data: Data::default(),
             details: HashMap::new(),
@@ -301,6 +398,7 @@ impl App {
             loading: HashSet::new(),
             pending_reload: HashSet::new(),
             detail_loading: HashSet::new(),
+            nvidia_probing: HashSet::new(),
             ebuild_loading: HashSet::new(),
             data_tx,
             data_rx,
@@ -308,6 +406,10 @@ impl App {
             exec,
             jobs: Vec::new(),
             batches: Vec::new(),
+            build_logs_private: false,
+            audit_note: None,
+            last_change: None,
+            recent_changes: None,
             captures: HashMap::new(),
             actions: Vec::new(),
             toasts: Vec::new(),
@@ -325,6 +427,9 @@ impl App {
             history_view: Default::default(),
             settings_view: Default::default(),
             last_log_poll: Instant::now(),
+            saved_settings: settings_on_disk,
+            settings_saved_at: Instant::now(),
+            size_checked: false,
             script: crate::shot::Script::from_env(),
             confirm_close: false,
             allow_close: false,
@@ -338,6 +443,9 @@ impl App {
             boot_mounts_cache: (Instant::now() - Duration::from_secs(60), Vec::new()),
             remount_restore: Vec::new(),
         };
+        if let Some(note) = settings_note {
+            app.toast(ToastKind::Warn, note);
+        }
         for r in [Reload::Repos, Reload::Vdb, Reload::History, Reload::Config, Reload::MakeConf, Reload::Env] {
             app.spawn_load(r);
         }
@@ -365,20 +473,21 @@ impl App {
         }
         let tracker = Box::new(Tracker::new(&planned, &history));
         let id = self.exec.alloc_id();
-        let opts = EmergeOptions::default().targets(&["@demo"]);
         self.jobs.push(Job {
             id,
             title: "emerge --update @demo (demo)".into(),
-            kind: JobKind::Emerge { opts, tracker },
+            kind: JobKind::Emerge { tracker },
             privilege: Priv::User,
             argv: vec!["emerge".into(), "@demo".into()],
-            lines: Vec::new(),
+            lines: Arc::default(),
+            dropped_lines: 0,
             partial: None,
             started: Instant::now(),
             ended: None,
             exit: None,
             error: None,
             reload: vec![],
+            stop: None,
         });
         self.emerge.active_job = Some(id);
         let sink = self.exec.sink();
@@ -414,6 +523,49 @@ impl App {
         self.actions.push(a);
     }
 
+    /// Send the next signal of the stop schedule to job `id` (see `stop.rs`).
+    fn stop_job(&mut self, id: u64) {
+        let Some(job) = self.jobs.iter_mut().find(|j| j.id == id && j.running()) else { return };
+        let since = job.stop.map(|(_, at)| at.elapsed()).unwrap_or_default();
+        let Some(stage) = crate::stop::next_stop(job.stop.map(|(s, _)| s), since) else { return };
+        job.stop = Some((stage, Instant::now()));
+        let privilege = job.privilege;
+        self.exec.cancel(id, privilege, stage.signal());
+        self.toast(ToastKind::Info, stage.describe());
+    }
+
+    /// Write the settings when they differ from what is on disk (at most once a second), so a
+    /// crash or a SIGTERM no longer loses the toggles of the whole session.
+    fn save_settings_if_changed(&mut self) {
+        if self.settings == self.saved_settings {
+            return;
+        }
+        if self.settings_saved_at.elapsed() < Duration::from_secs(1) {
+            self.ctx.request_repaint_after(Duration::from_secs(1));
+            return;
+        }
+        self.settings.save();
+        self.saved_settings = self.settings.clone();
+        self.settings_saved_at = Instant::now();
+    }
+
+    /// Jobs the user asked to stop that still run get the next, harder signal on time.
+    fn escalate_stops(&mut self) {
+        let due: Vec<u64> = self
+            .jobs
+            .iter()
+            .filter(|j| j.running())
+            .filter_map(|j| j.stop.map(|(stage, at)| (j.id, crate::stop::next_stop(Some(stage), at.elapsed()))))
+            .filter_map(|(id, next)| next.map(|_| id))
+            .collect();
+        for id in due {
+            self.stop_job(id);
+        }
+        if self.jobs.iter().any(|j| j.running() && j.stop.is_some_and(|(s, _)| s != crate::stop::Stage::Killed)) {
+            self.ctx.request_repaint_after(Duration::from_secs(1));
+        }
+    }
+
     pub fn toast(&mut self, kind: ToastKind, text: impl Into<String>) {
         self.toasts.push(Toast { kind, text: text.into(), created: Instant::now() });
         self.ctx.request_repaint();
@@ -434,7 +586,7 @@ impl App {
     pub fn running_count(&self) -> usize {
         self.jobs
             .iter()
-            .filter(|j| j.running() && !matches!(j.kind, JobKind::Capture { .. } | JobKind::WorldCheck | JobKind::BootScan | JobKind::CleanupScan { .. }))
+            .filter(|j| j.running() && !matches!(j.kind, JobKind::Capture { .. } | JobKind::WorldCheck | JobKind::BootScan | JobKind::CleanupScan { .. } | JobKind::ChangeList))
             .count()
             + self.batches.len()
     }
@@ -473,7 +625,7 @@ impl App {
         let keep_set = self.settings.kernel_keep_set.clone();
         let log_days = self.settings.log_keep_days;
         std::thread::spawn(move || {
-            let msg = match r {
+            let msg = data::run_loader(r, move || match r {
                 Reload::Repos => DataMsg::Repos(Arc::new(repos::load())),
                 Reload::Catalog => DataMsg::Catalog(Arc::new(catalog::scan(snapshot.repos.as_ref().unwrap()))),
                 Reload::Vdb => DataMsg::Vdb(Arc::new(vdb::load())),
@@ -519,7 +671,7 @@ impl App {
                         log_days,
                     )))
                 }
-            };
+            });
             let _ = tx.send(msg);
             ctx.request_repaint();
         });
@@ -535,22 +687,11 @@ impl App {
         let ctx = self.ctx.clone();
         let key = key.to_string();
         std::thread::spawn(move || {
-            if let Some(d) = data::build_detail(&key, &snapshot) {
-                let _ = tx.send(DataMsg::Detail(key, Arc::new(d)));
-            } else {
-                let _ = tx.send(DataMsg::Detail(
-                    key.clone(),
-                    Arc::new(PkgDetail {
-                        key: key.clone(),
-                        cat: key.split('/').next().unwrap_or("").into(),
-                        pn: key.split('/').nth(1).unwrap_or("").into(),
-                        versions: Vec::new(),
-                        xml: Default::default(),
-                        pkg_dir: None,
-                        files: Vec::new(),
-                    }),
-                ));
-            }
+            let msg = data::run_detail(&key.clone(), || match data::build_detail(&key, &snapshot) {
+                Some(d) => DataMsg::Detail(key.clone(), Arc::new(d)),
+                None => DataMsg::Detail(key.clone(), Arc::new(empty_detail(&key))),
+            });
+            let _ = tx.send(msg);
             ctx.request_repaint();
         });
     }
@@ -659,6 +800,23 @@ impl App {
                 self.ebuild_loading.remove(&p);
                 self.ebuilds.insert(p, t);
             }
+            DataMsg::Failed(r, why) => {
+                forget_load(&mut self.loading, &mut self.pending_reload, r);
+                self.toast(ToastKind::Error, format!("Loading {} failed: {why}. Press F5 to try again.", r.name()));
+            }
+            DataMsg::DetailFailed(key, why) => {
+                self.detail_loading.remove(&key);
+                self.details.insert(key.clone(), Arc::new(empty_detail(&key)));
+                self.toast(ToastKind::Error, format!("The page of {key} could not be built: {why}"));
+            }
+            DataMsg::NvidiaProbe { kver, ok, detail } => {
+                self.nvidia_probing.remove(&kver);
+                if ok {
+                    self.mark_kernel_good_after_probe(kver);
+                } else {
+                    self.toast(ToastKind::Error, format!("nvidia-smi failed ({detail}): the NVIDIA driver does not work on this kernel, so it is not marked known-good. Rebuild nvidia-drivers first."));
+                }
+            }
         }
         let ready: Vec<Reload> = self.pending_reload.iter().filter(|r| !self.loading.contains(r)).copied().collect();
         for r in ready {
@@ -678,13 +836,15 @@ impl App {
             kind,
             privilege,
             argv,
-            lines: Vec::new(),
+            lines: Arc::default(),
+            dropped_lines: 0,
             partial: None,
             started: Instant::now(),
             ended: None,
             exit: None,
             error: None,
             reload,
+            stop: None,
         });
         // Keep the job list bounded.
         if self.jobs.len() > 60 {
@@ -704,8 +864,18 @@ impl App {
 
     fn handle_exec(&mut self, msg: ExecMsg) {
         match msg {
-            ExecMsg::HelperReady(version) => {
+            ExecMsg::Notice(msg) => {
+                if msg.starts_with("Audit log:") {
+                    self.audit_note = Some(msg.clone());
+                }
+                self.toast(ToastKind::Warn, msg);
+            }
+            ExecMsg::HelperReady(version, warnings) => {
                 self.exec.on_helper_ready(version.as_deref());
+                self.audit_note = warnings.iter().find(|w| w.starts_with("Audit log:")).cloned();
+                for w in warnings {
+                    self.toast(ToastKind::Warn, w);
+                }
                 let mine = env!("CARGO_PKG_VERSION");
                 if self.exec.helper_outdated {
                     self.toast(
@@ -716,14 +886,17 @@ impl App {
                         ),
                     );
                 } else {
-                    self.toast(ToastKind::Success, "Administrator session started — privileged actions won't ask again.");
+                    self.toast(ToastKind::Success, "Administrator session started — privileged actions won't ask again until it ends (End admin session, quitting PortageHub, or 15 minutes without activity).");
                 }
             }
-            ExecMsg::HelperGone(reason) => {
+            ExecMsg::HelperGone(exit) => {
                 let was = self.exec.helper_state.clone();
-                self.exec.on_helper_gone(reason.clone());
+                self.exec.on_helper_gone(exit.clone());
                 if was != HelperState::NotStarted {
-                    self.toast(ToastKind::Warn, format!("Administrator session ended: {reason}"));
+                    match exit.problem() {
+                        Some(reason) => self.toast(ToastKind::Warn, format!("Administrator session ended: {reason}")),
+                        None => self.toast(ToastKind::Info, "Admin session closed after 15 minutes idle — you will be asked again when needed."),
+                    }
                 }
             }
             ExecMsg::Event(ev, at) => self.handle_event(ev, at),
@@ -734,6 +907,10 @@ impl App {
         let Some(id) = ev.id() else { return };
         // Batches first.
         if let Some(bi) = self.batches.iter().position(|b| b.current == Some(id)) {
+            if let Event::Data { text, .. } = &ev {
+                // The id of a transaction the batch just began.
+                self.batches[bi].run.note_data(text.clone());
+            }
             let outcome = match &ev {
                 Event::Ok { .. } => Some(Ok(())),
                 Event::Exit { code: Some(0), .. } => Some(Ok(())),
@@ -750,9 +927,9 @@ impl App {
         let history = self.data.history.clone().unwrap_or_default();
         let job = &mut self.jobs[ji];
         match ev {
-            Event::Started { .. } | Event::Ready { .. } => {}
+            Event::Started { .. } | Event::Ready { .. } | Event::Notice { .. } => {}
             Event::Data { text, .. } => {
-                job.lines.push((false, text));
+                Arc::make_mut(&mut job.lines).push((false, text));
             }
             Event::Ok { .. } => {
                 // Helper operations (not programs) finish with Ok.
@@ -765,9 +942,11 @@ impl App {
                     tracker.feed(&text, &history, at);
                 }
                 job.partial = None;
-                job.lines.push((stream == portagehub::protocol::StreamKind::Stderr, text));
-                if job.lines.len() > 60_000 {
-                    job.lines.drain(..10_000);
+                let lines = Arc::make_mut(&mut job.lines);
+                lines.push((stream == portagehub::protocol::StreamKind::Stderr, text));
+                if lines.len() > 60_000 {
+                    lines.drain(..10_000);
+                    job.dropped_lines += 10_000;
                 }
             }
             Event::Partial { text, .. } => {
@@ -897,8 +1076,35 @@ impl App {
                 self.invalidate_mounts();
                 if ok {
                     self.toast(ToastKind::Success, format!("{}: done", job.title));
+                    // What /boot holds (kernels, boot menu) may only be visible now.
+                    self.spawn_load(Reload::Kernels);
+                    if self.exec.root_ready() {
+                        self.actions.push(Action::RootOp { title: "Read boot configuration".into(), op: Op::BootScan, kind: JobKind::BootScan, reload: vec![] });
+                    }
                 } else {
                     self.toast(ToastKind::Error, format!("{} failed: {}", job.title, job.error.clone().unwrap_or_else(|| job.output().lines().last().unwrap_or("").to_string())));
+                }
+            }
+            JobKind::ChangeList => {
+                if let Some(text) = job.lines.iter().map(|l| l.1.as_str()).find(|l| l.starts_with('['))
+                    && let Ok(list) = serde_json::from_str::<Vec<TxInfo>>(text)
+                {
+                    self.recent_changes = Some(list);
+                } else if let Some(e) = &job.error {
+                    self.toast(ToastKind::Error, format!("Could not read the recent changes: {e}"));
+                }
+            }
+            JobKind::Undo => {
+                if ok {
+                    self.toast(ToastKind::Success, format!("{}: done", job.title));
+                    self.last_change = None;
+                } else {
+                    let why = job.error.clone().unwrap_or_else(|| "see the log".into());
+                    self.toast(ToastKind::Error, format!("{} failed: {}", job.title, explain_write_error(&why)));
+                }
+                self.recent_changes = None;
+                if self.exec.root_ready() {
+                    self.list_changes();
                 }
             }
             JobKind::CleanupScan { tag } => {
@@ -947,30 +1153,59 @@ impl App {
     }
 
     fn advance_batch(&mut self, bi: usize, outcome: Result<(), String>) {
-        match outcome {
-            Err(e) => {
-                let b = self.batches.remove(bi);
-                self.toast(ToastKind::Error, format!("{} failed: {e}", b.title));
-                for r in b.reload {
-                    self.spawn_load(r);
+        let step = self.batches[bi].run.advance(outcome);
+        self.run_step(bi, step);
+    }
+
+    fn run_step(&mut self, bi: usize, step: batch::Step) {
+        match step {
+            batch::Step::Send { op, tx } => {
+                let id = self.exec.root_op_tx(op, tx);
+                self.batches[bi].current = Some(id);
+            }
+            batch::Step::Finished(finish) => self.finish_batch(bi, finish),
+        }
+    }
+
+    fn finish_batch(&mut self, bi: usize, finish: batch::Finish) {
+        use batch::Finish;
+        let b = self.batches.remove(bi);
+        let mut reload = b.reload;
+        let mut ok = false;
+        match finish {
+            Finish::Saved { tx, warning } => {
+                ok = true;
+                self.toast(ToastKind::Success, format!("{} — saved", b.title));
+                if let Some(w) = warning {
+                    self.toast(ToastKind::Warn, w);
+                }
+                if let Some(tx) = tx {
+                    self.last_change = Some(LastChange { tx, title: b.title.clone() });
+                    self.recent_changes = None;
                 }
             }
-            Ok(()) => {
-                self.batches[bi].done += 1;
-                if let Some(op) = self.batches[bi].ops.pop_front() {
-                    let id = self.exec.root_op(op);
-                    self.batches[bi].current = Some(id);
-                } else {
-                    let b = self.batches.remove(bi);
-                    self.toast(ToastKind::Success, format!("{} — saved", b.title));
-                    for r in b.reload {
-                        self.spawn_load(r);
-                    }
-                    if let Some(then) = b.then {
-                        self.actions.push(*then);
-                    }
-                }
+            Finish::RolledBack { reason } => {
+                self.toast(ToastKind::Error, format!("{} failed: {}. Nothing was changed: the steps that had run were rolled back.", b.title, explain_write_error(&reason)));
+                reload.extend(stale_file_reloads(&reason));
             }
+            Finish::Failed { reason, rollback_error, tx } => {
+                self.toast(ToastKind::Error, format!("{} failed: {}", b.title, explain_write_error(&reason)));
+                if let Some(e) = rollback_error {
+                    self.toast(ToastKind::Error, format!("Rolling the earlier steps back failed too: {e}. Check /etc/portage before changing anything else."));
+                }
+                if let Some(tx) = tx {
+                    self.last_change = Some(LastChange { tx, title: b.title.clone() });
+                    self.recent_changes = None;
+                }
+                reload.extend(stale_file_reloads(&reason));
+            }
+        }
+        self.config_view.updates = None; // the pending ._cfg list may have changed: scan again when it is shown
+        for r in reload {
+            self.spawn_load(r);
+        }
+        if ok && let Some(then) = b.then {
+            self.actions.push(*then);
         }
     }
 
@@ -1004,6 +1239,10 @@ impl App {
                 self.store.page = views::store::Page::Search;
             }
             Action::Pretend(opts) => {
+                if let Some(problem) = opts.policy_error() {
+                    self.toast(ToastKind::Error, problem);
+                    return;
+                }
                 let mut env = opts.env.clone();
                 env.retain(|(_, v)| !v.is_empty());
                 let mut argv = vec!["emerge".to_string()];
@@ -1025,6 +1264,10 @@ impl App {
                 }
             }
             Action::Emerge(opts, planned) => {
+                if let Some(problem) = opts.policy_error() {
+                    self.toast(ToastKind::Error, problem);
+                    return;
+                }
                 if self.running_emerge().is_some() {
                     self.toast(ToastKind::Warn, "Another emerge is already running. Wait for it to finish.");
                     return;
@@ -1060,7 +1303,7 @@ impl App {
                 let mut env = opts.env.clone();
                 env.retain(|(_, v)| !v.is_empty());
                 let title = format!("emerge {}", opts.args().join(" "));
-                let kind = if opts.action == crate::portage::emerge::Action::Sync { JobKind::Sync } else { JobKind::Emerge { opts: opts.clone(), tracker } };
+                let kind = if opts.action == crate::portage::emerge::Action::Sync { JobKind::Sync } else { JobKind::Emerge { tracker } };
                 let id = self.start_job(title, argv, env, Priv::Root, kind, vec![]);
                 self.emerge.active_job = Some(id);
                 self.emerge.page = views::emerge::Page::Activity;
@@ -1071,15 +1314,20 @@ impl App {
                 self.emerge.selected_job = Some(id);
             }
             Action::Capture { tag, argv, privilege } => {
-                let id = self.start_job(format!("{}", argv.join(" ")), argv, vec![], privilege, JobKind::Capture { tag: tag.clone() }, vec![]);
-                self.captures.insert(tag, Captured { job: id, ..Default::default() });
+                self.start_job(argv.join(" "), argv, vec![], privilege, JobKind::Capture { tag: tag.clone() }, vec![]);
+                self.captures.insert(tag, Captured::default());
             }
             Action::Batch { title, ops, reload, then } => {
-                let mut ops: VecDeque<Op> = ops.into();
-                if let Some(first) = ops.pop_front() {
-                    let id = self.exec.root_op(first);
-                    self.batches.push(Batch { title, ops, current: Some(id), reload, then, done: 0 });
+                if ops.is_empty() {
+                    return;
                 }
+                // Changes that must land together run in a helper transaction (see batch.rs);
+                // a helper of another version may not know them.
+                let mut run = batch::Run::new(&title, ops, !self.exec.helper_outdated);
+                let first = run.first();
+                self.batches.push(Batch { title, run, current: None, reload, then });
+                let bi = self.batches.len() - 1;
+                self.run_step(bi, first);
             }
             Action::Write { title, changes, reload, then } => {
                 if changes.is_empty() {
@@ -1087,20 +1335,27 @@ impl App {
                     return;
                 }
                 if self.settings.review_writes {
-                    self.review = Some(ReviewDialog { title, changes, reload, then, expanded: 0 });
+                    self.review = Some(ReviewDialog::new(title, changes, reload, then));
                 } else {
                     self.apply_changes(title, changes, reload, then);
                 }
             }
+            Action::ReviewOps { title, changes, unreadable, notes, ops, reload } => {
+                let mut dialog = ReviewDialog::new(title, changes, reload, None);
+                dialog.ops = Some(ops);
+                dialog.unreadable = unreadable;
+                dialog.notes = notes;
+                self.review = Some(dialog);
+            }
             Action::Reload(r) => self.spawn_load(r),
-            Action::Toast(k, t) => self.toast(k, t),
             Action::Cancel(id) => {
                 if let Some(j) = self.jobs.iter().find(|j| j.id == id) {
                     let p = j.privilege;
                     self.exec.cancel(id, p, libc::SIGINT);
-                    self.toast(ToastKind::Info, "Stop requested (SIGINT). emerge will stop after cleaning up.");
+                    self.toast(ToastKind::Info, crate::stop::Stage::Interrupted.describe());
                 }
             }
+            Action::ForceStop(id) => self.stop_job(id),
             Action::StartHelper => {
                 if !self.exec.root_ready() && self.exec.helper_state != HelperState::Starting {
                     self.exec.start_helper();
@@ -1119,13 +1374,15 @@ impl App {
                     kind,
                     privilege: Priv::Root,
                     argv: vec![format!("helper: {label}")],
-                    lines: Vec::new(),
+                    lines: Arc::default(),
+            dropped_lines: 0,
                     partial: None,
                     started: Instant::now(),
                     ended: None,
                     exit: None,
                     error: None,
                     reload,
+                    stop: None,
                 });
                 if needs_new_helper && !self.exec.is_root && self.exec.helper_state == HelperState::Ready {
                     let ji = self.jobs.len() - 1;
@@ -1166,12 +1423,41 @@ impl App {
         let backup = self.settings.backup_on_write;
         let ops = changes
             .into_iter()
-            .map(|c| match c.new {
-                Some(content) => Op::WriteFile { path: c.path.to_string_lossy().to_string(), content, backup },
-                None => Op::DeleteFile { path: c.path.to_string_lossy().to_string() },
+            .map(|c| {
+                // The helper refuses the write when the file is no longer what the GUI read, so a
+                // change made outside PortageHub since then is never silently overwritten.
+                let expect = Some(Expect::of(&c.old));
+                match c.new {
+                    Some(content) => Op::WriteFile { path: c.path.to_string_lossy().to_string(), content, backup, expect },
+                    None => Op::DeleteFile { path: c.path.to_string_lossy().to_string(), expect },
+                }
             })
             .collect();
         self.apply(Action::Batch { title, ops, reload, then });
+    }
+
+    /// Queue the review and write of the changes an edit produced, or tell the user why it
+    /// produced none (a file PortageHub will not edit, for example).
+    pub fn push_write(&mut self, title: impl Into<String>, changes: Result<Vec<FileChange>, String>, reload: Vec<Reload>, then: Option<Box<Action>>) {
+        match changes {
+            Ok(changes) => self.push(Action::Write { title: title.into(), changes, reload, then }),
+            Err(why) => self.toast(ToastKind::Error, why),
+        }
+    }
+
+    /// Ask the helper for its journal (needs the admin session: the journal is root-only).
+    pub fn list_changes(&mut self) {
+        self.push(Action::RootOp { title: "Read recent changes".into(), op: Op::ListTx, kind: JobKind::ChangeList, reload: vec![] });
+    }
+
+    /// Undo a recorded change. Without `force` the helper refuses when a file was changed since.
+    pub fn undo_change(&mut self, tx: &str, title: &str, force: bool) {
+        self.push(Action::RootOp {
+            title: format!("Undo: {title}"),
+            op: Op::Rollback { tx: tx.to_string(), force },
+            kind: JobKind::Undo,
+            reload: vec![Reload::Config, Reload::MakeConf, Reload::Repos, Reload::Kernels],
+        });
     }
 
     /// Boot partitions as currently mounted (refreshed at most every 2 s).
@@ -1228,12 +1514,29 @@ impl App {
             return;
         }
         if self.settings.kernel_mark_requires_nvidia && ks.nvidia.gpu && ks.nvidia.drivers.is_some() {
-            let ok = std::process::Command::new("nvidia-smi").arg("-L").output().is_ok_and(|o| o.status.success());
-            if !ok {
-                self.toast(ToastKind::Error, "nvidia-smi failed: the NVIDIA driver does not work on this kernel, so it is not marked known-good. Rebuild nvidia-drivers first.");
-                return;
+            // A wedged NVIDIA driver can make nvidia-smi hang: ask on a thread, with a limit, and go on when it answers.
+            if self.nvidia_probing.insert(kver.clone()) {
+                self.toast(ToastKind::Info, "Checking the NVIDIA driver…");
+                let (tx, ctx) = (self.data_tx.clone(), self.ctx.clone());
+                std::thread::spawn(move || {
+                    let mut cmd = std::process::Command::new("nvidia-smi");
+                    cmd.arg("-L");
+                    let (ok, detail) = match crate::util::run_with_timeout(cmd, Duration::from_secs(10)) {
+                        Ok(out) if out.status.success() => (true, String::new()),
+                        Ok(out) => (false, String::from_utf8_lossy(&out.stderr).lines().next().unwrap_or("it reported an error").to_string()),
+                        Err(e) => (false, format!("nvidia-smi {e}")),
+                    };
+                    let _ = tx.send(DataMsg::NvidiaProbe { kver, ok, detail });
+                    ctx.request_repaint();
+                });
             }
+            return;
         }
+        self.mark_kernel_good_after_probe(kver);
+    }
+
+    fn mark_kernel_good_after_probe(&mut self, kver: String) {
+        let Some(ks) = self.data.kernels.clone() else { return };
         if (Op::MarkGood { kver: String::new(), state_dir: String::new(), backup: false }).min_helper() > self.exec.helper_version && !self.exec.is_root {
             self.toast(ToastKind::Error, "The installed admin helper is too old for this — run sudo dist/install.sh, then restart PortageHub.");
             return;
@@ -1254,7 +1557,7 @@ impl App {
                 content.push_str(a);
                 content.push('\n');
             }
-            ops.push(Op::WriteFile { path: format!("/etc/portage/sets/{}", ks.keep_set), content, backup: false });
+            ops.push(Op::WriteFile { path: format!("/etc/portage/sets/{}", ks.keep_set), content, backup: false, expect: None });
             if !ks.keep_set_in_world {
                 ops.push(Op::Run { argv: vec!["emerge".into(), "--noreplace".into(), "--ask=n".into(), format!("@{}", ks.keep_set)], env: vec![], cwd: None });
             }
@@ -1309,6 +1612,8 @@ impl App {
                 }
             }
         }
+        // Portage makes <PORTAGE_TMPDIR>/portage 0700 portage:portage: other users cannot even look in.
+        self.build_logs_private = dirs.values().any(|d| matches!(std::fs::read_dir(d.join("portage")), Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied));
         for j in self.jobs.iter_mut().filter(|j| j.running()) {
             if let JobKind::Emerge { tracker, .. } = &mut j.kind {
                 let active: Vec<(usize, PathBuf)> = tracker
@@ -1500,6 +1805,7 @@ impl App {
             return;
         }
         let in_process = self.exec.is_root;
+        let emerge = self.running_emerge().map(|j| (j.id, j.privilege));
         egui::Modal::new(egui::Id::new("close-guard"))
             .frame(Frame::new().fill(PANEL).corner_radius(CornerRadius::same(6)).inner_margin(Margin::same(18)))
             .show(ctx, |ui| {
@@ -1517,6 +1823,13 @@ impl App {
                 ui.horizontal(|ui| {
                     if w::primary(ui, icon::ARROW_LEFT, "Keep PortageHub open").clicked() {
                         self.confirm_close = false;
+                    }
+                    if !in_process && let Some((id, privilege)) = emerge && w::button(ui, icon::STOP, "Stop emerge and quit").on_hover_text("Sends SIGINT (like Ctrl+C) and quits. Continue later with “Resume interrupted emerge”.").clicked() {
+                        // Otherwise the emerge would go on without a window to watch it, held by a helper nobody can address any more.
+                        self.exec.cancel(id, privilege, libc::SIGINT);
+                        self.allow_close = true;
+                        self.confirm_close = false;
+                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }
                     if w::danger(ui, icon::SIGN_OUT, "Quit anyway").clicked() {
                         self.allow_close = true;
@@ -1541,7 +1854,14 @@ impl App {
                 });
                 w::subtitle(ui, &review.title);
                 ui.add_space(6.0);
+                for note in &review.notes {
+                    w::callout(ui, ORANGE, icon::INFO, note);
+                    ui.add_space(4.0);
+                }
                 egui::ScrollArea::vertical().max_height(ctx.content_rect().height() * 0.6).show(ui, |ui| {
+                    for path in &review.unreadable {
+                        ui.label(RichText::new(format!("{} {} — cannot be previewed (root-only file)", icon::LOCK, path.display())).color(TEXT_DIM));
+                    }
                     for (i, c) in review.changes.iter().enumerate() {
                         let header = match &c.new {
                             None => format!("{} delete {}", icon::TRASH, c.path.display()),
@@ -1551,6 +1871,9 @@ impl App {
                         let open = review.expanded == i;
                         if ui.selectable_label(open, RichText::new(header).color(WHITE)).clicked() {
                             review.expanded = i;
+                        }
+                        for warning in review.warnings.get(i).into_iter().flatten() {
+                            w::callout(ui, RED, icon::WARNING, &format!("Runs commands as root — {}: {}", warning.why, warning.line));
                         }
                         if open {
                             Frame::new().fill(BG_DEEP).inner_margin(Margin::same(8)).corner_radius(CornerRadius::same(3)).show(ui, |ui| {
@@ -1583,7 +1906,10 @@ impl App {
             });
         if apply {
             let r = self.review.take().unwrap();
-            self.apply_changes(r.title, r.changes, r.reload, r.then);
+            match r.ops {
+                Some(ops) => self.apply(Action::Batch { title: r.title, ops, reload: r.reload, then: r.then }),
+                None => self.apply_changes(r.title, r.changes, r.reload, r.then),
+            }
         } else if cancel {
             self.review = None;
         }
@@ -1599,6 +1925,8 @@ impl eframe::App for App {
             self.handle_exec(m);
         }
         self.poll_build_logs();
+        self.escalate_stops();
+        self.save_settings_if_changed();
         if !self.world_auto_done && self.data.catalog.is_some() && self.data.vdb.is_some() && self.data.repos.is_some() {
             self.world_auto_done = true;
             let last_sync = self.data.last_sync().unwrap_or(0);
@@ -1615,6 +1943,16 @@ impl eframe::App for App {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        if !self.size_checked
+            && let Some(monitor) = ctx.input(|i| i.viewport().monitor_size)
+        {
+            // A 1366x768 laptop panel is smaller than the 1380x860 the window asks for.
+            self.size_checked = true;
+            let (w, h) = crate::window::fit(crate::window::WANTED, (monitor.x, monitor.y));
+            if (w, h) != crate::window::WANTED {
+                ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(w, h)));
+            }
+        }
         if self.fonts_applied != self.settings.font_family {
             theme::install_fonts(&ctx, self.settings.font_family.as_deref());
             self.fonts_applied = self.settings.font_family.clone();
@@ -1657,8 +1995,41 @@ impl eframe::App for App {
         self.settings.save();
     }
 
-    fn on_exit(&mut self) {
+    fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.settings.save();
         self.exec.stop_helper();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_failed_load_stops_waiting_and_is_not_redone_by_itself() {
+        let mut loading: HashSet<Reload> = [Reload::Config, Reload::Vdb].into();
+        let mut pending: HashSet<Reload> = [Reload::Config].into();
+        forget_load(&mut loading, &mut pending, Reload::Config);
+        assert_eq!(loading, [Reload::Vdb].into());
+        assert!(pending.is_empty(), "a queued reload of a loader that just panicked would panic again at once");
+        // Unrelated loads are untouched.
+        forget_load(&mut loading, &mut pending, Reload::Kernels);
+        assert_eq!(loading, [Reload::Vdb].into());
+    }
+
+    #[test]
+    fn a_page_that_cannot_be_built_is_empty_not_endless() {
+        let d = empty_detail("app-misc/foo");
+        assert_eq!((d.cat.as_str(), d.pn.as_str(), d.key.as_str()), ("app-misc", "foo", "app-misc/foo"));
+        assert!(d.versions.is_empty());
+    }
+
+    #[test]
+    fn write_errors_are_explained() {
+        let e = explain_write_error("changed on disk: /etc/portage/package.use/zz");
+        assert!(e.contains("/etc/portage/package.use/zz was changed outside PortageHub"), "{e}");
+        assert_eq!(explain_write_error("disk full"), "disk full");
+        assert_eq!(stale_file_reloads("changed on disk: /x"), vec![Reload::Config, Reload::MakeConf, Reload::Repos]);
+        assert!(stale_file_reloads("disk full").is_empty());
     }
 }

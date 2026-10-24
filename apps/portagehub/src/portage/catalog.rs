@@ -221,10 +221,62 @@ pub fn scan(repos: &ReposConf) -> Catalog {
     cat
 }
 
-/// Category descriptions from `<repo>/<category>/metadata.xml`.
-pub fn category_description(repo_loc: &Path, category: &str) -> Option<String> {
-    let t = std::fs::read_to_string(repo_loc.join(category).join("metadata.xml")).ok()?;
-    let re = regex::Regex::new(r#"(?s)<longdescription(?:\s+lang="en")?\s*>(.*?)</longdescription>"#).ok()?;
-    let c = re.captures(&t)?;
+fn description_re() -> &'static regex::Regex {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    RE.get_or_init(|| regex::Regex::new(r#"(?s)<longdescription(?:\s+lang="en")?\s*>(.*?)</longdescription>"#).expect("category description pattern"))
+}
+
+/// The description of a category from `<repo>/<category>/metadata.xml`, with the file reader
+/// injected (so tests need no repository).
+pub fn category_description_with(repo_loc: &Path, category: &str, read: &dyn Fn(&Path) -> Option<String>) -> Option<String> {
+    let t = read(&repo_loc.join(category).join("metadata.xml"))?;
+    let c = description_re().captures(&t)?;
     Some(c[1].split_whitespace().collect::<Vec<_>>().join(" "))
+}
+
+/// Descriptions looked up so far: a category page asks every frame, the disk is read once.
+#[derive(Default)]
+pub struct DescriptionCache {
+    by_category: HashMap<String, Option<String>>,
+}
+
+impl DescriptionCache {
+    pub fn get(&mut self, repo_loc: &Path, category: &str, read: &dyn Fn(&Path) -> Option<String>) -> Option<&str> {
+        self.by_category.entry(category.to_string()).or_insert_with(|| category_description_with(repo_loc, category, read)).as_deref()
+    }
+}
+
+#[cfg(test)]
+mod description_tests {
+    use super::*;
+    use std::cell::Cell;
+
+    const XML: &str = "<pkgmetadata>\n<longdescription lang=\"de\">Deutsch</longdescription>\n<longdescription lang=\"en\">\n  Editors\n  and   friends.\n</longdescription>\n</pkgmetadata>";
+
+    #[test]
+    fn the_description_is_read_once_per_category() {
+        let reads = Cell::new(0);
+        let read = |p: &Path| -> Option<String> {
+            reads.set(reads.get() + 1);
+            p.ends_with("app-editors/metadata.xml").then(|| XML.to_string())
+        };
+        let mut cache = DescriptionCache::default();
+        let repo = Path::new("/var/db/repos/gentoo");
+        for _ in 0..100 {
+            assert_eq!(cache.get(repo, "app-editors", &read), Some("Editors and friends."));
+        }
+        assert_eq!(reads.get(), 1, "60 frames a second must not mean 60 reads a second");
+        // A category without a description is remembered as such, too.
+        for _ in 0..100 {
+            assert_eq!(cache.get(repo, "dev-libs", &read), None);
+        }
+        assert_eq!(reads.get(), 2);
+    }
+
+    #[test]
+    fn only_the_english_description_counts() {
+        assert_eq!(category_description_with(Path::new("/x"), "c", &|_| Some(XML.to_string())).as_deref(), Some("Editors and friends."));
+        assert_eq!(category_description_with(Path::new("/x"), "c", &|_| Some("<pkgmetadata/>".into())), None);
+        assert_eq!(category_description_with(Path::new("/x"), "c", &|_| None), None);
+    }
 }

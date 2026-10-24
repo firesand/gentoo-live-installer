@@ -83,8 +83,9 @@ fn valid_id(id: &str) -> bool {
     !id.is_empty() && id.len() < 64 && id.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
 }
 
-/// FNV-1a: stable across builds (unlike `DefaultHasher`), enough to notice edits.
-fn fnv(data: &[u8]) -> u64 {
+/// FNV-1a: stable across builds (unlike `DefaultHasher`), enough to notice edits. Shared with the
+/// GUI, which sends the hash of a file it read as the precondition of a change (`Expect`).
+pub fn content_hash(data: &[u8]) -> u64 {
     data.iter().fold(0xcbf29ce484222325u64, |h, b| (h ^ *b as u64).wrapping_mul(0x100000001b3))
 }
 
@@ -92,7 +93,7 @@ fn current_hash(base: &Beneath, rel: &Path) -> io::Result<Option<u64>> {
     if base.is_dir(rel)? {
         return Ok(Some(0));
     }
-    Ok(base.read(rel)?.map(|b| fnv(&b)))
+    Ok(base.read(rel)?.map(|b| content_hash(&b)))
 }
 
 fn invalid(msg: String) -> io::Error {

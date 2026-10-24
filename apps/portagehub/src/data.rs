@@ -87,6 +87,50 @@ pub enum DataMsg {
     Leftovers(Arc<crate::portage::cleanup::Leftovers>),
     Detail(String, Arc<PkgDetail>),
     Ebuild(PathBuf, Arc<String>),
+    /// A loader panicked: the page it feeds must stop waiting.
+    Failed(Reload, String),
+    /// Building the detail page of a package panicked.
+    DetailFailed(String, String),
+    /// Result of the `nvidia-smi -L` check before marking a kernel known-good.
+    NvidiaProbe { kver: String, ok: bool, detail: String },
+}
+
+fn panic_text(payload: Box<dyn std::any::Any + Send>) -> String {
+    payload.downcast_ref::<&str>().map(|s| s.to_string()).or_else(|| payload.downcast_ref::<String>().cloned()).unwrap_or_else(|| "unknown error".into())
+}
+
+/// Run a loader. A panic in it becomes [`DataMsg::Failed`]: otherwise its page would show
+/// "loading" for ever, because only a finished load clears the flag.
+pub fn run_loader(r: Reload, f: impl FnOnce() -> DataMsg) -> DataMsg {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|p| DataMsg::Failed(r, panic_text(p)))
+}
+
+/// Like [`run_loader`] for the detail page of `key`.
+pub fn run_detail(key: &str, f: impl FnOnce() -> DataMsg) -> DataMsg {
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|p| DataMsg::DetailFailed(key.to_string(), panic_text(p)))
+}
+
+impl Reload {
+    /// What the load is called in a message.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Reload::Repos => "repositories",
+            Reload::Catalog => "the package tree",
+            Reload::Vdb => "installed packages",
+            Reload::History => "the build history",
+            Reload::Config => "/etc/portage",
+            Reload::MakeConf => "make.conf",
+            Reload::Env => "the Portage settings",
+            Reload::UseDesc => "USE flag descriptions",
+            Reload::RemoteRepos => "the overlay list",
+            Reload::Profiles => "profiles",
+            Reload::News => "news",
+            Reload::Updates => "the update check",
+            Reload::Masks => "package masks",
+            Reload::Kernels => "kernels",
+            Reload::Leftovers => "leftovers",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -160,6 +204,34 @@ impl VersionInfo {
     }
 }
 
+/// What the VDB records about an installed version, read once when the detail is built (the
+/// pages used to read these files again on every frame).
+#[derive(Debug, Clone)]
+pub struct InstalledMeta {
+    pub ver: Version,
+    pub cflags: String,
+    /// USE flags it was built with (all of USE, including USE_EXPAND and implicit flags).
+    pub use_flags: Vec<String>,
+    /// IUSE without the +/- defaults.
+    pub iuse: HashSet<String>,
+}
+
+impl InstalledMeta {
+    pub fn read(i: &crate::portage::vdb::Installed) -> InstalledMeta {
+        InstalledMeta {
+            ver: i.ver.clone(),
+            cflags: i.read("CFLAGS"),
+            use_flags: i.read("USE").split_whitespace().map(String::from).collect(),
+            iuse: i.read("IUSE").split_whitespace().map(|f| f.trim_start_matches(['+', '-']).to_string()).collect(),
+        }
+    }
+
+    /// The flags it was built with that the ebuild declares (what "Built with" lists).
+    pub fn built_with(&self) -> Vec<&str> {
+        self.use_flags.iter().map(String::as_str).filter(|f| self.iuse.contains(*f)).collect()
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct PkgDetail {
     pub key: String,
@@ -170,9 +242,16 @@ pub struct PkgDetail {
     pub xml: PkgXml,
     pub pkg_dir: Option<PathBuf>,
     pub files: Vec<String>,
+    /// The installed versions, oldest first.
+    pub installed_meta: Vec<InstalledMeta>,
 }
 
 impl PkgDetail {
+    /// The record of the installed version `ver`, or of the newest installed one.
+    pub fn installed_for(&self, ver: &Version) -> Option<&InstalledMeta> {
+        self.installed_meta.iter().rev().find(|m| m.ver == *ver).or(self.installed_meta.last())
+    }
+
     pub fn best_visible(&self, accepts_testing: bool) -> Option<&VersionInfo> {
         self.versions.iter().find(|v| v.visible(accepts_testing) && !v.ver.is_live())
     }
@@ -302,7 +381,8 @@ pub fn build_detail(key: &str, data: &Data) -> Option<PkgDetail> {
         walk(&d.join("files"), &d.join("files"), &mut files);
         files.sort();
     }
-    Some(PkgDetail { key: key.to_string(), cat: pkg.cat.clone(), pn: pkg.pn.clone(), versions, xml, pkg_dir, files })
+    let installed_meta = data.vdb.as_ref().map(|v| v.installed(key).into_iter().map(InstalledMeta::read).collect()).unwrap_or_default();
+    Some(PkgDetail { key: key.to_string(), cat: pkg.cat.clone(), pn: pkg.pn.clone(), versions, xml, pkg_dir, files, installed_meta })
 }
 
 #[derive(Debug, Clone)]
@@ -366,7 +446,7 @@ fn find_held_back(vdb: &Vdb, cfg: Option<&PortageConfig>, cands: &mut [UpdateCan
     if let Some(sets) = cfg.and_then(|c| c.set(ConfKind::Sets)) {
         for f in sets.files.iter().filter(|f| !f.ignored) {
             let name = format!("@{}", f.rel);
-            if !vdb.world_sets.iter().any(|w| *w == name) {
+            if !vdb.world_sets.contains(&name) {
                 continue;
             }
             for (_, e) in f.entries() {
@@ -513,5 +593,61 @@ mod tests {
         assert!(keywords_accept(KwState::Testing, &s(&["~*"]), "amd64"));
         assert!(!keywords_accept(KwState::Testing, &s(&[]), "amd64"));
         assert!(keywords_accept(KwState::Stable, &s(&[]), "amd64"));
+    }
+
+    #[test]
+    fn a_panicking_loader_becomes_a_failure_not_a_spinner() {
+        let ok = run_loader(Reload::Vdb, || DataMsg::Vdb(Arc::new(Default::default())));
+        assert!(matches!(ok, DataMsg::Vdb(_)));
+        let failed = run_loader(Reload::Config, || panic!("bad config file"));
+        match failed {
+            DataMsg::Failed(Reload::Config, why) => assert_eq!(why, "bad config file"),
+            other => panic!("{}", matches!(other, DataMsg::Vdb(_))),
+        }
+        // String payloads (panic!("{x}")) are reported too.
+        let x = 5;
+        assert!(matches!(run_loader(Reload::Env, || panic!("value {x}")), DataMsg::Failed(Reload::Env, w) if w == "value 5"));
+        assert!(matches!(run_detail("app-misc/foo", || panic!("boom")), DataMsg::DetailFailed(k, w) if k == "app-misc/foo" && w == "boom"));
+        assert!(matches!(run_detail("app-misc/foo", || DataMsg::Detail("app-misc/foo".into(), Arc::new(PkgDetail { key: "app-misc/foo".into(), cat: "app-misc".into(), pn: "foo".into(), versions: vec![], xml: Default::default(), pkg_dir: None, files: vec![], installed_meta: vec![] }))), DataMsg::Detail(..)));
+        assert_eq!(Reload::Kernels.name(), "kernels");
+    }
+
+    #[test]
+    fn installed_files_are_read_once_into_the_detail() {
+        let dir = std::env::temp_dir().join(format!("portagehub-installed-meta-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("CFLAGS"), "-O2 -pipe\n").unwrap();
+        std::fs::write(dir.join("USE"), "abi_x86_64 amd64 kernel_linux wayland X -ignored\n").unwrap();
+        std::fs::write(dir.join("IUSE"), "+wayland -X doc test\n").unwrap();
+        let inst = crate::portage::vdb::Installed {
+            cat: "app-misc".into(),
+            pn: "foo".into(),
+            ver: Version::parse("1.2").unwrap(),
+            slot: "0".into(),
+            repo: "gentoo".into(),
+            build_time: 0,
+            size: 0,
+            desc: String::new(),
+            dir: dir.clone(),
+        };
+        let meta = InstalledMeta::read(&inst);
+        assert_eq!(meta.cflags, "-O2 -pipe");
+        assert_eq!(meta.built_with(), vec!["wayland", "X"], "only flags the ebuild declares, without the +/- defaults");
+        // Once the files are gone the meta still answers (the pages no longer touch the disk).
+        std::fs::remove_dir_all(&dir).unwrap();
+        let d = PkgDetail {
+            key: "app-misc/foo".into(),
+            cat: "app-misc".into(),
+            pn: "foo".into(),
+            versions: vec![],
+            xml: Default::default(),
+            pkg_dir: None,
+            files: vec![],
+            installed_meta: vec![meta, InstalledMeta { ver: Version::parse("1.3").unwrap(), cflags: String::new(), use_flags: vec![], iuse: HashSet::new() }],
+        };
+        assert_eq!(d.installed_for(&Version::parse("1.2").unwrap()).unwrap().cflags, "-O2 -pipe");
+        assert!(d.installed_for(&Version::parse("9.9").unwrap()).unwrap().cflags.is_empty(), "an unknown version falls back to the newest installed one");
+        assert!(PkgDetail { installed_meta: vec![], ..d }.installed_for(&Version::parse("1.2").unwrap()).is_none());
     }
 }

@@ -2,10 +2,9 @@
 //! modules) and cleanup of everything that is no longer used.
 
 use super::common::{self, page, subnav};
-use crate::app::{Action, App, JobKind, Tab, ToastKind};
+use crate::app::{Action, App, JobKind, ToastKind};
 use crate::data::Reload;
 use crate::edits;
-use crate::exec::Priv;
 use crate::portage::cleanup;
 use crate::portage::emerge::{self, EmergeOptions, Value};
 use crate::portage::kernel::{Fix, KernelState, NvStatus, Severity};
@@ -34,7 +33,6 @@ pub struct State {
     pub depclean_skip: HashSet<String>,
     /// Selected obsolete /etc/portage lines.
     pub config_selected: HashSet<(PathBuf, usize)>,
-    pub show_rules: bool,
 }
 
 pub fn show(app: &mut App, ui: &mut Ui) {
@@ -90,13 +88,15 @@ fn apply_fix(app: &mut App, ks: &KernelState, fix: &Fix) {
                 content.push('\n');
             }
             let path = PathBuf::from(format!("/etc/portage/sets/{}", ks.keep_set));
-            let old = std::fs::read_to_string(&path).unwrap_or_default();
-            app.push(Action::Write {
-                title: format!("Protect known-good kernels in @{}", ks.keep_set),
-                changes: vec![crate::app::FileChange { path, old, new: Some(content) }],
-                reload: vec![Reload::Kernels, Reload::Config],
-                then: None,
-            });
+            match crate::portage::config::read_utf8(&path) {
+                Ok(old) => app.push(Action::Write {
+                    title: format!("Protect known-good kernels in @{}", ks.keep_set),
+                    changes: vec![crate::app::FileChange { path, old, new: Some(content) }],
+                    reload: vec![Reload::Kernels, Reload::Config],
+                    then: None,
+                }),
+                Err(why) => app.toast(crate::app::ToastKind::Error, why),
+            }
         }
         Fix::AddKeepSetToWorld => app.push(Action::Root {
             title: format!("Add @{} to @world", ks.keep_set),
@@ -117,6 +117,16 @@ fn apply_fix(app: &mut App, ks: &KernelState, fix: &Fix) {
             kind: JobKind::BootFix,
             reload: vec![],
         }),
+        Fix::MountBoot(target) => {
+            // `mount -o ro <target>` from fstab: reading is all the check needs, and it is the safe
+            // way to look at a partition a kernel update has not asked to write to.
+            app.push(Action::RootOp {
+                title: format!("Mount {target}"),
+                op: Op::Remount { target: target.clone(), rw: false },
+                kind: JobKind::Remount,
+                reload: vec![Reload::Kernels],
+            });
+        }
         Fix::Depclean(atoms) => {
             let t: Vec<&str> = atoms.iter().map(|s| s.as_str()).collect();
             app.push(Action::Pretend(EmergeOptions { action: emerge::Action::Depclean, ..Default::default() }.targets(&t)));
@@ -137,6 +147,7 @@ fn fix_label(fix: &Fix) -> (&'static str, String) {
         Fix::RemoveOld(_) => (icon::TRASH, "Remove the .old copies".into()),
         Fix::RemoveLeftovers(_) => (icon::TRASH, "Remove leftover files".into()),
         Fix::Depclean(_) => (icon::BROOM, "Preview depclean".into()),
+        Fix::MountBoot(target) => (icon::HARD_DRIVES, format!("Mount {target}")),
     }
 }
 
@@ -853,7 +864,7 @@ fn cleanup_page(app: &mut App, ui: &mut Ui) {
                 && let Some(cfg) = &cfg
             {
                 let ch = edits::remove_lines(cfg, &sel);
-                app.push(Action::Write { title: "Remove obsolete /etc/portage entries".into(), changes: ch, reload: vec![Reload::Config, Reload::Leftovers], then: None });
+                app.push_write("Remove obsolete /etc/portage entries", ch, vec![Reload::Config, Reload::Leftovers], None);
                 app.maintenance.config_selected.clear();
             }
         });

@@ -30,16 +30,11 @@ pub struct PlanEntry {
     pub use_vars: Vec<(String, String)>,
     pub size: String,
     pub depth: usize,
-    pub raw: String,
 }
 
 impl PlanEntry {
     pub fn has(&self, c: char) -> bool {
         self.flags.contains(c)
-    }
-
-    pub fn is_new(&self) -> bool {
-        self.has('N')
     }
 
     pub fn status_label(&self) -> &'static str {
@@ -199,11 +194,11 @@ impl Plan {
     pub fn merge_entries(&self) -> impl Iterator<Item = &PlanEntry> {
         self.entries.iter().filter(|e| matches!(e.kind, EntryType::Ebuild | EntryType::Binary))
     }
-
-    pub fn ok(&self) -> bool {
-        self.exit_code == Some(0) && self.suggestions.is_empty() && !self.problems.iter().any(|p| p.is_blocking())
-    }
 }
+
+/// A skipped update while it is being read: (slot key, the candidate that was skipped, what requires
+/// the package it conflicts with as (atom, required by)).
+type SkipGroup = (String, String, Vec<(String, String)>);
 
 fn re(cell: &'static OnceLock<Regex>, pat: &str) -> &'static Regex {
     cell.get_or_init(|| Regex::new(pat).unwrap())
@@ -254,7 +249,7 @@ pub fn parse_entry(line: &str) -> Option<PlanEntry> {
     static SIZE: OnceLock<Regex> = OnceLock::new();
     let size_re = re(&SIZE, r"([\d,.]+ [KMG]i?B)\s*$");
     let size = size_re.captures(rest_s.trim_end()).map(|s| s[1].to_string()).unwrap_or_default();
-    Some(PlanEntry { kind, flags, cpv, key, version, slot, repo, old, use_vars, size, depth, raw: line.to_string() })
+    Some(PlanEntry { kind, flags, cpv, key, version, slot, repo, old, use_vars, size, depth })
 }
 
 fn suggestion_kind(header: &str) -> Option<ConfKind> {
@@ -436,7 +431,7 @@ pub fn parse(output: &str, exit_code: Option<i32>) -> Plan {
             static SKREQ: OnceLock<Regex> = OnceLock::new();
             let skreq = re(&SKREQ, r"^\s+(\S+) required by (.+?)\s*$");
             i += 1;
-            let mut current: Option<(String, String, Vec<(String, String)>)> = None;
+            let mut current: Option<SkipGroup> = None;
             while i < lines.len() {
                 let l = lines[i];
                 let lt = l.trim();
@@ -520,11 +515,9 @@ pub fn parse(output: &str, exit_code: Option<i32>) -> Plan {
                     let mut parts = r.splitn(2, ' ');
                     pkg = parts.next().unwrap_or("").to_string();
                     use_line = parts.next().unwrap_or("").to_string();
-                } else if l.starts_with("The following REQUIRED_USE flag constraints are unsatisfied") {
-                } else if l.starts_with("The above constraints are a subset") {
-                } else if l.is_empty() && !constraint.is_empty() {
-                    break;
-                } else if l.starts_with("(dependency required by") || l.starts_with("!!!") {
+                } else if l.starts_with("The following REQUIRED_USE flag constraints are unsatisfied") || l.starts_with("The above constraints are a subset") {
+                    // Headings: nothing to record.
+                } else if (l.is_empty() && !constraint.is_empty()) || l.starts_with("(dependency required by") || l.starts_with("!!!") {
                     break;
                 } else if !l.is_empty() && !pkg.is_empty() {
                     constraint.push(l.to_string());
@@ -675,7 +668,6 @@ The following USE changes are necessary to proceed:
         assert_eq!(p.suggestions[1].line, ">=media-libs/baz-1.2 qt6 -qt5");
         assert!(p.problems.iter().any(|x| matches!(x, Problem::News { count: 2 })));
         assert!(p.problems.iter().any(|x| matches!(x, Problem::Blocker { resolved: true, .. })));
-        assert!(!p.ok());
     }
 
     #[test]

@@ -122,7 +122,7 @@ pub const SPECS: &[Spec] = &[
     sw("--keep-going", None, "Keep going after failures", "Continue with the remaining packages when one fails, then report the failures at the end.", Group::Build, false),
     sw("--fetchonly", Some('f'), "Download only", "Fetch all source archives but do not build anything. Good for slow/metered networks.", Group::Build, false),
     sw("--fetch-all-uri", Some('F'), "Download all sources", "Fetch every SRC_URI regardless of USE flags.", Group::Build, true),
-    yn("--quiet-build", "Quiet build", "Hide compiler output (it is still written to the build log). PortageHub shows the build log live either way.", Group::Build, false),
+    yn("--quiet-build", "Quiet build", "Hide compiler output (it is still written to the build log). Activity then has less to go on: the current phase of each package comes from emerge's own output, because the build logs under PORTAGE_TMPDIR are private to the portage user.", Group::Build, false),
     sw("--quiet-fail", None, "Quiet failures", "Do not print the full build log tail when a build fails.", Group::Build, true),
     sw("--skipfirst", None, "Skip first (with resume)", "When resuming, skip the package that failed first.", Group::Build, false),
     // Binary
@@ -147,10 +147,6 @@ pub const SPECS: &[Spec] = &[
     sw("--nospinner", None, "No spinner", "Disable the progress spinner.", Group::Output, true),
     Spec { flag: "--color", short: None, label: "Colour", help: "Coloured output (PortageHub strips colours itself).", kind: Kind::Choice(&["y", "n"]), group: Group::Output, advanced: true },
 ];
-
-pub fn spec(flag: &str) -> Option<&'static Spec> {
-    SPECS.iter().find(|s| s.flag == flag)
-}
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Value {
@@ -290,10 +286,6 @@ impl EmergeOptions {
         self
     }
 
-    pub fn is_on(&self, flag: &str) -> bool {
-        matches!(self.values.get(flag), Some(Value::On) | Some(Value::Yes))
-    }
-
     /// Build argv (without the program name).
     pub fn args(&self) -> Vec<String> {
         let mut shorts = String::new();
@@ -346,6 +338,11 @@ impl EmergeOptions {
         let mut a = vec!["--color=n".to_string(), "--nospinner".into(), "--ask=n".into()];
         a.extend(self.args());
         a
+    }
+
+    /// Why the helper would refuse to run this as root (see `portagehub::emerge_opts`), if it would.
+    pub fn policy_error(&self) -> Option<String> {
+        portagehub::policy::check_args("emerge", &self.run_args()).err()
     }
 
     pub fn command_line(&self) -> String {
@@ -475,6 +472,7 @@ pub const COMMON_SETS: &[(&str, &str)] = &[
 #[cfg(test)]
 mod tests {
     use super::*;
+    use portagehub::emerge_opts::{self, SHORT_FLAGS, Value as Allowed};
 
     #[test]
     fn argv() {
@@ -490,5 +488,86 @@ mod tests {
         let o = EmergeOptions { action: Action::Depclean, ..Default::default() };
         assert_eq!(o.args(), vec!["--depclean"]);
         assert_eq!(o.command_line(), "emerge --ask --depclean");
+    }
+
+    /// The helper's allow-list and the GUI's option table must not drift apart:
+    /// an option the GUI can send but the helper refuses (or the reverse, a spec
+    /// the helper would take with a different value shape) is a bug.
+    #[test]
+    fn helper_allow_list_covers_every_spec_and_action() {
+        for s in SPECS {
+            let o = emerge_opts::long_opt(s.flag).unwrap_or_else(|| panic!("{} is missing from portagehub::emerge_opts::LONG_OPTS", s.flag));
+            let same = match (s.kind, o.value) {
+                (Kind::Switch, Allowed::None) | (Kind::YesNo, Allowed::YesNo) | (Kind::Atoms, Allowed::Atom) => true,
+                (Kind::Number { allow_plain, .. }, Allowed::Number { plain }) => allow_plain == plain,
+                (Kind::Choice(a), Allowed::Choice(b)) => a == b,
+                _ => false,
+            };
+            assert!(same, "{}: GUI kind {:?} vs helper {:?}", s.flag, s.kind, o.value);
+            if let (Kind::Switch, Some(c)) = (s.kind, s.short) {
+                assert!(SHORT_FLAGS.contains(c), "-{c} ({}) is missing from SHORT_FLAGS", s.flag);
+            }
+        }
+        for c in SHORT_FLAGS.chars() {
+            assert!(SPECS.iter().any(|s| s.kind_is_switch() && s.short == Some(c)), "-{c} is allowed by the helper but no spec uses it");
+        }
+        for a in Action::ALL {
+            if let Some(f) = a.flag() {
+                assert!(emerge_opts::long_opt(f).is_some(), "action flag {f} is missing from LONG_OPTS");
+            }
+        }
+        for fixed in ["--pretend", "--verbose", "--color", "--nospinner", "--ask"] {
+            assert!(emerge_opts::long_opt(fixed).is_some(), "{fixed}");
+        }
+    }
+
+    impl Spec {
+        fn kind_is_switch(&self) -> bool {
+            matches!(self.kind, Kind::Switch)
+        }
+    }
+
+    /// Everything the option builder can produce passes the helper's policy.
+    #[test]
+    fn every_generated_command_line_is_accepted_by_the_helper() {
+        let accepts = |o: &EmergeOptions| {
+            for args in [o.args(), o.run_args(), o.pretend_args()] {
+                portagehub::policy::check_args("emerge", &args).unwrap_or_else(|e| panic!("{args:?}: {e}"));
+            }
+            assert_eq!(o.policy_error(), None);
+        };
+        for r in recipes() {
+            accepts(&(r.build)());
+        }
+        for s in SPECS {
+            let values: Vec<Value> = match s.kind {
+                Kind::Switch => vec![Value::On],
+                Kind::YesNo => vec![Value::Yes, Value::No],
+                Kind::Number { allow_plain, .. } => [Some(Value::Num(Some(4))), allow_plain.then_some(Value::Num(None))].into_iter().flatten().collect(),
+                Kind::Atoms => vec![Value::Text("dev-libs/foo ~dev-lang/python-3.11.5 =sys-kernel/x-1.0*".into())],
+                Kind::Choice(list) => list.iter().map(|c| Value::Text((*c).into())).collect(),
+            };
+            for v in values {
+                accepts(&EmergeOptions::default().with(s.flag, v.clone()).targets(&["@world", "dev-libs/foo"]));
+                accepts(&EmergeOptions::default().with(s.flag, v).with("--update", Value::On).with("--deep", Value::On));
+            }
+        }
+        for a in Action::ALL {
+            accepts(&EmergeOptions { action: a, ..Default::default() }.targets(&["dev-libs/foo"]));
+            accepts(&EmergeOptions { action: a, ..Default::default() });
+        }
+    }
+
+    #[test]
+    fn free_text_is_checked_before_a_root_job_is_queued() {
+        let mut o = EmergeOptions::default().targets(&["@world"]);
+        o.extra_args = "--config-r tmp/x".into();
+        assert!(o.policy_error().unwrap().contains("not allowed"));
+        o.extra_args.clear();
+        o.targets.push("tmp/evil.tbz2".into());
+        assert!(o.policy_error().unwrap().contains("emerge target not allowed"));
+        o.targets.pop();
+        o.extra_args = "--keep-going".into();
+        assert_eq!(o.policy_error(), None);
     }
 }

@@ -2,13 +2,18 @@
 
 use super::common;
 use crate::app::{Action, App};
+use crate::data::UpdateCandidate;
+use crate::portage::catalog::Catalog;
 use crate::portage::emerge::{self, EmergeOptions, Value};
 use crate::portage::history::fmt_duration;
+use crate::portage::vdb::Vdb;
 use crate::ui::theme::{self, *};
 use crate::ui::widgets as w;
 use egui::{Color32, Margin, RichText, Ui};
 use egui_phosphor::regular as icon;
 use std::collections::HashSet;
+use std::hash::{Hash, Hasher};
+use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum Filter {
@@ -26,12 +31,116 @@ pub struct State {
     pub filter: Filter,
     pub query: String,
     pub collapsed: HashSet<String>,
-    pub collapse_all: bool,
+    /// The rows for the current query, filter, collapsed categories and data.
+    cache: Option<(RowKey, Arc<Built>)>,
 }
 
+/// Which icon an installed package gets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Mark {
+    Update,
+    World,
+    Plain,
+}
+
+#[derive(Debug)]
 enum Row {
     Header(String, usize),
-    Item(String, String),
+    Item { key: String, pn: String, mark: Mark },
+}
+
+#[derive(Debug)]
+struct Built {
+    rows: Vec<Row>,
+    /// Distinct installed packages (the count under the filter box).
+    packages: usize,
+    /// Packages with a pending update (the filter's label).
+    updates: usize,
+}
+
+/// Everything the list depends on. While it is unchanged, so are the rows: rebuilding 1600 rows
+/// (and, for the World filter, looking each up in the world file) every frame cost ~15 ms.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RowKey {
+    query: String,
+    filter: Filter,
+    collapsed: u64,
+    /// The data is replaced, not edited, so its address says whether it changed.
+    vdb: usize,
+    updates: usize,
+    catalog: usize,
+}
+
+fn address<T>(a: Option<&Arc<T>>) -> usize {
+    a.map_or(0, |a| Arc::as_ptr(a) as *const () as usize)
+}
+
+/// Order-independent hash of the collapsed categories.
+fn collapsed_hash(set: &HashSet<String>) -> u64 {
+    set.iter().fold(set.len() as u64, |acc, c| {
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        c.hash(&mut h);
+        acc ^ h.finish()
+    })
+}
+
+fn row_key(state: &State, vdb: &Arc<Vdb>, updates: Option<&Arc<Vec<UpdateCandidate>>>, catalog: Option<&Arc<Catalog>>) -> RowKey {
+    RowKey { query: state.query.clone(), filter: state.filter, collapsed: collapsed_hash(&state.collapsed), vdb: address(Some(vdb)), updates: address(updates), catalog: address(catalog) }
+}
+
+/// The category headers and package rows for a filter and query (only the packages of expanded categories).
+fn build_rows(vdb: &Vdb, catalog: Option<&Catalog>, updates: &HashSet<String>, filter: Filter, query: &str, collapsed: &HashSet<String>) -> Built {
+    let q = query.to_lowercase();
+    let mut rows: Vec<Row> = Vec::new();
+    let mut current_cat = String::new();
+    let mut cat_count = 0usize;
+    let mut header_pos = 0usize;
+    let mut seen: HashSet<String> = HashSet::new();
+    for p in &vdb.pkgs {
+        let key = p.key();
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        if !q.is_empty() && !key.contains(&q) {
+            continue;
+        }
+        let keep = match filter {
+            Filter::All => true,
+            Filter::World => vdb.in_world(&key),
+            Filter::Deps => !vdb.in_world(&key),
+            Filter::Updates => updates.contains(&key),
+            Filter::Orphans => catalog.is_some_and(|c| c.get(&key).is_none()),
+        };
+        if !keep {
+            continue;
+        }
+        if p.cat != current_cat {
+            if !current_cat.is_empty()
+                && let Row::Header(_, n) = &mut rows[header_pos]
+            {
+                *n = cat_count;
+            }
+            current_cat = p.cat.clone();
+            header_pos = rows.len();
+            rows.push(Row::Header(p.cat.clone(), 0));
+            cat_count = 0;
+        }
+        cat_count += 1;
+        if !collapsed.contains(&p.cat) {
+            let mark = if updates.contains(&key) {
+                Mark::Update
+            } else if vdb.in_world(&key) {
+                Mark::World
+            } else {
+                Mark::Plain
+            };
+            rows.push(Row::Item { key, pn: p.pn.clone(), mark });
+        }
+    }
+    if let Some(Row::Header(_, n)) = rows.get_mut(header_pos) {
+        *n = cat_count;
+    }
+    Built { rows, packages: seen.len(), updates: updates.len() }
 }
 
 pub fn show(app: &mut App, ui: &mut Ui) {
@@ -40,7 +149,18 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         return;
     };
     let catalog = app.data.catalog.clone();
-    let updates: HashSet<String> = app.data.updates.as_ref().map(|u| u.iter().map(|c| c.key.clone()).collect()).unwrap_or_default();
+    let update_list = app.data.updates.clone();
+    // Rebuilt only when something the list depends on changed (see RowKey).
+    let key = row_key(&app.library, &vdb, update_list.as_ref(), catalog.as_ref());
+    let built = match &app.library.cache {
+        Some((k, built)) if *k == key => built.clone(),
+        _ => {
+            let updates: HashSet<String> = update_list.as_ref().map(|u| u.iter().map(|c| c.key.clone()).collect()).unwrap_or_default();
+            let built = Arc::new(build_rows(&vdb, catalog.as_deref(), &updates, app.library.filter, &app.library.query, &app.library.collapsed));
+            app.library.cache = Some((key, built.clone()));
+            built
+        }
+    };
 
     egui::Panel::left("lib-side")
         .resizable(true)
@@ -57,7 +177,7 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 ui.add_space(4.0);
                 w::search_box(ui, &mut app.library.query, "Filter installed…", ui.available_width());
                 ui.add_space(4.0);
-                let up = format!("Updates {}", if updates.is_empty() { String::new() } else { updates.len().to_string() });
+                let up = format!("Updates {}", if built.updates == 0 { String::new() } else { built.updates.to_string() });
                 w::segmented(
                     ui,
                     &mut app.library.filter,
@@ -65,53 +185,9 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                 );
                 ui.add_space(4.0);
             });
-            // Build rows
-            let q = app.library.query.to_lowercase();
-            let mut rows: Vec<Row> = Vec::new();
-            let mut current_cat = String::new();
-            let mut cat_count = 0usize;
-            let mut header_pos = 0usize;
-            let mut seen: HashSet<String> = HashSet::new();
-            for p in &vdb.pkgs {
-                let key = p.key();
-                if !seen.insert(key.clone()) {
-                    continue;
-                }
-                if !q.is_empty() && !key.contains(&q) {
-                    continue;
-                }
-                let keep = match app.library.filter {
-                    Filter::All => true,
-                    Filter::World => vdb.in_world(&key),
-                    Filter::Deps => !vdb.in_world(&key),
-                    Filter::Updates => updates.contains(&key),
-                    Filter::Orphans => catalog.as_ref().is_some_and(|c| c.get(&key).is_none()),
-                };
-                if !keep {
-                    continue;
-                }
-                if p.cat != current_cat {
-                    if !current_cat.is_empty()
-                        && let Row::Header(_, n) = &mut rows[header_pos]
-                    {
-                        *n = cat_count;
-                    }
-                    current_cat = p.cat.clone();
-                    header_pos = rows.len();
-                    rows.push(Row::Header(p.cat.clone(), 0));
-                    cat_count = 0;
-                }
-                cat_count += 1;
-                if !app.library.collapsed.contains(&p.cat) {
-                    rows.push(Row::Item(key, p.pn.clone()));
-                }
-            }
-            if let Some(Row::Header(_, n)) = rows.get_mut(header_pos) {
-                *n = cat_count;
-            }
             ui.horizontal(|ui| {
                 ui.add_space(10.0);
-                ui.label(w::dim(format!("{} packages", seen.len())));
+                ui.label(w::dim(format!("{} packages", built.packages)));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add_space(8.0);
                     if w::icon_button(ui, icon::ARROWS_IN_LINE_VERTICAL, "Collapse all categories").clicked() {
@@ -122,9 +198,9 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                     }
                 });
             });
-            egui::ScrollArea::vertical().id_salt("lib-list").auto_shrink([false, false]).show_rows(ui, 30.0, rows.len(), |ui, range| {
+            egui::ScrollArea::vertical().id_salt("lib-list").auto_shrink([false, false]).show_rows(ui, 30.0, built.rows.len(), |ui, range| {
                 ui.spacing_mut().item_spacing.y = 0.0;
-                for r in &rows[range] {
+                for r in &built.rows[range] {
                     match r {
                         Row::Header(cat, n) => {
                             let collapsed = app.library.collapsed.contains(cat);
@@ -143,14 +219,12 @@ pub fn show(app: &mut App, ui: &mut Ui) {
                                 }
                             }
                         }
-                        Row::Item(key, pn) => {
+                        Row::Item { key, pn, mark } => {
                             let sel = app.library.selected.as_deref() == Some(key.as_str());
-                            let ic = if updates.contains(key) {
-                                icon::ARROW_CIRCLE_UP
-                            } else if vdb.in_world(key) {
-                                icon::STAR
-                            } else {
-                                icon::PACKAGE
+                            let ic = match mark {
+                                Mark::Update => icon::ARROW_CIRCLE_UP,
+                                Mark::World => icon::STAR,
+                                Mark::Plain => icon::PACKAGE,
                             };
                             let resp = w::side_item(ui, ic, pn, sel, None);
                             if resp.clicked() {
@@ -253,7 +327,7 @@ fn library_home(app: &mut App, ui: &mut Ui) {
         if let Some(h) = history {
             w::section(ui, "Longest builds on this machine");
             let mut longest: Vec<(String, std::time::Duration)> = h.by_key.keys().filter_map(|k| h.estimate(k).map(|d| (k.clone(), d))).collect();
-            longest.sort_by(|a, b| b.1.cmp(&a.1));
+            longest.sort_by_key(|x| std::cmp::Reverse(x.1));
             let max = longest.first().map(|x| x.1.as_secs_f32()).unwrap_or(1.0).max(1.0);
             for (k, d) in longest.iter().take(12) {
                 ui.horizontal(|ui| {
@@ -273,4 +347,84 @@ fn library_home(app: &mut App, ui: &mut Ui) {
             }
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::portage::vdb::Installed;
+    use crate::portage::version::Version;
+
+    fn pkg(cat: &str, pn: &str) -> Installed {
+        Installed { cat: cat.into(), pn: pn.into(), ver: Version::parse("1.0").unwrap(), slot: "0".into(), repo: "gentoo".into(), build_time: 0, size: 0, desc: String::new(), dir: Default::default() }
+    }
+
+    fn vdb() -> Vdb {
+        let mut v = Vdb::default();
+        v.pkgs = vec![pkg("app-editors", "emacs"), pkg("app-editors", "vim"), pkg("dev-libs", "openssl"), pkg("dev-libs", "zlib"), pkg("sys-apps", "coreutils")];
+        v.set_world(vec!["app-editors/vim".into(), "sys-apps/coreutils".into()]);
+        v
+    }
+
+    fn items(b: &Built) -> Vec<&str> {
+        b.rows.iter().filter_map(|r| if let Row::Item { key, .. } = r { Some(key.as_str()) } else { None }).collect()
+    }
+
+    #[test]
+    fn filters_and_marks() {
+        let v = vdb();
+        let updates: HashSet<String> = ["dev-libs/zlib".to_string()].into();
+        let none = HashSet::new();
+        let all = build_rows(&v, None, &updates, Filter::All, "", &none);
+        assert_eq!(items(&all), vec!["app-editors/emacs", "app-editors/vim", "dev-libs/openssl", "dev-libs/zlib", "sys-apps/coreutils"]);
+        assert_eq!((all.packages, all.updates), (5, 1));
+        let marks: Vec<Mark> = all.rows.iter().filter_map(|r| if let Row::Item { mark, .. } = r { Some(*mark) } else { None }).collect();
+        assert_eq!(marks, vec![Mark::Plain, Mark::World, Mark::Plain, Mark::Update, Mark::World]);
+        assert_eq!(items(&build_rows(&v, None, &updates, Filter::World, "", &none)), vec!["app-editors/vim", "sys-apps/coreutils"]);
+        assert_eq!(items(&build_rows(&v, None, &updates, Filter::Deps, "", &none)), vec!["app-editors/emacs", "dev-libs/openssl", "dev-libs/zlib"]);
+        assert_eq!(items(&build_rows(&v, None, &updates, Filter::Updates, "", &none)), vec!["dev-libs/zlib"]);
+        let q = build_rows(&v, None, &updates, Filter::All, "SSL", &none);
+        assert_eq!((items(&q), q.packages), (vec!["dev-libs/openssl"], 5), "the count is of installed packages, not of matches");
+        // With an empty catalog nothing is known to any repository.
+        let orphans = build_rows(&v, Some(&Catalog::default()), &updates, Filter::Orphans, "", &none);
+        assert_eq!(orphans.packages, 5);
+    }
+
+    #[test]
+    fn collapsed_categories_keep_their_header_and_count() {
+        let v = vdb();
+        let collapsed: HashSet<String> = ["app-editors".to_string()].into();
+        let b = build_rows(&v, None, &HashSet::new(), Filter::All, "", &collapsed);
+        assert!(matches!(&b.rows[0], Row::Header(c, 2) if c == "app-editors"), "{:?}", b.rows[0]);
+        assert_eq!(items(&b), vec!["dev-libs/openssl", "dev-libs/zlib", "sys-apps/coreutils"]);
+        assert_eq!(b.packages, 5);
+    }
+
+    #[test]
+    fn the_cache_key_changes_exactly_when_the_rows_would() {
+        let v = Arc::new(vdb());
+        let base = State::default();
+        let k0 = row_key(&base, &v, None, None);
+        assert_eq!(k0, row_key(&base, &v, None, None));
+        let s = State { query: "vim".into(), ..State::default() };
+        assert_ne!(k0, row_key(&s, &v, None, None));
+        let s = State { filter: Filter::World, ..State::default() };
+        assert_ne!(k0, row_key(&s, &v, None, None));
+        let mut s = State::default();
+        s.collapsed.insert("dev-libs".into());
+        let k1 = row_key(&s, &v, None, None);
+        assert_ne!(k0, k1);
+        // The same set in another insertion order is the same key.
+        let (mut a, mut b) = (State::default(), State::default());
+        a.collapsed.extend(["x/a".to_string(), "x/b".to_string()]);
+        b.collapsed.extend(["x/b".to_string(), "x/a".to_string()]);
+        assert_eq!(row_key(&a, &v, None, None), row_key(&b, &v, None, None));
+        // New data (a reload) is a new Arc.
+        let reloaded = Arc::new(vdb());
+        assert_ne!(k0, row_key(&base, &reloaded, None, None));
+        let catalog = Arc::new(Catalog::default());
+        assert_ne!(k0, row_key(&base, &v, None, Some(&catalog)));
+        let updates = Arc::new(Vec::new());
+        assert_ne!(k0, row_key(&base, &v, Some(&updates), None));
+    }
 }

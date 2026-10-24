@@ -3,6 +3,7 @@
 import ctypes
 import functools
 import glob
+import logging
 import os
 import re
 import socket
@@ -19,7 +20,11 @@ try:
 except ImportError:
     liquidctl = None
 
+log = logging.getLogger("hwmonux")
+
 SYS_CPU = "/sys/devices/system/cpu"
+SYS_PCI = "/sys/bus/pci/devices"
+PCI_IDS = ("/usr/share/hwdata/pci.ids", "/usr/share/misc/pci.ids", "/usr/share/pci.ids")
 LABELS_FILE = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"),
                            "HWMonux", "labels.conf")
 
@@ -50,6 +55,11 @@ CPU_CHIPS = {"coretemp", "k10temp", "zenpower", "cpu_thermal"}
 DIMM_CHIPS = {"spd5118", "jc42"}
 GPU_CHIPS = {"amdgpu", "radeon", "nouveau", "i915", "xe"}
 NETWORK_CHIP_PREFIXES = ("iwlwifi", "ath", "mt7", "rtw", "r8169")
+
+# amdgpu / i915 hwmon channel labels worth a nicer name
+GPU_LABELS = {"edge": "Edge", "junction": "Junction", "mem": "Memory", "Power #1": "GPU", "Fan #1": "Fan",
+              "vddgfx": "Core Voltage", "vddnb": "North Bridge Voltage", "Clock #1": "Graphics", "Clock #2": "Memory"}
+PCIE_GENERATIONS = {"2.5": 1, "5.0": 2, "8.0": 3, "16.0": 4, "32.0": 5, "64.0": 6}
 
 RAPL_LABELS = {"core": "IA Cores", "uncore": "GT", "dram": "DRAM", "psys": "Platform"}
 
@@ -96,6 +106,18 @@ def read_text(path, default=None):
         return default
 
 
+def in_virtual_machine():
+    """Does /proc/cpuinfo carry the 'hypervisor' flag? A VM has no motherboard sensors to find."""
+    try:
+        with open("/proc/cpuinfo") as f:
+            for line in f:
+                if line.startswith(("flags", "Features")):
+                    return " hypervisor" in line
+    except OSError:
+        pass
+    return False
+
+
 def sysfs_reader(path, scale=1.0):
     def read():
         with open(path) as f:
@@ -117,11 +139,18 @@ class Sensor:
         self.label, self.kind, self.read = label, kind, read
         self.warn, self.crit = warn, crit
         self.value = self.min = self.max = None
+        self._reported = False
 
     def update(self):
         try:
             value = self.read()
         except (OSError, ValueError):
+            value = None  # unplugged, not readable right now, or a driver answering garbage
+        except Exception:
+            # A bug or an odd driver in one reader must never take the other sensors down.
+            if not self._reported:
+                self._reported = True
+                log.warning("sensor %r failed and is shown empty", self.label, exc_info=True)
             value = None
         self.value = value
         if value is not None:
@@ -137,6 +166,7 @@ class Device:
         self.name, self.icon = name, icon
         self.info = []    # (label, text) static properties
         self.groups = {}  # group title -> [Sensor]
+        self.pci = None   # PCI address ("0000:01:00.0") of a display adapter, to list each GPU once
 
     def add(self, group, label, kind, read, **limits):
         self.groups.setdefault(group, []).append(Sensor(label, kind, read, **limits))
@@ -237,7 +267,11 @@ class MemInfo:
                 self.bytes[key] = int(value.split()[0]) * 1024
 
     def used_percent(self, total, free):
-        return 100 * (1 - self.bytes[free] / self.bytes[total])
+        """Used share of `total` in percent; None when there is none (swap turned off at runtime)."""
+        size = self.bytes.get(total)
+        if not size or free not in self.bytes:
+            return None
+        return 100 * (1 - self.bytes[free] / size)
 
 
 class DiskActivity:
@@ -353,9 +387,13 @@ def _text(value):
     return value.decode() if isinstance(value, bytes) else value
 
 
-def _nvidia_gpu(index, handle):
+def _nvidia_gpu(index, handle, pci_dir=None):
+    """(Device, RuntimePower or None) for one NVML handle."""
     N = pynvml
     dev = Device(_text(_nv(N.nvmlDeviceGetName, handle)) or f"NVIDIA GPU #{index}", "gpu")
+    pci = _nv(N.nvmlDeviceGetPciInfo, handle)
+    dev.pci = normalize_pci(_text(pci.busId)) if pci else None
+    power = RuntimePower(f"{pci_dir or SYS_PCI}/{dev.pci}") if dev.pci else None
     # v2 reports driver-reserved memory separately instead of counting it as used.
     memory = (N.nvmlDeviceGetMemoryInfo, handle, *([N.nvmlMemory_v2] if hasattr(N, "nvmlMemory_v2") else []))
 
@@ -365,14 +403,13 @@ def _nvidia_gpu(index, handle):
 
     def add(group, label, kind, read, **limits):
         if read() is not None:  # skip what this card or driver doesn't support
-            dev.add(group, label, kind, read, **limits)
+            dev.add(group, label, kind, power.guard(read) if power else read, **limits)
 
     info("Name", dev.name)
     info("Driver Version", _nv(N.nvmlSystemGetDriverVersion))
     info("VBIOS Version", _nv(N.nvmlDeviceGetVbiosVersion, handle))
     total = _nv(*memory)
     info("Memory", total and format_size(total.total))
-    pci = _nv(N.nvmlDeviceGetPciInfo, handle)
     info("PCI Address", pci and pci.busId)
     gen, width = _nv(N.nvmlDeviceGetMaxPcieLinkGeneration, handle), _nv(N.nvmlDeviceGetMaxPcieLinkWidth, handle)
     info("Bus Interface", gen and width and f"PCIe Gen {gen} x{width}")
@@ -398,7 +435,86 @@ def _nvidia_gpu(index, handle):
         _nv_reader(N.nvmlDeviceGetDecoderUtilization, handle, pick=lambda u: u[0]))
     add("Utilization", "Memory", "percent", _nv_reader(*memory, pick=lambda m: 100 * m.used / m.total))
     add("Utilization", "Memory Used", "size", _nv_reader(*memory, pick=lambda m: m.used))
-    return dev
+    return dev, power
+
+
+class RuntimePower:
+    """Whether a PCI device is runtime-suspended (D3).
+
+    Reading a sleeping GPU's sensors wakes it, which on a hybrid laptop keeps the discrete GPU
+    powered and drains the battery. While it sleeps its sensors show nothing instead.
+    """
+
+    def __init__(self, pci_path):
+        self._path = pci_path + "/power/runtime_status"
+        self.asleep = False
+
+    def sample(self):
+        self.asleep = read_text(self._path) in ("suspended", "suspending")
+
+    def guard(self, read):
+        def guarded():
+            return None if self.asleep else read()
+        return guarded
+
+
+def normalize_pci(address):
+    """NVML's '00000000:01:00.0' and sysfs's '0000:01:00.0' name the same device."""
+    domain, sep, rest = (address or "").lower().partition(":")
+    if not sep:
+        return address or ""
+    return f"{domain[-4:].rjust(4, '0')}:{rest}"
+
+
+def pci_names(vendor, device, paths=None):
+    """(vendor, device) names from pci.ids for ids like '0x8086' / '0x46a6'; None for what isn't listed."""
+    vendor, device = vendor.lower().removeprefix("0x"), device.lower().removeprefix("0x")
+    for path in PCI_IDS if paths is None else paths:
+        try:
+            f = open(path, encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        with f:
+            vendor_name = None
+            for line in f:
+                if not line.strip() or line.startswith("#"):
+                    continue
+                if not line[0].isspace():
+                    if vendor_name is not None or line.startswith("C "):
+                        break  # past our vendor (or into the class list)
+                    if line.startswith(vendor + "  "):
+                        vendor_name = line[len(vendor):].strip()
+                elif vendor_name is not None and line.startswith("\t") and not line.startswith("\t\t"):
+                    if line[1:].startswith(device + "  "):
+                        return vendor_name, line[1 + len(device):].strip()
+            if vendor_name is not None:
+                return vendor_name, None
+    return None, None
+
+
+VENDOR_NAMES = {"0x8086": "Intel", "0x1002": "AMD", "0x10de": "NVIDIA"}
+
+
+def gpu_name(vendor, device):
+    """'Intel Iris Xe Graphics' from the PCI ids, with a fallback for machines without pci.ids."""
+    vendor_name, device_name = pci_names(vendor, device)
+    vendor_name = (VENDOR_NAMES.get(vendor.lower())
+                   or re.sub(r",? ?(Inc\.|Corporation|Corp\.)", "", vendor_name or "").strip() or vendor)
+    if device_name:
+        marketing = re.findall(r"\[([^\[\]]+)\]", device_name)  # 'AlderLake-P GT2 [Iris Xe Graphics]'
+        device_name = marketing[-1] if marketing else device_name
+        return device_name if device_name.startswith(vendor_name) else f"{vendor_name} {device_name}"
+    return f"{vendor_name} GPU ({device.lower().removeprefix('0x')})"
+
+
+def _marked_mhz(path):
+    """MHz of the line marked '*' in an amdgpu pp_dpm_* file ('1: 1500Mhz *')."""
+    for line in (read_text(path, "") or "").splitlines():
+        if line.rstrip().endswith("*"):
+            m = re.search(r"(\d+)\s*[Mm][Hh][Zz]", line)
+            if m:
+                return float(m[1])
+    return None
 
 
 class Monitor:
@@ -407,22 +523,56 @@ class Monitor:
     def __init__(self):
         self.hostname = socket.gethostname()
         self._samplers = []  # run once per poll, before the sensors that share their data
-        self._chips = [(read_text(path + "/name", ""), path)
-                       for path in sorted(glob.glob("/sys/class/hwmon/hwmon*"),
-                                          key=lambda p: int(p.rsplit("hwmon", 1)[1]))]
-        drives = self._drives()  # first: claims the hwmon chips that belong to drives
-        self.devices = [self._motherboard(), self._cpu(), *self._liquidctl_devices(), self._memory(),
-                        *self._nvidia_gpus(), *drives, *self._other_chips()]
+        self._reported = set()
+        self._nvml_pci = set()  # PCI addresses of the GPUs NVML reports
+        self._chips = self._hwmon_chips()
+        # Every stage is isolated: an odd sysfs quirk on unusual hardware must cost one device,
+        # never the whole window.
+        drives = self._stage("drives", self._drives)  # first: claims the hwmon chips that belong to drives
+        self.devices = [*self._stage("motherboard", lambda: [self._motherboard()]),
+                        *self._stage("processor", lambda: [self._cpu()]),
+                        *self._stage("liquidctl devices", self._liquidctl_devices),
+                        *self._stage("memory", lambda: [self._memory()]),
+                        *self._stage("NVIDIA GPUs", self._nvidia_gpus),
+                        *self._stage("display adapters", self._display_adapters),
+                        *drives,
+                        *self._stage("other chips", self._other_chips)]
         for dev in self.devices:
             dev.groups = {g: dev.groups[g] for g in GROUPS if g in dev.groups}
         self.poll()  # primes the rate-based sensors
 
+    @staticmethod
+    def _hwmon_chips():
+        def index(path):
+            tail = path.rsplit("hwmon", 1)[1]
+            return (0, int(tail), "") if tail.isdigit() else (1, 0, tail)
+        return [(read_text(path + "/name", ""), path)
+                for path in sorted(glob.glob("/sys/class/hwmon/hwmon*"), key=index)]
+
+    def _stage(self, what, discover):
+        try:
+            return list(discover())
+        except Exception:
+            self._report(("stage", what), f"discovering {what} failed; continuing without them")
+            return []
+
+    def _report(self, key, message):
+        if key not in self._reported:  # once, not on every poll
+            self._reported.add(key)
+            log.warning("%s", message, exc_info=True)
+
     def poll(self):
         for sample in self._samplers:
-            sample()
+            try:
+                sample()
+            except Exception:
+                self._report(("sampler", id(sample)), "a sensor sampler failed; the sensors that use it show no value")
         for dev in self.devices:
-            for sensor in dev.sensors():
-                sensor.update()
+            try:
+                for sensor in dev.sensors():
+                    sensor.update()
+            except Exception:
+                self._report(("device", dev.name), f"refreshing {dev.name} failed")
 
     def reset(self):
         for dev in self.devices:
@@ -449,6 +599,9 @@ class Monitor:
             name == "acpitz" or "/platform/" in os.path.realpath(path + "/device")))
         for name, path in chips:
             add_hwmon(dev, path, lambda label, name=name: f"{label} ({name})")
+        if dmi("board_vendor") and not chips and not in_virtual_machine():
+            # Most boards need a Super I/O driver the kernel doesn't load by itself.
+            dev.info.append(("Fan/voltage sensors", "No Super I/O driver loaded - run sensors-detect and review its prompts, or see the README"))
         return dev
 
     def _cpu(self):
@@ -621,8 +774,7 @@ class Monitor:
             drives.append(dev)
         return drives
 
-    @staticmethod
-    def _nvidia_gpus():
+    def _nvidia_gpus(self):
         if pynvml is None:
             return []
         try:
@@ -632,9 +784,79 @@ class Monitor:
         gpus = []
         for index in range(_nv(pynvml.nvmlDeviceGetCount) or 0):
             handle = _nv(pynvml.nvmlDeviceGetHandleByIndex, index)
-            if handle is not None:
-                gpus.append(_nvidia_gpu(index, handle))
+            if handle is None:
+                continue
+            try:
+                gpu, power = _nvidia_gpu(index, handle)
+            except Exception:
+                self._report(("gpu", index), f"NVIDIA GPU #{index} could not be read")
+                continue
+            if power:
+                self._samplers.append(power.sample)
+            if gpu.pci:
+                self._nvml_pci.add(gpu.pci)  # the generic display-adapter pass skips it
+            gpus.append(gpu)
         return gpus
+
+    def _display_adapters(self, pci_dir=None):
+        """Display adapters NVML does not cover: Intel and AMD GPUs, virtual and open-source-driver ones."""
+        adapters = []
+        for path in sorted(glob.glob((pci_dir or SYS_PCI) + "/*")):
+            address = normalize_pci(os.path.basename(path))
+            if not (read_text(path + "/class", "") or "").startswith("0x03") or address in self._nvml_pci:
+                continue
+            try:
+                adapters.append(self._display_adapter(path, address))
+            except Exception:
+                self._report(("adapter", address), f"display adapter {address} could not be read")
+        return adapters
+
+    def _display_adapter(self, path, address):
+        vendor, device_id = read_text(path + "/vendor", ""), read_text(path + "/device", "")
+        dev = Device(gpu_name(vendor, device_id), "gpu")
+        dev.pci = address
+        driver = os.path.basename(os.path.realpath(path + "/driver")) if os.path.exists(path + "/driver") else ""
+        dev.info += [("Name", dev.name), ("Driver", driver or "none"), ("PCI Address", address)]
+        gen = PCIE_GENERATIONS.get((read_text(path + "/max_link_speed", "") or "").split(" ")[0])
+        width = read_text(path + "/max_link_width", "")
+        if gen and width.isdigit():
+            dev.info.append(("Bus Interface", f"PCIe Gen {gen} x{width}"))
+        vram_total = read_text(path + "/mem_info_vram_total", "")
+        if vram_total.isdigit() and int(vram_total):
+            dev.info.append(("Memory", format_size(int(vram_total))))
+        if driver == "nvidia" and pynvml is None:
+            dev.info.append(("Sensors", "need dev-python/nvidia-ml-py (USE=nvidia for app-misc/hwmonux)"))
+
+        # Temperatures, fans, power and clocks of the chip the kernel registers for this device.
+        real = os.path.realpath(path) + os.sep
+        for _, chip in self._take_chips(lambda _, chip: os.path.realpath(chip).startswith(real)):
+            add_hwmon(dev, chip, lambda label: GPU_LABELS.get(label, label))
+
+        if not dev.groups.get("Clocks"):
+            for label, name in (("Graphics", "pp_dpm_sclk"), ("Memory", "pp_dpm_mclk")):  # amdgpu
+                if os.access(f"{path}/{name}", os.R_OK):
+                    dev.add("Clocks", label, "clock", lambda name=name: _marked_mhz(f"{path}/{name}"))
+            freq = next((f for card in sorted(glob.glob(path + "/drm/card[0-9]*"))  # i915
+                         for f in (card + "/gt_act_freq_mhz", card + "/gt/gt0/rps_act_freq_mhz",
+                                   card + "/gt_cur_freq_mhz", card + "/gt/gt0/rps_cur_freq_mhz")
+                         if os.access(f, os.R_OK)), None)
+            freq = freq or next((f for f in (path + "/tile0/gt0/freq0/act_freq", path + "/tile0/gt0/freq0/cur_freq")  # xe
+                                 if os.access(f, os.R_OK)), None)
+            if freq:
+                dev.add("Clocks", "Graphics", "clock", sysfs_reader(freq))
+        for label, name in (("GPU", "gpu_busy_percent"), ("Memory Controller", "mem_busy_percent")):  # amdgpu
+            if os.access(f"{path}/{name}", os.R_OK):
+                dev.add("Utilization", label, "percent", sysfs_reader(f"{path}/{name}"))
+        if vram_total.isdigit() and int(vram_total) and os.access(path + "/mem_info_vram_used", os.R_OK):
+            total = int(vram_total)
+            dev.add("Utilization", "Memory", "percent", lambda: 100 * float(read_text(path + "/mem_info_vram_used")) / total)
+            dev.add("Utilization", "Memory Used", "size", sysfs_reader(path + "/mem_info_vram_used"))
+
+        power = RuntimePower(path)
+        self._samplers.append(power.sample)
+        for sensor in dev.sensors():
+            sensor.read = power.guard(sensor.read)
+        return dev
 
     def _liquidctl_devices(self):
         """AIO coolers and fan controllers on USB, read through liquidctl."""

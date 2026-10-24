@@ -95,10 +95,10 @@ pub fn parse_ini(text: &str) -> Vec<(String, Vec<(String, String)>)> {
             v.push_str(t);
             continue;
         }
-        if let Some((k, v)) = t.split_once('=').or_else(|| t.split_once(':')) {
-            if let Some((_, kv)) = out.last_mut() {
-                kv.push((k.trim().to_string(), v.trim().to_string()));
-            }
+        if let Some((k, v)) = t.split_once('=').or_else(|| t.split_once(':'))
+            && let Some((_, kv)) = out.last_mut()
+        {
+            kv.push((k.trim().to_string(), v.trim().to_string()));
         }
     }
     out

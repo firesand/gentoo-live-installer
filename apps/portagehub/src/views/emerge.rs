@@ -37,9 +37,9 @@ pub struct State {
     pub target_input: String,
     pub log_filter: String,
     pub log_errors_only: bool,
-    pub follow: bool,
-    pub show_raw: bool,
     pub confirm_dangerous: bool,
+    /// The lines of the shown job that pass the output filter, kept between frames.
+    pub log_cache: Option<LogCache>,
     pub env_features: String,
     pub env_makeopts: String,
     /// Start a kernel emerge even though a boot partition is read-only.
@@ -323,7 +323,12 @@ fn custom(app: &mut App, ui: &mut Ui) {
         w::command_preview(ui, &app.emerge.options.command_line());
         ui.add_space(8.0);
         let opts = app.emerge.options.clone();
-        let needs = opts.action.needs_targets() && opts.targets.is_empty();
+        // The admin helper only runs options and targets it recognises: say so here, not after the click.
+        let refused = opts.policy_error();
+        if let Some(problem) = &refused {
+            w::callout(ui, RED, icon::WARNING, &format!("{problem}. PortageHub only passes options it knows (exactly as spelled) and package atoms or @sets as targets."));
+        }
+        let needs = (opts.action.needs_targets() && opts.targets.is_empty()) || refused.is_some();
         ui.horizontal(|ui| {
             if opts.action.previewable() {
                 if ui.add_enabled_ui(!needs, |ui| w::big_button(ui, &format!("{}  PREVIEW", icon::EYE), GRAD_GREEN, 170.0)).inner.clicked() {
@@ -332,7 +337,7 @@ fn custom(app: &mut App, ui: &mut Ui) {
             } else if ui.add_enabled_ui(!needs, |ui| w::big_button(ui, &format!("{}  RUN", icon::PLAY), GRAD_BLUE, 150.0)).inner.clicked() {
                 app.push(Action::Emerge(opts.clone(), vec![]));
             }
-            if needs {
+            if opts.action.needs_targets() && opts.targets.is_empty() {
                 ui.label(RichText::new(format!("{} add at least one target", icon::WARNING)).color(ORANGE));
             }
             if w::button(ui, icon::ARROW_COUNTER_CLOCKWISE, "Reset").clicked() {
@@ -534,7 +539,8 @@ fn review(app: &mut App, ui: &mut Ui) {
         }
         ui.add_space(8.0);
         egui::CollapsingHeader::new(RichText::new(format!("{}  Full emerge output", icon::TERMINAL)).color(TEXT)).id_salt("raw-out").show(ui, |ui| {
-            log_view(ui, &job, "", false, false, 400.0);
+            let mut cache = None;
+            log_view(ui, &job, &mut cache, "", false, false, 400.0);
         });
     });
 }
@@ -741,7 +747,7 @@ fn problems(app: &mut App, ui: &mut Ui, plan: &Plan, opts: &EmergeOptions) {
                 let comment = format!("added by PortageHub for: emerge {}", opts.args().join(" "));
                 let ch = edits::add_lines(cfg, &sel, &target, Some(&comment));
                 let then = if app.settings.auto_repretend { Some(Box::new(Action::RePretend)) } else { None };
-                app.push(Action::Write { title: "Apply emerge's suggested changes".into(), changes: ch, reload: vec![Reload::Config], then });
+                app.push_write("Apply emerge's suggested changes", ch, vec![Reload::Config], then);
             }
             ui.label(w::dim(format!("into …/{target} of each package.* directory")));
         });
@@ -794,7 +800,7 @@ fn problem_body(app: &mut App, ui: &mut Ui, p: &Problem, pi: usize, opts: &Emerg
                             && let Some(cfg) = &cfg
                         {
                             let ch = edits::add_lines(cfg, &fixes, &target, Some(&format!("unmasked by PortageHub for {atom}")));
-                            app.push(Action::Write { title: format!("Allow {}", c.cpv), changes: ch, reload: vec![Reload::Config], then: Some(Box::new(Action::RePretend)) });
+                            app.push_write(format!("Allow {}", c.cpv), ch, vec![Reload::Config], Some(Box::new(Action::RePretend)));
                         }
                     });
                 });
@@ -947,7 +953,7 @@ fn problem_body(app: &mut App, ui: &mut Ui, p: &Problem, pi: usize, opts: &Emerg
                             let atom = crate::portage::atom::Atom::parse(pkg).map(|a| a.key()).unwrap_or(pkg.clone());
                             let line = format!("{atom} {}", change.replace(',', " "));
                             let ch = edits::add_lines(cfg, &[(ConfKind::Use, line)], &target, Some("temporary: break circular dependency"));
-                            app.push(Action::Write { title: "Break dependency cycle".into(), changes: ch, reload: vec![Reload::Config], then: Some(Box::new(Action::RePretend)) });
+                            app.push_write("Break dependency cycle", ch, vec![Reload::Config], Some(Box::new(Action::RePretend)));
                         }
                     });
                 }
@@ -1072,7 +1078,10 @@ fn plan_table(app: &mut App, ui: &mut Ui, plan: &Plan) {
                 }
             });
             let change = if e.old.is_empty() { e.version.clone() } else { format!("{} → {}", e.old.join(", ").split("::").next().unwrap_or(""), e.version) };
-            ui.label(RichText::new(change).color(TEXT));
+            let version = ui.label(RichText::new(change).color(TEXT));
+            if !e.size.is_empty() {
+                version.on_hover_text(format!("Download: {}", e.size));
+            }
             if matches!(e.kind, EntryType::Ebuild | EntryType::Binary) {
                 let (d, known) = if e.kind == EntryType::Binary { (std::time::Duration::from_secs(20), true) } else { history.estimate_or_default(&e.key) };
                 ui.label(RichText::new(format!("{}{}", fmt_duration(d), if known { "" } else { "?" })).color(if known { TEXT } else { TEXT_FAINT }));
@@ -1098,8 +1107,9 @@ fn plan_table(app: &mut App, ui: &mut Ui, plan: &Plan) {
 }
 
 fn activity(app: &mut App, ui: &mut Ui) {
-    let jobs: Vec<Job> = app.jobs.iter().filter(|j| !matches!(j.kind, JobKind::Capture { .. }) || app.settings.show_advanced).cloned().collect();
-    let batches: Vec<(String, usize, usize)> = app.batches.iter().map(|b| (b.title.clone(), b.done, b.done + b.ops.len() + 1)).collect();
+    // The sidebar needs a title and a status per job, not their whole logs.
+    let jobs: Vec<JobRow> = app.jobs.iter().filter(|j| !matches!(j.kind, JobKind::Capture { .. }) || app.settings.show_advanced).map(JobRow::of).collect();
+    let batches: Vec<(String, usize, usize)> = app.batches.iter().map(|b| (b.title.clone(), b.progress().0, b.progress().1)).collect();
     egui::Panel::left("jobs-side").resizable(true).default_size(300.0).frame(egui::Frame::new().fill(SIDEBAR).inner_margin(Margin::symmetric(0, 8))).show(ui, |ui| {
         ui.horizontal(|ui| {
             ui.add_space(12.0);
@@ -1114,15 +1124,15 @@ fn activity(app: &mut App, ui: &mut Ui) {
         }
         egui::ScrollArea::vertical().id_salt("jobs-list").show(ui, |ui| {
             for j in jobs.iter().rev() {
-                let ic = if j.running() {
+                let ic = if j.running {
                     icon::CIRCLE_NOTCH
-                } else if j.success() {
+                } else if j.success {
                     icon::CHECK_CIRCLE
                 } else {
                     icon::X_CIRCLE
                 };
                 let sel = app.emerge.selected_job.or(app.emerge.active_job) == Some(j.id);
-                let r = w::side_item(ui, ic, &j.title, sel, None).on_hover_text(format!("{}\n{}", j.argv.join(" "), j.status_text()));
+                let r = w::side_item(ui, ic, &j.title, sel, None).on_hover_text(format!("{}\n{}", j.command, j.status));
                 if r.clicked() {
                     app.emerge.selected_job = Some(j.id);
                 }
@@ -1146,6 +1156,9 @@ fn activity(app: &mut App, ui: &mut Ui) {
             job_header(app, ui, &job);
             if let JobKind::Emerge { tracker, .. } = &job.kind {
                 tracker_view(app, ui, tracker);
+                if job.running() && app.build_logs_private {
+                    ui.label(w::dim("Build phases come from emerge's own output: Portage keeps its build logs private to the portage user, so they cannot be followed from here (--quiet-build hides the most useful lines)."));
+                }
             }
             ui.add_space(6.0);
             ui.horizontal(|ui| {
@@ -1160,7 +1173,8 @@ fn activity(app: &mut App, ui: &mut Ui) {
                 }
             });
             let h = ui.available_height() - 8.0;
-            log_view(ui, &job, &app.emerge.log_filter.clone(), app.emerge.log_errors_only, app.settings.log_wrap, h.max(160.0));
+            let (filter, errors_only) = (app.emerge.log_filter.clone(), app.emerge.log_errors_only);
+            log_view(ui, &job, &mut app.emerge.log_cache, &filter, errors_only, app.settings.log_wrap, h.max(160.0));
         });
     });
 }
@@ -1187,8 +1201,17 @@ fn job_header(app: &mut App, ui: &mut Ui, job: &Job) {
         });
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             if job.running() {
-                if w::danger(ui, icon::STOP, "Stop").on_hover_text("Send SIGINT (like Ctrl+C). You can resume later with “Resume interrupted emerge”.").clicked() {
-                    app.push(Action::Cancel(job.id));
+                if job.stop.is_some_and(|(s, _)| s == crate::stop::Stage::Killed) {
+                    ui.label(w::dim("SIGKILL sent"));
+                } else if job.stop.is_some() {
+                    ui.label(w::dim("Stopping…"));
+                } else {
+                    if w::danger(ui, icon::SKULL, "Force stop").on_hover_text("SIGINT now; if it still runs after 10 seconds SIGTERM, after 10 more SIGKILL. Build directories may be left behind.").clicked() {
+                        app.push(Action::ForceStop(job.id));
+                    }
+                    if w::danger(ui, icon::STOP, "Stop").on_hover_text("Send SIGINT (like Ctrl+C). You can resume later with “Resume interrupted emerge”.").clicked() {
+                        app.push(Action::Cancel(job.id));
+                    }
                 }
             } else if matches!(job.kind, JobKind::Emerge { .. }) && !job.success() {
                 if w::primary(ui, icon::PLAY, "Resume").on_hover_text("emerge --resume").clicked() {
@@ -1264,20 +1287,84 @@ fn tracker_view(_app: &mut App, ui: &mut Ui, t: &crate::portage::progress::Track
     });
 }
 
-pub fn log_view(ui: &mut Ui, job: &Job, filter: &str, errors_only: bool, wrap: bool, height: f32) {
-    let f = filter.to_lowercase();
-    let lines: Vec<&(bool, String)> = job
-        .lines
-        .iter()
-        .filter(|(err, l)| {
-            (f.is_empty() || l.to_lowercase().contains(&f))
-                && (!errors_only || *err || l.contains("!!!") || l.contains(" * ERROR") || l.contains("error:") || l.contains("WARNING") || l.trim_start().starts_with("* "))
-        })
-        .collect();
+/// What the Activity sidebar shows of a job.
+struct JobRow {
+    id: u64,
+    title: String,
+    command: String,
+    status: String,
+    running: bool,
+    success: bool,
+}
+
+impl JobRow {
+    fn of(j: &Job) -> JobRow {
+        JobRow { id: j.id, title: j.title.clone(), command: j.argv.join(" "), status: j.status_text(), running: j.running(), success: j.success() }
+    }
+}
+
+/// Does `line` look like an error or a warning (for "Errors & warnings only")?
+fn is_problem_line(err: bool, l: &str) -> bool {
+    err || l.contains("!!!") || l.contains(" * ERROR") || l.contains("error:") || l.contains("WARNING") || l.trim_start().starts_with("* ")
+}
+
+/// Case-insensitive substring test that allocates nothing for ASCII text (`needle` is lower case).
+fn icontains(haystack: &str, needle: &str) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    if haystack.is_ascii() && needle.is_ascii() {
+        let (h, n) = (haystack.as_bytes(), needle.as_bytes());
+        return h.len() >= n.len() && h.windows(n.len()).any(|w| w.eq_ignore_ascii_case(n));
+    }
+    haystack.to_lowercase().contains(needle)
+}
+
+/// Indices (into `lines`, offset by `base`) of the lines that pass the filter.
+fn pass_filter(lines: &[(bool, String)], base: usize, needle_lower: &str, errors_only: bool, out: &mut Vec<u32>) {
+    for (i, (err, text)) in lines.iter().enumerate() {
+        if icontains(text, needle_lower) && (!errors_only || is_problem_line(*err, text)) {
+            out.push((base + i) as u32);
+        }
+    }
+}
+
+/// The filtered view of a job's log, extended line by line as the job prints instead of being
+/// recomputed (with every line lower-cased) on every frame.
+pub struct LogCache {
+    job: u64,
+    filter: String,
+    errors_only: bool,
+    /// Lines of the job seen so far, and how many old ones had been dropped by then.
+    seen: usize,
+    dropped: usize,
+    indices: Vec<u32>,
+}
+
+impl LogCache {
+    /// Bring the cache up to date with `job` for this filter.
+    fn refresh(cache: &mut Option<LogCache>, job: &Job, filter: &str, errors_only: bool) -> usize {
+        let needle = filter.to_lowercase();
+        let reusable = cache.as_ref().is_some_and(|c| c.job == job.id && c.filter == filter && c.errors_only == errors_only && c.dropped == job.dropped_lines && c.seen <= job.lines.len());
+        if !reusable {
+            let mut indices = Vec::new();
+            pass_filter(&job.lines, 0, &needle, errors_only, &mut indices);
+            *cache = Some(LogCache { job: job.id, filter: filter.to_string(), errors_only, seen: job.lines.len(), dropped: job.dropped_lines, indices });
+        } else if let Some(c) = cache.as_mut() {
+            pass_filter(&job.lines[c.seen..], c.seen, &needle, errors_only, &mut c.indices);
+            c.seen = job.lines.len();
+        }
+        cache.as_ref().map_or(0, |c| c.indices.len())
+    }
+}
+
+pub fn log_view(ui: &mut Ui, job: &Job, cache: &mut Option<LogCache>, filter: &str, errors_only: bool, wrap: bool, height: f32) {
+    let shown = LogCache::refresh(cache, job, filter, errors_only);
+    let indices = cache.as_ref().map(|c| c.indices.as_slice()).unwrap_or(&[]);
     egui::Frame::new().fill(Color32::from_rgb(0x0b, 0x10, 0x16)).corner_radius(4).inner_margin(Margin::same(8)).show(ui, |ui| {
         ui.set_width(ui.available_width());
         let row_h = 17.0;
-        let total = lines.len() + usize::from(job.partial.is_some());
+        let total = shown + usize::from(job.partial.is_some());
         egui::ScrollArea::both()
             .id_salt(("log", job.id))
             .max_height(height)
@@ -1285,7 +1372,12 @@ pub fn log_view(ui: &mut Ui, job: &Job, filter: &str, errors_only: bool, wrap: b
             .stick_to_bottom(true)
             .show_rows(ui, row_h, total, |ui, range| {
                 for i in range {
-                    let (err, text) = if i < lines.len() { (lines[i].0, lines[i].1.as_str()) } else { (false, job.partial.as_deref().unwrap_or("")) };
+                    let (err, text) = if i < shown {
+                        let line = &job.lines[indices[i] as usize];
+                        (line.0, line.1.as_str())
+                    } else {
+                        (false, job.partial.as_deref().unwrap_or(""))
+                    };
                     let col = line_color(text, err);
                     let rt = RichText::new(text).monospace().size(12.5).color(col);
                     if wrap {
@@ -1314,5 +1406,125 @@ pub fn line_color(l: &str, stderr: bool) -> Color32 {
         Color32::from_rgb(0xd0, 0xa0, 0x90)
     } else {
         Color32::from_rgb(0xb8, 0xc4, 0xcf)
+    }
+}
+
+#[cfg(test)]
+mod log_tests {
+    use super::*;
+    use std::sync::Arc;
+
+    fn lines(texts: &[&str]) -> Vec<(bool, String)> {
+        texts.iter().map(|t| (false, t.to_string())).collect()
+    }
+
+    #[test]
+    fn case_insensitive_search_without_allocating() {
+        assert!(icontains("Compiling FooBar", "foobar"));
+        assert!(icontains("anything", ""));
+        assert!(!icontains("short", "much longer"));
+        assert!(!icontains("Compiling", "link"));
+        // Non-ASCII text still works (and Unicode case folding is what to_lowercase does).
+        assert!(icontains("Größe passt", "größe"));
+        assert!(icontains("GRÖSSE", "grösse"));
+    }
+
+    #[test]
+    fn errors_only_keeps_stderr_and_warning_lines() {
+        let l = vec![(false, "plain".to_string()), (true, "from stderr".to_string()), (false, " * ERROR: x failed".to_string()), (false, "gcc: warning: y".to_string()), (false, "WARNING z".to_string()), (false, "  * note".to_string()), (false, "!!! boom".to_string())];
+        let mut out = Vec::new();
+        pass_filter(&l, 0, "", true, &mut out);
+        assert_eq!(out, vec![1, 2, 4, 5, 6]);
+        let mut all = Vec::new();
+        pass_filter(&l, 10, "", false, &mut all);
+        assert_eq!(all, (10..17).collect::<Vec<u32>>());
+    }
+
+    /// Build a job whose log is `texts` (the rest of the fields do not matter here).
+    fn job_with(texts: &[&str]) -> Job {
+        Job {
+            id: 1,
+            title: "t".into(),
+            kind: crate::app::JobKind::Generic,
+            privilege: crate::exec::Priv::User,
+            argv: vec![],
+            lines: Arc::new(lines(texts)),
+            dropped_lines: 0,
+            partial: None,
+            started: std::time::Instant::now(),
+            ended: None,
+            exit: None,
+            error: None,
+            reload: vec![],
+            stop: None,
+        }
+    }
+
+    #[test]
+    fn the_filtered_view_grows_with_the_log_and_is_not_recomputed() {
+        let mut job = job_with(&["alpha one", "beta", "ALPHA two"]);
+        let mut cache = None;
+        assert_eq!(LogCache::refresh(&mut cache, &job, "alpha", false), 2);
+        assert_eq!(cache.as_ref().unwrap().indices, vec![0, 2]);
+        // New lines are tested alone; the old ones are not looked at again.
+        Arc::make_mut(&mut job.lines).extend(lines(&["gamma", "Alpha three"]));
+        assert_eq!(LogCache::refresh(&mut cache, &job, "alpha", false), 3);
+        assert_eq!(cache.as_ref().unwrap().indices, vec![0, 2, 4]);
+        assert_eq!(cache.as_ref().unwrap().seen, 5);
+        // Nothing new: the same answer.
+        assert_eq!(LogCache::refresh(&mut cache, &job, "alpha", false), 3);
+        // A different filter, or errors-only, starts over.
+        assert_eq!(LogCache::refresh(&mut cache, &job, "beta", false), 1);
+        assert_eq!(cache.as_ref().unwrap().indices, vec![1]);
+        assert_eq!(LogCache::refresh(&mut cache, &job, "", true), 0);
+    }
+
+    #[test]
+    fn dropping_old_lines_invalidates_the_cached_indices() {
+        let mut job = job_with(&["x1", "x2", "x3", "x4"]);
+        let mut cache = None;
+        assert_eq!(LogCache::refresh(&mut cache, &job, "x", false), 4);
+        // Two lines fell off the front while many more arrived: the length alone would look "grown".
+        Arc::make_mut(&mut job.lines).drain(..2);
+        job.dropped_lines += 2;
+        Arc::make_mut(&mut job.lines).extend(lines(&["x5", "x6", "x7"]));
+        assert_eq!(job.lines.len(), 5);
+        assert_eq!(LogCache::refresh(&mut cache, &job, "x", false), 5);
+        assert_eq!(cache.as_ref().unwrap().indices, vec![0, 1, 2, 3, 4]);
+        // Another job is another log.
+        let mut other = job_with(&["x only"]);
+        other.id = 9;
+        assert_eq!(LogCache::refresh(&mut cache, &other, "x", false), 1);
+    }
+
+    /// The case that cost 4-7 ms per frame before: a 60 000-line log and a filter.
+    /// Run with `cargo test --release -- --ignored --nocapture log_filter_timing`.
+    #[test]
+    #[ignore = "timing documentation, not a pass/fail check"]
+    fn log_filter_timing() {
+        let texts: Vec<String> = (0..60_000).map(|i| format!("make[{}]: Entering directory '/var/tmp/portage/dev-qt/qtbase-6.8.0/work/build/src/plugins/Platforms{i}'", i % 40)).collect();
+        let refs: Vec<&str> = texts.iter().map(String::as_str).collect();
+        let mut job = job_with(&refs);
+        let mut cache = None;
+        let t = std::time::Instant::now();
+        LogCache::refresh(&mut cache, &job, "PLATFORMS1", false);
+        let first = t.elapsed();
+        Arc::make_mut(&mut job.lines).push((false, "one more line".into()));
+        let t = std::time::Instant::now();
+        LogCache::refresh(&mut cache, &job, "PLATFORMS1", false);
+        println!("first filter over 60k lines: {first:?}; one new line: {:?}", t.elapsed());
+    }
+
+    #[test]
+    fn appending_does_not_copy_a_log_nobody_else_holds() {
+        let mut job = job_with(&["a", "b"]);
+        let before = Arc::as_ptr(&job.lines);
+        Arc::make_mut(&mut job.lines).push((false, "c".into()));
+        assert_eq!(Arc::as_ptr(&job.lines), before);
+        // A view that still holds the old log keeps a consistent snapshot while the job moves on.
+        let held = job.lines.clone();
+        Arc::make_mut(&mut job.lines).push((false, "d".into()));
+        assert_eq!(held.len(), 3);
+        assert_eq!(job.lines.len(), 4);
     }
 }

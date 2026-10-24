@@ -23,7 +23,6 @@ pub struct LogStats {
 
 #[derive(Debug, Clone)]
 pub struct ConfigHit {
-    pub kind: ConfKind,
     pub path: PathBuf,
     pub line: usize,
     pub text: String,
@@ -110,7 +109,6 @@ pub fn scan(vdb: &Vdb, catalog: &Catalog, cfg: &PortageConfig, arch: &str, log_d
                 let in_tree = catalog.get(&key);
                 if in_tree.is_none() && !vdb.is_installed(&key) {
                     l.dead_entries.push(ConfigHit {
-                        kind: set.kind,
                         path: f.path.clone(),
                         line: i,
                         text: e.render(),
@@ -137,7 +135,6 @@ pub fn scan(vdb: &Vdb, catalog: &Catalog, cfg: &PortageConfig, arch: &str, log_d
                     });
                     if all_stable {
                         l.redundant_keywords.push(ConfigHit {
-                            kind: set.kind,
                             path: f.path.clone(),
                             line: i,
                             text: e.render(),

@@ -1,15 +1,21 @@
 //! PortageHub — a Steam-styled graphical front end for Gentoo's Portage.
 
 mod app;
+mod batch;
+mod danger;
 mod data;
 mod edits;
 mod exec;
 mod fmt;
 mod portage;
+mod render;
 mod settings;
 mod shot;
+mod stop;
 mod ui;
+mod util;
 mod views;
+mod window;
 
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -41,7 +47,10 @@ fn self_test() {
     println!("vdb: {} installed, world {} ({:?})", vdb.pkgs.len(), vdb.world_raw.len(), t.elapsed());
     let t = std::time::Instant::now();
     let h = portage::history::load();
-    println!("history: {} merges, {} syncs, median {:?} ({:?})", h.merges.len(), h.syncs.len(), h.median_build, t.elapsed());
+    match &h.problem {
+        Some(p) => println!("history: unavailable — {} ({:?})", p.message().0, t.elapsed()),
+        None => println!("history: {} merges, {} syncs, median {:?} ({:?})", h.merges.len(), h.syncs.len(), h.median_build, t.elapsed()),
+    }
     let cfg = portage::config::load();
     for s in &cfg.sets {
         println!("  {:<26} exists={} dir={} files={} entries={}", s.kind.file_name(), s.exists, s.is_dir, s.files.len(), s.entry_count());
@@ -121,7 +130,7 @@ fn boot_check_cli(path: &str) {
         }
     };
     let vdb = portage::vdb::load();
-    let settings = settings::Settings::load();
+    let (settings, _) = settings::Settings::load();
     let ks = portage::kernel::load(&vdb, &settings.kernel_keep_set);
     for f in portage::kernel::check(&ks, Some(&scan), settings.kernel_protect, 2, settings.nvidia_alerts) {
         println!("[{:?}] {}\n    {}{}", f.severity, f.title, f.detail, if f.fixes.is_empty() { String::new() } else { format!("\n    fixes: {:?}", f.fixes) });
@@ -138,13 +147,65 @@ fn main() -> eframe::Result {
         boot_check_cli(args.get(i + 1).map(|s| s.as_str()).unwrap_or(""));
         return Ok(());
     }
+    let choice = render::Choice::parse(std::env::var(render::VAR).ok().as_deref()).unwrap_or_else(|why| {
+        eprintln!("PortageHub: {why}; using auto.");
+        render::Choice::Auto
+    });
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("PortageHub")
             .with_app_id("portagehub")
-            .with_inner_size([1380.0, 860.0])
-            .with_min_inner_size([980.0, 620.0]),
+            .with_inner_size([window::WANTED.0, window::WANTED.1])
+            .with_min_inner_size([window::MIN.0, window::MIN.1]),
+        renderer: choice.first(),
         ..Default::default()
     };
-    eframe::run_native("PortageHub", options, Box::new(|cc| Ok(Box::new(app::App::new(cc)))))
+    let started = std::time::Instant::now();
+    if let Err(e) = eframe::run_native("PortageHub", options, Box::new(|cc| Ok(Box::new(app::App::new(cc))))) {
+        let has_display = std::env::var_os("DISPLAY").is_some() || std::env::var_os("WAYLAND_DISPLAY").is_some();
+        if choice.falls_back(has_display, started.elapsed()) {
+            eprintln!("PortageHub: the GPU renderer could not open a window ({e}); trying plain OpenGL.");
+            // Does not return unless the restart itself fails.
+            let why = restart_with_glow();
+            eprintln!("PortageHub: cannot restart ({why}).");
+        }
+        eprintln!("{}", window_error_text(&e.to_string(), has_display));
+        std::process::exit(1);
+    }
+    Ok(())
+}
+
+/// Replace this process by a new PortageHub that uses the OpenGL renderer.
+fn restart_with_glow() -> std::io::Error {
+    use std::os::unix::process::CommandExt;
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(e) => return e,
+    };
+    std::process::Command::new(exe).args(std::env::args_os().skip(1)).env(render::VAR, "glow").exec()
+}
+
+/// What to print when no window can be opened: the reason, and what usually helps.
+fn window_error_text(reason: &str, has_display: bool) -> String {
+    let mut text = format!("PortageHub could not open a window: {reason}");
+    if !has_display {
+        text.push_str("\nNo display was found (DISPLAY and WAYLAND_DISPLAY are both unset): start it from a desktop session.");
+    }
+    text.push_str("\nOn machines without a working Vulkan driver (older hardware, virtual machines) try: WGPU_BACKEND=gl portagehub");
+    text.push_str("\nOr use plain OpenGL: PORTAGEHUB_RENDERER=glow portagehub");
+    text
+}
+
+#[cfg(test)]
+mod tests {
+    use super::window_error_text;
+
+    #[test]
+    fn a_failed_window_is_explained() {
+        let t = window_error_text("FailedToCreateSurfaceForAnyBackend", true);
+        assert!(t.starts_with("PortageHub could not open a window: FailedToCreateSurfaceForAnyBackend"));
+        assert!(t.contains("WGPU_BACKEND=gl portagehub") && t.contains("PORTAGEHUB_RENDERER=glow portagehub") && !t.contains("No display"));
+        let t = window_error_text("x", false);
+        assert!(t.contains("No display was found") && t.contains("WGPU_BACKEND=gl"));
+    }
 }
