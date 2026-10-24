@@ -61,6 +61,9 @@ def lab(tmp_path, monkeypatch, sock_dir, qapp):
     monkeypatch.setenv("XAUTHORITY", str(xauth))
     monkeypatch.setattr(driver, "guard_problems", lambda spec: [])
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    # Lab.machine() is the whole machine: the GUI must not ask the test server's real
+    # `inspect` handler, which would read this host's disks and firmware instead.
+    monkeypatch.setenv("GENTOO_INSTALLER_DEV", "1")
 
     class Lab:
         output = tmp_path / "out"

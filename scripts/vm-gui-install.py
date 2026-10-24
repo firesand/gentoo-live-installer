@@ -280,7 +280,8 @@ def main(argv: list[str] | None = None) -> int:
                         print(json.dumps({"type": "error", "error": "stage3 started before storage completion"}), flush=True)
                         return
                     cancel_state["requested"] = True
-                    window.progress.cancel.click()
+                    # The Cancel button asks for confirmation first; this is the confirmed path.
+                    window.progress.request_cancel()
 
     observer = EventObserver()
 
@@ -289,7 +290,8 @@ def main(argv: list[str] | None = None) -> int:
         worker.eventReceived.connect(observer.on_event)
 
     setattr(BackendWorker, "__init__", observed_worker_init)
-    window = InstallerWindow(initial, args.socket)
+    # A preloaded manifest names the firmware; in detect mode the GUI picks it from the boot mode.
+    window = InstallerWindow(initial, args.socket, firmware_explicit=not detect)
     window.show()
     outcome: list[bool] = []
 
@@ -346,12 +348,18 @@ def main(argv: list[str] | None = None) -> int:
         return json.dumps({key: row.accessibleDescription() for key, row in window.readiness.rows.items()})
 
     def start() -> None:
-        # inspect_system() is synchronous in InstallerWindow.__init__, so reaching this timer
-        # means a first live disk/readiness scan is done. Retry only the transient (network,
-        # tools) problems, then proceed through the real wizard.
+        # The live disk/readiness scan runs in the background (also after refresh_readiness()),
+        # so wait until it reports, retry only the transient (network, tools) problems, then
+        # proceed through the real wizard.
         deadline = time.monotonic() + args.readiness_timeout
 
         def check() -> None:
+            if not window.info.inspected:
+                if time.monotonic() < deadline:
+                    later(200, check)
+                else:
+                    fail(f"The live readiness scan did not finish within {args.readiness_timeout}s")
+                return
             fatal, transient = readiness_problems(window.info, expected_manifest.storage.firmware, plan["target"])
             fatal += guard_problems(plan["guard"])
             if fatal:

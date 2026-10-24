@@ -244,13 +244,15 @@ def test_check_again_does_not_freeze_the_event_loop(qtbot, monkeypatch, tmp_path
 def test_a_superseded_inspection_is_ignored(qtbot, monkeypatch, tmp_path):
     old = sample_info(memory_gib=1.5)
     new = sample_info(memory_gib=32)
-    slow_inspection(monkeypatch, [0.0, 0.8, 0.0], [sample_info(), old, new])
+    calls = slow_inspection(monkeypatch, [0.0, 0.8, 0.0], [sample_info(), old, new])
     window = InstallerWindow(InstallManifest(), str(tmp_path / "s.sock"))
     qtbot.addWidget(window)
     window.show()
     with qtbot.waitSignal(window.inspectionFinished, timeout=5000):
         pass
     window.refresh_readiness()  # slow one
+    # Results go by call order, so let the slow check start first (a loaded machine may reorder the threads).
+    qtbot.waitUntil(lambda: len(calls) >= 2, timeout=5000)
     window.refresh_readiness()  # supersedes it
     with qtbot.waitSignal(window.inspectionFinished, timeout=5000):
         pass

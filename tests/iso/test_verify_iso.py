@@ -367,6 +367,14 @@ def write_pack_file(tree: dict[str, tuple[str, int, int, int, str]], path: Path,
     path.write_text("\n".join(lines) + "\n")
 
 
+def source_applies(condition: str | dict[str, str]) -> bool:
+    """The contract's when_source rule against this repository: what the ebuild would install."""
+    if isinstance(condition, str):
+        return (ROOT / condition).exists()
+    path = ROOT / condition["path"]
+    return path.is_file() and condition["contains"] in path.read_text()
+
+
 def image_entries(flavor: str, live_make_conf: str) -> dict[str, tuple[str, int, int, int, str]]:
     """A root file system that satisfies iso/image-contract.json, built from the repository's own overlay."""
     entries: dict[str, tuple[str, int, int, int, str]] = {}
@@ -393,7 +401,7 @@ def image_entries(flavor: str, live_make_conf: str) -> dict[str, tuple[str, int,
         add(f"etc/init.d/{service}", mode=0o755, extra="#!/sbin/openrc-run\n")
         add(f"etc/runlevels/{level}/{service}", "slink", 0o777, f"/etc/init.d/{service}")
     for item in CONTRACT["squashfs"]["required"]:
-        if "when_source" in item:
+        if "when_source" in item and not source_applies(item["when_source"]):
             continue
         path = item["path"]
         if path not in entries:

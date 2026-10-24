@@ -16,6 +16,7 @@ dev = ["pytest>=8", "pytest-qt>=4.4"]
 [project.scripts]
 gentoo-installer = "gentoo_installer.app:main"
 gentoo-installerd = "gentoo_installerd.server:main"
+gentoo-rescue = "gentoo_installerd.rescue.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

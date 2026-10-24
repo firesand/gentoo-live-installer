@@ -124,6 +124,10 @@ class RegistryTests(unittest.TestCase):
             self.assertEqual(registry.status_extensions(), {"rescue": {"sessions": 0}})
 
 
+# Import of either name raises ModuleNotFoundError, also when another test already imported the real module.
+ABSENT_RESCUE = {"gentoo_installerd.rescue": None, "gentoo_installerd.rescue.api": None}
+
+
 class PluginTests(unittest.TestCase):
     def install_module(self, name: str, **attributes) -> None:
         module = pytypes.ModuleType(name)
@@ -143,7 +147,7 @@ class PluginTests(unittest.TestCase):
             reg.register_action("hw.sync_time", lambda request, channel: None, feature="hardware.v1")
 
         self.install_module("gentoo_installerd.hwactions", register=register)
-        with patch.dict(sys.modules, {"gentoo_installerd.rescue": None}):  # import raises ModuleNotFoundError
+        with patch.dict(sys.modules, ABSENT_RESCUE):
             loaded = load_plugins(registry)
         self.assertEqual(loaded, ["gentoo_installerd.hwactions"])
         self.assertEqual(calls, [registry])
@@ -161,7 +165,7 @@ class PluginTests(unittest.TestCase):
     def test_a_broken_plugin_is_logged_and_does_not_stop_the_daemon(self) -> None:
         registry = ActionRegistry()
         self.install_module("gentoo_installerd.hwactions", register=lambda reg: 1 / 0)
-        with patch.dict(sys.modules, {"gentoo_installerd.rescue": None}), self.assertLogs("gentoo_installerd.server", level="ERROR"):
+        with patch.dict(sys.modules, ABSENT_RESCUE), self.assertLogs("gentoo_installerd.server", level="ERROR"):
             self.assertEqual(load_plugins(registry), [])
 
     def test_a_plugin_with_a_missing_dependency_is_an_error_not_silence(self) -> None:

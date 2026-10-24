@@ -7,6 +7,7 @@ stalls, crashes or reconnects (``rescue.events``) never stops a repair.
 
 from __future__ import annotations
 
+import logging
 import os
 import subprocess
 import threading
@@ -24,6 +25,8 @@ from .manager import RescueManager
 from .ops import Operation, RescueEvent
 from .scan import ScanOptions
 from .session import SessionEnv
+
+LOG = logging.getLogger(__name__)
 
 ACTIONS = (
     "rescue.scan", "rescue.unlock", "rescue.activate", "rescue.mount", "rescue.session", "rescue.events", "rescue.query", "rescue.plan", "rescue.run", "rescue.cancel",
@@ -211,26 +214,37 @@ def register(
     manager: RescueManager | None = None,
     install_busy: Callable[[], str | None] | None = None,
     enabled: bool | Callable[[], bool] | None = None,
-    base_dir: str | Path = DEFAULT_SESSION_BASE,
-    state_dir: str | Path = DEFAULT_STATE_DIR,
-    audit_dir: str | Path = DEFAULT_AUDIT_DIR,
+    base_dir: str | Path | None = None,
+    state_dir: str | Path | None = None,
+    audit_dir: str | Path | None = None,
     host: Host | None = None,
 ) -> RescueApi | None:
     """Add every ``rescue.*`` action and the ``rescue.v1`` feature to the server's registry.
 
-    ``registry`` offers ``register_action(name, handler, *, feature=None)`` and ``add_shutdown_hook(hook)`` (the module
-    gentoo_installerd.server does). ``install_busy`` returns a reason while an installation runs. Rescue is only enabled on
-    the live medium unless ``enabled`` says otherwise (review R21); ``None`` is returned when it is disabled. The caller
-    wires the other direction with ``InstallManager.busy_check = api.install_blocker`` and calls ``api.recover_orphans()``.
+    ``registry`` offers ``register_action(name, handler, *, feature=None)``. The daemon's ActionRegistry also offers
+    ``add_shutdown_hook``, ``add_status_provider``, ``install_manager`` and ``options`` (the --rescue-* flags); when they
+    exist both directions of the install/rescue exclusivity, the ``status.rescue`` summary and the directories are wired
+    here, so server.py needs no rescue-specific code. ``install_busy`` returns a reason while an installation runs. Rescue
+    is only enabled on the live medium unless ``enabled`` says otherwise (review R21); ``None`` is returned when it is
+    disabled. Sessions an earlier daemon left behind are recovered before the first request.
     """
     host = host or Host()
     allowed = enabled() if callable(enabled) else enabled
     if allowed is None:
         allowed = on_live_medium(host)
     if not allowed:
+        LOG.info("Repair actions are disabled: this system was not started from the live medium")
         return None
+    options = getattr(registry, "options", None)
+    install_manager = getattr(registry, "install_manager", None)
+    if install_busy is None and install_manager is not None:
+        def install_busy() -> str | None:
+            return "An installation is running; repairs can start when it has finished." if install_manager.is_running() else None
     if manager is None:
-        manager = RescueManager(build_env(base_dir, state_dir, audit_dir, host), install_busy=install_busy)
+        env = build_env(base_dir or getattr(options, "rescue_root", None) or DEFAULT_SESSION_BASE,
+                        state_dir or getattr(options, "rescue_state_dir", None) or DEFAULT_STATE_DIR,
+                        audit_dir or getattr(options, "rescue_audit_dir", None) or DEFAULT_AUDIT_DIR, host)
+        manager = RescueManager(env, install_busy=install_busy)
     elif install_busy is not None:
         manager.install_busy = install_busy
     api = RescueApi(manager)
@@ -238,5 +252,9 @@ def register(
         registry.register_action(name, api.handler(name), feature=FEATURE)
     if hasattr(registry, "add_shutdown_hook"):
         registry.add_shutdown_hook(lambda: manager.shutdown(25.0))
+    if hasattr(registry, "add_status_provider"):
+        registry.add_status_provider("rescue", api.status)
+    if install_manager is not None:
+        install_manager.busy_check = api.install_blocker
     api.recover_orphans()
     return api

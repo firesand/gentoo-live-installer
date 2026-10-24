@@ -263,8 +263,9 @@ def window_attribute_chains(source: str) -> set[tuple[str, ...]]:
 
 def make_window(qtbot, monkeypatch, tmp_path, manifest, system_info):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
+    monkeypatch.setenv("GENTOO_INSTALLER_DEV", "1")  # system_info is the whole machine: no daemon is asked
     monkeypatch.setattr("gentoo_installer.app.inspect_system", lambda: system_info)
-    window = InstallerWindow(manifest, str(tmp_path / "backend.sock"))
+    window = InstallerWindow(manifest, str(tmp_path / "backend.sock"), background_inspection=False)
     qtbot.addWidget(window)
     return window
 
@@ -273,7 +274,7 @@ def test_driver_only_uses_window_attributes_that_exist(qtbot, monkeypatch, tmp_p
     """Fails when a GUI refactor renames something the guest-only driver clicks or reads."""
     window = make_window(qtbot, monkeypatch, tmp_path, InstallManifest(), info())
     chains = window_attribute_chains((ROOT / "scripts" / "vm-gui-install.py").read_text())
-    assert ("progress", "cancel") in chains and ("storage", "disk_group") in chains  # the parser found the real uses
+    assert ("progress", "request_cancel") in chains and ("storage", "disk_group") in chains  # the parser found the real uses
     assert ("readiness", "rows") in chains and ("refresh_readiness",) in chains
     for chain in sorted(chains):
         target = window
@@ -309,8 +310,6 @@ def test_a_uefi_live_system_is_detected_and_the_wizard_matches_the_expected_mani
     assert detect_run(qtbot, monkeypatch, tmp_path, "openrc", uefi=True) == []
 
 
-@pytest.mark.xfail(reason="G2: the Storage page loads firmware 'uefi' from the default manifest on a BIOS live system "
-                          "instead of the detected one; passes once the GUI seeds the firmware from detection", strict=False)
 def test_a_bios_live_system_is_detected_and_the_wizard_matches_the_expected_manifest(qtbot, monkeypatch, tmp_path):
     assert detect_run(qtbot, monkeypatch, tmp_path, "bios", uefi=False) == []
 
