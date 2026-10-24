@@ -296,7 +296,7 @@ The one deliberate change is `options.ssh`, now `true`.
 | `bootloader` | adds `none` | `grub` | `none` needs no UEFI. Effect later. |
 | `secure_boot_mode` | `off`, `own-key`, `create`, `shim` | `off` | An old file with `secure_boot: true` loads as `own-key`. Effect later. |
 | `serial_console` | string | `""` | e.g. `ttyS0,115200`. Effect later. |
-| `desktop` | adds `cinnamon`, `mate`, `lxqt`, `gnome-light`, `sway`, `i3` | `kde` | Checked against `FAMILY_DESKTOP_SUPPORT`; the registry comes later. |
+| `desktop` | adds `cinnamon`, `mate`, `lxqt`, `gnome-light`, `sway`, `i3` | `kde` | The desktop registry (`src/gentoo_installer/desktops.py`) is the single source: profile suffix, display manager, packages, USE flags, services, sizes, stage3 families. Cinnamon needs the `desktop/gnome` profile, so Hardened and No-multilib refuse it. Sway and i3 are for experienced users. |
 | `domain` | string | `""` | Domain name. Effect later. |
 | `hosts_extra` | list of `"address name [alias...]"` | `[]` | Extra /etc/hosts lines. Effect later. |
 | `extra_locales` | list of locales | `[]` | Locales besides `locale`. Effect later. |
@@ -317,8 +317,8 @@ The one deliberate change is `options.ssh`, now `true`.
 | `cron` | `cronie`, `dcron`, `fcron`, `bcron`, `none` | `cronie` | Was a bool: `true` loads as `cronie`, `false` as `none`. |
 | `timesync` | `chrony`, `timesyncd`, `none` | `chrony` | The old bool `chrony` still loads (`true` = `chrony`, `false` = `none`); `timesyncd` needs systemd. |
 | `gentoolkit`, `eclean_kernel`, `mlocate`, `journal_persistent` | bool | `false` | Effect later. |
-| `browser` | `firefox`, `none` | `firefox` | Effect later. |
-| `flathub` | bool | `false` | Effect later. |
+| `browser` | `firefox`, `none` | `firefox` | Firefox on every graphical desktop: from the binary package host when it has the package, otherwise `firefox-bin` (also for source installs, where Firefox would compile for hours). |
+| `flathub` | bool | `false` | Installs Flatpak (as `flatpak` does), the desktop's portal backends, and adds the Flathub remote system-wide after the desktop is installed (a warning with the command when there is no network). |
 | `input_method` | `auto`, `none`, `ibus`, `fcitx5` | `auto` | `auto` installs nothing yet. |
 | `accessibility` | bool | `false` | Effect later. |
 | `gaming` | `off`, `flatpak`, `native` | `off` | `native` is refused without multilib; both are refused on the minimal desktop. Effect later. |
