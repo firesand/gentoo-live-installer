@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Indigo silk: the wallpaper of the Gentoo installer live disc. Drawn by iso/artwork/make-wallpaper.py; edit that, not this file. -->
+<svg xmlns="http://www.w3.org/2000/svg" width="3840" height="2160" viewBox="0 0 3840 2160" preserveAspectRatio="xMidYMid slice">
+  <title>Indigo silk</title>
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0c0b1a"/>
+      <stop offset="0.5" stop-color="#16132e"/>
+      <stop offset="1" stop-color="#1f1840"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="2650" cy="820" r="2500" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7d64d8" stop-opacity="0.42"/>
+      <stop offset="0.3" stop-color="#5a46a6" stop-opacity="0.22"/>
+      <stop offset="0.7" stop-color="#2a2160" stop-opacity="0.06"/>
+      <stop offset="1" stop-color="#16132e" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="deep" cx="300" cy="2300" r="2100" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2a5fb0" stop-opacity="0.34"/>
+      <stop offset="1" stop-color="#2a5fb0" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="silkA" x1="-300" y1="0" x2="4150" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#7f9cff" stop-opacity="0"/>
+      <stop offset="0.25" stop-color="#8fa4ff"/>
+      <stop offset="0.6" stop-color="#b6a4ff"/>
+      <stop offset="1" stop-color="#d9ccff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="silkB" x1="-300" y1="0" x2="4150" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#c9bbff" stop-opacity="0"/>
+      <stop offset="0.45" stop-color="#e4dcff"/>
+      <stop offset="0.85" stop-color="#a48cff"/>
+      <stop offset="1" stop-color="#a48cff" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="vignette" cx="1920" cy="1080" r="2350" gradientUnits="userSpaceOnUse">
+      <stop offset="0.5" stop-color="#04030a" stop-opacity="0"/>
+      <stop offset="1" stop-color="#04030a" stop-opacity="0.62"/>
+    </radialGradient>
+  </defs>
+  <rect width="3840" height="2160" fill="url(#sky)"/>
+  <rect width="3840" height="2160" fill="url(#glow)"/>
+  <rect width="3840" height="2160" fill="url(#deep)"/>
+  <g fill="none" stroke="url(#silkA)" stroke-linecap="round">
+    <path d="M -300 1779 C 700 1516, 1500 1486, 2150 1246 S 3300 815, 4150 397" stroke-width="900" stroke-opacity="0.012"/>
+    <path d="M -300 1779 C 700 1516, 1500 1486, 2150 1246 S 3300 815, 4150 397" stroke-width="720" stroke-opacity="0.014"/>
+    <path d="M -300 1779 C 700 1516, 1500 1486, 2150 1246 S 3300 815, 4150 397" stroke-width="560" stroke-opacity="0.016"/>
+    <path d="M -300 1779 C 700 1516, 1500 1486, 2150 1246 S 3300 815, 4150 397" stroke-width="420" stroke-opacity="0.018"/>
+    <path d="M -300 1779 C 700 1516, 1500 1486, 2150 1246 S 3300 815, 4150 397" stroke-width="300" stroke-opacity="0.022"/>
+    <path d="M -300 1779 C 700 1516, 1500 1486, 2150 1246 S 3300 815, 4150 397" stroke-width="200" stroke-opacity="0.026"/>
+    <path d="M -300 1779 C 700 1516, 1500 1486, 2150 1246 S 3300 815, 4150 397" stroke-width="120" stroke-opacity="0.03"/>
+    <path d="M -300 1779 C 700 1516, 1500 1486, 2150 1246 S 3300 815, 4150 397" stroke-width="60" stroke-opacity="0.035"/>
+  </g>
+  <g fill="none">
+    <path d="M -300 1520 C 700 1330, 1500 1340, 2150 1100 S 3300 810, 4150 230" stroke="url(#silkB)" stroke-width="2.6" stroke-opacity="0.092" stroke-linecap="round"/>
+    <path d="M -300 1634 C 700 1437, 1500 1397, 2150 1157 S 3300 779, 4150 303" stroke="url(#silkA)" stroke-width="3.4" stroke-opacity="0.108" stroke-linecap="round"/>
+    <path d="M -300 1547 C 700 1343, 1500 1305, 2150 1065 S 3300 729, 4150 334" stroke="url(#silkA)" stroke-width="4.5" stroke-opacity="0.124" stroke-linecap="round"/>
+    <path d="M -300 1511 C 700 1301, 1500 1412, 2150 1172 S 3300 741, 4150 314" stroke="url(#silkB)" stroke-width="6.0" stroke-opacity="0.140" stroke-linecap="round"/>
+    <path d="M -300 1664 C 700 1447, 1500 1403, 2150 1163 S 3300 806, 4150 271" stroke="url(#silkA)" stroke-width="7.8" stroke-opacity="0.156" stroke-linecap="round"/>
+    <path d="M -300 1716 C 700 1492, 1500 1349, 2150 1109 S 3300 837, 4150 252" stroke="url(#silkA)" stroke-width="10.0" stroke-opacity="0.172" stroke-linecap="round"/>
+    <path d="M -300 1606 C 700 1376, 1500 1471, 2150 1231 S 3300 797, 4150 284" stroke="url(#silkB)" stroke-width="12.5" stroke-opacity="0.188" stroke-linecap="round"/>
+    <path d="M -300 1638 C 700 1401, 1500 1404, 2150 1164 S 3300 753, 4150 358" stroke="url(#silkA)" stroke-width="15.4" stroke-opacity="0.204" stroke-linecap="round"/>
+    <path d="M -300 1795 C 700 1552, 1500 1413, 2150 1173 S 3300 778, 4150 430" stroke="url(#silkA)" stroke-width="18.5" stroke-opacity="0.220" stroke-linecap="round"/>
+    <path d="M -300 1779 C 700 1529, 1500 1509, 2150 1269 S 3300 844, 4150 461" stroke="url(#silkB)" stroke-width="22.1" stroke-opacity="0.236" stroke-linecap="round"/>
+    <path d="M -300 1681 C 700 1424, 1500 1413, 2150 1173 S 3300 863, 4150 440" stroke="url(#silkA)" stroke-width="25.9" stroke-opacity="0.252" stroke-linecap="round"/>
+    <path d="M -300 1779 C 700 1516, 1500 1486, 2150 1246 S 3300 815, 4150 397" stroke="url(#silkA)" stroke-width="25.9" stroke-opacity="0.252" stroke-linecap="round"/>
+    <path d="M -300 1907 C 700 1637, 1500 1526, 2150 1286 S 3300 779, 4150 378" stroke="url(#silkB)" stroke-width="22.1" stroke-opacity="0.236" stroke-linecap="round"/>
+    <path d="M -300 1832 C 700 1555, 1500 1441, 2150 1201 S 3300 816, 4150 412" stroke="url(#silkA)" stroke-width="18.5" stroke-opacity="0.220" stroke-linecap="round"/>
+    <path d="M -300 1779 C 700 1496, 1500 1556, 2150 1316 S 3300 880, 4150 486" stroke="url(#silkA)" stroke-width="15.4" stroke-opacity="0.204" stroke-linecap="round"/>
+    <path d="M -300 1924 C 700 1634, 1500 1529, 2150 1289 S 3300 886, 4150 558" stroke="url(#silkB)" stroke-width="12.5" stroke-opacity="0.188" stroke-linecap="round"/>
+    <path d="M -300 1995 C 700 1699, 1500 1491, 2150 1251 S 3300 833, 4150 587" stroke="url(#silkA)" stroke-width="10.0" stroke-opacity="0.172" stroke-linecap="round"/>
+    <path d="M -300 1888 C 700 1585, 1500 1610, 2150 1370 S 3300 807, 4150 565" stroke="url(#silkA)" stroke-width="7.8" stroke-opacity="0.156" stroke-linecap="round"/>
+    <path d="M -300 1900 C 700 1590, 1500 1531, 2150 1291 S 3300 855, 4150 523" stroke="url(#silkB)" stroke-width="6.0" stroke-opacity="0.140" stroke-linecap="round"/>
+    <path d="M -300 2060 C 700 1743, 1500 1559, 2150 1319 S 3300 914, 4150 505" stroke="url(#silkA)" stroke-width="4.5" stroke-opacity="0.124" stroke-linecap="round"/>
+    <path d="M -300 2063 C 700 1740, 1500 1642, 2150 1402 S 3300 907, 4150 539" stroke="url(#silkA)" stroke-width="3.4" stroke-opacity="0.108" stroke-linecap="round"/>
+    <path d="M -300 1958 C 700 1628, 1500 1545, 2150 1305 S 3300 852, 4150 614" stroke="url(#silkB)" stroke-width="2.6" stroke-opacity="0.092" stroke-linecap="round"/>
+  </g>
+  <rect width="3840" height="2160" fill="url(#vignette)"/>
+</svg>

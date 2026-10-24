@@ -65,6 +65,7 @@
       {"path": "etc/xdg/xfce4/xfconf/xfce-perchannel-xml/thunar-volman.xml", "type": "file"},
       {"path": "etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfce4-power-manager.xml", "type": "file"},
       {"path": "etc/xfce4/helpers.rc", "type": "file"},
+      {"path": "usr/share/backgrounds/gentoo-live/indigo-silk.svg", "type": "file"},
       {"path": "etc/lvm/lvmlocal.conf", "type": "file"},
       {"path": "etc/mdadm.conf", "type": "file"},
       {"path": "etc/chrony/chrony.conf", "type": "file"},
