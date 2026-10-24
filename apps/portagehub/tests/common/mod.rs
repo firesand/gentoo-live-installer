@@ -29,6 +29,9 @@ impl Helper {
     }
 
     pub fn spawn(root: Option<&Path>, env: &[(&str, &str)]) -> Helper {
+        // As root the helper only talks to a socket whose peer is the user pkexec authenticated
+        // (see peer.rs), and it ignores PORTAGEHUB_ROOT: these pipe-driven tests cannot work.
+        assert!(unsafe { libc::geteuid() } != 0, "run the PortageHub integration tests as a normal user, not as root");
         let mut cmd = Command::new(env!("CARGO_BIN_EXE_portagehub-helper"));
         cmd.stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
         if let Some(root) = root {
