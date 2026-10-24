@@ -196,11 +196,18 @@ def test_every_rcadd_service_needs_a_link_and_an_init_script() -> None:
 def test_forbidden_services_and_paths() -> None:
     assert "squashfs.forbidden_services" in failed(squashfs_report(LISTING))  # acpid is enabled in r19
     assert "squashfs.forbidden_services" not in failed(squashfs_report(LISTING.replace("etc/runlevels/default/acpid", "etc/runlevels/default/other")))
-    report = squashfs_report(LISTING)
+    report = squashfs_report(LISTING + "file opt/rust-bin-1.98.1/bin/rustc 0755 0 0\n")
     forbidden = next(c.detail for c in report.errors if c.id == "squashfs.forbidden")
-    assert "opt/rust-bin-1.98.1" in forbidden and "var/cache/binhost" in forbidden and "etc/portage/make.conf.old" in forbidden
+    assert "opt/rust-bin-1.98.1/bin/rustc" in forbidden and "var/cache/binhost" in forbidden and "etc/portage/make.conf.old" in forbidden
     clean = "\n".join(l for l in LISTING.splitlines() if "rust-bin" not in l and "binhost" not in l and "make.conf." not in l)
     assert "squashfs.forbidden" not in failed(squashfs_report(clean))
+
+
+def test_a_leftover_empty_directory_is_not_a_forbidden_file() -> None:
+    """Portage keeps a directory that holds a file it does not own; the check is about files."""
+    clean = "\n".join(l for l in LISTING.splitlines() if "rust-bin" not in l and "binhost" not in l and "make.conf." not in l)
+    assert "squashfs.forbidden" not in failed(squashfs_report(clean + "\ndir opt/rust-bin-1.98.1 0755 0 0\ndir opt/rust-bin-1.98.1/lib 0755 0 0\n"))
+    assert "squashfs.forbidden" in failed(squashfs_report(clean + "\ndir opt/rust-bin-1.98.1 0755 0 0\nfile opt/rust-bin-1.98.1/bin/rustc 0755 0 0\n"))
 
 
 def test_release_flavour_refuses_test_access_and_needs_a_locked_root() -> None:

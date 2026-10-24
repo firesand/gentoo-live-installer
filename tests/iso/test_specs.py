@@ -169,3 +169,20 @@ def test_every_stage1_atom_and_use_flag_exists_in_the_pinned_tree(pinned_tree: P
             iuse |= {flag for flag in re.findall(r"\bgrub_platforms_\w+|\bpython_targets_\w+", ebuild.read_text(errors="replace"))}
         for flag in flags:
             assert flag.lstrip("-") in iuse or flag.lstrip("-").startswith(("grub_platforms_", "python_")), f"{atom}: unknown USE flag {flag}"
+
+
+def test_livecd_keys_are_valid_for_catalyst_4_2() -> None:
+    """A misspelled key is rejected by Catalyst only after stage1 has run for hours."""
+    pytest.importorskip("catalyst")
+    from catalyst.targets.livecd_stage1 import livecd_stage1
+    from catalyst.targets.livecd_stage2 import livecd_stage2
+
+    base = {"subarch", "version_stamp", "target", "rel_type", "profile", "snapshot_treeish", "source_subpath", "compression_mode",
+            "portage_confdir", "repos"}
+    for path, target in ((STAGE1, livecd_stage1), (STAGE2, livecd_stage2)):
+        keys = set(spec(path))
+        unknown = {k for k in keys if k not in base and k not in target.valid_values and not k.startswith("boot/kernel")}
+        assert not unknown, f"{path.name}: Catalyst does not know {sorted(unknown)}"
+        missing = set(target.required_values) - keys - {"boot/kernel"} if target is livecd_stage2 else set()
+        assert not missing, missing
+    assert "boot/kernel" in spec(STAGE2)

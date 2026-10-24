@@ -6,6 +6,6 @@ Comment=Find, mount and repair a Linux system that no longer starts
 Exec=gentoo-rescue-gui
 Icon=system-run
 Terminal=false
-Categories=System;Settings;
+Categories=System;Filesystem;
 Keywords=repair;rescue;boot;grub;fstab;chroot;initramfs;fix;
 StartupNotify=true

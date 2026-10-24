@@ -649,8 +649,13 @@ def check_squashfs(
     ]
     report.expect(not forbidden_services, "squashfs.forbidden_services", "", "services that must stay off are enabled: " + ", ".join(sorted(forbidden_services)))
 
-    # Forbidden paths.
-    hits = sorted({path for path in entries for pattern in rules.get("forbidden", []) if _matches(pattern, path)})
+    # Forbidden paths. An item is a glob (any entry type) or {"pattern": glob, "types": [...]}, which
+    # ignores leftover directories: Portage keeps a directory that holds a file it does not own.
+    forbidden = [(item, None) if isinstance(item, str) else (item["pattern"], set(item["types"])) for item in rules.get("forbidden", [])]
+    hits = sorted({
+        path for path, entry in entries.items() for pattern, types in forbidden
+        if _matches(pattern, path) and (types is None or entry.kind in types)
+    })
     report.expect(not hits, "squashfs.forbidden", "", "must not be in the image: " + ", ".join(hits[:12]) + (" ..." if len(hits) > 12 else ""))
 
     # Ownership: nothing may belong to the builder or to the live user outside its home.

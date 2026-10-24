@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 from xml.etree import ElementTree
 
@@ -223,3 +224,24 @@ def test_overlay_has_no_setuid_files_or_odd_modes() -> None:
             mode = path.stat().st_mode
             assert not mode & 0o7000, path
             assert not mode & 0o022, f"{path} is writable by group or others"
+
+
+@pytest.mark.skipif(shutil.which("desktop-file-validate") is None, reason="desktop-file-validate is not installed")
+def test_desktop_entries_pass_the_freedesktop_validator() -> None:
+    files = sorted((OVERLAY / "etc/xdg/autostart").glob("*.desktop")) + [
+        ROOT / "data/gentoo-rescue.desktop",
+        ROOT / "packaging/gentoo-overlay/app-admin/gentoo-live-installer/files/gentoo-installer.desktop",
+        ROOT / "apps/hwmonux/hwmonux.desktop",
+    ]
+    for path in files:
+        result = subprocess.run(["desktop-file-validate", str(path)], capture_output=True, text=True, check=False)
+        assert result.returncode == 0 and "error" not in result.stdout.lower(), f"{path.name}: {result.stdout}{result.stderr}"
+
+
+@pytest.mark.skipif(shutil.which("xmllint") is None, reason="xmllint is not installed")
+def test_xml_files_are_well_formed() -> None:
+    files = [*OVERLAY.rglob("*.xml"), *(ROOT / "packaging/gentoo-overlay").rglob("metadata.xml")]
+    assert len(files) >= 7
+    for path in files:
+        result = subprocess.run(["xmllint", "--noout", str(path)], capture_output=True, text=True, check=False)
+        assert result.returncode == 0, f"{path}: {result.stderr}"

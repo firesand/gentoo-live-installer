@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 
 import pytest
 
@@ -161,3 +163,15 @@ def test_memtest_files_without_menu_entry_are_refused(pins: dict[str, str]) -> N
     text = "\n".join(l for l in (FIXTURES / "grub_r19.cfg").read_text().splitlines())
     report = check(text, pins)
     assert "grub.memtest" in {c.id for c in report.errors}
+
+
+@pytest.mark.skipif(shutil.which("grub-script-check") is None, reason="grub-script-check (sys-boot/grub) is not installed")
+def test_grub_itself_accepts_the_rendered_menu(grub_text: str, tmp_path) -> None:
+    """GRUB's own parser: a syntax error here means no menu at all on the user's PC."""
+    good = tmp_path / "grub.cfg"
+    good.write_text(grub_text)
+    result = subprocess.run(["grub-script-check", str(good)], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr
+    broken = tmp_path / "broken.cfg"
+    broken.write_text(grub_text.replace("submenu 'More options (troubleshooting)' --class gnu-linux --class os {", "submenu 'More options' {{", 1))
+    assert subprocess.run(["grub-script-check", str(broken)], capture_output=True, check=False).returncode != 0, "the check itself must be able to fail"

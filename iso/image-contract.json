@@ -100,7 +100,7 @@
     "forbidden_services": ["acpid"],
     "forbidden": [
       "var/cache/binhost*",
-      "opt/rust-bin*",
+      {"pattern": "opt/rust-bin*", "types": ["file", "slink"]},
       "usr/lib64/libQt6*.a",
       "usr/share/doc",
       "usr/share/doc/*",
