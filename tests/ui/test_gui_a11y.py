@@ -326,7 +326,7 @@ def test_welcome_offers_install_and_repair(make_window):
 
 def test_repair_without_the_repair_tools_points_to_the_terminal_command(make_window, monkeypatch):
     window = make_window()
-    monkeypatch.delitem(sys.modules, "gentoo_installer.rescue_app", raising=False)
+    monkeypatch.setitem(sys.modules, "gentoo_installer.rescue_app", None)  # the repair window ships now: pretend this build does not contain it
     shown = []
     monkeypatch.setattr(QMessageBox, "information", lambda parent, title, text, *a, **k: shown.append((title, text)))
     window.welcome.repair_button.click()
@@ -483,7 +483,7 @@ def fake_main(monkeypatch):
 
 
 def test_main_repair_mode_without_the_repair_tools_explains_and_exits(fake_main, monkeypatch):
-    monkeypatch.delitem(sys.modules, "gentoo_installer.rescue_app", raising=False)
+    monkeypatch.setitem(sys.modules, "gentoo_installer.rescue_app", None)  # the repair window ships now: pretend this build does not contain it
     shown = []
     monkeypatch.setattr(QMessageBox, "information", lambda parent, title, text, *a, **k: shown.append(text))
     assert app_module.main(["--mode", "repair"]) == 0
