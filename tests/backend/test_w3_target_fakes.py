@@ -204,7 +204,10 @@ class LayerRunner(ScriptedRunner):
             vg, lv, segtype = self.volumes.get(args[-1], ("", "", ""))
             if not lv:
                 raise RunnerError(args, 5, f'  Failed to find logical volume "{args[-1]}"')
-            return type(result)(args, 0, f"  {vg} {lv} {segtype}\n")
+            # lvm warns about descriptors it inherited, on stderr, which the runner mixes into the output
+            noise = "File descriptor 3 (pipe:[48151]) leaked on lvs invocation. Parent PID 4242: python3\n"
+            assert "--nameprefixes" in args, "without --nameprefixes the columns are padded text that the warning above breaks"
+            return type(result)(args, 0, noise + f"  LVM2_VG_NAME='{vg}' LVM2_LV_NAME='{lv}' LVM2_SEGTYPE='{segtype}'\n")
         if args[:2] == ("mdadm", "--examine"):
             member = args[-1]
             for path, array in self.arrays.items():

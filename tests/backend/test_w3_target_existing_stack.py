@@ -104,10 +104,26 @@ class DetectionTests(unittest.TestCase):
             stack = configurer(temporary, runner).detect_stack(MD_LAYOUT, blockdev.parse_lsblk(md_tree()))
         self.assertEqual(stack.md_uuids, ())
         self.assertTrue(stack.md and stack.root_md == "1")
+        self.assertIn("UUID of the RAID array /dev/md0", stack.unsupported)     # a root that cannot be named stops the install
         runner.arrays["/dev/md0"]["uuid"] = MD_UUID + "\x07"
         with tempfile.TemporaryDirectory() as temporary:
             stack = configurer(temporary, runner).detect_stack(MD_LAYOUT, blockdev.parse_lsblk(md_tree()))
         self.assertEqual((stack.md_uuids, stack.arrays), ((), ()))
+
+    def test_a_root_volume_that_cannot_be_named_stops_the_install(self) -> None:
+        tree = lvm_tree().replace("vg0-root", "weird-name-here")
+        layout = [LayoutEntry("/dev/mapper/weird-name-here", "/", "ext4"), LayoutEntry("/dev/sda1", "/efi", "vfat")]
+        stack, _ = detect(tree, layout, volumes={})
+        self.assertTrue(stack.root_lvm)
+        self.assertEqual(stack.lvs, ())
+        self.assertIn("which LVM volume group the root volume /dev/mapper/weird-name-here belongs to", stack.unsupported)
+
+    def test_a_volume_that_cannot_be_named_is_only_a_warning_when_the_root_is_elsewhere(self) -> None:
+        tree = lvm_tree().replace("vg0-home", "weird-name-here")
+        layout = [LayoutEntry("/dev/sda2", "/", "ext4"), LayoutEntry("/dev/sda1", "/efi", "vfat"), LayoutEntry("/dev/mapper/weird-name-here", "/home", "ext4")]
+        stack, _ = detect(tree, layout, volumes={})
+        self.assertTrue(stack.lvm)
+        self.assertEqual(stack.unsupported, "")
 
     def test_a_preview_looks_at_nothing(self) -> None:
         stack, runner = detect(lvm_tree(), LVM_LAYOUT, dry_run=True)

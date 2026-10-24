@@ -786,7 +786,7 @@ class ExistingStack:
     lvs: tuple[str, ...] = ()  # "vg/lv" of the volumes the initramfs has to activate (rd.lvm.lv)
     md_uuids: tuple[str, ...] = ()  # arrays the initramfs has to assemble (rd.md.uuid)
     arrays: tuple[str, ...] = ()  # ARRAY lines of every array under the layout, for /etc/mdadm.conf
-    unsupported: str = ""  # why the root cannot be booted (a device type the initramfs cannot assemble)
+    unsupported: str = ""  # why the root cannot be booted: a device type the initramfs cannot assemble, or a name that could not be found out
 
     @property
     def early_lvm(self) -> bool:
@@ -1818,21 +1818,28 @@ class Configurer:
                 thin = thin or "thin" in segtype or "cache" in segtype
                 if early and name:
                     lvs.append(name)
+                elif device == root_device:
+                    unsupported = unsupported or f"Could not find out which LVM volume group the root volume {node.path} belongs to, so the initramfs could not activate it."
             for array in on_arrays:
                 arrays.extend(self._md_scan(array))
                 if early:
                     uuids.append(self._md_uuid(array, everything))
+                    if not uuids[-1] and device == root_device:
+                        unsupported = unsupported or f"Could not read the UUID of the RAID array {array.path} under the root, so the initramfs could not assemble it."
         return ExistingStack(lvm=lvm, md=md, thin=thin, root_lvm=root_lvm, root_md=root_md, lvs=tuple(dict.fromkeys(lvs)),
                              md_uuids=tuple(dict.fromkeys(uuid for uuid in uuids if uuid)), arrays=tuple(dict.fromkeys(arrays)), unsupported=unsupported)
 
     def _lvm_volume(self, node: blockdev.BlockDevice) -> tuple[str, str]:
         """("vg/lv", segment type) of a logical volume; the name is "" when it cannot be found out."""
         try:
-            fields = self.runner.run(("lvs", "--noheadings", "-o", "vg_name,lv_name,segtype", node.path)).stdout.split()
+            # name=value pairs: the runner mixes stderr into the output, and lvm likes to warn about leaked descriptors
+            output = self.runner.run(("lvs", "--noheadings", "--nameprefixes", "-o", "vg_name,lv_name,segtype", node.path)).stdout
         except (RunnerError, OSError):
-            fields = []
-        if len(fields) >= 2 and LVM_NAME_RE.fullmatch(f"{fields[0]}/{fields[1]}"):
-            return f"{fields[0]}/{fields[1]}", fields[2] if len(fields) > 2 else ""
+            output = ""
+        fields = dict(re.findall(r"LVM2_(VG_NAME|LV_NAME|SEGTYPE)='([^']*)'", output))
+        name = f"{fields.get('VG_NAME', '')}/{fields.get('LV_NAME', '')}"
+        if LVM_NAME_RE.fullmatch(name):
+            return name, fields.get("SEGTYPE", "")
         # /dev/mapper/<vg>-<lv>: a dash inside a name is doubled
         parts = re.split(r"(?<!-)-(?!-)", os.path.basename(node.path))
         name = "/".join(part.replace("--", "-") for part in parts)
@@ -2322,8 +2329,8 @@ class Configurer:
             if not re.search(r"^\s*linux(?:efi)?\s+\S+", config, re.MULTILINE):
                 problems.append("grub.cfg has no menu entry that loads a kernel")
             else:
-                for wanted, present in (("rd.luks.uuid", storage.luks), ("rd.lvm.lv", storage.lvm or (stack is not None and bool(stack.lvs))),
-                                        ("rd.md.uuid", stack is not None and bool(stack.md_uuids))):
+                for wanted, present in (("rd.luks.uuid", storage.luks), ("rd.lvm.lv", storage.lvm or (stack is not None and stack.early_lvm)),
+                                        ("rd.md.uuid", stack is not None and stack.early_md)):
                     if present and wanted not in config:
                         problems.append(f"grub.cfg does not pass {wanted}, so the root filesystem would not be found")
             if storage.firmware == "uefi":
