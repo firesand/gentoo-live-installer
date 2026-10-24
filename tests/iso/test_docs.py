@@ -48,6 +48,19 @@ def test_every_documented_option_and_variable_exists_in_the_script() -> None:
         assert variable in BUILD_SCRIPT and variable in ISO_DOC.read_text()
 
 
+def test_reuse_auto_is_described_as_it_behaves() -> None:
+    """--reuse auto reuses a stage1 that nothing changed and builds stage1 fresh otherwise. The reseed that reinstalls only the changed
+    project packages did not reinstall them in a real build: it runs only for BUILD_MODE=reseed inside the container (iso/builder-entrypoint.sh)."""
+    usage = BUILD_SCRIPT.split("--reuse MODE", 1)[1].split("--reuse-stage1", 1)[0]
+    lines = ISO_DOC.read_text().splitlines()
+    row = next(line for line in lines if line.startswith("| `--reuse auto`"))
+    reseed = next(line for line in lines if line.startswith("* **reseed**"))
+    for name, described in (("the usage text of build-iso.sh", usage), ("the --reuse auto row of docs/ISO.md", row)):
+        assert "fresh" in described and "reinstall" not in described, name
+    assert "BUILD_MODE=reseed" in reseed and "--reuse auto" in reseed and "not" in reseed
+    assert "needs no revision bump" not in ISO_DOC.read_text() and "reuse logic reinstalls it by name" not in ISO_DOC.read_text()
+
+
 def test_documented_test_iso_name_matches_the_builder(pins: dict[str, str]) -> None:
     expected = pins["ISO_NAME"].replace(".iso", "-TESTKEY.iso")
     assert expected in README.read_text()

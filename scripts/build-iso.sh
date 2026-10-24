@@ -39,9 +39,10 @@ ISO_LOG_DIR, BUILD_MEMORY (default 8g), BUILD_MIN_FREE_GIB (default 45), ISO_SEC
 
   --check              Validate prerequisites and inputs without building or creating dirs.
   --reuse MODE         auto (default): reuse the stage1 of the last build when nothing that
-                       goes into it changed, reinstall only the project's own packages when
-                       only those changed, otherwise build everything. none: always build
-                       everything. stage1: like --stage2-only.
+                       goes into it changed, otherwise build stage1 fresh (the binary package
+                       cache keeps that short when only the project's own packages changed,
+                       and they always come from this tree). none: always build everything.
+                       stage1: like --stage2-only.
   --reuse-stage1       Same as --reuse auto (the default), for scripts that want to say it.
   --stage2-only        Run only stage2 from a stage1 archive whose receipt matches the
                        current inputs; fails when there is none.

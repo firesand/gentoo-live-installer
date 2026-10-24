@@ -60,7 +60,7 @@ JOBS=4 ./scripts/build-iso.sh           # the release ISO into dist/
 ```
 
 * The result is `dist/gentoo-installer-amd64-<stamp>.iso` with `.sha512`, `.blake2b`, `.manifest.json` and `.packages.txt`. Every build writes a timestamped log to `dist/logs/`.
-* A following build reuses the stage1 of the previous one when nothing that goes into it changed (`--reuse auto`, the default). `--reuse none` always builds everything. Use it for a release when in doubt.
+* A following build reuses the stage1 of the previous one when nothing that goes into it changed (`--reuse auto`, the default). Otherwise it builds stage1 again; the binary package cache makes that shorter. `--reuse none` always builds everything. Use it for a release when in doubt.
 * The finished ISO is checked before it is published (`scripts/verify-iso.py`, rules in `iso/image-contract.json`): boot images, boot menu, initramfs, services, the repair and text-mode files, ownership, and no test access in a release.
 * Settings: `JOBS`, `LOAD_AVERAGE`, `BUILD_MEMORY` (container memory, default 8g), `BUILD_MIN_FREE_GIB`, `ISO_CACHE_DIR`, `ISO_DIST_DIR`, `ISO_LOG_DIR`, `ISO_SECCOMP`. `--clean` removes retained chroots and old stage1 archives.
 * The container needs `SYS_ADMIN`, `NET_ADMIN`, `MKNOD` and `SYS_CHROOT` and an open seccomp profile: the build runs the Gentoo ebuilds of about 500 packages as root inside the container. Build untrusted changes in a throwaway VM.
