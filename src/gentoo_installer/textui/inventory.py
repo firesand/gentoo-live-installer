@@ -124,6 +124,14 @@ class MachineView:
         return bool(self.reply)
 
     @property
+    def memory_gib(self) -> float:
+        """Installed memory as the probe measured it (a few percent below what was fitted); 0 when the reply does not say."""
+        value = self.reply.get("memory_bytes")
+        if isinstance(value, (int, float)) and not isinstance(value, bool) and value > 0:
+            return value / 1024**3
+        return self.profile.memory.total_kib / 1024**2
+
+    @property
     def network(self) -> bool | None:
         value = self.reply.get("network")
         return value if isinstance(value, bool) else None

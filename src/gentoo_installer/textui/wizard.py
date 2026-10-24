@@ -25,7 +25,7 @@ from .console import Console, GoBack, Option, Quit
 from .daemon import Daemon, DaemonError
 from .host import Host
 from .inventory import DiskEntry, Finding, MachineView, apply_disk
-from .summary import build_summary, keyboard_label, render_summary
+from .summary import build_summary, hwmonux_note, keyboard_label, render_summary
 
 MAX_WRONG_CONFIRMATIONS = 3
 NO_IDENTITY_HINT = "A virtual disk can be given a serial number, for example QEMU: -device virtio-blk-pci,drive=d0,serial=MYDISK."
@@ -679,6 +679,9 @@ class Wizard:
             options.install_hwmonux = options.install_portagehub = False  # graphical programs
         elif was_minimal:
             options.install_hwmonux = options.install_portagehub = True
+        note = hwmonux_note(self.manifest, self.view)
+        if note:  # HWMonux comes with every desktop; this program has no question for it, so it only says what it costs
+            c.note(f'{note} To leave HWMonux out, use the graphical installer or a settings file with "install_hwmonux": false.')
         return True
 
     def _ask_init(self) -> bool:
