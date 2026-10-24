@@ -487,6 +487,14 @@ class EventHistory:
 GENERIC_FAILURE = "Installation failed; inspect the streamed error and persistent log"
 
 
+def installer_resumable(installer: Any) -> bool:
+    """Whether a later run can continue the job (storage was prepared and checkpointed); False when the installer cannot say, as after a crash."""
+    try:
+        return bool(installer._resumable())
+    except Exception:  # noqa: BLE001 - this runs on the crash path: a state that cannot be read must not hide the crash
+        return False
+
+
 class InstallManager:
     """Runs at most one installation at a time and lets any number of clients follow it."""
 
@@ -616,13 +624,14 @@ class InstallManager:
         except BaseException as exc:  # noqa: BLE001 - whatever happened, the job must end cleanly for its clients
             LOG.exception("Installation job %s crashed", self.job_id)
             text = redact_text(f"Installer crashed: {exc}", getattr(installer, "secrets", ()))
-            self._emit(error_event(ErrorCode.FAILED, text, job_id=self.job_id, stage=self.stage or "preflight", retryable=True, resumable=False,
-                                   bootable=bool(getattr(installer, "_bootable", False))))
+            self._emit(error_event(ErrorCode.FAILED, text, job_id=self.job_id, stage=self.stage or "preflight", retryable=True,
+                                   resumable=installer_resumable(installer), bootable=bool(getattr(installer, "_bootable", False))))
         finally:
             with self.lock:
                 if self._completed is None:
                     self._emit(completed_event(result, "Installation completed successfully" if result else "Installation failed", job_id=self.job_id,
-                                               bootable=bool(getattr(installer, "_bootable", False)), degraded=[], warnings=[]))
+                                               bootable=bool(getattr(installer, "_bootable", False)), degraded=[], warnings=[],
+                                               **({} if result else {"resumable": installer_resumable(installer)})))
                 self.status = "completed" if result else "cancelled" if cancel.is_set() else "failed"
                 if self.status == "failed" and not self.last_error:
                     self.last_error = GENERIC_FAILURE

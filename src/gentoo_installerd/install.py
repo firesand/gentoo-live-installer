@@ -879,8 +879,11 @@ class Installer:
         self.configurer.configure_portage(self.manifest, plan)
         self.configurer.chroot(("eselect", "profile", "set", self.manifest.effective_profile()))
         # Resolve everything the later stages will emerge now: an impossible combination of
-        # options fails here, in minutes and with the disk still reusable, not hours later.
-        required = [*self.configurer.kernel_stage_atoms(self.manifest, self.storage.layout, plan),
+        # options fails here, in minutes and with the disk still reusable, not hours later. That includes
+        # the tools of volumes that existed before (lvm2, mdadm) and the USE flag lvm2 needs for them.
+        stack = self._storage_stack()
+        self.configurer.prepare_stack_packages(stack)
+        required = [*self.configurer.kernel_stage_atoms(self.manifest, self.storage.layout, plan, stack),
                     *self.configurer.kernel_atoms(self.manifest), *self.configurer.essential_atoms(self.manifest, plan),
                     *self.configurer.bootloader_atoms(self.manifest), *self.configurer.desktop_atoms(self.manifest, plan).required]
         try:
@@ -931,7 +934,7 @@ class Installer:
             try:
                 self.configurer.emerge(self.manifest, ("--noreplace", *driver_atoms))
             except RunnerError as exc:
-                self.degraded.append(f"Hardware drivers ({', '.join(driver_atoms)}) could not be installed: {str(exc)[-200:]}")
+                self.degraded.append(f"Hardware drivers ({', '.join(driver_atoms)}) could not be installed: {self.configurer.explain(exc).summary[:200]}")
                 self.log("WARNING: " + self.degraded[-1])
         if self.manifest.system.initramfs == "dracut":
             self.configurer.emerge(self.manifest, ("--noreplace", "sys-kernel/dracut"))

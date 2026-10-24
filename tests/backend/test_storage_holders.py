@@ -46,7 +46,9 @@ class TestActiveVolumes:
             make_manager(runner, tmp_path).prepare(erase())
         assert caught.value.code == "storage.holders"
         assert "lvm /dev/mapper/vg0-root" in str(caught.value) and "crypt /dev/mapper/luks-old" in str(caught.value)
-        assert "release_holders" in str(caught.value)
+        # the way out is told in the words of the clients, not by the name of a manifest field
+        assert "release_holders" not in str(caught.value) and "storage." not in str(caught.value)
+        assert "tick the box in the installer window" in str(caught.value) and "--release-holders" in str(caught.value)
         no_writes(runner)
         assert not any(c[0] in {"vgchange", "cryptsetup", "mdadm", "dmsetup"} for c in runner.commands)
 

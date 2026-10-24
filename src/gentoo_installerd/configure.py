@@ -7,6 +7,7 @@ import os
 import re
 import shlex
 import shutil
+import stat
 import tempfile
 import time
 import types
@@ -17,7 +18,7 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Callable, Mapping, MutableMapping, Sequence
 
 from gentoo_installer import __version__ as INSTALLER_VERSION
-from gentoo_installer import blockdev, keymaps
+from gentoo_installer import blockdev, keymaps, recommend
 from gentoo_installer import layout as guided_layout
 from gentoo_installer.manifest import ATOM_RE, CMDLINE_TOKEN_RE, USE_TOKEN_RE, InstallManifest, Network, System
 
@@ -59,6 +60,12 @@ DESKTOP_USE: Mapping[str, Mapping[str, tuple[str, ...]]] = {
 }
 NVRAM_FAILURE = re.compile(r"efibootmgr|EFI variables|efivars|NVRAM", re.IGNORECASE)
 RECEIPT_PATH = "etc/gentoo-live-installer/install.json"
+# The package.env of the hardware plan (hwplan.MEMORY_HEAVY_ATOMS): the compile jobs the memory-heavy packages may use.
+MEMORY_ENV_NAME = "installer-memory"
+MEMORY_ENV_FILE = f"etc/portage/env/{MEMORY_ENV_NAME}"
+PACKAGE_ENV_FILE = "etc/portage/package.env/installer-hardware"
+# What an out-of-memory failure says when the build already had one compile job: nothing is left to lower.
+NOT_ENOUGH_MEMORY = "It ran out of memory even with one compile job: this PC needs more memory or swap for it."
 # Where a live profile's certificates may be read from (never arbitrary files such as /etc/shadow).
 CERTIFICATE_ROOTS = ("/home/", "/root/", "/etc/NetworkManager/", "/etc/ssl/", "/etc/pki/", "/etc/ca-certificates/",
                      "/usr/share/ca-certificates/", "/usr/local/share/ca-certificates/")
@@ -600,6 +607,22 @@ def root_stack_problems(manifest: InstallManifest, runner: Runner) -> list[str]:
 
 # --- explaining a failed emerge ---------------------------------------------------------------------
 
+# How much of the end of a failed package's build log is read: the compiler's own error is near the end of it.
+BUILD_LOG_TAIL_BYTES = 256 * 1024
+# Of that, the last lines are searched, and a longer line is a build command, not a message.
+_LOG_LINES = 400
+_LOG_LINE_CHARS = 300
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[ -/]*[@-~]")
+
+
+@dataclass(frozen=True)
+class FailedBuild:
+    """A package that emerge could not build or install."""
+
+    package: str  # category/name-version, without slot and repository
+    phase: str = ""  # the Portage phase that failed (compile, configure, install, ...), "" when emerge did not say
+    log: str = ""  # its build log as emerge names it: a path inside the new system
+
 
 @dataclass(frozen=True)
 class EmergeDiagnosis:
@@ -608,6 +631,8 @@ class EmergeDiagnosis:
     build_failure: bool = False  # a package failed to compile or install
     transient: bool = False  # a download or network problem; a retry may well work
     out_of_memory: bool = False  # a build was killed for lack of memory; fewer parallel jobs may help
+    failures: tuple[FailedBuild, ...] = ()  # the packages that failed themselves
+    dropped: tuple[str, ...] = ()  # packages --keep-going left out because one they need failed
 
     @property
     def kind(self) -> str:
@@ -635,10 +660,81 @@ _TRANSIENT_PATTERN = re.compile(
 _MEMORY_PATTERN = re.compile(
     r"signal terminated program|Killed\b|virtual memory exhausted|Cannot allocate memory|std::bad_alloc|"
     r"out of memory|memory exhausted|oom-kill", re.IGNORECASE)
+# In a build log the signs are narrower: a compiler, linker or runtime that the kernel killed or that could not get memory.
+_LOG_MEMORY_PATTERN = re.compile(
+    r"signal terminated program|internal compiler error: Killed|virtual memory exhausted|Cannot allocate memory|std::bad_alloc|"
+    r"memory allocation of \d+ bytes failed|out of memory|memory exhausted|oom-kill|terminated with signal 9|signal: 9, SIGKILL|(?-i:\bKilled\b)",
+    re.IGNORECASE)
+# The first of these that any line matches names the reason, so a compiler's "error:" beats a make or ninja summary line.
+_LOG_ERROR_PATTERNS = (
+    re.compile(r"(?<![-\w])(?:fatal )?error(?:\[\w+\])?:", re.IGNORECASE),
+    re.compile(r"(?<![-\w])error(?![-\w=])|\bFAILED\b|undefined reference", re.IGNORECASE),
+)
+# What Portage prints about failed packages. Its summary block (only when several failed or --keep-going is on):
+#   " *  (dev-python/pyside-6.11.2:6/6.11.2::gentoo, ebuild scheduled for merge), Log file:" and "'/var/tmp/.../build.log'"
+# It is an error message, so it starts with " * ": a slot conflict names its packages in the very same words, without that prefix.
+_FAILED_ENTRY = re.compile(r"\s*\*\s+\((?P<package>[^\s:,()]+)(?::[^\s,()]*)?::[^\s,()]+, (?:ebuild|binary) scheduled for merge[^)]*\)(?P<postinst> \(postinst failed\))?")
+#   " * ERROR: dev-python/pyside-6.11.2::gentoo failed (compile phase):" (the messages of the package; always printed)
+_FAILED_PHASE = re.compile(r"ERROR: (?P<package>\S+?)(?:::\S+)? failed \((?P<phase>\w+) phase\)")
+#   ">>> Failed to emerge dev-python/pyside-6.11.2, Log file:"
+_FAILED_TO_EMERGE = re.compile(r"Failed to emerge (?P<package>[^\s,]+),")
+#   " * emerge --keep-going: app-misc/hwmonux-1.0.0-r1 dropped because it requires"
+_DROPPED = re.compile(r"emerge --keep-going: (?P<package>\S+) dropped because")
+# Every place that names a build log has its path: /var/tmp/portage/<category>/<name-version>/temp/build.log
+_BUILD_LOG = re.compile(r"'(?P<path>/[^'\s]*?/(?P<package>[^/'\s]+/[^/'\s]+)/temp/build\.log)'")
+# A package that checks its memory needs before it builds (check-reqs.eclass: qtwebengine wants 2.5 GB per job) stops emerge with
+#   " * There is NOT at least 10 GiB RAM" and " * ERROR: dev-qt/qtwebengine-6.11.2::gentoo failed (pretend phase):"; fewer jobs fix that.
+_SHORT_OF_RAM = re.compile(r"There is NOT at least (?P<size>\d+(?:\.\d+)? \w+) RAM")
+_SHORT_OF_SOMETHING = re.compile(r"There is NOT at least .+")
+# The old summary block: " * 1) dev-qt/qtwebengine-6.11.2::gentoo (/var/tmp/portage/...)".
+_NUMBERED_ENTRY = re.compile(r"\s*\*\s+\d+\)\s+(?P<package>\S+?)::")
+# phase -> (what the build was doing when it died, what to say about the failure)
+_PHASES = {
+    "setup": ("setting up", "failed in its setup"), "unpack": ("unpacking", "failed to unpack"), "prepare": ("preparing", "failed to prepare"),
+    "configure": ("configuring", "failed to configure"), "compile": ("compiling", "failed to compile"), "test": ("testing", "failed its tests"),
+    "install": ("installing", "failed to install"), "preinst": ("installing", "failed before it was installed"),
+    "pretend": ("checking", "failed its check before the build"),
+    "postinst": ("installing", "was installed, but its final step failed"),
+}
 
 
-def explain_emerge_failure(output: str) -> EmergeDiagnosis:
-    """Turn the tail of a failed emerge run into a short, actionable explanation."""
+def _build_log_findings(text: str) -> tuple[str, str]:
+    """(the line that shows the build was killed for lack of memory, the first error line) of the end of a build log; either may be ''."""
+    lines = [line for line in (_ANSI.sub("", line).strip() for line in text.splitlines()) if line][-_LOG_LINES:]
+    short = [line for line in lines if len(line) <= _LOG_LINE_CHARS]  # a longer line is a build command, not a message
+    sign = next((found for found in (_LOG_MEMORY_PATTERN.search(line) for line in lines) if found), None)
+    if sign is not None:
+        memory = sign.string.strip()
+        if len(memory) > _LOG_LINE_CHARS:
+            # cargo ends the line of the whole rustc command with the kill: name the error before it, and the sign
+            before = next((line for line in short if _LOG_ERROR_PATTERNS[0].search(line)), "")
+            memory = f"{before} ({sign.group(0)})" if before else sign.group(0)
+        return memory, ""
+    for pattern in _LOG_ERROR_PATTERNS:
+        error = next((line for line in short if pattern.search(line)), "")
+        if error:
+            return "", error
+    return "", ""
+
+
+def _failure_sentence(failure: FailedBuild, memory: str, error: str) -> str:
+    """What happened to one package, in a sentence that starts with its name ('' when nothing is known beyond the name)."""
+    doing, failed = _PHASES.get(failure.phase, ("building", "failed to build"))
+    if memory:
+        return f"{failure.package} ran out of memory while {doing}: {memory[:160]}"
+    if error:
+        return f"{failure.package} {failed}: {error[:160]}"
+    return f"{failure.package} {failed}" if failure.phase else ""
+
+
+def explain_emerge_failure(output: str, read_log: Callable[[str], str] | None = None) -> EmergeDiagnosis:
+    """Turn the tail of a failed emerge run into a short, actionable explanation.
+
+    ``output`` is the end of what emerge printed. With ``read_log`` (the end of a build log, given the path emerge
+    printed for it) the diagnosis also reads why a package failed: when other packages were built after the failure,
+    as --keep-going does, the compiler's own error is no longer in the output.
+    """
+    output = _ANSI.sub("", output)
     lines = [line.rstrip() for line in output.splitlines()]
     items: list[str] = []
     resolution = any(marker in output for marker in _RESOLUTION_MARKERS)
@@ -665,6 +761,7 @@ def explain_emerge_failure(output: str) -> EmergeDiagnosis:
             elif entry and not entry.startswith(("#", "(", "!!!")):
                 items.append(f"{kind}: {entry}" + (f" (required by {reason})" if reason else ""))
                 reason = ""
+    phases: dict[str, str] = {}  # package -> phase, in the order the packages are first named
     for index, line in enumerate(lines):
         if "REQUIRED_USE flag constraints are unsatisfied" in line:
             package = next((lines[i].strip().lstrip("- ").split(" USE=")[0] for i in range(index - 1, max(index - 4, -1), -1)
@@ -682,9 +779,40 @@ def explain_emerge_failure(output: str) -> EmergeDiagnosis:
             items.append("blocked packages: " + line.strip()[:160])
         if "Multiple package instances within a single package slot" in line:
             items.append("slot conflict between packages")
-    failed = [m.group(1) for line in lines for m in [re.match(r"\s*\*\s+\d+\)\s+(\S+?)::", line)] if m]
-    if failed:
-        items.append("failed to build: " + ", ".join(dict.fromkeys(failed)))
+        for found in (_FAILED_ENTRY.match(line), _FAILED_PHASE.search(line), _FAILED_TO_EMERGE.search(line), _NUMBERED_ENTRY.match(line)):
+            if found:
+                groups = found.groupdict()
+                package = groups["package"]
+                phases[package] = groups.get("phase") or ("postinst" if groups.get("postinst") else "") or phases.get(package, "")
+    dropped = tuple(dict.fromkeys(m.group("package") for m in _DROPPED.finditer(output)))
+    logs = {m.group("package"): m.group("path") for m in _BUILD_LOG.finditer(output)}
+    failures = tuple(FailedBuild(package, phase, logs.get(package) or f"/var/tmp/portage/{package}/temp/build.log")
+                     for package, phase in phases.items() if package not in dropped)
+    sentences: list[str] = []
+    undescribed: list[str] = []
+    killed = False
+    short_of_ram = _SHORT_OF_RAM.search(output)
+    short_of_something = _SHORT_OF_SOMETHING.search(output)
+    for failure in failures[:4]:
+        if failure.phase == "pretend" and short_of_something:
+            killed = killed or bool(short_of_ram)
+            sentences.append(f"{failure.package} needs {short_of_ram['size']} of memory for its compile jobs, and this PC has less" if short_of_ram
+                             else f"{failure.package} {_PHASES['pretend'][1]}: {short_of_something.group(0).strip()[:160]}")
+            continue
+        text = ""
+        if read_log is not None:
+            try:
+                text = read_log(failure.log) or ""
+            except Exception:  # noqa: BLE001 - a log that cannot be read only costs the detail
+                text = ""
+        memory, error = _build_log_findings(text)
+        killed = killed or bool(memory)
+        sentence = _failure_sentence(failure, memory, error)
+        (sentences if sentence else undescribed).append(sentence or failure.package)
+    undescribed.extend(failure.package for failure in failures[4:])
+    items = sentences + items
+    if undescribed:
+        items.append("failed to build: " + ", ".join(dict.fromkeys(undescribed)))
     fetch = [m.group(1) for line in lines for m in [re.search(r"Fetch failed for ([^\s,]+)", line)] if m]
     if fetch:
         items.append("download failed for " + ", ".join(dict.fromkeys(fetch)) + " (check the network connection)")
@@ -693,11 +821,12 @@ def explain_emerge_failure(output: str) -> EmergeDiagnosis:
     if not summary:
         tail = [line.strip() for line in lines if line.strip()][-3:]
         summary = " | ".join(tail)[:400]
-    build_failure = bool(failed) or bool(re.search(r"\* ERROR: \S+ failed \(", output))
-    memory = build_failure and bool(_MEMORY_PATTERN.search(output))
-    if memory:
+    build_failure = bool(failures) or bool(re.search(r"\* ERROR: \S+ failed \(", output))
+    memory_in_output = build_failure and bool(_MEMORY_PATTERN.search(output))
+    if memory_in_output and not killed:
         summary += " (the build ran out of memory)"
-    return EmergeDiagnosis(resolution, summary, build_failure, bool(fetch) or bool(_TRANSIENT_PATTERN.search(output)), memory)
+    return EmergeDiagnosis(resolution, summary, build_failure, bool(fetch) or bool(_TRANSIENT_PATTERN.search(output)), killed or memory_in_output,
+                           failures, dropped)
 
 
 # emerge's own way out of a dependency cycle, for example "- dev-python/pillow-12.3.0 (Change USE: -truetype)".
@@ -1549,10 +1678,63 @@ class Configurer:
     # ----- installing packages --------------------------------------------------------------------
 
     def emerge(self, manifest: InstallManifest, arguments: Sequence[str], *, environment: Mapping[str, str] | None = None,
-               capture: bool = False) -> CommandResult:
+               capture: bool = False, one_job: bool = False) -> CommandResult:
+        """Run emerge in the new system. ``one_job`` is the retry of a build that was killed for lack of memory: one compile job and one package at a time."""
         env = self.emerge_environment(manifest)
         env.update(environment or {})
+        arguments = tuple(arguments)
+        if one_job:
+            # NINJAOPTS too: unset, ninja-utils derives it from MAKEOPTS, but an inherited value would win over that.
+            env.update({"MAKEOPTS": "-j1", "NINJAOPTS": ninja_opts_from_make_opts("-j1")})
+            arguments = ("--jobs=1", *arguments)  # the command line wins over --jobs in EMERGE_DEFAULT_OPTS
         return self.chroot(("emerge", *arguments), env=env, capture=capture)
+
+    # ----- why a build failed --------------------------------------------------------------------------
+
+    def build_log_tail(self, path: str) -> str:
+        """The end of a failed package's build log. emerge names the log as the new system sees it (inside the chroot); '' when it cannot be read."""
+        if self.dry_run or not path.startswith("/"):
+            return ""
+        try:
+            log = self.path(path)
+            if not stat.S_ISREG(log.stat().st_mode):
+                return ""
+            with log.open("rb") as handle:
+                size = handle.seek(0, os.SEEK_END)
+                handle.seek(max(0, size - BUILD_LOG_TAIL_BYTES))
+                return handle.read(BUILD_LOG_TAIL_BYTES).decode("utf-8", errors="replace")
+        except (OSError, ConfigurationError):
+            return ""
+
+    def explain(self, failure: RunnerError | str) -> EmergeDiagnosis:
+        """Explain a failed emerge from its output and from the build logs of the packages that failed."""
+        return explain_emerge_failure(failure if isinstance(failure, str) else failure.output, self.build_log_tail)
+
+    def compile_jobs(self, package: str) -> int | None:
+        """The compile jobs a package (category/name-version) gets: MAKEOPTS of the new system, or the lower limit of the hardware plan; None when unknown or unlimited."""
+        try:
+            jobs = recommend.make_opts_jobs(self._variable("etc/portage/make.conf", "MAKEOPTS"))
+            listed = {fields[0] for line in self.read_text(PACKAGE_ENV_FILE).splitlines() for fields in [line.split("#")[0].split()]
+                      if len(fields) > 1 and MEMORY_ENV_NAME in fields[1:]}
+            limit = recommend.make_opts_jobs(self._variable(MEMORY_ENV_FILE, "MAKEOPTS")) if package_of(package) in listed else None
+        except (OSError, ValueError, ConfigurationError):
+            return None
+        return limit if limit is not None and (jobs is None or limit < jobs) else jobs
+
+    def _variable(self, relative: str, name: str) -> str:
+        """The value of NAME=... in a shell-style file of the new system ('' when it has none)."""
+        for line in reversed(self.read_text(relative).splitlines()):
+            if line.startswith(f"{name}="):
+                return shlex.split(line)[0].partition("=")[2]
+        return ""
+
+    def one_job_cannot_help(self, manifest: InstallManifest, diagnosis: EmergeDiagnosis) -> bool:
+        """Whether the packages that were killed already had one compile job and were built alone: a retry with one job would end the same way."""
+        opts = self.emerge_environment(manifest).get("EMERGE_DEFAULT_OPTS", manifest.portage.emerge_opts)
+        parallel = recommend.make_opts_jobs(opts)
+        if parallel is None and re.search(r"(?:^|\s)(?:-j|--jobs)", opts) or parallel is not None and parallel > 1:
+            return False  # other packages were built at the same time
+        return bool(diagnosis.failures) and all(self.compile_jobs(failure.package) == 1 for failure in diagnosis.failures)
 
     def is_installed(self, atom: str) -> bool:
         if self.dry_run:
@@ -1585,7 +1767,7 @@ class Configurer:
                 if suggestion is not None and attempt < MAX_CYCLE_BREAKS:
                     self.break_cycle(manifest, *suggestion)
                     continue
-                diagnosis = explain_emerge_failure(exc.output)
+                diagnosis = self.explain(exc)
                 if diagnosis.resolution:
                     raise PackageInstallError(f"Portage cannot resolve the selected packages: {diagnosis.summary}", resolution=True) from exc
                 self.notify("warning: the package resolution check could not run (" + diagnosis.summary[:200] + "); continuing")
@@ -1605,7 +1787,7 @@ class Configurer:
             self.emerge(manifest, ("--oneshot", f"={cpv}"))
         except RunnerError as exc:
             raise PackageInstallError(f"A dependency cycle could not be broken by building {cpv} with USE=\"{change}\": "
-                                      + explain_emerge_failure(exc.output).summary, resolution=True) from exc
+                                      + self.explain(exc).summary, resolution=True) from exc
         finally:
             if not self.dry_run:
                 self.path(CYCLE_BREAK_USE).unlink(missing_ok=True)
@@ -1625,7 +1807,7 @@ class Configurer:
                 self.emerge(manifest, ("--oneshot", "--update", "--newuse", package))
             except RunnerError as exc:
                 problems.append(f"{package} keeps the flags used to break a dependency cycle; later run: emerge --oneshot --newuse {package} "
-                                f"({explain_emerge_failure(exc.output).summary[:160]})")
+                                f"({self.explain(exc).summary[:160]})")
         record.unlink(missing_ok=True)
         return problems
 
@@ -1645,20 +1827,32 @@ class Configurer:
         atoms = self.essential_atoms(manifest, plan)
         if not atoms:
             return
-        environment: dict[str, str] = {}
+        one_job = False
         for attempt in range(1, attempts + 1):
             try:
-                self.emerge(manifest, ("--noreplace", *atoms), environment=environment)
+                self.emerge(manifest, ("--noreplace", *atoms), one_job=one_job)
                 return
             except RunnerError as exc:
-                diagnosis = explain_emerge_failure(exc.output)
-                if diagnosis.kind in {"resolution", "build"} or attempt == attempts:
-                    raise PackageInstallError(f"The base system packages could not be installed: {diagnosis.summary}",
+                diagnosis = self.explain(exc)
+                hopeless = self.one_job_is_no_help(manifest, diagnosis, one_job)
+                if diagnosis.kind in {"resolution", "build"} or attempt == attempts or hopeless:
+                    raise PackageInstallError(f"The base system packages could not be installed: {self.memory_advice(diagnosis, hopeless)}",
                                               resolution=diagnosis.resolution) from exc
                 if diagnosis.kind == "memory":
-                    environment = {"MAKEOPTS": "-j1"}
-                self.notify(f"Base system packages: {diagnosis.summary[:160]}; trying again ({attempt + 1}/{attempts})")
+                    one_job = True
+                    self.notify(f"Base system packages: {diagnosis.summary[:160]}; trying again with a single compile job ({attempt + 1}/{attempts})")
+                else:
+                    self.notify(f"Base system packages: {diagnosis.summary[:160]}; trying again ({attempt + 1}/{attempts})")
                 self.sleep(5.0 * attempt)
+
+    @staticmethod
+    def memory_advice(diagnosis: EmergeDiagnosis, hopeless: bool) -> str:
+        """The summary of a failed emerge; when one compile job was not enough either, it says so."""
+        return diagnosis.summary.rstrip(". ") + f". {NOT_ENOUGH_MEMORY}" if hopeless else diagnosis.summary
+
+    def one_job_is_no_help(self, manifest: InstallManifest, diagnosis: EmergeDiagnosis, one_job: bool) -> bool:
+        """A build was killed for lack of memory, and the attempt already had one compile job (or had to have): another try would only fail the same way."""
+        return diagnosis.kind == "memory" and (one_job or self.one_job_cannot_help(manifest, diagnosis))
 
     def emerge_keep_going(self, manifest: InstallManifest, atoms: Sequence[str], *, label: str, attempts: int = 3) -> KeepGoingResult:
         """Emerge atoms with --keep-going and retry what is still missing when a retry can help.
@@ -1669,25 +1863,26 @@ class Configurer:
         """
         remaining = list(dict.fromkeys(atoms))
         result = KeepGoingResult(remaining, "", "unknown")
-        environment: dict[str, str] = {}
+        one_job = False
         for attempt in range(1, attempts + 1):
             if not remaining:
                 break
             try:
-                self.emerge(manifest, ("--noreplace", "--keep-going", *remaining), environment=environment)
+                self.emerge(manifest, ("--noreplace", "--keep-going", *remaining), one_job=one_job)
                 return KeepGoingResult()
             except RunnerError as exc:
-                diagnosis = explain_emerge_failure(exc.output)
+                diagnosis = self.explain(exc)
                 remaining = [atom for atom in remaining if not self.is_installed(atom)]
                 if not remaining:
                     self.notify(f"warning: {label}: some dependencies failed ({diagnosis.summary[:200]}) but everything requested is installed")
                     return KeepGoingResult()
-                result = KeepGoingResult(remaining, diagnosis.summary, diagnosis.kind)
-                if diagnosis.kind in {"resolution", "build"} or attempt == attempts:
+                hopeless = self.one_job_is_no_help(manifest, diagnosis, one_job)
+                result = KeepGoingResult(remaining, self.memory_advice(diagnosis, hopeless), diagnosis.kind)
+                if diagnosis.kind in {"resolution", "build"} or attempt == attempts or hopeless:
                     return result
                 if diagnosis.kind == "memory":
-                    environment = {"MAKEOPTS": "-j1"}
-                    self.notify(f"{label}: a build ran out of memory; retrying with a single compile job ({attempt + 1}/{attempts})")
+                    one_job = True
+                    self.notify(f"{label}: {diagnosis.summary[:140]}; retrying with a single compile job ({attempt + 1}/{attempts})")
                 else:
                     self.notify(f"{label}: {len(remaining)} package(s) failed ({diagnosis.summary[:160]}); retrying ({attempt + 1}/{attempts})")
                 self.sleep(5.0 * attempt)
@@ -1731,7 +1926,7 @@ class Configurer:
             try:
                 self.emerge(manifest, ("--update", "--deep", "--newuse", "--keep-going", "@world"))
             except RunnerError as exc:
-                result.degraded.append("The @world update did not finish: " + explain_emerge_failure(exc.output).summary[:200])
+                result.degraded.append("The @world update did not finish: " + self.explain(exc).summary[:200])
         # TLP goes first: KDE and GNOME need a power-profiles provider, and when TLP is not there yet they
         # pull in power-profiles-daemon, which TLP then blocks. With TLP installed first the desktop is satisfied by it.
         first = [(label, group) for label, group in atoms.groups if PREFERRED_FIRST in group]
@@ -1885,10 +2080,31 @@ class Configurer:
         return self.run_plan_steps(plan)
 
     def write_plan_files(self, plan: object | None = None) -> None:
-        """Files the hardware plan wants on the target (written as root:root)."""
-        for item in _plan_list(self._plan(plan), "files"):
-            path, content, mode = item
-            self.write(str(path), str(content), int(mode))
+        """Files the hardware plan wants on the target (written as root:root).
+
+        The plan sized its limit for the memory-heavy packages from what the probe saw. The setting in force is MAKEOPTS in
+        make.conf of the new system, and package.env replaces it for the packages it names: a limit that is not below that
+        setting would raise those packages, so the two files are left out then.
+        """
+        files = [(str(path), str(content), int(mode)) for path, content, mode in _plan_list(self._plan(plan), "files")]
+        if self.memory_limit_raises(files):
+            self.notify("The compile-job limit for memory-heavy packages is not below MAKEOPTS of the new system, so it is not needed")
+            files = [item for item in files if item[0].lstrip("/") not in (MEMORY_ENV_FILE, PACKAGE_ENV_FILE)]
+        for path, content, mode in files:
+            self.write(path, content, mode)
+
+    def memory_limit_raises(self, files: Sequence[tuple[str, str, int]]) -> bool:
+        """Whether the plan's limit for the memory-heavy packages is not below MAKEOPTS of the new system."""
+        text = next((content for path, content, _mode in files if path.lstrip("/") == MEMORY_ENV_FILE), "")
+        match = re.search(r'(?m)^MAKEOPTS="?([^"\n]*)', text)
+        if not match or self.dry_run:
+            return False
+        try:
+            machine = recommend.make_opts_jobs(self._variable("etc/portage/make.conf", "MAKEOPTS"))
+        except (OSError, ValueError, ConfigurationError):
+            return False
+        limit = recommend.make_opts_jobs(match.group(1))
+        return limit is not None and machine is not None and limit >= machine
 
     # ----- LVM volumes and md arrays that existed before the installation ------------------------------
 

@@ -46,6 +46,14 @@ never on the human text in `error`/`message`.
 An install failure keeps the specific code of its cause: a `StorageError` is
 `storage.<code>`; every other failure is `install.failed`.
 
+`install.busy` has two causes. With `data.blocked: true` the start was refused by the repair
+module's busy check (a repair session, an unlocked volume or a repair that was cut short holds
+the disks): nothing runs, there is nothing to `attach` to, and the start can be tried again
+once the repair tool has let go. Without that key an installation really runs, and `attach`
+follows it. `storage.holders` also covers Btrfs, ZFS and bcachefs pools that have a member on
+another disk (every member shows the same filesystem UUID); `storage.release_holders` is the
+consent for those as well.
+
 ## Install events (feature `install.v1`)
 
 Thirteen stages run in this order, with these shares of the overall progress bar (a
@@ -75,6 +83,9 @@ the table of the current job, `capabilities.stages` the default one):
   cancel is retryable). `resumable`: a run with `resume: true` continues from the checkpoints
   (storage was prepared). `bootable`: the bootloader stage completed, so the disk boots even
   though the run failed. Every `error` is followed by `completed` with `success: false`.
+  When the job's own worker crashes (an exception that escapes the installer: `install.failed`
+  with the exception text) both events read `resumable` from the checkpoints in the same way,
+  and it is `false` when they cannot be read.
 * The `completed` event has `message`, `progress: 100` on success and
   `data = {success, bootable, degraded, warnings}`, plus `resumable` after a failure.
   `degraded` lists optional parts that failed (a desktop package, the NVIDIA driver, a
@@ -84,7 +95,9 @@ the table of the current job, `capabilities.stages` the default one):
   installed, and the warning says which commands release the disks before a restart.
 * The install log (`install.log` in the state directory, copied into the new system under
   `/var/log/gentoo-installer/`) holds one JSON object per line: `ts`, `job_id`, `type`, and
-  `stage`, `message`, `error`, `code`, ... when they apply.
+  `stage`, `message`, `error`, `code`, ... when they apply. The hardware plan of the job is a
+  file of its own, in two shapes that must not be mixed up: see "Files of a job" in
+  [contracts.md](contracts.md).
 
 ## Actions
 
@@ -123,7 +136,9 @@ the table of the current job, `capabilities.stages` the default one):
   error, never a generic replacement), `error_stage`, `error_code`, `errors` (the last ten),
   `stages`, `log_path`, `leftovers` (mounts under the target root and `gentoo-*`
   device-mapper devices an earlier run left; computed while idle) and `rescue` (rescue manager
-  summary, when present).
+  summary, when present: `api`, `sessions`, `pool`, `running`, and `orphans`, the number of
+  leftovers of an earlier daemon that were **not** taken over at start-up: a system that is still
+  mounted becomes a session again and is listed by `rescue.session`, not counted here).
 * `attach {"after_seq": 0}` → replays the current/last job's buffered events with
   `seq > after_seq`, then streams live events until that job's `completed` (which is sent
   again when the client already had it). No leading `status` event: call `status` first.
@@ -139,11 +154,19 @@ the table of the current job, `capabilities.stages` the default one):
 
 ### Hardware (feature `hardware.v1`)
 
-Neither action runs while an installation runs (`install.busy`). Each reply is one
-`result` event `data = {ok: bool, message: str}`, then `completed` (`success` = `ok`).
+Neither action runs while an installation runs or while a repair operation is running
+(`install.busy`; a repair session that only holds a mounted system does not count, the repair
+may need the right clock first). Each reply is one `result` event
+`data = {ok: bool, message: str}`, then `completed` (`success` = `ok`).
 
 * `sync_time` (no arguments): asks the network for the time with chrony (`chronyc makestep`,
-  or a one-shot `chronyd -q`).
+  or a one-shot `chronyd -q`). With a running chronyd the daemon then polls
+  `chronyc -c tracking` for up to about 15 seconds: `ok` is true once chrony follows a time
+  server and the clock is within 5 seconds of it, and `ok: false` (with a message that says
+  which of the two is wrong) when chrony follows no server or the clock stays more than 5
+  seconds off. `chronyc makestep` alone answers "200 OK" even when chronyd has no server, so
+  the call takes up to about 15 seconds longer in that case. After a one-shot `chronyd -q` there
+  is nothing to ask, and its exit status is the answer.
 * `set_time {"utc": "YYYY-MM-DD HH:MM:SS"}` (years 2020 to 2100, `T` and `Z` accepted):
   `date -u -s`, and `hwclock --systohc` only when the hardware clock is known to keep UTC.
   A bad time is `proto.bad_request`.
@@ -160,6 +183,23 @@ set its directories). It registers only on the live medium (`/run/initramfs/live
 `InstallManager.busy_check`, so installing and repairing never run at the same time
 (`install.busy` / `rescue.busy_install`). Rescue events carry their own `seq` per
 operation; `rescue.events {job_id|session_id, after_seq}` re-attaches.
+
+Payload changes since the first release (all additive; a client that ignores them keeps working):
+
+* `rescue.plan` / `rescue.mount` mount plan: `unresolved[]` entries can have `status: "unstable"`
+  and a `device` key: a boot or system mount that fstab names by a kernel name (`/dev/sdb1`,
+  `/dev/md0`) or a by-path link, and that here is a partition on another disk than the system's
+  own (or of another file system type than fstab expects). It is not opened automatically; the
+  same device is in `suggestions[]` (`{mountpoint, device, reason}`), whose entries can now
+  name a device on another disk. The `reason` then asks for care.
+* `rescue.mount` error `mounted_elsewhere` has `details.leftover` (bool): the mount that stops
+  "open this system" was left by an earlier repair session (release it with the repair tool)
+  rather than made by the desktop (eject it in the file manager). The request key
+  `unmount_existing` is gone; an old client's key is ignored without an error.
+* `rescue.session` orphan rows of `state: "unknown"` (mounts below a session directory that has
+  no saved state) have a `path`.
+* The repair action `boot.kernel` has a `kernels` list parameter. It is published in
+  `actions.list` only for systems whose adapter selects kernels (Debian and Ubuntu).
 
 ## Server-side registry (for modules such as rescue and hardware)
 

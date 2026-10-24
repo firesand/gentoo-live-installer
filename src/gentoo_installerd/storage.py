@@ -477,8 +477,9 @@ class StorageManager:
                     f"It is a member of the {item.describe()}: erasing it would also destroy data stored on {', '.join(item.outside)}"
                 )
             raise StorageError(
-                " ".join(reasons) + ". Deactivate or remove them first (swapoff, vgchange -an, cryptsetup close, mdadm --stop), "
-                "or confirm in the installer that they may be deactivated and destroyed (storage.release_holders)",
+                " ".join(reasons) + ". Deactivate or remove them first (swapoff, vgchange -an, cryptsetup close, mdadm --stop), or allow the installer "
+                "to switch them off and erase them: tick the box in the installer window, answer the question in the text installer, "
+                "or pass --release-holders to an unattended run",
                 "storage.holders",
             )
         for item in spanning:
@@ -876,7 +877,7 @@ class StorageManager:
             raise StorageError(
                 f"The root partition {root.device} is kept (not formatted) but already contains files ({shown}). The new system would be "
                 "extracted over it, replacing its /etc, accounts and boot files. To keep and repair that system, use the rescue tools instead. "
-                "To install over it, confirm the replacement (storage.overwrite_existing_system) or format the partition.",
+                "To install over it, confirm the replacement in the installer, or format the partition.",
                 "storage.existing_system",
             )
         stamp = datetime.datetime.now(datetime.timezone.utc).strftime("%Y%m%dT%H%M%SZ")

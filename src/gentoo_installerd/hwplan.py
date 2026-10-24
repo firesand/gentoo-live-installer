@@ -66,6 +66,21 @@ A_HWMONUX = "app-misc/hwmonux"
 A_NOTO = "media-fonts/noto"
 A_NOTO_CJK = "media-fonts/noto-cjk"
 
+# Packages the installer can pull in that need far more memory per compile job than the machine-wide MAKEOPTS assumes (about
+# 2 GiB per job). The binary host installs them ready-made; compiled, a few big C++ compiles or links at once exhaust the memory
+# (the first VM acceptance run: the compiler of dev-python/pyside was killed on a 4 GiB machine). Every atom is in the pinned tree
+# and reached by a package set; the ebuilds of qtwebengine, llvm and webkit-gtk say why they are heavy, pyside has the acceptance run
+# and clang is built with LLVM (tests/hardware/test_plan_memory.py checks all of it with GENTOO_PINNED_TREE).
+# Left out on purpose: dev-lang/rust (rust.eclass prefers rust-bin) and sys-devel/gcc (in the stage3; a job needs little memory).
+MEMORY_HEAVY_ATOMS = (
+    "dev-python/pyside",     # HWMonux's Qt bindings: unity builds of the Qt modules
+    "dev-qt/qtwebengine",    # KDE (kdeplasma-addons, plasma-nm, kmail ...): the ebuild itself refuses a build below 2.5 GB per job
+    "llvm-core/llvm",        # mesa[llvm] and pyside: "very high memory consumption while linking"
+    "llvm-core/clang",       # built beside LLVM; pyside needs it
+    "net-libs/webkit-gtk",   # GNOME (yelp, epiphany, evolution-data-server): the ebuild trims the linker's memory
+)
+MEMORY_ENV_NAME = "installer-memory"  # /etc/portage/env/<name>, named by /etc/portage/package.env/installer-hardware
+
 LIC_FIRMWARE = "linux-fw-redistributable"
 LIC_INTEL_UCODE = "intel-ucode"
 
@@ -335,6 +350,7 @@ class _Planner:
         self.power()
         self.storage()
         self.memory()
+        self.heavy_builds()
         self.guest_tools()
         self.peripherals()
         self.audio()
@@ -617,6 +633,30 @@ class _Planner:
             self.service("zram-init", optional=True)
         self.p.scalars["zram_mib"] = size_mib
 
+    def heavy_builds(self) -> None:
+        """Fewer compile jobs than the machine-wide setting for the memory-heavy packages (MEMORY_HEAVY_ATOMS), when memory asks for it.
+
+        Portage reads /etc/portage/package.env, so this limits those packages only; everything else keeps the setting of
+        make.conf. Only a limit below that setting is written, and nothing when the memory of this PC is not known.
+        """
+        total_kib = self.hw.memory.total_kib
+        if not total_kib:
+            return
+        swap_mib = _swap_mib(self.m, self.hw) or 0
+        jobs = recommend.memory_heavy_jobs(total_kib, swap_mib)
+        typed = self.m.portage.make_opts.strip()
+        machine = recommend.make_opts_jobs(typed) if typed else recommend.recommend_jobs(self.hw.cpu.threads, self.hw.memory.available_kib, swap_mib)
+        if machine is not None and jobs >= machine:
+            return
+        self.file(f"/etc/portage/env/{MEMORY_ENV_NAME}", "# Written by the Gentoo installer: the compile jobs for packages that need a lot of memory per job.\n"
+                  f'MAKEOPTS="-j{jobs}"\n')
+        self.file(f"/etc/portage/package.env/{PORTAGE_FILE}", "# Written by the Gentoo installer: packages that need a lot of memory per compile job.\n"
+                  + "".join(f"{atom} {MEMORY_ENV_NAME}\n" for atom in MEMORY_HEAVY_ATOMS))
+        self.p.scalars["memory_heavy_jobs"] = jobs
+        gib = total_kib / recommend.KIB_PER_GIB
+        self.note(f"With {gib:.1f} GiB of memory (and the swap), the packages that need about {recommend.GIB_PER_HEAVY_JOB} GiB per compile job "
+                  f"({', '.join(atom.split('/')[1] for atom in MEMORY_HEAVY_ATOMS)}) get {jobs} compile job{'s' if jobs != 1 else ''} when they are built from source.")
+
     # Virtual machines ---------------------------------------------------------------------------------------------------
 
     def guest_tools(self) -> None:
@@ -783,6 +823,8 @@ class _Planner:
             lines.append("Storage: weekly TRIM for the solid-state disk" + (" (fstrim.timer)" if self.init == "systemd" else " (cron)"))
         if s["zram"] == "yes":
             lines.append(f"Memory: compressed RAM swap (zram), {s.get('zram_mib', 0)} MiB")
+        if s.get("memory_heavy_jobs") == 1:
+            lines.append("Memory: large programs that have to be compiled (Qt, LLVM, PySide) are built with one compile job, to stay within the memory of this PC")
         if hw.machine.hypervisor:
             tools = hw.machine.hypervisor in ("qemu", "kvm", "vmware", "virtualbox") and self.m.hardware.guest_tools != "none"
             lines.append(f"Virtual machine: {hw.machine.hypervisor}; " + ("guest tools installed" if tools else "no guest tools"))

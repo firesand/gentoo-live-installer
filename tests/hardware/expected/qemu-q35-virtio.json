@@ -31,11 +31,23 @@
       "/etc/conf.d/zram-init",
       "# Compressed RAM swap, written by the Gentoo installer.\nload_on_start=\"yes\"\nunload_on_stop=\"yes\"\nnum_devices=\"1\"\ntype0=\"swap\"\nsize0=\"2004\"\nmaxs0=\"1\"\nalgo0=\"zstd\"\nlabl0=\"zram_swap\"\n",
       420
+     ],
+     [
+      "/etc/portage/env/installer-memory",
+      "# Written by the Gentoo installer: the compile jobs for packages that need a lot of memory per job.\nMAKEOPTS=\"-j1\"\n",
+      420
+     ],
+     [
+      "/etc/portage/package.env/installer-hardware",
+      "# Written by the Gentoo installer: packages that need a lot of memory per compile job.\ndev-python/pyside installer-memory\ndev-qt/qtwebengine installer-memory\nllvm-core/llvm installer-memory\nllvm-core/clang installer-memory\nnet-libs/webkit-gtk installer-memory\n",
+      420
      ]
     ],
     "kernel_cmdline": [],
     "make_conf": {},
-    "notes": [],
+    "notes": [
+     "With 3.9 GiB of memory (and the swap), the packages that need about 4 GiB per compile job (pyside, qtwebengine, llvm, clang, webkit-gtk) get 1 compile job when they are built from source."
+    ],
     "optional_atoms": [
      "sys-block/zram-init",
      "app-emulation/qemu-guest-agent",
@@ -96,6 +108,7 @@
      "hypervisor": "qemu",
      "init": "openrc",
      "luks_allow_discards": false,
+     "memory_heavy_jobs": 1,
      "microcode": "none",
      "nvidia_branch": "",
      "nvk": "no",
@@ -116,6 +129,7 @@
      "Graphics: Virtio 1.0 GPU (virtual, software rendering unless the host provides 3D)",
      "Firmware: Linux firmware",
      "Memory: compressed RAM swap (zram), 2004 MiB",
+     "Memory: large programs that have to be compiled (Qt, LLVM, PySide) are built with one compile job, to stay within the memory of this PC",
      "Virtual machine: qemu; guest tools installed",
      "Boot: fallback boot path is always written"
     ],
@@ -156,11 +170,23 @@
       "/etc/conf.d/zram-init",
       "# Compressed RAM swap, written by the Gentoo installer.\nload_on_start=\"yes\"\nunload_on_stop=\"yes\"\nnum_devices=\"1\"\ntype0=\"swap\"\nsize0=\"2004\"\nmaxs0=\"1\"\nalgo0=\"zstd\"\nlabl0=\"zram_swap\"\n",
       420
+     ],
+     [
+      "/etc/portage/env/installer-memory",
+      "# Written by the Gentoo installer: the compile jobs for packages that need a lot of memory per job.\nMAKEOPTS=\"-j1\"\n",
+      420
+     ],
+     [
+      "/etc/portage/package.env/installer-hardware",
+      "# Written by the Gentoo installer: packages that need a lot of memory per compile job.\ndev-python/pyside installer-memory\ndev-qt/qtwebengine installer-memory\nllvm-core/llvm installer-memory\nllvm-core/clang installer-memory\nnet-libs/webkit-gtk installer-memory\n",
+      420
      ]
     ],
     "kernel_cmdline": [],
     "make_conf": {},
-    "notes": [],
+    "notes": [
+     "With 3.9 GiB of memory (and the swap), the packages that need about 4 GiB per compile job (pyside, qtwebengine, llvm, clang, webkit-gtk) get 1 compile job when they are built from source."
+    ],
     "optional_atoms": [
      "sys-block/zram-init",
      "app-emulation/qemu-guest-agent",
@@ -221,6 +247,7 @@
      "hypervisor": "qemu",
      "init": "openrc",
      "luks_allow_discards": false,
+     "memory_heavy_jobs": 1,
      "microcode": "none",
      "nvidia_branch": "",
      "nvk": "no",
@@ -241,6 +268,7 @@
      "Graphics: Virtio 1.0 GPU (virtual, software rendering unless the host provides 3D)",
      "Firmware: Linux firmware",
      "Memory: compressed RAM swap (zram), 2004 MiB",
+     "Memory: large programs that have to be compiled (Qt, LLVM, PySide) are built with one compile job, to stay within the memory of this PC",
      "Virtual machine: qemu; guest tools installed",
      "Boot: fallback boot path is always written",
      "The proprietary NVIDIA driver was not installed because it does not fit this PC or these settings (nvidia_no_gpu). The open driver is used."
@@ -280,7 +308,18 @@
     "early_atoms": [
      "sys-kernel/linux-firmware"
     ],
-    "files": [],
+    "files": [
+     [
+      "/etc/portage/env/installer-memory",
+      "# Written by the Gentoo installer: the compile jobs for packages that need a lot of memory per job.\nMAKEOPTS=\"-j1\"\n",
+      420
+     ],
+     [
+      "/etc/portage/package.env/installer-hardware",
+      "# Written by the Gentoo installer: packages that need a lot of memory per compile job.\ndev-python/pyside installer-memory\ndev-qt/qtwebengine installer-memory\nllvm-core/llvm installer-memory\nllvm-core/clang installer-memory\nnet-libs/webkit-gtk installer-memory\n",
+      420
+     ]
+    ],
     "kernel_cmdline": [
      "nvidia-drm.modeset=1",
      "nvidia-drm.fbdev=1"
@@ -289,7 +328,8 @@
      "VIDEO_CARDS": "${VIDEO_CARDS} nvidia"
     },
     "notes": [
-     "NVIDIA proprietary driver 595 (current, open kernel modules); if it fails to build, the open nouveau driver stays in use."
+     "NVIDIA proprietary driver 595 (current, open kernel modules); if it fails to build, the open nouveau driver stays in use.",
+     "With 3.9 GiB of memory (and the swap), the packages that need about 4 GiB per compile job (pyside, qtwebengine, llvm, clang, webkit-gtk) get 1 compile job when they are built from source."
     ],
     "optional_atoms": [
      "app-emulation/qemu-guest-agent",
@@ -365,6 +405,7 @@
      "hypervisor": "qemu",
      "init": "openrc",
      "luks_allow_discards": false,
+     "memory_heavy_jobs": 1,
      "microcode": "none",
      "nvidia_branch": "595",
      "nvk": "no",
@@ -383,6 +424,7 @@
      "CPU: Intel Core Processor (Skylake, IBRS), 4 threads; no microcode",
      "Graphics: Virtio 1.0 GPU (virtual, software rendering unless the host provides 3D)",
      "Firmware: Linux firmware (a portable install can meet any hardware)",
+     "Memory: large programs that have to be compiled (Qt, LLVM, PySide) are built with one compile job, to stay within the memory of this PC",
      "Virtual machine: qemu; guest tools installed",
      "Boot: fallback boot path is always written"
     ],
@@ -408,6 +450,16 @@
       "/etc/systemd/zram-generator.conf",
       "# Compressed RAM swap, written by the Gentoo installer.\n[zram0]\nzram-size = min(ram * 50 / 100, 16384)\ncompression-algorithm = zstd\nswap-priority = 100\n",
       420
+     ],
+     [
+      "/etc/portage/env/installer-memory",
+      "# Written by the Gentoo installer: the compile jobs for packages that need a lot of memory per job.\nMAKEOPTS=\"-j1\"\n",
+      420
+     ],
+     [
+      "/etc/portage/package.env/installer-hardware",
+      "# Written by the Gentoo installer: packages that need a lot of memory per compile job.\ndev-python/pyside installer-memory\ndev-qt/qtwebengine installer-memory\nllvm-core/llvm installer-memory\nllvm-core/clang installer-memory\nnet-libs/webkit-gtk installer-memory\n",
+      420
      ]
     ],
     "kernel_cmdline": [],
@@ -415,7 +467,9 @@
      "CPU_FLAGS_X86": "aes avx avx2 bmi1 bmi2 f16c fma3 mmx mmxext pclmul popcnt rdrand sse sse2 sse3 sse4_1 sse4_2 ssse3",
      "VIDEO_CARDS": "virgl"
     },
-    "notes": [],
+    "notes": [
+     "With 3.9 GiB of memory (and the swap), the packages that need about 4 GiB per compile job (pyside, qtwebengine, llvm, clang, webkit-gtk) get 1 compile job when they are built from source."
+    ],
     "optional_atoms": [
      "sys-apps/zram-generator",
      "app-emulation/qemu-guest-agent",
@@ -472,6 +526,7 @@
      "hypervisor": "qemu",
      "init": "systemd",
      "luks_allow_discards": false,
+     "memory_heavy_jobs": 1,
      "microcode": "none",
      "nvidia_branch": "",
      "nvk": "no",
@@ -493,6 +548,7 @@
      "Graphics: Virtio 1.0 GPU (virtual, software rendering unless the host provides 3D)",
      "Firmware: Linux firmware",
      "Memory: compressed RAM swap (zram), 2004 MiB",
+     "Memory: large programs that have to be compiled (Qt, LLVM, PySide) are built with one compile job, to stay within the memory of this PC",
      "Virtual machine: qemu; guest tools installed",
      "Boot: fallback boot path is always written"
     ],

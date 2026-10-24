@@ -25,6 +25,7 @@ from .manifest import InstallManifest, Storage
 KIB_PER_GIB = 1024 * 1024
 DEFAULT_SWAP_MIB = Storage().swap_mib
 LEGACY_MAKE_OPTS = "-j2"  # the old manifest default; "" means automatic
+HWMONUX_COMFORTABLE_GIB = 8  # below this, compiling PySide for HWMonux is slow and tight on memory
 
 
 # ---------------------------------------------------------------------------
@@ -35,6 +36,37 @@ def recommend_jobs(threads: int, available_kib: int, swap_mib: int = 0) -> int:
     """Parallel compile jobs: about 2 GiB per job (LLVM, Rust and Qt links), never above the thread count or 32."""
     budget_gib = available_kib / KIB_PER_GIB + 0.5 * swap_mib / 1024
     return max(1, min(max(threads, 1), 32, int(budget_gib // 2)))
+
+
+# Qt WebEngine, LLVM and PySide's bindings need about this much memory per compile job, twice what MAKEOPTS assumes.
+GIB_PER_HEAVY_JOB = 4
+
+
+def memory_heavy_jobs(total_kib: int, swap_mib: int = 0) -> int:
+    """Compile jobs for the memory-heavy packages: all the memory and half the swap, about 4 GiB per job, at least one."""
+    budget_gib = total_kib / KIB_PER_GIB + 0.5 * swap_mib / 1024
+    return max(1, int(budget_gib // GIB_PER_HEAVY_JOB))
+
+
+def make_opts_jobs(make_opts: str) -> int | None:
+    """The number of jobs a MAKEOPTS-style text allows: the last ``-jN`` or ``--jobs=N`` wins, as in make.
+
+    None when it names no job count or leaves the jobs unlimited (``-j`` alone, ``-j0``).
+    """
+    tokens = make_opts.split()
+    jobs: int | None = None
+    for index, token in enumerate(tokens):
+        if token in ("-j", "--jobs"):
+            following = tokens[index + 1] if index + 1 < len(tokens) else ""
+            value = following if following.isdecimal() else ""
+        elif token.startswith("--jobs="):
+            value = token[len("--jobs="):]
+        elif token.startswith("-j"):
+            value = token[2:]
+        else:
+            continue
+        jobs = int(value) if value.isdecimal() and int(value) > 0 else None
+    return jobs
 
 
 def recommend_emerge_jobs(total_kib: int, threads: int) -> int:
@@ -166,6 +198,11 @@ def recommend(profile: HardwareProfile | Mapping[str, Any] | None, manifest: Ins
         elif gib < 4 and desktop in ("kde", "gnome"):
             out.append(Recommendation("rec.tight_memory", "info",
                                       f"This PC has {gib:.1f} GiB of memory. {desktop.upper()} will feel slow; Xfce needs less.", "system.desktop", "xfce"))
+        if manifest.options.install_hwmonux and nominal_ram_gib(total_kib) < HWMONUX_COMFORTABLE_GIB:
+            # The factory default stays on: the PC owner decides, with the time and the memory in front of them.
+            out.append(Recommendation("rec.hwmonux_low_memory", "info",
+                                      f"This PC has {gib:.1f} GiB of memory. HWMonux needs PySide6, which is compiled from source: about 40 minutes and up to 4 GiB of memory "
+                                      "per compile job. Turn HWMonux off if you do not need it.", "options.install_hwmonux", "false"))
         if hardware.hibernate:
             wanted = recommend_swap_mib(total_kib, hibernate=True)
             if manifest.storage.swap_mib < wanted:
