@@ -15,6 +15,7 @@ from typing import Any
 
 from ..layout import human_size
 
+BACKUP_PHRASE = "I HAVE A BACKUP"  # the words a dangerous plan (and a read-write terminal) asks for; the engine checks the same text
 SEVERITY_RANK = {"error": 0, "warn": 1, "info": 2}
 LOADER_NAMES = {"grub": "GRUB", "systemd-boot": "systemd-boot", "refind": "rEFInd", "limine": "Limine", "syslinux": "Syslinux", "lilo": "LILO"}
 MOUNT_KINDS = {"root": "The system", "boot": "Boot files", "system": "System folders", "data": "Your data (optional)"}
@@ -41,6 +42,12 @@ FORM_FIRST = frozenset({"fs.check"})
 def event_data(event: dict[str, Any]) -> dict[str, Any]:
     """The ``data`` object of an event ({} when it has none)."""
     value = event.get("data")
+    return value if isinstance(value, dict) else {}
+
+
+def error_details(data: dict[str, Any]) -> dict[str, Any]:
+    """The ``details`` object of an error event's data ({} when there is none)."""
+    value = data.get("details")
     return value if isinstance(value, dict) else {}
 
 
@@ -225,6 +232,67 @@ class MountChoice:
         }
 
 
+@dataclass
+class OpenSystem:
+    """The system that is open for repair: the reply of ``rescue.mount``, kept up to date after each repair."""
+
+    info: dict[str, Any]
+
+    @property
+    def session_id(self) -> str:
+        return str(self.info.get("session_id", ""))
+
+    @property
+    def root_device(self) -> str:
+        return str((self.info.get("root") or {}).get("device", ""))
+
+    @property
+    def title(self) -> str:
+        return os_name(self.info.get("os") or {})
+
+    @property
+    def mode(self) -> str:
+        return str(self.info.get("mode", "ro"))
+
+    @property
+    def writable(self) -> bool:
+        return self.mode == "rw"
+
+    @property
+    def allow_write(self) -> bool:
+        return bool(self.info.get("allow_write", True))
+
+    @property
+    def findings(self) -> list[dict[str, Any]]:
+        return list(self.info.get("findings", []))
+
+    @property
+    def recommended(self) -> list[str]:
+        return list(self.info.get("recommended", []))
+
+    @property
+    def actions(self) -> list[dict[str, Any]]:
+        return list(self.info.get("actions", []))
+
+    @property
+    def audit_path(self) -> str:
+        return str(self.info.get("audit", ""))
+
+    @property
+    def kernels(self) -> list[str]:
+        return [str(item["version"]) for item in (self.info.get("boot") or {}).get("kernels", []) if item.get("image")]
+
+    @property
+    def devices(self) -> list[str]:
+        """The devices the system is made of (for the file system check): the root and the other mounted file systems."""
+        found = [self.root_device]
+        found += [str(item.get("device")) for item in self.info.get("mounts", []) if item.get("kind") == "mount"]
+        return list(dict.fromkeys(device for device in found if device.startswith("/dev/")))
+
+    def merge(self, **updates: Any) -> None:
+        self.info.update({key: value for key, value in updates.items() if value is not None})
+
+
 # ---- diagnosis --------------------------------------------------------------------------------------------------------------------
 def sorted_findings(findings: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return sorted(findings, key=lambda item: SEVERITY_RANK.get(str(item.get("severity")), 3))
@@ -337,6 +405,11 @@ def secrets_ready(plan: dict[str, Any], values: dict[str, tuple[str, str]]) -> b
 
 # Steps that only prepare the system (switch it to read-write, mount virtual file systems) are shown in a quieter style.
 PREPARATION_GROUPS = frozenset({"enter-write", "leave-write", "virtual", "guard", "policy", "generic"})
+SMOKE_STEP = "smoke"  # the check that the system can run its own programs
+
+
+def is_preparation(step: dict[str, Any]) -> bool:
+    return step.get("group") in PREPARATION_GROUPS or step.get("id") == SMOKE_STEP
 CONDITION_TEXTS = {"chroot_ok": "if the system's programs run", "chroot_broken": "only if they do not"}
 
 
@@ -450,14 +523,16 @@ class RunTracker:
 
 
 # ---- the terminal --------------------------------------------------------------------------------------------------------------------
-def terminal_argv(socket_path: str, session_id: str, root_device: str, *, writable: bool = False, sudo: bool = False) -> list[str]:
+def terminal_argv(socket_path: str, session_id: str, root_device: str, *, writable: bool = False, host: bool = False, sudo: bool = False) -> list[str]:
     """The command that opens a terminal inside the repaired system: ``gentoo-rescue shell`` hands the daemon's PTY to the terminal window.
 
     The device name is typed for the person (the window asked them to), so the command never waits for a question the window
     already asked. Read-write terminals also carry the backup phrase that the window collected.
     """
     argv = ["gentoo-rescue", "--socket", socket_path, "shell", session_id, "--typed", root_device.rsplit("/", 1)[-1]]
-    if writable:
+    if host:
+        argv.append("--host")  # inspect-only sessions: a shell of the live system in the mount folder, nothing of the system runs
+    elif writable:
         argv += ["--writable", "--i-have-a-backup"]
     return (["sudo", *argv]) if sudo else argv
 

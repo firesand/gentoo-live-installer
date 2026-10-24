@@ -264,5 +264,9 @@ def test_error_texts_explain_the_next_step_and_unknown_codes_show_the_engine_mes
     assert "• /boot is full" in reasons and "• no network" in reasons
 
 
+def test_the_backup_phrase_is_the_one_the_engine_asks_for() -> None:
+    assert model.BACKUP_PHRASE == BACKUP_PHRASE
+
+
 def test_every_risk_has_a_title_and_a_sentence() -> None:
     assert set(messages.RISK_TITLES) == set(RISKS) == set(messages.RISK_TEXTS)

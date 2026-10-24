@@ -12,13 +12,18 @@ looks like; the daemon goes on with the operation, as it does for a real client 
 from __future__ import annotations
 
 import json
+import os
 import socket
 import threading
 from pathlib import Path
 from typing import Any, Callable
 
 import pytest
+import shiboken6
 
+from gentoo_installer import keyboard
+from gentoo_installer.rescue_app import RescueWindow
+from gentoo_installer.rescue_ui import find_page, launcher
 from gentoo_installerd.rescue import api as rescue_api
 from gentoo_installerd.server import ActionRegistry, InstallManager, UnixServer
 from tests.rescue.flow import uefi_gentoo_lab
@@ -132,20 +137,57 @@ class CuttingProxy:
         except OSError:
             pass
         self._thread.join(2)
+        try:
+            os.unlink(self.path)  # a new proxy can take the same address (the daemon "came back")
+        except OSError:
+            pass
 
 
-def gate_command(lab: Lab, name: str) -> tuple[threading.Event, threading.Event]:
-    """Make the fake program ``name`` (run inside the system) wait: returns (entered, release). Nothing else changes about it."""
-    entered, release = threading.Event(), threading.Event()
+class Gate:
+    """Holds one command until the test lets it go. ``entered`` is set when the command is waiting; arm() starts the holding."""
+
+    def __init__(self, armed: bool = True) -> None:
+        self.entered = threading.Event()
+        self.release = threading.Event()
+        self.armed = threading.Event()
+        if armed:
+            self.armed.set()
+
+    def arm(self) -> None:
+        self.armed.set()
+
+    def hold(self, what: Any) -> None:
+        if self.armed.is_set() and not self.entered.is_set():
+            self.entered.set()
+            assert self.release.wait(30), f"the test never released {what}"
+
+
+def gate_host_command(lab: Lab, *prefix: str) -> Gate:
+    """Hold the first host command that starts with ``prefix`` (for example blockdev --setrw) once the gate is armed."""
+    gate = Gate(armed=False)
+    original = lab.system.run
+
+    def gated(argv: Any, **kwargs: Any) -> Any:
+        inner = tuple(argv)[3:] if tuple(argv)[:1] == ("timeout",) else tuple(argv)
+        if inner[: len(prefix)] == prefix:
+            gate.hold(prefix)
+        return original(argv, **kwargs)
+
+    lab.system.run = gated  # type: ignore[method-assign]
+    return gate
+
+
+def gate_command(lab: Lab, name: str) -> Gate:
+    """Hold the fake program ``name``, run inside the system: it only ever runs as a step of a repair, so the gate is armed at once."""
+    gate = Gate()
     original = lab.system.chroot_effects[name]
 
     def gated(system: Any, root: Path, command: tuple[str, ...], extra: dict[str, str]) -> tuple[int, str]:
-        entered.set()
-        assert release.wait(30), f"the test never released {name}"
+        gate.hold(name)
         return original(system, root, command, extra)
 
     lab.system.chroot_effects[name] = gated
-    return entered, release
+    return gate
 
 
 @pytest.fixture
@@ -166,7 +208,8 @@ def daemon_factory(sock_dir):
     made: list[Any] = []
 
     def make(lab: Lab | None, **kwargs) -> RescueDaemon:
-        daemon = RescueDaemon(lab, sock_dir, name=f"d{len(made)}.sock", **kwargs)
+        kwargs.setdefault("name", f"d{len(made)}.sock")
+        daemon = RescueDaemon(lab, sock_dir, **kwargs)
         made.append(daemon)
         return daemon
 
@@ -179,8 +222,8 @@ def daemon_factory(sock_dir):
 def proxy_factory(sock_dir):
     made: list[CuttingProxy] = []
 
-    def make(daemon: RescueDaemon) -> CuttingProxy:
-        proxy = CuttingProxy(daemon.path, sock_dir, name=f"p{len(made)}.sock")
+    def make(daemon: RescueDaemon | str, name: str = "") -> CuttingProxy:
+        proxy = CuttingProxy(daemon if isinstance(daemon, str) else daemon.path, sock_dir, name=name or f"p{len(made)}.sock")
         made.append(proxy)
         return proxy
 
@@ -201,3 +244,72 @@ def wait_for(qtbot: Any, predicate: Callable[[], Any], timeout: int = 20000, mes
     qtbot.waitUntil(predicate, timeout=timeout)
     if message:
         assert predicate(), message
+
+
+class RepairKit:
+    """Opens repair windows with every side effect replaced, and closes them afterwards."""
+
+    def __init__(self, qtbot: Any) -> None:
+        self.qtbot = qtbot
+        self.windows: list[RescueWindow] = []
+        self.launched: list[tuple[str, list[str]]] = []  # programs the window tried to start: (program, arguments)
+        self.keyboard_calls: list[tuple[str, list[str]]] = []  # what the keyboard chooser would have started (setxkbmap)
+        self.terminal_available = True
+
+    def open(self, socket_path: str, *, width: int = 1024, height: int = 600) -> RescueWindow:
+        window = RescueWindow(socket_path)
+        self.windows.append(window)
+        window.resize(width, height)
+        window.show()
+        return window
+
+    def start_detached(self, program: str, arguments: list[str]) -> bool:
+        self.launched.append((program, list(arguments)))
+        return True
+
+    def start_keyboard(self, program: str, arguments: list[str]) -> bool:
+        self.keyboard_calls.append((program, list(arguments)))
+        return True
+
+    def close(self) -> None:
+        for window in self.windows:
+            if shiboken6.isValid(window):
+                window.force_close()
+        self.qtbot.wait(20)
+
+
+@pytest.fixture
+def repair_kit(qtbot, monkeypatch):
+    kit = RepairKit(qtbot)
+    monkeypatch.setattr(launcher, "start_detached", kit.start_detached)
+    monkeypatch.setattr(launcher, "find_terminal", lambda which=None: "xfce4-terminal" if kit.terminal_available else None)
+    monkeypatch.setattr(keyboard, "start_detached", kit.start_keyboard)  # the keyboard chooser must not start setxkbmap
+    monkeypatch.setattr(find_page, "read_layout", lambda: ("us", ""))
+    yield kit
+    kit.close()
+
+
+def system_card(window: RescueWindow, device: str) -> str:
+    """The id of the system the scan found on ``device``."""
+    return next(item["id"] for item in window.find_page.candidates if item["device"] == device)
+
+
+def open_system(qtbot: Any, window: RescueWindow, device: str = "/dev/nvme0n1p5") -> Any:
+    """Drive the window from the first scan to the diagnosis of the system on ``device``."""
+    from gentoo_installer.rescue_app import DIAGNOSE
+
+    qtbot.waitUntil(lambda: any(item["device"] == device for item in window.find_page.candidates) and not window.find_page._busy, timeout=20000)
+    window.find_page.group.set_value(system_card(window, device))
+    window.find_page.continue_button.click()
+    qtbot.waitUntil(lambda: window.mount_page.open_button.isEnabled(), timeout=20000)
+    window.mount_page.open_button.click()
+    qtbot.waitUntil(lambda: window.stack.currentIndex() == DIAGNOSE and window.system is not None and not window.diagnose_page.busy.isVisibleTo(window.diagnose_page), timeout=20000)
+    return window.system
+
+
+def request_action(qtbot: Any, window: RescueWindow, action_id: str, state: str = "review") -> None:
+    """Click the diagnosis page's button for an action and wait until the plan page is in ``state``."""
+    button = window.diagnose_page.findChild(object, f"rescueAction:{action_id}")
+    assert button is not None and button.isEnabled(), action_id
+    button.click()
+    qtbot.waitUntil(lambda: window.plan_page.state == state, timeout=20000)
