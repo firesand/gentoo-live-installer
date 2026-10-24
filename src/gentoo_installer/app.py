@@ -220,6 +220,7 @@ class InstallerWindow(QMainWindow):
         self._close_after_worker = False
         self._inspect_generation = 0
         self._seeded: dict[str, tuple[Any, Any]] = {}  # hardware defaults written into the manifest: field -> (before, after)
+        self._overwrite_consent: tuple[str, str] | None = None  # (root partition, its filesystem UUID) the user said "install over it" for
         self._workers: list[QThread] = []
         self._repair_window: QWidget | None = None
         self.setWindowTitle("Gentoo Installer")
@@ -709,8 +710,15 @@ class InstallerWindow(QMainWindow):
         """A kept (not formatted) root partition may hold a system: ask before the new one is extracted over it."""
         storage = self.manifest.storage
         root = next((row for row in storage.partitions if row.mountpoint == "/"), None)
-        if root is None or root.format or root.filesystem == "none" or storage.overwrite_existing_system:
+        if root is None or root.format or root.filesystem == "none":
             return True
+        # The consent is for this partition with this filesystem on it. A flag that came from a saved draft or a settings file,
+        # or that was given for another root partition (or another disk that now has the same name), does not count.
+        found = self.info.find_partition(root.device)
+        consent = (root.device, found.uuid if found is not None else "")
+        if storage.overwrite_existing_system and consent == self._overwrite_consent:
+            return True
+        storage.overwrite_existing_system = False
         answer = QMessageBox.warning(
             self,
             "Install over the existing system?",
@@ -724,6 +732,7 @@ class InstallerWindow(QMainWindow):
         if answer != QMessageBox.StandardButton.Yes:
             return False
         storage.overwrite_existing_system = True
+        self._overwrite_consent = consent
         return True
 
     def _install_running(self) -> None:

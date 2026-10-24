@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
 from .. import blockdev, keymaps, layout, theme
 from ..keyboard import start_detached
 from ..manifest import InstallManifest
-from ..system_info import MEMBER_SIGNATURES, DiskInfo, SystemInfo, format_size, smallest_disk_bytes
+from ..system_info import MEMBER_SIGNATURES, DiskInfo, SystemInfo, device_from_disk, format_size, smallest_disk_bytes
 from ..widgets import Card, ChoiceGroup, FlowLayout, FormGrid, Page, wrapped_label
 from .hardware import CAPACITY_CODES, blocking_findings
 from .manual_storage import ManualLayoutEditor
@@ -37,6 +37,7 @@ RAID_HINT = (
     "with manual partitions."
 )
 BTRFS_LABEL = "Btrfs with subvolumes @ and @home"
+SWAPPED_DISK = "The disk at {path} is not the same disk you selected before (its serial number or hardware path is different). Select a disk again."
 
 
 def card_flags(disk: DiskInfo) -> list[str]:
@@ -90,6 +91,8 @@ class StoragePage(Page):
         self.firmware_touched = False
         self.advanced = False
         self._vanished = ""
+        self._swapped = False  # the disk that is gone was replaced by another one under the same name
+        self._consented_disk = ""  # the disk the consent box below was shown for
         self._extras_written = False
         self.disk_group = ChoiceGroup([disk_choice(disk) for disk in self.disks], columns=1)
         self.content.addWidget(self.disk_group)
@@ -255,15 +258,19 @@ class StoragePage(Page):
         self.disks = info.disks
         survived = self.disk_group.set_choices([disk_choice(disk) for disk in info.disks])
         self._apply_card_states()
+        swapped = bool(previous and survived and self._pin_mismatch(info.find_disk(previous)))
+        if swapped:
+            self._forget_swapped_disk()  # the name is the same, the disk is not: the choice was made for another disk
+            survived = False
         wanted = self.manifest.storage.device
         if not previous and wanted in self.disk_group.cards and not self.disk_group.value():
             self.disk_group.set_value(wanted)  # the first scan finished: show the manifest's disk
         elif previous and not survived and info.disks:
-            self._vanished = previous
-            self.disk_notice.setText(f"The selected disk {previous} is no longer present. Select a disk again.")
+            self._vanished, self._swapped = previous, swapped
+            self.disk_notice.setText(SWAPPED_DISK.format(path=previous) if swapped else f"The selected disk {previous} is no longer present. Select a disk again.")
             self.disk_notice.show()
         else:
-            self._vanished = ""
+            self._vanished, self._swapped = "", False
             self.disk_notice.hide()
         self.manual_editor.set_info(info)
         if not self.firmware_touched:
@@ -306,12 +313,35 @@ class StoragePage(Page):
         path = self.disk_group.value()
         return self.info.find_disk(path) if path else None
 
+    def _pin_mismatch(self, disk: DiskInfo | None) -> bool:
+        """Whether the manifest pinned this name to a disk that is not the one there now (the service checks the same pin before it writes)."""
+        storage = self.manifest.storage
+        if disk is None or not storage.device_id or disk.path != storage.device:
+            return False  # nothing was pinned for this disk yet: it is a choice that has not been saved
+        return not blockdev.identity_matches(device_from_disk(disk), storage.device_id_kind, storage.device_id, disk.by_path)
+
+    def _forget_swapped_disk(self) -> None:
+        """A different disk answers to the name the user chose: drop the choice, its pin and the consents given for the old disk."""
+        storage = self.manifest.storage
+        storage.device, storage.device_id, storage.device_id_kind = "", "", ""
+        self.disk_group.clear_value()
+        self._drop_holders_consent()
+        self._consented_disk = ""
+
+    def _drop_holders_consent(self) -> None:
+        """The consent to switch volumes off was given for one disk; it does not pass to another."""
+        self.release_holders.setChecked(False)
+        self.manifest.storage.release_holders = False
+
     def _disk_changed(self) -> None:
         disk = self.selected_disk()
         self.manual_editor.set_disk(disk.path if disk else "")
         if disk is not None:
-            self._vanished = ""
+            self._vanished, self._swapped = "", False
             self.disk_notice.hide()
+            if self._consented_disk and disk.path != self._consented_disk:
+                self._drop_holders_consent()
+            self._consented_disk = disk.path
         self._update_approval()
         self._update_holders()
         self._update_capacity()
@@ -580,6 +610,8 @@ class StoragePage(Page):
         storage = self.manifest.storage
         if not self.disk_group.value():
             if self._vanished:
+                if self._swapped:
+                    return False, SWAPPED_DISK.format(path=self._vanished)
                 return False, f"The disk you selected ({self._vanished}) is no longer present. Select a disk again."
             return False, "Select the disk you want to use."
         disk = self.selected_disk()
