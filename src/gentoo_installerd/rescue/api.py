@@ -69,6 +69,10 @@ class RescueApi:
         return self.manager.install_blocker()
 
     def recover_orphans(self) -> list[dict[str, Any]]:
+        """What a daemon that died left behind. Systems that are still mounted become sessions again, so a window lists them (continue, or release); the rest stays a leftover."""
+        for item in self.manager.orphans():
+            if item["sid"] and item["state"] == "alive":
+                self.manager.adopt(item["sid"])
         self.startup_orphans = [item for item in self.manager.orphans() if item["state"] in {"alive", "stale", "pool", "unknown"}]
         return self.startup_orphans
 

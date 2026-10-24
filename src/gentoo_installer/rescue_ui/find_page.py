@@ -194,6 +194,7 @@ class FindPage(RescuePage):
     serviceProblem = Signal(str)
     storageChanged = Signal()  # a disk was unlocked or a volume activated: it has to be released again
     resumeRequested = Signal(dict)  # a session that is still open in the daemon (the reply of rescue.session)
+    refreshRequested = Signal()  # leftovers were released: ask the daemon again what is open
     quitRequested = Signal()
 
     def __init__(self, client: RescueClient) -> None:
@@ -217,6 +218,22 @@ class FindPage(RescuePage):
         self.open_card.content.addLayout(self.open_rows)
         self.open_card.hide()
         self.content.addWidget(self.open_card)
+
+        self.left_card = Card("Left open by an earlier repair", messages.LEFTOVERS_TEXT)
+        self.left_rows = QVBoxLayout()
+        self.left_card.content.addLayout(self.left_rows)
+        release_row = QHBoxLayout()
+        release_row.addStretch()
+        self.release_button = QPushButton("&Release them")
+        self.release_button.setObjectName("rescueReleaseLeftovers")
+        self.release_button.setAccessibleName("Release what the earlier repair left open")
+        self.release_button.clicked.connect(self._release_leftovers)
+        release_row.addWidget(self.release_button)
+        self.left_card.content.addLayout(release_row)
+        self.left_card.hide()
+        self.content.addWidget(self.left_card)
+        self._leftover_calls: list[dict[str, Any]] = []
+        self._note_after_scan = ""
 
         self.systems_card = Card("Installed systems", "Choose the system you want to repair.")
         self.group = ChoiceGroup([], columns=1)
@@ -288,6 +305,64 @@ class FindPage(RescuePage):
             self.open_rows.addLayout(row)
         self.open_card.setVisible(bool(sessions))
 
+    def show_leftovers(self, orphans: list[dict[str, Any]], pool: list[dict[str, Any]]) -> None:
+        """What an earlier repair left that no window can continue with: sessions whose disks are still flagged, mounts of unknown origin, unlocked or activated volumes."""
+        clear_layout(self.left_rows)
+        calls: list[dict[str, Any]] = []
+        for item in orphans:
+            sid = str(item.get("sid", ""))
+            if item.get("state") == "unknown":
+                text = f"Something is mounted at {item.get('path', sid)} and the tool cannot tell whether it opened it. Unmount it yourself in a terminal: sudo umount -R {item.get('path', sid)}"
+            elif sid and item.get("state") in {"stale", "alive"}:
+                calls.append({"do": "cleanup", "sid": sid})
+                text = (f"The repair {sid} was cut short; its disks may still be locked against writing." if item.get("state") == "stale"
+                        else f"The repair {sid} is still mounted, but this window cannot continue with it.")
+            else:
+                continue
+            self.left_rows.addWidget(wrapped_label(soft_breaks(text)))
+        if pool:
+            calls.append({"do": "cleanup"})
+            names = ", ".join(sorted({str(entry.get("name") or entry.get("device") or entry.get("kind", "")) for entry in pool}))
+            self.left_rows.addWidget(wrapped_label(soft_breaks(f"Unlocked disks or active volumes are still open: {names}.")))
+        self._leftover_calls = calls
+        self.release_button.setEnabled(bool(calls) and not self._busy)
+        self.release_button.setVisible(bool(calls))
+        self.left_card.setVisible(bool(self.left_rows.count()))
+
+    def _release_leftovers(self) -> None:
+        if self._busy or not self._leftover_calls:
+            return
+        self.notice.clear()
+        self._release_next(list(self._leftover_calls))
+
+    def _release_next(self, calls: list[dict[str, Any]]) -> None:
+        if not calls:
+            self._set_busy(False)
+            self._note_after_scan = "Everything the earlier repair left open was released."  # shown when the scan that follows has finished (a scan starts with a clean page)
+            self.refreshRequested.emit()
+            return
+        self._set_busy(True, "Releasing what the earlier repair left open…")
+
+        def released(result: dict[str, Any]) -> None:
+            problems = [str(error) for error in result.get("errors", [])] + [f"{path} is still in use" for path in result.get("leftovers", []) if isinstance(path, str)]
+            if problems:
+                self._set_busy(False)
+                self.notice.show_message("error", "Not everything could be released: " + "; ".join(problems) + ". Close the programs that use it and try again.")
+                return
+            self._release_next(calls[1:])
+
+        def failed(_code: str, text: str, _data: dict[str, Any]) -> None:
+            self._set_busy(False)
+            self.notice.show_message("error", text)
+
+        def lost(text: str) -> None:
+            self._set_busy(False)
+            self.notice.show_message("error", text + " Use “Scan again” to see what is still open.")
+
+        call = self.client.request("rescue.recover", calls[0])
+        self._call = call
+        call.then(released, failed, lost)
+
     # ---- scanning -------------------------------------------------------------------------------------------------------------------
     def start_scan(self) -> None:
         if self._busy:
@@ -311,6 +386,9 @@ class FindPage(RescuePage):
         self.scan = scan
         self.candidates = [item for item in scan.get("candidates", [])]
         self._render()
+        if self._note_after_scan:
+            self.notice.show_message("ok", self._note_after_scan)
+            self._note_after_scan = ""
 
     def _scan_failed(self, _code: str, text: str, _data: dict[str, Any]) -> None:
         self._set_busy(False)
@@ -332,6 +410,7 @@ class FindPage(RescuePage):
             self.busy.stop()
         for button in (self.scan_button,):
             button.setEnabled(not busy)
+        self.release_button.setEnabled(not busy and bool(self._leftover_calls))
         self._update_continue()
 
     # ---- drawing the result ---------------------------------------------------------------------------------------------------------

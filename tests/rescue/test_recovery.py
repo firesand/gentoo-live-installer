@@ -145,3 +145,49 @@ def test_an_adopted_session_continues_where_the_old_one_stopped(lab_factory) -> 
     assert audit.path is not None and audit.path.read_text().count('"kind":"mount"') >= 1 and len(audit.path.read_text().splitlines()) > before  # one log file for the whole life of the session
     unmount(adopted, sid)
     assert (tree / "boot/grub/grub.cfg").exists() and lab.system.mounted_targets() == [] and not any(lab.system.ro.values())
+
+
+@pytest.mark.parametrize("state", ["mounting", "closing"])
+def test_a_session_cut_short_while_mounting_or_releasing_is_adopted_as_an_open_system(lab_factory, state: str) -> None:
+    """The daemon died in the middle of opening or releasing: what is mounted can be used or released, so it must be listed as open and not as nothing."""
+    lab, _tree = uefi_gentoo_lab(lab_factory)
+    manager, sid, _info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    path = manager.session(sid).state_path
+    saved = json.loads(path.read_text())
+    saved["state"] = state
+    path.write_text(json.dumps(saved))
+    again = crash(lab)
+    summary = again.adopt(sid)
+    assert summary is not None and summary.state == "mounted_ro" and again.session_summary("")["sessions"][0]["state"] == "mounted_ro"
+    assert again.unmount(None, {"session_id": sid})["leftovers"] == [] and not any(lab.system.ro.values())
+
+
+def test_a_mount_that_belongs_to_this_tool_is_named_as_a_leftover(lab_factory) -> None:
+    """The window tells 'the file manager opened it' from 'an earlier repair left it' by this detail of the mounted_elsewhere error."""
+    from .flow import with_live_mounts
+
+    def refused_with(lab, after_scan=lambda: None) -> RescueError:
+        newcomer = lab.manager()  # the daemon that started after the crash; it has not adopted the session
+        scan = newcomer.scan(None, ScanOptions())
+        cid = next(item["id"] for item in scan["candidates"] if item["device"] == "/dev/nvme0n1p5")
+        after_scan()
+        with pytest.raises(RescueError) as info:
+            newcomer.mount(None, {"candidate": cid, "scan_id": scan["scan_id"], "dry_run": True})
+        return info.value
+
+    lab, _tree = uefi_gentoo_lab(lab_factory)
+    with_live_mounts(lab)
+    mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")  # the manager of that daemon is gone; a new one did not adopt the session
+    error = refused_with(lab)
+    assert error.short == "mounted_elsewhere" and error.details["leftover"] is True and "/dev/nvme0n1p5" in error.message
+    # the same, when the kernel only says the device is busy
+    other, _ = uefi_gentoo_lab(lab_factory)
+    mount_through_the_manager(other, candidate_device="/dev/nvme0n1p5")
+    busy = refused_with(other, lambda: other.system.fail_mount.update({"/dev/nvme0n1p5": "mount: /x: /dev/nvme0n1p5 is busy"}))
+    assert busy.short == "mounted_elsewhere" and busy.details["leftover"] is True
+    # a disk the desktop mounted is not ours
+    desktop = lab_factory(lf.desktop_automount(), name="desktop")
+    desktop.add_tree("/dev/sda1", "gentoo", firmware="bios")
+    with pytest.raises(RescueError) as info:
+        desktop.manager().mount(None, {"device": "/dev/sda1", "dry_run": True})
+    assert info.value.short == "mounted_elsewhere" and info.value.details["leftover"] is False

@@ -260,15 +260,25 @@ class RescueManager:
         candidate, node = self._candidate(params, graph)
         rootflags = candidate.get("rootflags", "")
         spec = RootSpec(node.path, node.fstype, node.uuid, rootflags, node.id)
-        with probe_mounted(runner, self.env.host, self.env.probe_root, node, subvolid=spec.subvolid, sleep=self.env.sleep, graph=graph) as (target, rung):
-            with RootFS(target) as fs:
-                plan = plan_mounts(
-                    spec, fs, Fstab.parse(fs.read_text_or("/etc/fstab")), parse_crypttab(fs.read_text_or("/etc/crypttab")), graph, include_tier4=params.get("include_tier4", []),
-                    overrides=params.get("overrides", []), allow_write=bool(params.get("allow_write", True)), esp_default_mountpoint="/efi" if candidate.get("os", {}).get("family") == "gentoo" else "/boot/efi")
+        try:
+            with probe_mounted(runner, self.env.host, self.env.probe_root, node, subvolid=spec.subvolid, sleep=self.env.sleep, graph=graph) as (target, rung):
+                with RootFS(target) as fs:
+                    plan = plan_mounts(
+                        spec, fs, Fstab.parse(fs.read_text_or("/etc/fstab")), parse_crypttab(fs.read_text_or("/etc/crypttab")), graph, include_tier4=params.get("include_tier4", []),
+                        overrides=params.get("overrides", []), allow_write=bool(params.get("allow_write", True)), esp_default_mountpoint="/efi" if candidate.get("os", {}).get("family") == "gentoo" else "/boot/efi")
+        except RescueError as exc:
+            if exc.short == "mounted_elsewhere":
+                exc.details["leftover"] = self._made_by_rescue(node, str(exc.details.get("mountpoint", "")))
+            raise
         env = self.environment(runner)
         if env.uefi is False and any(item.get("mountpoint") in {"/efi", "/boot/efi"} for item in [it.to_dict() for it in plan.items]):
             plan.warnings.append("This live session started in legacy BIOS mode but the system boots with UEFI. Boot entries cannot be written from here; the fallback boot path still works.")
         return plan, candidate, graph, node
+
+    def _made_by_rescue(self, node: DeviceNode, mountpoint: str) -> bool:
+        """Whether a mount that stops 'open this system' was left by a repair session (then the window says to release it, not to eject it in the file manager)."""
+        base = str(self.env.base_dir)
+        return mountpoint == base or mountpoint.startswith(base + "/") or any(item.get("device") == node.path for item in self.orphans())
 
     def mount(self, op: Operation | None, params: dict[str, Any]) -> dict[str, Any]:
         self.check_not_busy()
@@ -407,6 +417,9 @@ class RescueManager:
             return f"A repair session holds {held}; unmount it first"
         if len(self.pool_ledger):
             return "Unlocked or activated storage from a repair session is still open; release it first"
+        left = [item["sid"] for item in self.orphans() if item["sid"]]  # sessions whose daemon died: their disks may be mounted or flagged read-only
+        if left:
+            return f"A repair that was cut short left disks open ({', '.join(left)}); release them first with 'gentoo-rescue cleanup'"
         return None
 
     # ---- release --------------------------------------------------------------------------------------------------------------------------
@@ -556,7 +569,7 @@ class RescueManager:
             known_roots = {item["sid"] for item in found} | known
             unknown = sorted({line.strip().split("/")[len(self.env.base_dir.parts)] for line in listing.stdout.splitlines()
                               if line.strip().startswith(str(self.env.base_dir) + "/") and len(line.strip().split("/")) > len(self.env.base_dir.parts)} - known_roots)
-            found.extend({"sid": sid, "state": "unknown", "mounts": [], "mappings": [], "vgs": []} for sid in unknown)
+            found.extend({"sid": sid, "state": "unknown", "path": str(self.env.base_dir / sid), "mounts": [], "mappings": [], "vgs": []} for sid in unknown)
         return found
 
     def recover(self, op: Operation | None, params: dict[str, Any]) -> dict[str, Any]:

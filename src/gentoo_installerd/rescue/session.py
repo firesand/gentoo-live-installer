@@ -755,4 +755,6 @@ def session_from_state(env: SessionEnv, raw: dict[str, Any], graph: DeviceGraph 
     session.generation = int(raw.get("generation", 0))
     session.state = raw.get("state", "mounted_ro")
     session.ledger = Ledger.from_state(raw.get("ledger", []), session.persist)
+    if session.state in {"init", "mounting", "closing"} and session.ledger.find("mount", mountpoint="/"):
+        session.state = "mounted_rw" if session.mode == "rw" else "mounted_ro"  # cut short while opening or releasing: what is mounted can be used or released
     return session

@@ -239,17 +239,36 @@ def test_secrets_never_appear_in_events_or_logs(lab_factory) -> None:
     assert PASSPHRASE not in json.dumps(unlock.events) and unlock.error_event["error"] in {"rescue.not_luks", "rescue.live_medium"}
 
 
-def test_recover_reports_leftovers_of_a_previous_daemon(lab_factory) -> None:
+def test_a_daemon_that_starts_after_a_crash_takes_over_the_systems_the_old_one_left_mounted(lab_factory) -> None:
+    """The window asks rescue.session for what is open; a restarted daemon used to answer with an empty list, so the window blamed the file manager."""
     lab, tree, registry, api, sid = mounted(lab_factory)
     registry2 = FakeRegistry()
     api2 = rescue_api.register(registry2, manager=lab.manager(), enabled=True)
-    assert api2 is not None and [item["sid"] for item in api2.startup_orphans] == [sid] and api2.startup_orphans[0]["state"] == "alive"
-    assert api2.status()["orphans"] == 1
+    assert api2 is not None and api2.startup_orphans == [] and api2.status()["orphans"] == 0
+    listed = registry2.call("rescue.session").result
+    assert [(item["session_id"], item["state"], item["mode"], item["root"]["device"]) for item in listed["sessions"]] == [(sid, "mounted_ro", "ro", "/dev/nvme0n1p5")] and listed["orphans"] == []
+    blocker = api2.install_blocker()
+    assert blocker and "/dev/nvme0n1p5" in blocker  # an installation must not start on disks that are still held
+    released = registry2.call("rescue.unmount", {"session_id": sid})
+    assert released.completed["data"]["success"] is True and lab.system.mounted_targets() == [] and not any(lab.system.ro.values())
+    assert api2.install_blocker() is None and registry2.call("rescue.session").result["sessions"] == []
+
+
+def test_leftovers_that_cannot_be_taken_over_are_listed_and_block_an_installation_until_released(lab_factory) -> None:
+    lab, tree, registry, api, sid = mounted(lab_factory)
+    for target in sorted(lab.system.mounted_targets(), reverse=True):  # the mounts are gone, the kernel flags on the disks are not
+        lab.system.mounts.pop(target)
+    registry2 = FakeRegistry()
+    api2 = rescue_api.register(registry2, manager=lab.manager(), enabled=True)
+    assert api2 is not None and [(item["sid"], item["state"]) for item in api2.startup_orphans] == [(sid, "stale")] and api2.status()["orphans"] == 1
+    assert registry2.call("rescue.session").result["sessions"] == []
+    blocker = api2.install_blocker()
+    assert blocker and sid in blocker and "gentoo-rescue cleanup" in blocker and lab.system.ro["/dev/nvme0n1p5"] is True
     listing = registry2.call("rescue.recover").result["orphans"]
-    assert listing[0]["sid"] == sid and listing[0]["mounts"]
+    assert listing[0]["sid"] == sid and listing[0]["state"] == "stale"
     cleaned = registry2.call("rescue.recover", {"do": "cleanup", "sid": sid})
     assert cleaned.result["leftovers"] == [] and lab.system.mounted_targets() == [] and not any(lab.system.ro.values())
-    assert registry2.call("rescue.recover").result["orphans"] == []
+    assert registry2.call("rescue.recover").result["orphans"] == [] and api2.install_blocker() is None
     assert registry2.call("rescue.recover", {"do": "adopt", "sid": "r000000"}).error_event["error"] == "rescue.not_found"
     assert registry2.call("rescue.recover", {"do": "explode"}).error_event["error"] == "rescue.bad_request"
 

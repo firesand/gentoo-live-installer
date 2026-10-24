@@ -4,12 +4,15 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from gentoo_installerd.rescue.scan import ScanOptions
 
 from . import fakeroot as fr
 from . import lsblk_fixtures as lf
+
+if TYPE_CHECKING:
+    from .lab import Lab
 
 
 def uefi_gentoo_lab(lab_factory, family: str = "gentoo", root_device: str = "/dev/nvme0n1p5", **options: Any):
@@ -71,3 +74,27 @@ def chroot_commands(lab) -> list[tuple[str, ...]]:
 
 def unmount(manager, sid: str, **extra: Any) -> dict[str, Any]:
     return manager.unmount(None, {"session_id": sid, **extra})
+
+
+def with_live_mounts(lab: Lab) -> Lab:
+    """Make the fake lsblk show what the fake kernel has mounted, as the real one does (the fixtures print a fixed list)."""
+    static = lab.system._lsblk
+    assert isinstance(static, str)
+
+    def current(system: Any) -> str:
+        document = json.loads(static)
+        mounts: dict[str, list[str]] = {}
+        for target, record in system.mounts.items():
+            if not record.bind:
+                mounts.setdefault(record.device, []).append(target)
+
+        def walk(nodes: list[dict[str, Any]]) -> None:
+            for node in nodes:
+                node["mountpoints"] = [*node.get("mountpoints", []), *mounts.get(node["path"], [])]
+                walk(node.get("children", []))
+
+        walk(document["blockdevices"])
+        return json.dumps(document)
+
+    lab.system._lsblk = current
+    return lab
