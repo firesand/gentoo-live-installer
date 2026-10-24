@@ -66,3 +66,26 @@ class Lab:
 
         self.ledger = ledger or Ledger()
         return StackManager(self.runner, self.ctx, self.ledger, self.graph, self.host)
+
+    def session_env(self):
+        from gentoo_installerd.rescue.session import SessionEnv
+
+        return SessionEnv(self.base, self.state_dir, self.tmp / "audit-dir", self.probe_root, self.host, lambda _cancel: self.system, sleep=lambda _s: None,
+                          clock=lambda: 1_792_400_000.0, pid=4242)
+
+    def session(self, root_device: str, *, sid: str = "r1a2b3c", allow_write: bool = True, include_tier4=(), overrides=(), candidate=None, **kwargs):
+        from gentoo_installerd.rescue.fstab import Fstab, parse_crypttab
+        from gentoo_installerd.rescue.mountplan import RootSpec, plan_mounts
+        from gentoo_installerd.rescue.paths import RootFS
+        from gentoo_installerd.rescue.session import RescueSession
+
+        graph = self.graph()
+        node = graph.find(root_device)
+        tree = self.system.device_trees[root_device]
+        spec = RootSpec(node.path, node.fstype, node.uuid, kwargs.pop("rootflags", ""), node.id)
+        with RootFS(tree) as fs:
+            plan = plan_mounts(spec, fs, Fstab.parse(fs.read_text_or("/etc/fstab")), parse_crypttab(fs.read_text_or("/etc/crypttab")), graph, include_tier4=include_tier4,
+                               overrides=overrides, allow_write=allow_write, esp_default_mountpoint=kwargs.pop("esp", "/efi"))
+        self.plan = plan
+        self.graph_obj = graph
+        return RescueSession(self.session_env(), sid, plan, candidate or {"id": "cTEST", "os": {"id": "gentoo", "family": "gentoo"}}, graph, allow_write=allow_write, **kwargs)

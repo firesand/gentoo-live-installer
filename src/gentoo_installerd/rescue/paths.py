@@ -400,6 +400,25 @@ class RootFS:
             raise RescueError("path_escape", f"Mount point {mountpoint} contains a symbolic link", mountpoint=mountpoint)
         return host
 
+    def virtual_destination(self, name: str) -> str:
+        """Host path of $ROOT/<name> for a virtual file system (proc, sys, dev, run): a real directory, never a link."""
+        info = self.lstat("/" + name)
+        if not stat.S_ISDIR(info.st_mode):
+            raise RescueError("path_escape", f"/{name} in the target is not a plain directory (it may be a symbolic link)", mountpoint=name)
+        return self.root + "/" + name
+
+    def file_destination(self, path: str) -> str:
+        """Host path of an existing regular file that a file may be bind-mounted onto (resolv.conf, /proc/cmdline)."""
+        canonical = self.resolve(path)
+        parts = split_components(canonical)
+        host = self.root + canonical
+        info = os.lstat(host)  # host-path: composed from the session root and canonical names
+        if not stat.S_ISREG(info.st_mode) or not parts:
+            raise RescueError("path_escape", f"{path} is not a regular file", mountpoint=path)
+        if os.path.realpath(host) != host:  # host-path: our own composed string, must be symlink free
+            raise RescueError("path_escape", f"{path} contains a symbolic link", mountpoint=path)
+        return host
+
     # ---- writing (executor only; needs writable=True) ---------------------
     def _need_writable(self) -> None:
         if not self.writable:

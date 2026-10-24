@@ -827,7 +827,7 @@ class ChrootPolicy:
                 raise _fail(f"{disk} is not one of the session's disks", argv)
 
 
-def check_mount_destination(destination: str, session_root: str) -> None:
+def check_mount_destination(destination: str, session_root: str, *, file_ok: bool = False) -> None:
     """Re-check a mount destination immediately before the mount (review R2).
 
     The destination is a live-system path composed by ``RootFS.mount_destination`` from the
@@ -840,7 +840,7 @@ def check_mount_destination(destination: str, session_root: str) -> None:
         info = os.lstat(destination)
     except OSError as exc:
         raise SafetyViolation(f"Mount point {destination} does not exist: {exc.strerror}", destination=destination) from exc
-    if not stat.S_ISDIR(info.st_mode):
+    if not (stat.S_ISDIR(info.st_mode) or (file_ok and stat.S_ISREG(info.st_mode))):
         raise SafetyViolation(f"Mount point {destination} is not a directory", destination=destination)
     if os.path.realpath(destination) != destination:  # host-path: composed from the session root, must be symlink free
         raise SafetyViolation(f"Mount point {destination} contains a symbolic link", destination=destination)

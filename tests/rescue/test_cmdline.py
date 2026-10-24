@@ -1,0 +1,96 @@
+"""The synthesized /proc/cmdline and Gentoo's installkernel chroot guard (review R3)."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import pytest
+
+from gentoo_installerd.rescue import cmdline
+from gentoo_installerd.rescue.paths import RootFS
+
+from . import fakeroot as fr
+
+LIVE = "BOOT_IMAGE=/boot/gentoo dokeymap nodhcp secureconsole root=live:CDLABEL=GENTOO_INSTALLER_AMD64 rd.live.dir=/ rd.live.squashimg=image.squashfs cdroot quiet"
+
+
+def test_sanitize_removes_every_live_argument() -> None:
+    cleaned = cmdline.sanitize(LIVE + " rd.live.ram=1 nox")
+    assert cleaned == "quiet"
+    assert "root=live" not in cleaned and "rd.live" not in cleaned
+    assert cmdline.contains_live_arguments("root=live:LABEL=x") and cmdline.contains_live_arguments("cdroot") and not cmdline.contains_live_arguments("root=UUID=x ro quiet")
+
+
+def test_target_kernel_cmdline_file_wins(tmp_path: Path) -> None:
+    root = fr.make_root(tmp_path / "g", "gentoo")
+    with RootFS(root) as fs:
+        derived = cmdline.derive(fs, fr.ROOT_UUID)
+    assert derived.text == f"root=UUID={fr.ROOT_UUID} ro quiet" and derived.source == "/etc/kernel/cmdline" and derived.added == []
+
+
+def test_grub_defaults_then_bls_then_grub_cfg(tmp_path: Path) -> None:
+    debian = fr.make_root(tmp_path / "d", "debian", firmware="uefi")
+    with RootFS(debian) as fs:
+        derived = cmdline.derive(fs, fr.ROOT_UUID)
+    assert derived.source == "/etc/default/grub" and derived.text.startswith("quiet splash") and f"root=UUID={fr.ROOT_UUID}" in derived.text and derived.text.endswith(" ro")
+    fedora = fr.make_root(tmp_path / "f", "fedora")
+    with RootFS(fedora) as fs:
+        derived = cmdline.derive(fs, fr.ROOT_UUID)
+    assert derived.source == "/boot/loader/entries" and "rootflags=subvol=root" in derived.text
+    arch = fr.make_root(tmp_path / "a", "arch")
+    with RootFS(arch) as fs:
+        derived = cmdline.derive(fs, fr.ROOT_UUID)
+    assert derived.source == "grub.cfg" and derived.text == f"root=UUID={fr.ROOT_UUID} ro"
+
+
+def test_a_live_leak_in_the_targets_own_files_is_scrubbed(tmp_path: Path) -> None:
+    root = fr.make_root(tmp_path / "g", "gentoo")
+    fr.put(root, "etc/kernel/cmdline", LIVE + "\n")
+    with RootFS(root) as fs:
+        derived = cmdline.derive(fs, fr.ROOT_UUID)
+    assert not cmdline.contains_live_arguments(derived.text) and "root=live" not in derived.text and "rd.live" not in derived.text
+    assert derived.text == f"quiet root=UUID={fr.ROOT_UUID} ro"
+
+
+def test_stack_arguments_are_added_only_when_missing(tmp_path: Path) -> None:
+    root = fr.make_root(tmp_path / "g", "gentoo", kernel_cmdline=False)
+    with RootFS(root) as fs:
+        derived = cmdline.derive(fs, fr.ROOT_UUID, subvol_path="/@", luks_uuid=fr.LUKS_UUID, lvm_vg="vg0", md_uuid="abc")
+    tokens = derived.text.split()
+    assert f"root=UUID={fr.ROOT_UUID}" in tokens and "rootflags=subvol=@" in tokens and f"rd.luks.uuid={fr.LUKS_UUID}" in tokens and "rd.lvm.vg=vg0" in tokens and "rd.md.uuid=abc" in tokens
+    fr.put(root, "etc/kernel/cmdline", f"root=UUID={fr.ROOT_UUID} rd.luks.uuid={fr.LUKS_UUID} rw\n")
+    with RootFS(root) as fs:
+        again = cmdline.derive(fs, fr.ROOT_UUID, luks_uuid=fr.LUKS_UUID)
+    assert again.text.split().count("rw") == 1 and "ro" not in again.text.split() and again.added == []
+
+
+def test_a_system_without_any_configuration_still_gets_a_root_argument(tmp_path: Path) -> None:
+    root = fr.make_root(tmp_path / "u", "unknown")
+    with RootFS(root) as fs:
+        derived = cmdline.derive(fs, fr.ROOT_UUID)
+    assert derived.text == f"root=UUID={fr.ROOT_UUID} ro" and derived.source == "the root file system"
+
+
+@pytest.mark.parametrize("use,files,blocks", [
+    ("dracut grub", {}, True),                                # dracut would use /proc/cmdline
+    ("dracut grub", {"etc/cmdline": "root=UUID=x\n"}, False),
+    ("dracut grub", {"etc/cmdline.d/root.conf": "root=UUID=x\n"}, False),
+    ("dracut grub", {"etc/dracut.conf": "kernel_cmdline=\"root=UUID=x\"\n"}, False),
+    ("dracut grub", {"etc/dracut.conf.d/90-host.conf": "hostonly=\"no\"\n"}, False),
+    ("dracut grub", {"etc/dracut.conf": "hostonly=\"no\"\nhostonly_cmdline=\"yes\"\n"}, True),
+    ("grub", {}, False),                                      # no initramfs generator, no BLS layout: nothing to guard
+    ("dracut systemd systemd-boot", {"etc/cmdline": "x\n"}, True),   # BLS layout needs /etc/kernel/cmdline too
+    ("dracut systemd systemd-boot", {"etc/cmdline": "x\n", "etc/kernel/cmdline": "root=UUID=x\n"}, False),
+    ("dracut", {"etc/kernel/preinst.d/05-check-chroot.install": ""}, False),   # already overridden
+])
+def test_installkernel_guard(tmp_path: Path, use: str, files: dict[str, str], blocks: bool) -> None:
+    root = tmp_path / "root"
+    root.mkdir()
+    for path, text in files.items():
+        fr.put(root, path, text)
+    with RootFS(root) as fs:
+        info = cmdline.installkernel_guard(fs, use)
+    assert info.blocks is blocks
+    assert info.override_path == ("/etc/kernel/install.d/05-check-chroot.install" if "systemd" in use.split() else "/etc/kernel/preinst.d/05-check-chroot.install")
+    if blocks:
+        assert info.reason

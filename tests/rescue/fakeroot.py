@@ -101,6 +101,8 @@ def base_system(root: Path, family: str, *, merged: bool = True, init: str = "sy
     else:
         for name in ("bin", "sbin", "usr/bin", "usr/sbin", "lib", "etc", "var", "boot"):
             (root / name).mkdir(parents=True, exist_ok=True)
+    for name in ("proc", "sys", "dev", "run", "tmp", "home", "root", "mnt", "srv", "opt"):
+        (root / name).mkdir(parents=True, exist_ok=True)
     tool(root, "usr/bin/env", elf())
     tool(root, "usr/bin/sh", elf())
     tool(root, "usr/bin/true", elf())
@@ -214,6 +216,8 @@ def _fstab_and_crypttab(root: Path, opts: dict[str, Any], default_esp_mount: str
             put(root, "etc/fstab", opts["fstab"])
     else:
         uefi = opts.get("firmware", "bios") == "uefi"
+        if uefi:
+            (root / opts.get("esp_mount", default_esp_mount).lstrip("/")).mkdir(parents=True, exist_ok=True)
         put(root, "etc/fstab", fstab_text(root=opts.get("root_uuid", ROOT_UUID), esp=ESP_UUID if uefi else None, esp_mount=opts.get("esp_mount", default_esp_mount),
                                          boot=BOOT_UUID if opts.get("separate_boot_fs") else None, root_fs=root_fs))
     if opts.get("crypttab"):
