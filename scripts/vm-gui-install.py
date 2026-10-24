@@ -241,7 +241,8 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         raise SystemExit(f"Refusing GUI automation: {exc}")
     args.output.mkdir(mode=0o700, parents=True, exist_ok=True)
-    app = QApplication.instance() or QApplication(["gentoo-installer-vm-test"])
+    existing = QApplication.instance()
+    app = existing if isinstance(existing, QApplication) else QApplication(["gentoo-installer-vm-test"])
     apply_theme(app)
 
     def save_screenshot(path: Path) -> None:
@@ -287,7 +288,7 @@ def main(argv: list[str] | None = None) -> int:
         original_worker_init(worker, *worker_args, **worker_kwargs)
         worker.eventReceived.connect(observer.on_event)
 
-    BackendWorker.__init__ = observed_worker_init
+    setattr(BackendWorker, "__init__", observed_worker_init)
     window = InstallerWindow(initial, args.socket)
     window.show()
     outcome: list[bool] = []
@@ -429,7 +430,7 @@ def main(argv: list[str] | None = None) -> int:
     finally:  # leave the process as it was (a test runs this in-process)
         closed[0] = True
         watchdog.stop()
-        BackendWorker.__init__ = original_worker_init
+        setattr(BackendWorker, "__init__", original_worker_init)
 
 
 if __name__ == "__main__":
