@@ -712,7 +712,7 @@ class Installer(Stage3Stage, RepositoryStage, PortageStage, KernelStage, Bootloa
             raise
         except Exception:
             # The bootloader stage set this flag. A system that does not pass its final checks is not one the
-            # clients may call bootable: they would offer "Restart" and hide "Start over".
+            # clients may call bootable: they would offer "Restart" and hide "Erase again".
             self._bootable = False
             raise
         if self.manifest.system.desktop != "minimal":

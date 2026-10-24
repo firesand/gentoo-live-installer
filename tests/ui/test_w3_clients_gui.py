@@ -95,11 +95,11 @@ def test_a_cancel_inside_storage_does_not_send_the_user_to_a_resume_button_that_
     stage(page, "storage", "running")
     cancelled_in(page, "storage", resumable=False)
     assert not page.resume_button.isVisible()
-    assert page.retry_button.text() == "Start over" and page.retry_button.isVisible() and page.settings_button.isVisible()
+    assert page.retry_button.text() == "Erase again and restart installation" and page.retry_button.isVisible() and page.settings_button.isVisible()
     shown = page.detail.text() + "\n" + page.result_hint.text()
     assert "Resume" not in shown, shown
-    assert "partially installed" in page.detail.text() and "Start over" in page.detail.text()
-    assert "Start over" in page.result_hint.text() and "modified" in page.result_hint.text()
+    assert "partially installed" in page.detail.text() and "Erase again and restart installation" in page.detail.text()
+    assert "Erase again and restart installation" in page.result_hint.text() and "modified" in page.result_hint.text()
 
 
 def test_a_cancel_after_storage_still_points_to_resume(page):

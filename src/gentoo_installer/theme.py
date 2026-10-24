@@ -37,6 +37,7 @@ BADGE_COLORS = {
 }
 FONT_FAMILY = "'Fira Sans', 'Noto Sans', 'DejaVu Sans', sans-serif"  # the live image ships media-fonts/fira-sans
 PROBLEM_TEXT, PROBLEM_BG, PROBLEM_BORDER = "#8d2636", "#fff1f2", "#f0c5cb"  # inline problem messages (light scheme)
+SEVERITY = {"ok": "#14573a", "warning": "#8a5a00", "error": "#a82a3c"}  # headline colours, 4.5:1 or better on the card
 DARK = False  # set by apply_theme from the colour scheme
 
 
@@ -59,6 +60,7 @@ def apply_theme(app: QApplication) -> None:
     global TEXT, MUTED, SURFACE, BACKGROUND, BORDER, DARK, PROBLEM_TEXT, PROBLEM_BG, PROBLEM_BORDER
     if app.styleHints().colorScheme() == Qt.ColorScheme.Dark:
         DARK = True
+        SEVERITY.update({"ok": "#a8e6c6", "warning": "#f0c066", "error": "#ff9aa6"})
         PROBLEM_TEXT, PROBLEM_BG, PROBLEM_BORDER = "#ffc9d0", "#4a2530", "#8d3a4b"
         TEXT = "#ece9f2"
         MUTED = "#aaa4b5"
@@ -101,6 +103,9 @@ def apply_theme(app: QApplication) -> None:
         QLabel#pageTitle {{ font-size: 25px; font-weight: 700; }}
         QLabel#pageSubtitle, QLabel[muted=true] {{ color: {MUTED}; }}
         QLabel#problemLabel {{ color: {PROBLEM_TEXT}; background: {PROBLEM_BG}; border: 1px solid {PROBLEM_BORDER}; border-radius: 9px; padding: 12px 14px; font-weight: 600; }}
+        QLabel#cardTitle[severity="ok"] {{ color: {SEVERITY['ok']}; }}
+        QLabel#cardTitle[severity="warning"] {{ color: {SEVERITY['warning']}; }}
+        QLabel#cardTitle[severity="error"] {{ color: {SEVERITY['error']}; }}
         QLabel#sectionTitle {{ font-size: 17px; font-weight: 650; }}
         QLabel#heroTitle {{ font-size: 32px; font-weight: 750; }}
         QLabel#heroText {{ font-size: 16px; color: {MUTED}; }}

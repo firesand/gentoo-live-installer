@@ -294,6 +294,7 @@ class InstallerWindow(QMainWindow):
         self.progress.retryRequested.connect(self.start_installation)
         self.progress.settingsRequested.connect(self._return_to_settings)
         self.progress.quitRequested.connect(self.close)
+        self.progress.repairRequested.connect(self.open_repair)
         self.progress.diagnosticsRequested.connect(lambda: self.save_diagnostics("installation failed"))
         self.progress.logSaved.connect(self._export_saved)
         content_layout.addWidget(self._navigation())

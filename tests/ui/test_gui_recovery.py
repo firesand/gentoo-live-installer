@@ -243,7 +243,7 @@ def test_failure_after_storage_offers_resume_and_start_over(page):
     stage(page, "kernel")
     error(page, "boom", data={"retryable": True})
     assert page.resume_button.isVisible()
-    assert page.retry_button.text() == "Start over"
+    assert page.retry_button.text() == "Erase again and restart installation"
     assert "without formatting again" in page.result_hint.text()
 
 
