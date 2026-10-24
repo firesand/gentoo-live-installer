@@ -532,6 +532,29 @@ class StageInstallTests(unittest.TestCase):
         self.assertTrue(any("sys-power/tlp" in e for e in emerges))
         self.assertEqual(result.degraded, [])
 
+    def test_tlp_is_installed_before_the_desktop_so_the_desktop_does_not_pull_in_the_daemon_it_blocks(self) -> None:
+        plan = FakePlan(optional_atoms=[("TLP", ["sys-power/tlp"]), ("Guest tools", ["app-emulation/qemu-guest-agent"])])
+        m = target_manifest(system={"desktop": "kde"}, options={"pipewire": False, "bluetooth": False, "printing": False, "install_hwmonux": False, "install_portagehub": False})
+        result = self.c.install_desktop(m, plan)
+        emerges = self.emerges()
+        tlp = next(index for index, line in enumerate(emerges) if line.endswith("sys-power/tlp"))
+        desktop = next(index for index, line in enumerate(emerges) if "kde-plasma/plasma-meta" in line)
+        guest = next(index for index, line in enumerate(emerges) if "qemu-guest-agent" in line)
+        self.assertLess(tlp, desktop)
+        self.assertLess(desktop, guest)  # every other best-effort package still follows the desktop
+        self.assertEqual(sum("sys-power/tlp" in line for line in emerges), 1)  # and TLP is not installed a second time
+        self.assertEqual(result.degraded, [])
+
+    def test_a_tlp_that_fails_is_a_degraded_install_and_the_desktop_goes_on(self) -> None:
+        runner = ScriptedRunner()
+        runner.script("*sys-power/tlp", ("fail", "!!! Fetch failed for tlp"), ("fail", "!!! Fetch failed for tlp"))
+        with tempfile.TemporaryDirectory() as temporary:
+            c = configurer(temporary, runner)
+            result = c.install_desktop(target_manifest(system={"desktop": "kde"}, options={"pipewire": False, "bluetooth": False, "printing": False,
+                                                           "install_hwmonux": False, "install_portagehub": False}), FakePlan(optional_atoms=[("TLP", ["sys-power/tlp"])]))
+        self.assertTrue(any("sys-power/tlp (TLP) could not be installed" in item for item in result.degraded))
+        self.assertTrue(any("kde-plasma/plasma-meta" in line for line in runner.lines()))
+
     def test_missing_companion_applications_degrade_instead_of_failing(self) -> None:
         m = target_manifest(system={"desktop": "minimal"}, options={"pipewire": False, "bluetooth": False, "printing": False,
                                                                        "install_hwmonux": True, "install_portagehub": True})

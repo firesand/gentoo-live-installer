@@ -30,6 +30,8 @@ class ConfigurationError(RuntimeError):
 
 
 COMPANION_ATOMS = ("app-misc/hwmonux", "app-portage/portagehub")
+# Installed before the desktop set so that the desktop's own choice of a power-profiles provider finds it.
+PREFERRED_FIRST = "sys-power/tlp"
 
 
 class PackageInstallError(ConfigurationError):
@@ -1432,6 +1434,15 @@ class Configurer:
                 self.emerge(manifest, ("--update", "--deep", "--newuse", "--keep-going", "@world"))
             except RunnerError as exc:
                 result.degraded.append("The @world update did not finish: " + explain_emerge_failure(exc.output).summary[:200])
+        # TLP goes first: KDE and GNOME need a power-profiles provider, and when TLP is not there yet they
+        # pull in power-profiles-daemon, which TLP then blocks. With TLP installed first the desktop is satisfied by it.
+        first = [(label, group) for label, group in atoms.groups if PREFERRED_FIRST in group]
+        for label, group in first:
+            outcome = self.emerge_keep_going(manifest, group, label=label, attempts=2)
+            for atom in outcome.missing:
+                result.failed.append(atom)
+                result.degraded.append(f"{atom} ({label}) could not be installed: {outcome.reason}"[:300])
+        atoms.groups = [item for item in atoms.groups if item not in first]
         if atoms.required:
             outcome = self.emerge_keep_going(manifest, atoms.required, label="Desktop")
             if outcome.missing:
