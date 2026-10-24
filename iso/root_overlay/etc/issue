@@ -1,6 +1,6 @@
 
 Gentoo installer and rescue disc (\n \s \r \m)
 Log in as "gentoo" (no password).
-  Install Gentoo: gentoo-installer
-  Repair a broken system: gentoo-rescue
+  Install Gentoo: gentoo-installer   (text mode: sudo gentoo-installer-text)
+  Repair a broken system: sudo gentoo-rescue
 

@@ -2,7 +2,8 @@
  Welcome to the Gentoo installer and rescue disc.
 
    Install Gentoo ............  gentoo-installer  (starts with the desktop)
-   Repair a broken system ....  gentoo-rescue     (finds, mounts and repairs)
+   Install in text mode ......  sudo gentoo-installer-text
+   Repair a broken system ....  sudo gentoo-rescue  (finds, mounts and repairs)
    Network ...................  nmtui             (text menu) or nmcli
    Hardware report ...........  sudo lshw -short ; sudo dmidecode -t system
    Disk health ...............  sudo smartctl -a /dev/sda

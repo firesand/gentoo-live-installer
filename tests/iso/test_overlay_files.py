@@ -151,7 +151,9 @@ def test_console_hint_is_printed_on_text_consoles_only() -> None:
     script = OVERLAY / "etc/profile.d/10-gentoo-rescue-hint.sh"
     base = {k: v for k, v in os.environ.items() if k not in ("DISPLAY", "WAYLAND_DISPLAY")}
     console = subprocess.run(["bash", "--norc", "-i", "-c", f". {script}"], capture_output=True, text=True, env=base, check=False)
-    assert "Repair a broken system: gentoo-rescue" in console.stdout
+    assert "Repair a broken system: sudo gentoo-rescue" in console.stdout
+    assert "Install Gentoo (desktop): gentoo-installer" in console.stdout and "sudo gentoo-installer-text" in console.stdout
+    assert max(len(line) for line in console.stdout.splitlines()) <= 80, "the console is 80 columns wide"
     desktop = subprocess.run(["bash", "--norc", "-i", "-c", f". {script}"], capture_output=True, text=True, env={**base, "DISPLAY": ":0"}, check=False)
     assert "gentoo-rescue" not in desktop.stdout
     script_mode = subprocess.run(["bash", "--norc", "-c", f". {script}"], capture_output=True, text=True, env=base, check=False)

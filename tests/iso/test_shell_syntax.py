@@ -19,6 +19,7 @@ SHELL_FILES = [
     "iso/lib/run.sh",
     "iso/root_overlay/etc/acpi/actions/powerbtn.sh",
     "iso/root_overlay/etc/profile.d/10-gentoo-rescue-hint.sh",
+    "iso/root_overlay/etc/profile.d/20-gentoo-autostart.sh",
     "packaging/gentoo-overlay/app-admin/gentoo-live-installer/files/gentoo-installerd.initd",
 ]
 PYTHON_FILES = [
