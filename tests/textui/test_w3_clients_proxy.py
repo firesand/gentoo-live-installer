@@ -7,7 +7,6 @@ import json
 import pytest
 
 from gentoo_installer import diagnostics
-from gentoo_installer.app import blank_secrets
 from gentoo_installer.manifest import InstallManifest
 from gentoo_installer.textui.inventory import MachineView
 from gentoo_installer.textui.summary import build_summary, render_summary, settings_rows
@@ -34,15 +33,6 @@ def test_the_manifest_accepts_these_proxies_and_hides_the_password(typed: str, s
 def test_redact_url_userinfo_follows_the_manifests_rule(typed: str, shown: str, password: str) -> None:
     assert diagnostics.redact_url_userinfo(typed) == shown
     assert password not in diagnostics.redact_url_userinfo(typed)
-
-
-@pytest.mark.parametrize(("typed", "shown", "password"), PROXIES)
-def test_the_saved_draft_keeps_no_part_of_the_credentials(typed: str, shown: str, password: str) -> None:
-    manifest = valid_manifest()
-    manifest.network.proxy = typed
-    draft = blank_secrets(manifest.to_dict(redact=True))["network"]["proxy"]
-    assert draft == "http://" + typed.rpartition("@")[2]  # only the host and port are kept
-    assert password not in draft and "<redacted>" not in draft
 
 
 def test_text_around_the_address_is_left_alone() -> None:

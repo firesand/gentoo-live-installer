@@ -13,6 +13,8 @@ import pytest
 from PySide6.QtCore import QObject
 
 from gentoo_installer import diagnostics, system_info
+from gentoo_installer.app import blank_secrets
+from gentoo_installer.manifest import InstallManifest
 from gentoo_installer.backend import BackendWorker
 from gentoo_installer.pages.progress import DiagnosticsExporter, LogExporter
 from tests.hardware.helpers import fixture_path
@@ -204,3 +206,24 @@ def test_an_exception_in_a_worker_thread_never_opens_a_dialog(restore_hooks: Non
     except RuntimeError:
         sys.excepthook(*sys.exc_info())  # type: ignore[arg-type]
     assert len(shown) == 1 and "in the main thread" in shown[0]
+
+
+# --- PROXY-1: the saved draft keeps no part of a proxy's credentials -----------------------------------------------------------------------
+
+
+PROXIES = [
+    ("http://john@corp.com:s3cretpw@proxy.corp.example:3128", "s3cretpw"),
+    ("http://svc:p@ssw0rd@proxy.corp.example:3128", "ssw0rd"),
+    ("http://alice:S3cretPass@proxy.corp:3128", "S3cretPass"),
+]
+
+
+@pytest.mark.parametrize(("typed", "password"), PROXIES)
+def test_the_saved_draft_keeps_no_part_of_the_credentials(typed: str, password: str) -> None:
+    manifest = InstallManifest()
+    manifest.network.proxy = typed
+    draft = blank_secrets(manifest.to_dict(redact=True))["network"]["proxy"]
+    assert draft == "http://" + typed.rpartition("@")[2]  # only the host and port are kept
+    assert password not in draft and "<redacted>" not in draft
+
+

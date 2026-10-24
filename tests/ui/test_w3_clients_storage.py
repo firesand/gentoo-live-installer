@@ -59,7 +59,6 @@ def test_the_consent_given_for_one_root_does_not_cover_another_kept_root(make_wi
     window.start_installation()
     assert [title for title, _ in shown] == [OVERWRITE], "the question is asked again for the new root"
     assert "/dev/sdb1" in shown[0][1]
-    assert window.manifest.storage.overwrite_existing_system is False
     assert len(FakeWorker.instances) == started and not window.install_started, "nothing was sent to the service"
 
 
@@ -83,7 +82,23 @@ def test_a_consent_from_a_draft_or_an_imported_file_is_not_taken_for_granted(mak
     shown = ask(monkeypatch, {})
     window.start_installation()
     assert [title for title, _ in shown] == [OVERWRITE]
-    assert not FakeWorker.instances and window.manifest.storage.overwrite_existing_system is False
+    assert not FakeWorker.instances and not window.install_started, "answering No starts nothing"
+
+
+def test_answering_no_leaves_the_settings_of_the_run_that_can_still_be_resumed(make_window, monkeypatch):
+    """The draft of a run that failed after storage: Start (forgetting the Resume box), No, then Resume must still match that run."""
+    window = kept_root_window(make_window, monkeypatch)
+    window.manifest.storage.overwrite_existing_system = True
+    shown = ask(monkeypatch, {})
+    window.start_installation()
+    assert [title for title, _ in shown] == [OVERWRITE] and not FakeWorker.instances
+    assert window.manifest.storage.overwrite_existing_system is True, "the job fingerprint contains the flag"
+    shown.clear()
+    window._show_page(6)
+    window.review.resume_check.setVisible(True)
+    window.review.resume_check.setChecked(True)
+    window.start_installation()
+    assert shown == [] and FakeWorker.instances[-1].kwargs == {"resume": True}
 
 
 def test_a_resume_keeps_the_consent_of_the_run_it_continues(make_window, monkeypatch):

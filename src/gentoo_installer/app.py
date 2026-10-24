@@ -713,12 +713,13 @@ class InstallerWindow(QMainWindow):
         if root is None or root.format or root.filesystem == "none":
             return True
         # The consent is for this partition with this filesystem on it. A flag that came from a saved draft or a settings file,
-        # or that was given for another root partition (or another disk that now has the same name), does not count.
+        # or that was given for another root partition (or another disk that now has the same name), does not count: the question
+        # is asked. The flag itself is left alone until the answer is Yes, because the job fingerprint contains it and a resume
+        # has to send the settings of the run it continues (a resume never asks).
         found = self.info.find_partition(root.device)
         consent = (root.device, found.uuid if found is not None else "")
         if storage.overwrite_existing_system and consent == self._overwrite_consent:
             return True
-        storage.overwrite_existing_system = False
         answer = QMessageBox.warning(
             self,
             "Install over the existing system?",
