@@ -6,7 +6,7 @@
   <vendor>PortageHub</vendor>
   <action id="org.portagehub.helper">
     <description>Manage Gentoo packages with PortageHub</description>
-    <message>PortageHub needs administrator rights to run emerge and edit /etc/portage</message>
+    <message>PortageHub asks for administrator rights. While its admin session is open it can run package-manager commands and rewrite /etc/portage, which is equivalent to full administrator access.</message>
     <icon_name>system-software-install</icon_name>
     <defaults>
       <allow_any>auth_admin</allow_any>
