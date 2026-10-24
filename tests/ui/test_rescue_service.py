@@ -45,7 +45,7 @@ def test_a_service_that_is_not_running_is_explained_and_the_window_starts_when_i
     lab, _tree = uefi_gentoo_lab(rescue_lab_factory)
     daemon_factory(lab, name="late.sock")  # the service starts
     window.service_page.retry_button.click()
-    qtbot.waitUntil(lambda: window.stack.currentIndex() == FIND and len(window.find_page.candidates) == 2, timeout=20000)
+    qtbot.waitUntil(lambda: window.stack.currentIndex() == FIND and len(window.find_page.candidates) == 1, timeout=20000)
 
 
 def test_a_user_without_access_to_the_socket_is_told_what_to_do(qtbot, repair_kit, sock_dir) -> None:
@@ -70,7 +70,7 @@ def test_an_installation_that_is_running_blocks_repairs_with_a_plain_explanation
     assert window.service_page.text.text() == messages.INSTALL_RUNNING_TEXT and not window.find_page.candidates
     daemon.registry.install_manager.status = "idle"
     window.service_page.retry_button.click()
-    qtbot.waitUntil(lambda: window.stack.currentIndex() == FIND and len(window.find_page.candidates) == 2, timeout=20000)
+    qtbot.waitUntil(lambda: window.stack.currentIndex() == FIND and len(window.find_page.candidates) == 1, timeout=20000)
 
 
 def test_a_scan_that_the_engine_refuses_shows_its_message_and_can_be_repeated(qtbot, rescue_lab_factory, daemon_factory, repair_kit) -> None:
@@ -82,5 +82,5 @@ def test_a_scan_that_the_engine_refuses_shows_its_message_and_can_be_repeated(qt
     assert "installation is running" in window.find_page.notice.text.text() and not window.find_page.candidates
     daemon.api.manager.install_busy = lambda: None
     window.find_page.scan_button.click()
-    qtbot.waitUntil(lambda: len(window.find_page.candidates) == 2, timeout=20000)
+    qtbot.waitUntil(lambda: len(window.find_page.candidates) == 1, timeout=20000)
     assert not window.find_page.notice.isVisibleTo(window.find_page)

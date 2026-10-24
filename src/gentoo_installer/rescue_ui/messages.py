@@ -1,6 +1,6 @@
 """Plain-English texts of the repair window (no Qt).
 
-Many users are not native English speakers and are stressed because their computer does not start: short sentences,
+The window repairs Gentoo systems only. Many users are not native English speakers and are stressed because their computer does not start: short sentences,
 no jargon without a few words of explanation, and the engine's own messages only where they are already clear.
 Code branches on the machine-readable error code (``rescue.*``, ``proto.*``), never on the wording.
 """
@@ -10,6 +10,8 @@ from __future__ import annotations
 from typing import Any
 
 TERMINAL_COMMAND = "sudo gentoo-rescue"
+REPAIR_TITLE = "Repair a Gentoo system that does not start"
+NOT_GENTOO_TEXT = "Not a Gentoo system - this repair tool only supports Gentoo"  # the engine says the same words about every other Linux it finds
 
 # Texts the design fixes word for word (docs: rescue design 9.4).
 FIRST_WRITE_NOTICE = (
@@ -31,7 +33,7 @@ NO_RESCUE_TEXT = (
     "The installer service on this computer does not include the repair engine. "
     "This happens when the service is older than the installer, when it was started without repair support, "
     "or when this computer was not started from the live disc.\n\n"
-    "You can still repair a system from a terminal. Open a terminal and run:\n\n"
+    "You can still repair a Gentoo system from a terminal. Open a terminal and run:\n\n"
     f"    {TERMINAL_COMMAND}\n\n"
     "The terminal tool asks the same questions and shows every command before it runs."
 )
@@ -52,18 +54,21 @@ LEFTOVERS_TEXT = (
     "Only what the repair tool itself opened is released."
 )
 
-NOTHING_FOUND_TITLE = "No installed Linux system was found"
-NOTHING_FOUND_TEXT = (
-    "The tool looked at every disk in this computer. These are common reasons:\n"
+NOTHING_FOUND_TITLE = "No Gentoo system was found"
+NOTHING_FOUND_INTRO = "The tool looked at every disk in this computer. These are common reasons:\n"
+NOTHING_FOUND_OTHERS = "• The systems listed below are not Gentoo. This tool repairs Gentoo only.\n"  # added after the intro when the scan found another Linux
+NOTHING_FOUND_REASONS = (
     "• The disk is encrypted. Unlock it first (see “Encrypted disks” above, if it is listed).\n"
     "• The system is on a RAID or LVM volume that is not active yet.\n"
     "• The disk is not connected, or the firmware hides it. Check the cables and the SATA mode "
     "(AHCI works best), then scan again.\n"
     "• The system uses a file system this live disc cannot read."
 )
+NOTHING_FOUND_TEXT = NOTHING_FOUND_INTRO + NOTHING_FOUND_REASONS
 
-NOTHING_YET_TITLE = "No installed system was found yet"
+NOTHING_YET_TITLE = "No Gentoo system was found yet"
 NOTHING_YET_TEXT = "There are encrypted disks or volumes that are not open. Unlock or activate them first: the tool then looks inside."
+OTHER_SYSTEMS_TITLE = "Other systems"
 
 RISK_TITLES = {
     "info": "Only looks",
@@ -137,5 +142,5 @@ def friendly_error(code: str, message: str = "", data: dict[str, Any] | None = N
 
 def describe_daemon_problem(kind: str, message: str) -> str:
     """The text for a service that cannot be reached; the client's own message already says what to do."""
-    extra = f"\n\nYou can also repair a system from a terminal without the service:\n\n    {TERMINAL_COMMAND}"
+    extra = f"\n\nYou can also repair a Gentoo system from a terminal without the service:\n\n    {TERMINAL_COMMAND}"
     return (message or "The installer service could not be reached.") + extra

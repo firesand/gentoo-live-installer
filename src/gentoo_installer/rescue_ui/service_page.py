@@ -12,7 +12,7 @@ from .base import Notice, RescuePage
 
 class ServicePage(RescuePage):
     title = "The repair tool cannot start"
-    subtitle = "The installer service is needed to repair a system."
+    subtitle = "The installer service is needed to repair a Gentoo system."
     step = 0
     retryRequested = Signal()
     terminalToolRequested = Signal()

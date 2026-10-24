@@ -71,11 +71,10 @@ class OptionsForm(QWidget):
             box.setAccessibleName(param.label)
             return box
         if param.type == "list" and param.name == "kernels" and kernels:
-            spec_id = self.spec.get("id")
             holder = QWidget()
             inner = QVBoxLayout(holder)
             inner.setContentsMargins(0, 0, 0, 0)
-            inner.addWidget(wrapped_label("Leave all unticked for the damaged kernel, or the newest one." if spec_id == "boot.kernel" else "Leave all unticked for every kernel.", muted=True))
+            inner.addWidget(wrapped_label("Leave all unticked for every kernel.", muted=True))
             for version in kernels:
                 check = QCheckBox(version)
                 check.setChecked(version in (default or []))

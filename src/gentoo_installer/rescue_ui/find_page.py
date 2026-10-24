@@ -1,4 +1,4 @@
-"""Step 1: find the installed systems, unlock encrypted disks and activate LVM or RAID volumes."""
+"""Step 1: find the Gentoo systems (any other Linux is named, not offered), unlock encrypted disks and activate LVM or RAID volumes."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ STAGE_TEXTS = {
     "environment": "Checking the firmware…",
 }
 KEYBOARD_FAILURES_BEFORE_OPENING = 2
-REPEATED_HINTS = frozenset({"locked_volumes", "inactive_vg", "md_members"})
+REPEATED_HINTS = frozenset({"locked_volumes", "inactive_vg", "md_members", "no_gentoo"})  # the cards already say it
 
 
 def read_layout() -> tuple[str, str] | None:
@@ -187,8 +187,8 @@ class UnlockPanel(QFrame):
 
 
 class FindPage(RescuePage):
-    title = "Find the system to repair"
-    subtitle = "The tool looks at the disks of this computer. Nothing is changed."
+    title = "Find the Gentoo system to repair"
+    subtitle = messages.REPAIR_TITLE + ". The tool looks at the disks of this computer. Nothing is changed."
     step = 0
     systemChosen = Signal(dict, dict)  # the system's scan entry, the whole scan
     serviceProblem = Signal(str)
@@ -201,7 +201,8 @@ class FindPage(RescuePage):
         super().__init__()
         self.client = client
         self.scan: dict[str, Any] = {}
-        self.candidates: list[dict[str, Any]] = []
+        self.candidates: list[dict[str, Any]] = []  # the Gentoo systems: the ones that can be opened
+        self.others: list[dict[str, Any]] = []  # every other Linux the scan found: named, never opened
         self._call: Call | None = None
         self._busy = False
         self._selected = ""
@@ -235,7 +236,7 @@ class FindPage(RescuePage):
         self._leftover_calls: list[dict[str, Any]] = []
         self._note_after_scan = ""
 
-        self.systems_card = Card("Installed systems", "Choose the system you want to repair.")
+        self.systems_card = Card("Gentoo systems", "Choose the system you want to repair.")
         self.group = ChoiceGroup([], columns=1)
         self.group.selectionChanged.connect(self._selection_changed)
         self.systems_card.content.addWidget(self.group)
@@ -259,6 +260,12 @@ class FindPage(RescuePage):
         self.empty_title = self.empty_card.findChild(QLabel, "cardTitle")
         self.empty_text = self.empty_card.findChildren(QLabel)[-1]
         self.content.addWidget(self.empty_card)
+
+        self.others_card = Card(messages.OTHER_SYSTEMS_TITLE, messages.NOT_GENTOO_TEXT)  # after the cards above: with one Gentoo it sits right below it
+        self.others_rows = QVBoxLayout()
+        self.others_card.content.addLayout(self.others_rows)
+        self.others_card.hide()
+        self.content.addWidget(self.others_card)
 
         self.confirm = InlineConfirm()
         self.confirm.confirmed.connect(self._activation_confirmed)
@@ -384,7 +391,7 @@ class FindPage(RescuePage):
     def _scanned(self, scan: dict[str, Any]) -> None:
         self._set_busy(False)
         self.scan = scan
-        self.candidates = [item for item in scan.get("candidates", [])]
+        self.candidates, self.others = model.split_candidates(scan.get("candidates", []))
         self._render()
         if self._note_after_scan:
             self.notice.show_message("ok", self._note_after_scan)
@@ -436,6 +443,7 @@ class FindPage(RescuePage):
         elif len(rows) == 1 and not rows[0].snapshot:
             self.group.set_value(rows[0].id)
         self.systems_card.setVisible(bool(rows))
+        self._render_others([model.describe_system(item, devices) for item in sorted(self.others, key=lambda item: str(item.get("device")))])
         locked = model.locked_volumes(scan)
         inactive = model.inactive_groups(scan)
         arrays = model.unassembled_arrays(scan)
@@ -443,7 +451,7 @@ class FindPage(RescuePage):
         waiting = bool(locked or inactive or arrays)  # the volumes below have to be opened first: the usual list of reasons would only distract
         if self.empty_title is not None:
             self.empty_title.setText(messages.NOTHING_YET_TITLE if waiting else messages.NOTHING_FOUND_TITLE)
-        self.empty_text.setText(messages.NOTHING_YET_TEXT if waiting else messages.NOTHING_FOUND_TEXT)
+        self.empty_text.setText(messages.NOTHING_YET_TEXT if waiting else messages.NOTHING_FOUND_INTRO + (messages.NOTHING_FOUND_OTHERS if self.others else "") + messages.NOTHING_FOUND_REASONS)
         self._render_locked(locked)
         self._render_storage(inactive, arrays)
         # what the cards above already say (an encrypted disk, an inactive volume group, a RAID array) is not said twice
@@ -457,6 +465,19 @@ class FindPage(RescuePage):
         self.disks_text.setText(soft_breaks("\n".join(overview)))
         self.disks.setVisible(bool(overview))
         self._update_continue()
+
+    def _render_others(self, rows: list[model.SystemRow]) -> None:
+        """The systems that are not Gentoo, by the name they give themselves and where they are; the card says once why they cannot be opened."""
+        clear_layout(self.others_rows)
+        named: set[tuple[str, str]] = set()
+        for row in rows:
+            if (row.title, row.device) in named:  # two roots of one disk read the same
+                continue
+            named.add((row.title, row.device))
+            label = wrapped_label(soft_breaks(f"{row.title} on {row.device}"))
+            label.setObjectName(f"rescueOther:{row.device}")
+            self.others_rows.addWidget(label)
+        self.others_card.setVisible(bool(rows))
 
     def _render_locked(self, locked: list[model.LockedVolume]) -> None:
         clear_layout(self.locked_rows)

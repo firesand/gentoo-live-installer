@@ -22,16 +22,16 @@ def test_a_gentoo_without_a_boot_menu_is_found_opened_diagnosed_repaired_and_clo
     (tree / "boot/grub/grub.cfg").unlink()
     window = repair_kit.open(daemon.path)
 
-    # 1. the scan starts by itself and lists the two installed systems with their disks
-    qtbot.waitUntil(lambda: len(window.find_page.candidates) == 2, timeout=20000)
+    # 1. the scan starts by itself and lists the Gentoo with its disk; the Debian on the other disk is named, but it is not a choice
+    qtbot.waitUntil(lambda: len(window.find_page.candidates) == 1 and bool(window.find_page.others), timeout=20000)
     assert current(window) == FIND
     cards = window.find_page.group.cards
     gentoo = system_card(window, "/dev/nvme0n1p5")
-    assert not window.find_page.continue_button.isEnabled()
+    assert list(cards) == [gentoo] and window.find_page.continue_button.isEnabled()  # the only Gentoo is chosen already
     text = cards[gentoo].description_label.text()
     assert "Samsung SSD 990 PRO 1TB" in text and "ext4" in text and "Not encrypted" in text and "1 kernel" in text
-    debian = cards[system_card(window, "/dev/sdb1")]
-    assert debian.title_label.text().startswith("Debian") and "Samsung SSD 870" in debian.description_label.text()
+    debian = window.find_page.findChild(object, "rescueOther:/dev/sdb1")
+    assert debian is not None and debian.text().startswith("Debian") and "Not a Gentoo system" in " ".join(label.text() for label in window.find_page.others_card.findChildren(type(debian)))
     window.find_page.group.set_value(gentoo)
     assert window.find_page.continue_button.isEnabled()
     window.find_page.continue_button.click()

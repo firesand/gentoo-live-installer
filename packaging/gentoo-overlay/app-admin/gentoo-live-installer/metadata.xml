@@ -3,7 +3,7 @@
 <pkgmetadata>
 	<longdescription lang="en">
 		The Qt installer wizard, the privileged installer daemon (gentoo-installerd) and the
-		repair tool for systems that no longer boot. The daemon runs as root, formats the
+		repair tool for Gentoo systems that no longer boot. The daemon runs as root, formats the
 		disk the user selected and installs a stage3 into it; the wizard talks to the daemon
 		over a Unix socket that only root and the gentoo-installer group can open.
 	</longdescription>
