@@ -422,12 +422,17 @@ class Result:
         self.code, self.out, self.err = code, out, err
 
 
-def run_main(argv: Sequence[str], script: Script, host: FakeHost, *, environ: dict[str, str] | None = None) -> Result:
-    """Run ``gentoo-installer-text`` against the scripted terminal. Standard error is captured separately."""
+def run_main(argv: Sequence[str], script: Script, host: FakeHost, *, environ: dict[str, str] | None = None, allow_traceback: bool = False) -> Result:
+    """Run ``gentoo-installer-text`` against the scripted terminal. Standard error is captured separately.
+
+    An unexpected exception inside the program is turned into a message and exit status 1 by main(); a test
+    wants to hear about it, so it fails here unless it expects one."""
     from gentoo_installer.textui.cli import main
 
     err = io.StringIO()
     code = main(list(argv), stdin=script.stdin, stdout=script.out, stderr=err, environ={"TERM": "dumb", **(environ or {})}, host=host)  # type: ignore[arg-type]
+    if "Traceback (most recent call last)" in err.getvalue() and not allow_traceback:
+        raise AssertionError("The program crashed:\n" + err.getvalue())
     return Result(code, script.text, err.getvalue())
 
 
@@ -437,3 +442,34 @@ def valid_manifest(device: str = "/dev/vda", serial: str = "VDA-SERIAL-0001") ->
     manifest.storage.device, manifest.storage.device_id = device, serial
     manifest.accounts.password = manifest.accounts.root_password = "correct-horse-1"
     return manifest
+
+
+PASSWORD = "correct-horse-1"
+
+
+def to_disk_step(keyboard: str = "") -> list[tuple[str, Any]]:
+    """Steps 1 to 3 with the defaults; the disk menu is on screen next."""
+    return [("Step 1 of 9: Keyboard", keyboard), ("Step 2 of 9: Network", ""), ("Step 3 of 9: This computer", "")]
+
+
+def accounts(user: str = "alice", root_mode: str = "1") -> list[tuple[str, Any]]:
+    return [
+        ("Step 7 of 9: Accounts", "mybox"), ("Your user name", user), ("Password for " + user, PASSWORD), ("Type it again", PASSWORD),
+        ("How should the administrator", root_mode),
+    ]
+
+
+def region() -> list[tuple[str, Any]]:
+    return [("Step 8 of 9: Time zone", "5"), ("Choose your time zone", "berlin"), ("Which language", "de_DE")]
+
+
+def walk_to_review(disk: str = "1", *, approve: str | None = None, luks: str | None = None, desktop: str = "", user: str = "alice") -> list[tuple[str, Any]]:
+    """Every step answered with its default (or the German region); the review is on screen next.
+
+    ``approve``: the answer to the question about a disk without a serial number; ``luks``: a passphrase to encrypt with."""
+    steps: list[tuple[str, Any]] = [*to_disk_step(), ("Step 4 of 9: Disk", disk)]
+    if approve is not None:
+        steps.append(("neither a serial number nor a WWN", approve))
+    steps.append(("Step 5 of 9", ""))
+    steps += [("Encrypt", "")] if luks is None else [("Encrypt", "y"), ("Passphrase", luks), ("Type the passphrase again", luks)]
+    return [*steps, ("Step 6 of 9", desktop), ("init system", ""), *accounts(user), *region()]

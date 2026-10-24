@@ -6,26 +6,11 @@ import pytest
 
 from gentoo_installer.manifest import InstallManifest
 
-from tests.textui.support import CTRL_C, END, FakeHost, FakeInstaller, Script, good_job, inspect_reply, run_main
+from tests.textui.support import (
+    CTRL_C, END, PASSWORD, FakeHost, FakeInstaller, Script, accounts, inspect_reply, region, run_main, to_disk_step, walk_to_review,
+)
 
 VDA = {"/dev/vda": "VDA-SERIAL-0001"}
-PASSWORD = "correct-horse-1"
-
-
-def to_disk_step(keyboard: str = "") -> list[tuple[str, str]]:
-    """Steps 1 to 3 with the defaults, then the disk menu is on screen."""
-    return [("Step 1 of 9: Keyboard", keyboard), ("Step 2 of 9: Network", ""), ("Step 3 of 9: This computer", "")]
-
-
-def accounts(user: str = "alice", root_mode: str = "1") -> list[tuple[str, str]]:
-    return [
-        ("Step 7 of 9: Accounts", "mybox"), ("Your user name", user), ("Password for " + user, PASSWORD), ("Type it again", PASSWORD),
-        ("How should the administrator", root_mode),
-    ]
-
-
-def region() -> list[tuple[str, str]]:
-    return [("Step 8 of 9: Time zone", "5"), ("Choose your time zone", "berlin"), ("Which language", "de_DE")]
 
 
 def serial_installer(installer, **kwargs) -> FakeInstaller:
@@ -158,10 +143,6 @@ def test_change_a_setting_from_the_review_then_walk_forward_again(installer, hos
 
 
 # --- the typed confirmation -----------------------------------------------------------------------------------------------------
-
-
-def walk_to_review() -> list[tuple[str, str]]:
-    return [*to_disk_step(), ("Step 4 of 9: Disk", "1"), ("Step 5 of 9", ""), ("Encrypt", ""), ("Step 6 of 9", ""), ("init system", ""), *accounts(), *region()]
 
 
 def test_a_wrong_confirmation_is_refused_three_times_and_nothing_starts(installer, host: FakeHost) -> None:

@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping, Sequence, TextIO
@@ -38,6 +39,7 @@ from .summary import build_summary, render_summary
 from .wizard import Refused, Wizard
 
 PROGRAM = "gentoo-installer-text"
+STARTUP_WAIT = (1.0, 2.0, 2.0, 2.0, 3.0)  # seconds to wait for the service to appear (it may still be starting after boot)
 EPILOG = """\
 examples:
   gentoo-installer-text                       ask the questions, then install
@@ -161,11 +163,22 @@ def exit_code(outcome: Outcome) -> int:
 
 
 def connect(ctx: Context, *, ask_retry: bool) -> DaemonState | None:
-    """The daemon's state, or None when it cannot be reached (after offering to try again)."""
+    """The daemon's state, or None when it cannot be reached (after waiting a little, and offering to try again).
+
+    Right after boot the service may still be starting, so a missing or stale socket is waited for first."""
+    delays = iter(STARTUP_WAIT)
+    announced = False
     while True:
         state = ctx.daemon.probe()
         if state.reachable:
             return state
+        delay = next(delays, None) if state.kind in {"not-running", "stale"} else None
+        if delay is not None:
+            if not announced:
+                ctx.console.say("Waiting for the installer service to start...")
+                announced = True
+            ctx.host.sleep(delay)
+            continue
         ctx.console.error(state.message or "The installer service cannot be reached.")
         if not ask_retry:
             return None
@@ -414,6 +427,11 @@ def main(
         return EXIT_INTERRUPTED
     except BrokenPipeError:
         return EXIT_INTERRUPTED
+    except Exception as exc:  # noqa: BLE001 - a console user must not be left with a bare traceback and no hint
+        traceback.print_exc(file=err)
+        console.error(f"The installer stopped because of an unexpected problem ({type(exc).__name__}: {exc}). Nothing more was done; "
+                      "the details above help when you report it. If an installation was started it keeps running: follow it with gentoo-installer-text --attach")
+        return EXIT_FAILED
 
 
 if __name__ == "__main__":

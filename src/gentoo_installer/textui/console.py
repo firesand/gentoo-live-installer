@@ -374,16 +374,16 @@ class Console:
         """A numbered menu. Returns the chosen option or one of the extra ``commands`` (letter -> label).
 
         ``b`` raises GoBack (unless ``back`` is false) and ``q`` asks whether to quit."""
-        if title:
-            self.para(title)
+        lines = self.wrap(title) if title else []
         for number, option in enumerate(options, 1):
-            self.para(f"{number:>2}) {option.label}", hanging=4)
+            lines.extend(self.wrap(f"{number:>2}) {option.label}", hanging=4))
             if option.detail:
-                self.para(option.detail, indent=7)
+                lines.extend(self.wrap(option.detail, indent=7))
         legend = [f"{letter} = {label}" for letter, label in (commands or {}).items()]
         legend.extend(["b = back"] if back else [])
         legend.extend(["q = quit", "? = help"])
-        self.para(", ".join(item.replace(" ", NBSP) for item in legend))
+        lines.extend(self.wrap(", ".join(item.replace(" ", NBSP) for item in legend)))
+        self.show_lines(lines)  # a long menu pauses after each screenful on a real terminal
         suffix = f" [{default + 1}]" if default is not None else ""
         while True:
             text = self._read_line(f"{prompt}{suffix}: ").strip().lower()
