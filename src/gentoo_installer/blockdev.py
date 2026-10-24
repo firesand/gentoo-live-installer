@@ -118,6 +118,11 @@ class BlockDevice:
             children=tuple(cls.from_lsblk(child) for child in raw.get("children") or []),
         )
 
+    @classmethod
+    def from_dict(cls, raw: dict[str, Any]) -> BlockDevice:
+        """Compatibility name for from_lsblk() (the daemon's old Disk.from_dict)."""
+        return cls.from_lsblk(raw)
+
     def walk(self) -> tuple[BlockDevice, ...]:
         return (self,) + tuple(node for child in self.children for node in child.walk())
 
@@ -230,3 +235,76 @@ def live_medium_keys(roots: Sequence[BlockDevice], *, sources: Iterable[str] = (
         if node.key in marked:
             marked.update(disk.key for disk in parent_disks(roots, node))
     return marked
+
+
+# --- which devices may be offered as an installation target -------------------
+
+# Kernel placeholders that lsblk reports as "disk" but never hold an installation.
+VIRTUAL_DEVICE_RE = re.compile(r"^(?:loop|ram|zram|nbd|sr|fd)\d*$")
+# eMMC exposes its boot areas and the replay-protected memory block as extra read-only disks.
+HIDDEN_MMC_RE = re.compile(r"^mmcblk\d+(?:boot\d+|rpmb)$")
+
+TARGET_PROBLEMS = {
+    "not_a_disk": "is not a whole disk",
+    "virtual": "is a virtual or placeholder device (RAM disk, zram, loop, network block or floppy)",
+    "firmware_area": "is a hidden eMMC boot or replay-protected area",
+    "empty": "has no media (an empty card-reader slot reports 0 bytes)",
+    "read_only": "is read-only",
+    "live_medium": "holds the live installer medium this system was started from",
+}
+
+
+def install_target_problem(node: BlockDevice, *, live_keys: Iterable[str] = (), allow_loop: bool = False) -> str:
+    """Why a top-level lsblk node cannot be an installation target ("" when it can).
+
+    The result is a key of TARGET_PROBLEMS. live_keys comes from live_medium_keys().
+    allow_loop admits loop devices (hand-written manifests and tests; never the GUI).
+    """
+    name = os.path.basename(node.path) or node.name
+    if node.type == "loop":
+        if not allow_loop:
+            return "virtual"
+    elif VIRTUAL_DEVICE_RE.match(name):
+        return "virtual"
+    elif HIDDEN_MMC_RE.match(name):
+        return "firmware_area"
+    elif node.type != "disk":
+        return "not_a_disk"
+    if node.size <= 0:
+        return "empty"
+    if node.ro:
+        return "read_only"
+    if node.key in set(live_keys):
+        return "live_medium"
+    return ""
+
+
+def install_target_disks(roots: Sequence[BlockDevice], live_keys: Iterable[str] = (), *, allow_loop: bool = False) -> list[BlockDevice]:
+    """The top-level devices that may be offered as installation targets."""
+    keys = set(live_keys)
+    return [node for node in roots if not install_target_problem(node, live_keys=keys, allow_loop=allow_loop)]
+
+
+# --- what is alive on a disk ------------------------------------------------------
+
+# Everything lsblk lists below a disk that is not one of these is a stacked device (LVM, dm-crypt, md, multipath).
+STRUCTURAL_TYPES = frozenset({"disk", "part", "loop", "rom"})
+
+
+def stacked_devices(node: BlockDevice) -> list[BlockDevice]:
+    """Active LVM / dm-crypt / md / device-mapper devices below ``node``, children first (so they can be stopped in order).
+
+    A device lsblk repeats under several parents is listed once.
+    """
+    seen: set[str] = set()
+    found: list[BlockDevice] = []
+    for child in reversed(node.walk()[1:]):
+        if child.type not in STRUCTURAL_TYPES and child.key not in seen:
+            seen.add(child.key)
+            found.append(child)
+    return found
+
+
+def active_swaps(node: BlockDevice) -> list[str]:
+    """Paths of the devices at or below ``node`` that are in use as swap."""
+    return [sub.path for sub in node.walk() if "[SWAP]" in sub.mountpoints]

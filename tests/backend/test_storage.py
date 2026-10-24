@@ -85,26 +85,38 @@ class StorageGuardTests(unittest.TestCase):
             StorageManager(runner).prepare(m)
         self.assertFalse(any(command[0] == "sgdisk" for command in runner.commands))
 
-    def test_disk_without_stable_identity_is_rejected(self) -> None:
-        m = manifest()
-        m.storage.device_id = ""
-        runner = FakeRunner()
+    def serial_less(self) -> FakeRunner:
         raw = json.loads(lsblk(serial=""))
         raw["blockdevices"][0]["wwn"] = ""
+        runner = FakeRunner()
         runner.respond("lsblk", json.dumps(raw))
-        with self.assertRaisesRegex(StorageError, "stable"):
+        return runner
+
+    def test_disk_without_serial_cannot_be_pinned_by_a_serial(self) -> None:
+        m = manifest()  # pinned by the serial "disk-serial", but this disk has no serial or WWN
+        runner = self.serial_less()
+        with self.assertRaisesRegex(StorageError, "no serial number or WWN.*bus connection"):
             StorageManager(runner).prepare(m)
+        self.assertFalse(any(command[0] in {"sgdisk", "parted", "wipefs"} for command in runner.commands))
+
+    def test_unpinned_manifest_is_refused_before_the_disk_is_even_listed(self) -> None:
+        m = manifest()
+        m.storage.device_id = ""
+        runner = self.serial_less()
+        with self.assertRaisesRegex(StorageError, "does not pin the target disk"):
+            StorageManager(runner).prepare(m)
+        self.assertFalse(any(command[0] == "lsblk" for command in runner.commands))
 
     def test_manual_layout_formats_and_mounts_only_selected_root(self) -> None:
         m = manifest()
         m.storage.mode = "manual"
-        m.storage.device_id = ""
         m.storage.firmware = "bios"
         m.storage.swap_mib = 0
         m.storage.partitions = [Partition(device="/dev/sda1", mountpoint="/", filesystem="ext4")]
         raw = json.loads(lsblk())
         raw["blockdevices"][0]["mountpoints"] = []
         raw["blockdevices"][0]["children"][0]["mountpoints"] = []
+        raw["blockdevices"][0]["children"][0]["size"] = 60 * 2**30  # a root the default desktop fits on
         runner = FakeRunner()
         runner.respond("lsblk", json.dumps(raw))
         with tempfile.TemporaryDirectory() as root:
@@ -196,7 +208,7 @@ class StorageResumeSafetyTests(unittest.TestCase):
     def test_cleanup_retains_failed_resources_for_retry(self):
         runner = FakeRunner()
         runner.failures["umount"] = 1
-        manager = StorageManager(runner)
+        manager = StorageManager(runner, cleanup_delay=0)
         manager.owned_mounts = [Path("/fake-target")]
         with self.assertRaises(StorageError):
             manager.cleanup()
