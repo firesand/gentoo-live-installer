@@ -120,6 +120,20 @@ def test_the_installers_reason_for_a_degraded_part_is_shown_as_it_sent_it_and_a_
     assert last_result(lab)["error"] == f"Target verification failed: install-degraded: the installer finished with problems it did not treat as fatal: {reason}"
 
 
+def test_the_probe_of_a_part_that_did_not_install_carries_the_reason_the_installer_gave(lab):
+    """H3 with the real data: the completed event of the first run says hwmonux could not be installed, the probe found 'command not found'."""
+    completed = json.loads((DATA / "completed-uefi-nvme-luks-openrc.json").read_text())
+    reason = completed["data"]["degraded"][0]
+    gone = {"user": "^vmtest$", "match": r"^hwmonux --dump$", "rc": 127, "stdout": "bash: line 1: hwmonux: command not found\n"}
+    lab.rules = guest_rules(vm, "bios", sudo=True, install=EVENT_STREAM[:-1] + [completed], extra=[gone])
+    assert lab.run("--scenario", "bios") == 1
+    result = lab.result()
+    probe = {p["name"]: p for p in result["probes"]}["hwmonux"]
+    assert not probe["success"] and probe["error"] == f"Probe exited with status 127 (the installer reported: {reason})"
+    assert f"hwmonux: Probe exited with status 127 (the installer reported: {reason})" in result["error"]
+    assert result["companion_probes"][0]["error"] == probe["error"]
+
+
 def test_a_long_reason_of_the_installer_is_not_cut_short(lab):
     reason = ("app-misc/hwmonux could not be installed: dev-python/pyside-6.11.2 was stopped because the machine ran out of memory while it compiled "
               "QtOpenGL (the compiler was killed). " + "The build log inside the new system has the details. " * 12 + "End of the reason.")

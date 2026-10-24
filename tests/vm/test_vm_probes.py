@@ -342,6 +342,24 @@ def test_a_broken_sudo_is_not_a_verdict_about_the_world():
     assert vm_probes.WORLD_COMMAND.startswith("sudo -S -p ''") and "emerge --color=n -pvuDN @world" in vm_probes.WORLD_COMMAND
 
 
+# --- a part the installer could not install ------------------------------------------------------------------------------------
+
+def test_a_missing_companion_is_explained_by_what_the_installer_said_about_it():
+    """The first real run: 'hwmonux: Probe exited with status 127' and, three probes away, the installer's own words about the package."""
+    missing = vm_probes.ProbeResult("hwmonux", False, "bash: line 1: hwmonux: command not found", "Probe exited with status 127")
+    reason = "app-misc/hwmonux could not be installed: dev-python/pyside-6.11.2 was killed because the machine ran out of memory"
+    explained = vm_probes.explain_missing_part(missing, ["app-emulation/qemu-guest-agent failed", reason])
+    assert explained.error == f"Probe exited with status 127 (the installer reported: {reason})" and explained.output == missing.output
+    assert vm_probes.explain_missing_part(missing, ["app-emulation/qemu-guest-agent failed"]).error == "Probe exited with status 127"
+    assert vm_probes.explain_missing_part(missing, []).error == "Probe exited with status 127"
+    fine = vm_probes.ProbeResult("hwmonux", True, "ok")
+    assert vm_probes.explain_missing_part(fine, [reason]).error == ""
+    other = vm_probes.ProbeResult("network", False, "", "no route")
+    assert vm_probes.explain_missing_part(other, [reason]).error == "no route"
+    hub = vm_probes.ProbeResult("portagehub", False, "", "Probe exited with status 127")
+    assert "app-portage/portagehub failed" in vm_probes.explain_missing_part(hub, ["app-portage/portagehub failed to build"]).error
+
+
 # --- the hardware plan -----------------------------------------------------------------------------------------------------
 
 def plan_dict(name: str, manifest: InstallManifest) -> dict:

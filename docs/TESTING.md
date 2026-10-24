@@ -213,7 +213,7 @@ Information (`world-drift`) is kept in `result.json` and is neither.
 | Probe | What must be true | If it is not |
 |---|---|---|
 | `init`, `hostname`, `user`, `network`, `dns`, `portage` | the basics boot and work; `network-static` for the static-address scenarios | failure |
-| `hwmonux`, `portagehub` or `disabled-*-absent`, `desktop` | the companions and desktop the manifest asked for are installed and run; those it declined are absent | failure |
+| `hwmonux`, `portagehub` or `disabled-*-absent`, `desktop` | the companions and desktop the manifest asked for are installed and run; those it declined are absent. A companion that is missing carries the reason the installer gave for it in its final event | failure |
 | `firmware`, `cmdline`, `root-source` | booted in the firmware mode it was installed for; a stable `root=` (UUID, PARTUUID, label or mapper name) and the encryption argument, nothing of the live system, the requested extra arguments; in a guided install the container name of `rd.luks.name` (`gentoo-root`, or `gentoo-crypt` when LVM sits inside) and `rd.lvm.lv=gentoo/root` for LVM; root on `/dev/mapper` for LUKS and LVM | failure |
 | `swap` | a swap of the requested size is active (zram does not count). An encrypted install keeps swap in a **file** inside the encrypted root: a raw swap partition is a failure | failure |
 | `receipt` | `/etc/gentoo-live-installer/install.json` exists and agrees with the manifest: firmware, bootloader, init, kernel, initramfs, UKI, Secure Boot, profile, ESP mount point, root file system and UUID, LUKS UUID, LVM, RAID, separate `/boot` | missing: finding; wrong: failure |

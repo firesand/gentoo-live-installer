@@ -13,7 +13,7 @@ import inspect
 import json
 import re
 import shlex
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Iterable, Mapping, Sequence
 
 if TYPE_CHECKING:  # pragma: no cover
@@ -468,6 +468,23 @@ def parse_world_probe(returncode: int, output: str) -> list[ProbeResult]:
     summary = f"{counts['upgrades']} upgrades, {counts['new']} new, {counts['reinstalls']} reinstalls"
     resolve = ProbeResult("world-resolve", not failures, f"{summary}\n{tail}", "; ".join(failures))
     return [resolve, ProbeResult("world-drift", True, drift_text(drift, returncode), data=drift)]
+
+
+# --- a part the installer could not install -----------------------------------------------------------------------------------
+
+COMPANION_PACKAGES = {"hwmonux": "app-misc/hwmonux", "portagehub": "app-portage/portagehub"}
+
+
+def explain_missing_part(result: ProbeResult, degraded: Sequence[str]) -> ProbeResult:
+    """A companion probe that failed gets the installer's own words about that package, when its final event named it as not installed.
+
+    'hwmonux: Probe exited with status 127' says that the program is not there; the reason is in the installer's report.
+    """
+    package = COMPANION_PACKAGES.get(result.name)
+    if result.success or package is None:
+        return result
+    reasons = [text for text in degraded if package in text or result.name in text.lower()]
+    return replace(result, error=f"{result.error} (the installer reported: {'; '.join(reasons)})") if reasons else result
 
 
 # --- the hardware plan -------------------------------------------------------------------------------------------------

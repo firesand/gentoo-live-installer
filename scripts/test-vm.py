@@ -2323,7 +2323,7 @@ class ScenarioRunner:
             code, log = self.ssh(TEST_USERNAME, command, f"verify-{name}{label}.log", rest[1] if len(rest) > 1 else self.args.command_timeout,
                                  stdin=rest[0] if rest else None)
             parsed = parser(code, log.read_text(errors="replace"))
-            results.extend(parsed if isinstance(parsed, list) else [parsed])
+            results.extend(vm_probes.explain_missing_part(item, degraded) for item in (parsed if isinstance(parsed, list) else [parsed]))
         return results
 
     # --- what the installer itself reported ----------------------------------------------------------------------
