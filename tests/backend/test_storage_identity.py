@@ -386,6 +386,21 @@ class TestManualApprovals:
         no_writes(runner)
         make_manager(StatefulRunner(machine_with_array()), tmp_path).prepare(manual(*rows, additional_device_ids=["SER-B"]))
 
+    def test_an_install_onto_an_assembled_array_pins_one_member_and_approves_the_other(self, tmp_path):
+        rows = (ESP_ROW, Partition("/dev/md0", "/", "ext4", format=False))
+        m = manual(*rows, device="/dev/md0", device_id="SER-A", additional_device_ids=["SER-B"], raid_level="1")
+        make_manager(StatefulRunner(machine_with_array()), tmp_path).prepare(m)
+        runner = StatefulRunner(machine_with_array())
+        with pytest.raises(StorageError, match="Target disk identity does not match the approved manifest"):
+            make_manager(runner, tmp_path).prepare(manual(*rows, device="/dev/md0", device_id="NOT-A-MEMBER", additional_device_ids=["SER-B"], raid_level="1"))
+        no_writes(runner)
+
+    def test_erase_mode_needs_a_whole_disk(self, tmp_path):
+        runner = StatefulRunner(machine())
+        with pytest.raises(StorageError, match="Erase mode requires a whole disk"):
+            make_manager(runner, tmp_path).prepare(erase(device="/dev/sdb1", device_id="SER-B"))
+        no_writes(runner)
+
     def test_rows_must_exist_on_this_machine(self, tmp_path):
         with pytest.raises(StorageError, match="was not found"):
             make_manager(StatefulRunner(machine()), tmp_path).prepare(manual(ESP_ROW, Partition("/dev/sdq9", "/", "ext4")))
