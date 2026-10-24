@@ -1,0 +1,31 @@
+# /etc/fstab: static file system information.
+# <fs>                                          <mountpoint>    <type>  <opts>                                                          <dump> <pass>
+
+# Root filesystem (btrfs on NVMe SSD)
+UUID=de5412a3-678a-49a2-8e1c-25bcb37d0834       /               btrfs   rw,noatime,ssd,discard=async,space_cache=v2,subvolid=256,subvol=/root,noacl,commit=120  0 0
+
+# EFI System Partition (systemd-boot)
+UUID=ACB7-F14B                                  /boot/efi       vfat    ro,noatime,umask=0077,fmask=0077,dmask=0077                     0 2
+
+# Swap partition (NVMe)
+UUID=d37fe0f2-7f4e-414d-82b0-85a3a736792d       none            swap    sw,discard                                                      0 0
+
+# Temporary filesystems
+tmpfs                                           /var/tmp/portage tmpfs  uid=portage,gid=portage,mode=775,nosuid,noatime,nodev              0 0
+shm                                             /dev/shm        tmpfs   rw,noatime,nodev,nosuid,noexec                                  0 0
+
+# Steam Library Drive - nvme2n1p2 (ext4)
+UUID=9d9bf6e0-3e62-48c6-8695-592a4dc2176a       /mnt/steam-library  ext4  noatime,discard,nodev,nosuid,user,exec,commit=120              0 2
+
+
+# BackupData — Lexar NM790 4TB (btrfs); nofail = boot continues if the drive is missing
+UUID=1a28e7ec-dcdb-47a9-8dd9-6ecbe0a83814	/mnt/BackupData	btrfs	noatime,compress=zstd:3,discard=async,nofail	0 0
+
+# Extern2 — Crucial BX500 4TB SATA SSD (ext4)
+UUID=97af3e70-654c-4d96-8f88-32b2e9753e75	/mnt/Extern2	ext4	rw,noatime,nofail	0 2
+
+# ExTern — Samsung 870 EVO 2TB SATA SSD (NTFS)
+UUID=76C5846998E85EFA	/mnt/ExTern	ntfs3	rw,noatime,discard,nofail,uid=1000,gid=1000,umask=0002,iocharset=utf8	0 0
+
+# Extern3 — Patriot P200 2TB SATA SSD (ext4)
+UUID=0d8acaaf-9bd7-4bac-8dd1-cad07ff15f48	/mnt/Extern3	ext4	rw,noatime,nofail	0 2
