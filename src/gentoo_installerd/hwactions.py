@@ -38,7 +38,7 @@ SYNCED_WITHIN_SECONDS = 5.0
 # this many times (about fifteen seconds in all). chronyd may still be sending its first requests when the button is pressed.
 SYNC_POLLS = 15
 SYNC_POLL_SECONDS = 1.0
-TRACKING_TIMEOUT_SECONDS = 10.0
+TRACKING_TIMEOUT_SECONDS = 5.0
 _sleep = time.sleep  # a module attribute so that tests wait for nothing
 
 
@@ -144,7 +144,7 @@ def _read_tracking(runner: Runner) -> tuple[bool | None, float | None]:
 
 
 def _wait_for_sync(runner: Runner) -> str:
-    """"" once chrony follows a time server and the clock is within SYNCED_WITHIN_SECONDS of it; otherwise what is wrong."""
+    """An empty string once chrony follows a time server and the clock is within SYNCED_WITHIN_SECONDS of it; otherwise what is wrong."""
     synced: bool | None = None
     offset: float | None = None
     for attempt in range(SYNC_POLLS):

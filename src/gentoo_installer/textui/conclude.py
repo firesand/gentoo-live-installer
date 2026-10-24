@@ -47,7 +47,7 @@ def describe(console: Console, outcome: Outcome) -> None:
     if outcome.state == "blocked":
         c.para("Nothing was started and nothing on your disks was changed. Close the repair tool (or unmount what it holds), then start again.")
     if outcome.code == "storage.holders":
-        c.para("Nothing on your disks was changed: the installer stopped before it wrote anything.")
+        c.para("No data was written to your disks: the installer stopped before it started to prepare them.")
     if outcome.state in {"failed", "cancelled", "unreachable"}:
         c.para(f"The installation log is on this computer: {outcome.log_path or DEFAULT_LOG_PATH} (only root can read that file; the menu below can show it).")
     if outcome.bootable:
@@ -111,10 +111,11 @@ def restart(console: Console, host: Host) -> bool:
     return False
 
 
-def conclude(console: Console, host: Host, daemon: Daemon, outcome: Outcome, *, can_resume: bool = True) -> str:
+def conclude(console: Console, host: Host, daemon: Daemon, outcome: Outcome, *, can_resume: bool = True, can_release: bool = True) -> str:
     """Show the result and offer what makes sense. Returns "resume", "release", "again", "attach" or "done".
 
-    ``can_resume`` is false when the settings of the installation are not known (a run that was only attached to)."""
+    ``can_resume`` is false when the settings of the installation are not known (a run that was only attached to).
+    ``can_release`` is false when they are not known, or when they already carry the consent to switch volumes off."""
     describe(console, outcome)
     while True:
         options: list[Option] = []
@@ -132,7 +133,7 @@ def conclude(console: Console, host: Host, daemon: Daemon, outcome: Outcome, *, 
             offer("Resume the installation", "resume", "Continues where it stopped. The disk is not erased again.")
         if outcome.bootable and not outcome.ok:
             offer("Restart the computer now", "restart", "The system installed so far can start. Remove the installation medium first.")
-        if outcome.state == "failed" and outcome.code == "storage.holders" and can_resume:
+        if outcome.state == "failed" and outcome.code == "storage.holders" and can_release:
             offer("Switch them off, erase them together with the disk, and try again", "release",
                   "Their data is lost, and so is data stored on other disks of the same volume group or RAID array.")
         if outcome.state in {"failed", "cancelled", "invalid", "blocked"}:

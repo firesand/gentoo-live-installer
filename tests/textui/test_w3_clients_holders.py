@@ -146,7 +146,7 @@ def test_the_menu_after_a_refusal_offers_the_consent_and_then_starts_again(insta
     fake = serial_installer(installer, jobs=[holders_job(), good_job()])
     script = Script([
         *walk_to_review(), ("Step 9 of 9", "/dev/vda"),
-        ("Nothing on your disks was changed", "1"),  # Switch them off, erase them with the disk, and try again
+        ("No data was written to your disks", "1"),  # Switch them off, erase them together with the disk, and try again
         ("Really switch them off", "y"),
         ("The installation finished successfully.", "4"),  # restart, log, save, quit
     ])
@@ -156,7 +156,7 @@ def test_the_menu_after_a_refusal_offers_the_consent_and_then_starts_again(insta
     assert [manifest["storage"]["release_holders"] for manifest in fake.manifests] == [False, True]
     assert fake.resumes == [False, False]
     assert "Resume the installation" not in script.text, "the refusal came before anything was written"
-    assert "may be partly installed" not in script.text
+    assert "may be partly installed" not in script.text and "No data was written to your disks" in script.flat
 
 
 def test_saying_no_changes_nothing_and_the_menu_stays(installer, host: FakeHost) -> None:
@@ -171,8 +171,8 @@ def test_conclude_offers_it_only_for_that_refusal_and_when_the_settings_are_know
     fake = serial_installer(installer)
     for outcome, known in ((Outcome("failed", HOLDERS_MESSAGE, code="storage.holders", stage="storage"), False), (Outcome("failed", "x", code="install.failed"), True)):
         script = Script([("What now", "1")])
-        conclude(Console(script.stdin, script.out, environ={}), host, Daemon(fake.path), outcome, can_resume=known)
-        assert "erase them with the disk" not in script.text
+        conclude(Console(script.stdin, script.out, environ={}), host, Daemon(fake.path), outcome, can_resume=known, can_release=known)
+        assert "erase them together with the disk" not in script.text
 
 
 # --- without anybody to ask ---------------------------------------------------------------------------------------------------------------------
@@ -188,7 +188,7 @@ def test_an_unattended_run_that_is_refused_says_which_option_gives_the_consent(t
     fake = serial_installer(installer, jobs=[holders_job()])
     result = run_main(["--socket", fake.path, "--manifest", write_manifest(tmp_path), "--yes", "--confirm-device", "/dev/vda"], Script(), host)
     assert result.code == 1
-    assert "--release-holders" in result.out and "Nothing on your disks was changed" in " ".join(result.out.split())
+    assert "--release-holders" in result.out and "No data was written to your disks" in " ".join(result.out.split())
     assert fake.manifests[0]["storage"]["release_holders"] is False
 
 
@@ -205,3 +205,16 @@ def test_the_option_needs_a_settings_file(host: FakeHost) -> None:
 
 def test_the_help_names_the_option(host: FakeHost) -> None:
     assert "--release-holders" in run_main(["--help"], Script(), host).out
+
+
+def test_a_refusal_after_the_consent_was_given_does_not_offer_the_same_consent_again(tmp_path: Path, installer, host: FakeHost) -> None:
+    """'Volumes are still active after deactivation': asking for the consent again would change nothing."""
+    settings = valid_manifest()
+    settings.storage.release_holders = True
+    path = tmp_path / "settings.json"
+    path.write_text(settings.to_json())
+    fake = serial_installer(installer, jobs=[holders_job()])
+    script = Script([("Type the disk name to start", "/dev/vda"), ("What now", "4")])  # summary, log, save, quit
+    result = run_main(["--socket", fake.path, "--manifest", str(path)], script, host)
+    script.assert_finished()
+    assert result.code == 1 and "erase them together with the disk, and try again" not in script.text

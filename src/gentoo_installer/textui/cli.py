@@ -267,7 +267,8 @@ def conclude_loop(ctx: Context, outcome: Outcome, manifest: InstallManifest | No
         tell_how_to_resume(ctx.console, outcome)
         return "done", outcome
     while True:
-        action = conclude(ctx.console, ctx.host, ctx.daemon, outcome, can_resume=manifest is not None)
+        action = conclude(ctx.console, ctx.host, ctx.daemon, outcome, can_resume=manifest is not None,
+                          can_release=manifest is not None and not manifest.storage.release_holders)
         if action == "resume" and manifest is not None:
             outcome = run_install(ctx, start_request(manifest, True))
         elif action == "release" and manifest is not None:
