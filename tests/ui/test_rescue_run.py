@@ -236,3 +236,19 @@ def test_a_plan_whose_condition_is_not_met_cannot_be_run(qtbot, gentoo_machine, 
     page.reviewed.setChecked(True)
     assert not page.run_button.isEnabled() and "cannot run yet" in page.notice.text.text()
     assert not lab.system.chroot_calls and lab.system.nvram["entries"] == {}
+
+
+def test_the_late_answer_to_an_earlier_repair_does_not_land_in_a_later_one(qtbot, gentoo_machine, repair_kit) -> None:
+    daemon, _lab, _tree = gentoo_machine
+    window = repair_kit.open(daemon.path)
+    system = open_system(qtbot, window)
+    page = window.plan_page
+    seen: list[str] = []
+    page.begin(system, next(spec for spec in system.actions if spec["id"] == "boot.config"))
+    handler = page._current(lambda plan: seen.append(plan["action"]))  # what the answer to that first request would do
+    qtbot.waitUntil(lambda: page.state == "review", timeout=20000)
+    page.begin(system, next(spec for spec in system.actions if spec["id"] == "boot.initramfs"))  # the person went on to another repair
+    handler({"action": "boot.config"})  # the first answer arrives now
+    assert seen == []
+    qtbot.waitUntil(lambda: page.state == "review", timeout=20000)
+    assert page.plan["action"] == "boot.initramfs" and page.heading.text() == "Rebuild the initramfs"

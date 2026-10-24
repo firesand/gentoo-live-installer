@@ -61,6 +61,7 @@ class PlanPage(RescuePage):
         self._secret_fields: dict[str, tuple[SecretField, SecretField]] = {}
         self._form: OptionsForm | None = None
         self._calls: list[Call] = []
+        self._generation = 0  # counts the repairs started on this page: the late answer to an earlier one must not land in a later one
 
         self.heading = wrapped_label("")
         self.heading.setObjectName("sectionTitle")
@@ -90,7 +91,7 @@ class PlanPage(RescuePage):
         self.reconnect_button = self.add_button("&Reconnect", "planReconnect", right=False)
         self.reconnect_button.clicked.connect(self._reconnect_now)
         self.continue_button = self.add_button("&Show me what will change", "planContinue", primary=True)
-        self.continue_button.clicked.connect(self._request_plan)
+        self.continue_button.clicked.connect(lambda: self._request_plan())
         self.run_button = self.add_button("&Start the repair", "planRun", primary=True)
         self.run_button.clicked.connect(self._start_run)
         self.done_button = self.add_button("&Back to the diagnosis", "planDone", primary=True)
@@ -255,7 +256,18 @@ class PlanPage(RescuePage):
         return ""
 
     # ---- starting ---------------------------------------------------------------------------------------------------------------------
+    def _current(self, handler: Any) -> Any:
+        """The handler, silent when the page has moved on to another repair since the request was sent."""
+        generation = self._generation
+
+        def guarded(*args: Any) -> None:
+            if generation == self._generation:
+                handler(*args)
+
+        return guarded
+
     def begin(self, system: model.OpenSystem, spec: dict[str, Any], *, hardware_changed: bool = False) -> None:
+        self._generation += 1
         self.system, self.spec, self.moved = system, spec, hardware_changed
         self.plan, self.tracker, self._ran, self._cancel_requested, self._form = {}, None, False, False, None
         self.params = {param.name: param.default for param in model.params_of(spec) if param.default not in (None, "") and param.type != "object"}
@@ -289,7 +301,7 @@ class PlanPage(RescuePage):
         if self.system is None:
             return
         call = self.client.request("rescue.query", {"session_id": self.system.session_id, "query": query})
-        call.then(lambda result: use(result.get("data", {})))
+        call.then(self._current(lambda result: use(result.get("data", {}))))
         self._calls.append(call)
 
     # ---- the plan -----------------------------------------------------------------------------------------------------------------
@@ -309,7 +321,7 @@ class PlanPage(RescuePage):
         self._set_state("planning")
         self.busy.start("Making the plan…")
         call = self.client.request("rescue.plan", {"session_id": self.system.session_id, "action_id": self.spec.get("id"), "params": self.params})
-        call.then(self._planned, self._plan_failed, self._plan_lost)
+        call.then(self._current(self._planned), self._current(self._plan_failed), self._current(self._plan_lost))
 
     def _planned(self, plan: dict[str, Any]) -> None:
         self.busy.stop()
