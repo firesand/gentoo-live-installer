@@ -1856,7 +1856,7 @@ class ScenarioRunner:
 
     def check_decoys(self, prepared: dict, stage: str) -> None:
         for role, disk in prepared.items():
-            check = self.guest_tool("decoy-check", {"path": disk["path"], "size": disk["size"], "sha256": disk["sha256"]},
+            check = self.guest_tool("decoy-check", {"role": role, "path": disk["path"], "size": disk["size"], "sha256": disk["sha256"]},
                                     f"decoy-check-{stage}-{role}.log")
             if not check["unchanged"]:
                 raise HarnessError(f"The decoy disk {role} ({disk['path']}) changed {stage}: the installer wrote to a disk it was not given")

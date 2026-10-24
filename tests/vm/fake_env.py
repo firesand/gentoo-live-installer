@@ -119,6 +119,7 @@ def guest_rules(vm, scenario_name: str, *, guard: str = "vm_disk_guard", install
     """Rules for a guest that installs and boots successfully, in the order the harness needs them."""
     scenario = vm.SCENARIO_MAP[scenario_name]
     plan = hardware_plan_for(vm, scenario_name, firmware)
+    preset = vm.vm_hw.SMBIOS_PRESETS[scenario.hardware.smbios]
     init = "systemd" if scenario.init == "systemd" else "init"
     target_ready = {"user": "^vmtest$", "match": "^true$"}
     if scenario.luks:
@@ -156,6 +157,7 @@ def guest_rules(vm, scenario_name: str, *, guard: str = "vm_disk_guard", install
         {"user": "^vmtest$", "match": r"^swapon --noheadings --bytes", "stdout": (f"/swapfile file {swap_mib * 2**20}\n" if scenario.luks
                                                                           else f"/dev/vda3 partition {swap_mib * 2**20 - 4096}\n")},
         {"user": "^vmtest$", "match": r"^cat /etc/gentoo-live-installer/install\.json$", "stdout": receipt_for(vm, scenario_name, firmware)},
+        {"user": "^vmtest$", "match": r"^cat /sys/class/dmi/id/sys_vendor", "stdout": f"{preset.manufacturer}\n{preset.chassis_type}\n"},
         {"user": "^vmtest$", "match": r"BOOTX64\.EFI$", "stdout": json.dumps({"path": "/efi/EFI/BOOT/BOOTX64.EFI", "size": 120832, "magic": "MZ"}) + "\n"},
         {"user": "^vmtest$", "match": r"emerge --color=n -pvuDN @world$", "stdout": WORLD_CLEAN},
         {"user": "^vmtest$", "match": r"^findmnt -rno TARGET,SOURCE", "stdout": layout_output(vm, scenario_name) if scenario.manual else ""},

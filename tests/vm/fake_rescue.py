@@ -41,23 +41,25 @@ def rescue_rules(os_id: str, *, disk: str = "/dev/vda", mode: str = "grub-cfg", 
     title, family = OS[os_id]
     system = {"id": "c1234abcd", "device": f"{disk}1", "kind": "root", "fstype": "ext4", "rootflags": "", "os": {"id": os_id, "pretty_name": title, "family": family}}
     finding_id, finding_title, action = FINDING.get(mode, ("D05", "x", "boot.config"))
-    findings = [{"id": finding_id, "severity": "error", "title": finding_title}] if sees_damage and not refuse else []
+    wanted = list(FINDING.values()) if mode == "all" else [(finding_id, finding_title, action)]
+    findings = [{"id": fid, "severity": "error", "title": ftitle} for fid, ftitle, _a in wanted] if sees_damage and not refuse else []
+    commands = list(COMMAND.values()) if mode == "all" else [COMMAND.get(mode, "update-grub")]
     plan = {"digest": "d" * 64, "plan_id": "p1", "risk": "high" if typed else "medium", "action": "repair.recommended", "title": "Fix everything recommended",
             "confirm": {"typed": typed, "phrase": "", "required": True, "review": True, "risk": "medium"},
             "needs": {"uefi_nvram": nvram, "write": True, "chroot": True}, "preconditions": [], "warnings": [], "diff": "",
-            "steps": [{"id": "boot-config-c1", "display": f"chroot /mnt/rescue/{SESSION} {COMMAND.get(mode, 'update-grub')}", "argv": COMMAND.get(mode, "update-grub").split()}]}
+            "steps": [{"id": f"step-{number}", "display": f"chroot /mnt/rescue/{SESSION} {command}", "argv": command.split()} for number, command in enumerate(commands, 1)]}
     ran = {"outcome": outcome, "steps": [{"id": "boot-config-c1", "status": "completed" if outcome == "success" else "failed", "rc": 0 if outcome == "success" else 1}],
            "post_checks": [{"kind": "file_min_size", "ok": outcome == "success", "text": "/boot/grub/grub.cfg is 1.3 KiB"}], "warnings": []}
-    session = {"session_id": SESSION, "path": f"/mnt/rescue/{SESSION}", "mode": "ro", "family": family, "os": system["os"], "findings": findings, "recommended": [action]}
+    session = {"session_id": SESSION, "path": f"/mnt/rescue/{SESSION}", "mode": "ro", "family": family, "os": system["os"], "findings": findings, "recommended": [item[2] for item in wanted]}
     actions = [{"id": name, "available": not refuse, "reason": REFUSAL if refuse else ""} for name in WRITE_ACTIONS]
     root = {"user": "^root$"}
     rules: list[dict] = [
-        {**root, "match": r"^gentoo-rescue (?:--\S+ \S+ )?--json scan$", "stdout": result({"scan_id": "s1", "candidates": systems if systems is not None else [system],
+        {**root, "match": r"^gentoo-rescue (?:--local |--socket \S+ )?--json scan$", "stdout": result({"scan_id": "s1", "candidates": systems if systems is not None else [system],
                                                                                          "live_medium": ["/dev/sr0"]}, "rescue.scan")},
-        {**root, "match": r"^gentoo-rescue (?:--\S+ \S+ )?--json mount c1234abcd --yes$",
+        {**root, "match": r"^gentoo-rescue (?:--local |--socket \S+ )?--json mount c1234abcd --yes$",
          "stdout": "Mount plan (digest abcdef012345):\n" + result({"mount_plan": {"digest": "a"}, "candidate": system}, "rescue.mount")
          + result(session, "rescue.mount") + f"Mounted at /mnt/rescue/{SESSION} (read-only; session {SESSION}).\n"},
-        {**root, "match": rf"--json diagnose {SESSION}$", "stdout": result({"query": "diag.summary", "data": {"findings": findings, "recommended": [action] if findings else []}}, "rescue.query")},
+        {**root, "match": rf"--json diagnose {SESSION}$", "stdout": result({"query": "diag.summary", "data": {"findings": findings, "recommended": [item[2] for item in wanted] if findings else []}}, "rescue.query")},
         {**root, "match": rf"--json actions {SESSION}$", "stdout": result({"query": "actions.list", "data": {"actions": actions}}, "rescue.query")},
     ]
     if refuse:

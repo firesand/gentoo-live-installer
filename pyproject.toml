@@ -11,7 +11,7 @@ license = "GPL-2.0-or-later"
 dependencies = ["PySide6>=6.8"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "pytest-qt>=4.4"]
+dev = ["pytest>=8", "pytest-qt>=4.4", "pytest-timeout>=2.3"]
 
 [project.scripts]
 gentoo-installer = "gentoo_installer.app:main"
@@ -22,7 +22,7 @@ gentoo-rescue = "gentoo_installerd.rescue.cli:main"
 where = ["src"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "apps/hwmonux/tests"]
 # "." makes the tests package importable, "src" the installer packages and "scripts" the
 # vm_*.py helper modules, so a bare `pytest` (IDE, CI) collects the same suite as scripts/test.sh.
 pythonpath = [".", "src", "scripts"]

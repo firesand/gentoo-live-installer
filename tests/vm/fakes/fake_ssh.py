@@ -14,6 +14,7 @@ by FAKE_SSH_RULES (first match wins) and answers like the guest would. Rule keys
   events     list of objects printed as JSON lines (the installer's event stream)
   stdin_to   save the command's stdin below <run dir>/fake-guest/<name>
   touch      files (relative to the run directory) to create
+  remove     files (relative to the run directory) to delete
   shutdown_vm  "live" or "target": SIGTERM the fake QEMU of that phase (the guest powers off)
   write      {"path": ..., "text": ...}: write a file below the run directory (the guest changes a disk or NVRAM)
   guest_tool answer like scripts/vm_guest.py for decoy-prepare / decoy-check (checksums of the host's image file)
@@ -88,6 +89,8 @@ def guest_tool_answer(remote: str, run_dir: Path) -> str:
         report = {"path": payload["path"], "size": payload["size"], "sha256": digest, "unchanged": digest == payload["sha256"]}
     else:
         report = {"mode": payload.get("mode"), "root": payload.get("path", "") + "3", "removed": ["boot/grub/grub.cfg"]}
+        if payload.get("mode") == "fstab-uuid":
+            report.update(replaced=["UUID=x"], findmnt_exit=1, findmnt_output="unreachable on boot required source: UUID=00000000-dead-beef-0000-000000000000")
     return json.dumps({"type": "vm_guest", "ok": True, **report}) + "\n"
 
 
@@ -158,6 +161,8 @@ def main() -> int:
             target.write_bytes(stdin)
         for name in chosen.get("touch", []):
             (run_dir / name).write_text("1")
+        for name in chosen.get("remove", []):
+            (run_dir / name).unlink(missing_ok=True)
         if chosen.get("write"):
             (run_dir / chosen["write"]["path"]).write_text(chosen["write"]["text"])
         output = chosen.get("stdout", "")
