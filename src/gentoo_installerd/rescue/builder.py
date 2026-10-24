@@ -38,6 +38,7 @@ class PlanBuilder:
         self.needs: dict[str, Any] = {"write": True, "network": False, "uefi_nvram": False, "unmounted_device": None}
         self.diff = ""
         self.hints: list[str] = []
+        self.notes: list[str] = []
         self.secrets: tuple[str, ...] = ()
         self.uses_chroot = False
         self.chroot_tools: set[str] = set()
@@ -146,7 +147,7 @@ class PlanBuilder:
         self.needs["chroot"] = self.uses_chroot
         return Plan(session_id=session.sid, action=self.action, title=self.title, summary=self.summary, risk=self.risk, steps=all_steps, cleanup=self.cleanup, post_checks=self.post_checks,
                     warnings=self.warnings, preconditions=self.preconditions, needs=self.needs, diff=self.diff, params=self._public_params(), secrets_needed=self.secrets,
-                    root_device=self.view.root_device, root_uuid=self.view.root_uuid, generation=session.generation, mode=session.mode, next_hints=self.hints)
+                    root_device=self.view.root_device, root_uuid=self.view.root_uuid, generation=session.generation, mode=session.mode, next_hints=self.hints, notes=self.notes)
 
     def _public_params(self) -> dict[str, Any]:
         return {key: value for key, value in self.params.items() if not key.startswith("_") and key not in {"secrets", "password", "passphrase"}}

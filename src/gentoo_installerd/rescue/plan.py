@@ -97,6 +97,7 @@ class Plan:
     generation: int = 0
     mode: str = "ro"
     next_hints: list[str] = field(default_factory=list)
+    notes: list[str] = field(default_factory=list)  # things worth knowing before the plan is confirmed (not warnings)
     id: str = field(default_factory=lambda: "p" + secrets.token_hex(3))
     created: float = field(default_factory=time.time)
     expires: float = 0.0
@@ -129,7 +130,7 @@ class Plan:
         return {
             "plan_id": self.id, "digest": self.digest, "session_id": self.session_id, "action": self.action, "title": self.title, "summary": self.summary, "risk": self.risk,
             "needs": self.needs, "preconditions": self.preconditions, "steps": [step.public() for step in self.steps], "cleanup": [step.public() for step in self.cleanup],
-            "post_checks": self.post_checks, "warnings": self.warnings, "diff": self.diff, "confirm": self.confirm, "expires": self.expires, "generation": self.generation,
+            "post_checks": self.post_checks, "warnings": self.warnings, "notes": self.notes, "diff": self.diff, "confirm": self.confirm, "expires": self.expires, "generation": self.generation,
             "secrets": list(self.secrets_needed), "params": self.params,
         }
 

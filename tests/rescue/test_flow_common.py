@@ -486,3 +486,13 @@ def test_secret_output_is_never_streamed(lab_factory) -> None:
     assert "hunter2" not in " ".join(event.message for event in op.buffer.since(0)) + str(result)
     assert "hunter2" not in manager.audit_text({"session_id": sid})["text"] + manager.audit.text("jsonl")
     unmount(manager, sid)
+
+
+def test_a_dirty_xfs_log_is_not_a_failed_check_and_the_user_is_told_how_to_replay_it(lab_factory) -> None:
+    lab = lab_factory(lf.xfs_boot_esp())
+    tree = lab.add_tree("/dev/sda3", "gentoo", firmware="uefi", fstab=f"UUID={fr.ROOT_UUID} / xfs noatime 0 1\n")
+    lab.system.script(("xfs_repair", "-n"), "ERROR: The filesystem has valuable metadata changes in a log which needs to be replayed.\n", rc=2)
+    manager, sid, _info = mount_through_the_manager(lab, candidate_device="/dev/sda3")
+    plan, result, _ = plan_and_run(manager, sid, "fs.check")
+    assert result["outcome"] == "success" and [n for n in plan["notes"] if "replays it" in n and "-L" in n]  # shown with the plan, before it is confirmed
+    unmount(manager, sid)

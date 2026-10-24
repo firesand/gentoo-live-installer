@@ -177,6 +177,8 @@ def render_plan(console: Console, plan: dict[str, Any]) -> None:
             console.say(f"       {step['display']}")
     for warning in plan.get("warnings", []):
         console.say(f"  ! {warning}")
+    for note in plan.get("notes", []):
+        console.say(f"  note: {note}")
 
 
 def render_result(console: Console, result: dict[str, Any]) -> None:

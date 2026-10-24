@@ -198,6 +198,9 @@ def _merge(master: PlanBuilder, sub: PlanBuilder, action: str) -> None:
     for hint in sub.hints:
         if hint not in master.hints:
             master.hints.append(hint)
+    for note in sub.notes:
+        if note not in master.notes:
+            master.notes.append(note)
     master.needs["network"] = bool(master.needs.get("network")) or bool(sub.needs.get("network"))
     master.needs["uefi_nvram"] = bool(master.needs.get("uefi_nvram")) or bool(sub.needs.get("uefi_nvram"))
     if sub.diff:
@@ -425,7 +428,7 @@ def _verify_fstab(b: PlanBuilder, text: str) -> str:
 # ---- file system checks -----------------------------------------------------------------------------------------------------------------------------------
 CHECK_COMMANDS = {
     "ext": {"check": (["e2fsck", "-n", "-f"], (0, 4)), "repair": (["e2fsck", "-f", "-p"], (0, 1, 2)), "repair_force": (["e2fsck", "-f", "-y"], (0, 1, 2))},
-    "xfs": {"check": (["xfs_repair", "-n"], (0, 1)), "repair": (["xfs_repair"], (0,)), "repair_force": (["xfs_repair", "-L"], (0,))},
+    "xfs": {"check": (["xfs_repair", "-n"], (0, 1, 2)), "repair": (["xfs_repair"], (0,)), "repair_force": (["xfs_repair", "-L"], (0,))},  # -n: 1 corruption found, 2 the log is not clean
     "vfat": {"check": (["fsck.vfat", "-n"], (0, 1)), "repair": (["fsck.vfat", "-a"], (0, 1))},
     "f2fs": {"check": (["fsck.f2fs", "--dry-run"], (0,)), "repair": (["fsck.f2fs", "-f"], (0, 1))},
     "exfat": {"check": (["fsck.exfat", "-n"], (0, 1)), "repair": (["fsck.exfat", "-p"], (0, 1))},
@@ -498,6 +501,8 @@ def _plan_fs_check(b: PlanBuilder) -> None:
     b.hints.append("The system was mounted read-only again after the check." if mode == "check" else "The system was mounted read-only again. Enable repairs to continue.")
     if mode == "check":
         b.hints.append("Exit code 4 of e2fsck means errors were found, not that the check failed.")
+    if node.fstype == "xfs":
+        b.notes.append("If xfs_repair says the log must be replayed, enable repairs first (mounting the file system read-write replays it) and check again. The 'may lose data' repair (-L) destroys the log instead.")
 
 
 # ---- accounts -------------------------------------------------------------------------------------------------------------------------------------------------
