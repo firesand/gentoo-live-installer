@@ -125,6 +125,12 @@ def sandbox(tmp_path: Path):
 
 @pytest.fixture
 def terminal(installer, sandbox):
+    try:
+        probe_master, probe_slave = pty.openpty()
+    except OSError as exc:  # a sandbox without pseudo terminals
+        pytest.skip(f"no pseudo terminal available: {exc}")
+    os.close(probe_master)
+    os.close(probe_slave)
     started: list[Terminal] = []
 
     def start(fake: FakeInstaller, *, term: str = "xterm", extra_env: dict[str, str] | None = None, **size) -> Terminal:
