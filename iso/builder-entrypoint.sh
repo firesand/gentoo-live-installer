@@ -293,9 +293,21 @@ resolve_build_plan() {
 			STAGE1_MODE=reuse
 			;;
 		reseed)
-			PLAN=reseed
-			STAGE1_MODE=reseed
-			RESEED_ATOMS=$(python3 -c 'import json, sys; print(" ".join(json.load(sys.stdin)["reinstall"]))' <<<"${decision}")
+			if [[ ${BUILD_MODE} == auto ]]; then
+				# In a real Catalyst run the reseed did not reinstall the changed packages (the
+				# --reinstall-atoms given through EMERGE_DEFAULT_OPTS never reached emerge in the
+				# chroot), so the image kept the old installer while its receipt claimed the new
+				# one. Build stage1 fresh instead: the binary package cache keeps that short, and the
+				# project's own packages are always built from this tree. BUILD_MODE=reseed still
+				# runs the reseed for whoever works on it.
+				log "Stage1 is built fresh, not reseeded ($(json_field reason <<<"${decision}")): the project's packages are built from this tree"
+				PLAN=full
+				STAGE1_MODE=fresh
+			else
+				PLAN=reseed
+				STAGE1_MODE=reseed
+				RESEED_ATOMS=$(python3 -c 'import json, sys; print(" ".join(json.load(sys.stdin)["reinstall"]))' <<<"${decision}")
+			fi
 			;;
 		*)
 			[[ ${BUILD_MODE} == auto ]] || die "BUILD_MODE=${BUILD_MODE} needs a usable earlier stage1: $(json_field reason <<<"${decision}")"

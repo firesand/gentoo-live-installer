@@ -193,7 +193,8 @@ def test_changed_local_sources_reseed_only_those_packages(sandbox, stage1: Path)
     write_receipt(sandbox, stage1)
     version = reuse.package_version(reuse.ebuild_file(ROOT, "portagehub"))
     (sandbox.dirs["distfiles"] / f"portagehub-{version}.tar.zst").write_bytes(b"new sources")
-    assert plan(sandbox, "auto").stdout.strip() == "reseed reseed [app-portage/portagehub]"
+    # auto never reseeds (a real reseed kept the old package); only an explicit reseed does
+    assert plan(sandbox, "auto").stdout.strip() == "full fresh []"
     assert plan(sandbox, "reseed").stdout.strip() == "reseed reseed [app-portage/portagehub]"
     refused = plan(sandbox, "stage2-only")
     assert refused.returncode != 0 and "cannot run stage2 only" in refused.stderr
