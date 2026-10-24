@@ -1830,7 +1830,7 @@ class Configurer:
                 diagnosis = self.explain(exc)
                 hopeless = self.one_job_is_no_help(manifest, diagnosis, one_job)
                 if diagnosis.kind in {"resolution", "build"} or attempt == attempts or hopeless:
-                    raise PackageInstallError(f"The base system packages could not be installed: {diagnosis.summary}" + (f" {NOT_ENOUGH_MEMORY}" if hopeless else ""),
+                    raise PackageInstallError(f"The base system packages could not be installed: {self.memory_advice(diagnosis, hopeless)}",
                                               resolution=diagnosis.resolution) from exc
                 if diagnosis.kind == "memory":
                     one_job = True
@@ -1838,6 +1838,11 @@ class Configurer:
                 else:
                     self.notify(f"Base system packages: {diagnosis.summary[:160]}; trying again ({attempt + 1}/{attempts})")
                 self.sleep(5.0 * attempt)
+
+    @staticmethod
+    def memory_advice(diagnosis: EmergeDiagnosis, hopeless: bool) -> str:
+        """The summary of a failed emerge; when one compile job was not enough either, it says so."""
+        return diagnosis.summary.rstrip(". ") + f". {NOT_ENOUGH_MEMORY}" if hopeless else diagnosis.summary
 
     def one_job_is_no_help(self, manifest: InstallManifest, diagnosis: EmergeDiagnosis, one_job: bool) -> bool:
         """A build was killed for lack of memory, and the attempt already had one compile job (or had to have): another try would only fail the same way."""
@@ -1866,7 +1871,7 @@ class Configurer:
                     self.notify(f"warning: {label}: some dependencies failed ({diagnosis.summary[:200]}) but everything requested is installed")
                     return KeepGoingResult()
                 hopeless = self.one_job_is_no_help(manifest, diagnosis, one_job)
-                result = KeepGoingResult(remaining, diagnosis.summary + (f" {NOT_ENOUGH_MEMORY}" if hopeless else ""), diagnosis.kind)
+                result = KeepGoingResult(remaining, self.memory_advice(diagnosis, hopeless), diagnosis.kind)
                 if diagnosis.kind in {"resolution", "build"} or attempt == attempts or hopeless:
                     return result
                 if diagnosis.kind == "memory":

@@ -134,7 +134,7 @@ class TestMultiDevicePools:
         with pytest.raises(StorageError, match=f"Btrfs.*{FSID}.*members here: /dev/vda2; also on /dev/vdb1.*destroy data stored on /dev/vdb1") as caught:
             make_manager(runner, tmp_path).prepare(erase())
         assert caught.value.code == "storage.holders"
-        assert "release_holders" in str(caught.value)
+        assert "release_holders" not in str(caught.value) and "--release-holders" in str(caught.value)  # the way out is told in plain words
         no_writes(runner)
 
     def test_consent_lets_it_through_and_is_written_to_the_log(self, tmp_path):

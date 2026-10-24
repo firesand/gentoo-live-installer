@@ -337,8 +337,8 @@ class OutOfMemoryRetryTests(unittest.TestCase):
         result = c.install_desktop(m)
         self.assertEqual(result.failed, ["app-misc/hwmonux"])
         self.assertEqual(len(result.degraded), 1)
-        self.assertTrue(result.degraded[0].startswith(f"app-misc/hwmonux could not be installed: {PYSIDE} ran out of memory while compiling: {KILLED}"), result.degraded[0])
-        self.assertNotIn("GNU info", result.degraded[0])
+        self.assertEqual(result.degraded, [f"app-misc/hwmonux could not be installed: {PYSIDE} ran out of memory while compiling: {KILLED}. "
+                                           "It still ran out of memory with one compile job: this PC needs more memory or swap for it."])
         self.assertEqual(len(self.emerges()), 2)
 
     def test_a_failed_world_update_names_the_package_too(self) -> None:

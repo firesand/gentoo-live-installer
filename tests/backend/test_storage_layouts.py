@@ -316,6 +316,7 @@ class TestExistingSystem:
         with pytest.raises(StorageError, match="already contains files \\(etc, home, root\\).*replacing its /etc, accounts and boot files") as caught:
             manager.prepare(m)
         assert caught.value.code == "storage.existing_system"
+        assert "overwrite_existing_system" not in str(caught.value) and "storage." not in str(caught.value)
         assert not any(c[0] == "tar" for c in runner.commands)
         assert not any(c[:1] == ("mount",) and c[-1].endswith("/efi") for c in runner.commands)  # refused before the other mount points exist
         assert (tmp_path / "target" / "etc" / "passwd").read_text().startswith("root:")
