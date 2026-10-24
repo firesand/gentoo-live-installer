@@ -6,8 +6,10 @@ serial line. It collects the same manifest as the graphical installer and hands 
 installer daemon (``gentoo-installerd``) through its socket; see docs/protocol.md.
 
 Modules: ``console`` (terminal input and output), ``host`` (the programs it runs on the live
-system), ``daemon`` (the socket), ``inventory`` (the daemon's ``inspect`` reply), ``wizard`` (the
-questions), ``follow`` (progress, reconnecting, resume) and ``cli`` (the command line).
+system and the system files it reads), ``daemon`` (the socket), ``inventory`` (the daemon's
+``inspect`` reply), ``check`` (answers checked with the manifest's own rules), ``wizard`` (the
+questions), ``summary`` (what is shown before the start), ``follow`` (progress, reconnecting),
+``conclude`` (restart, resume, the log) and ``cli`` (the command line and the exit codes).
 """
 
 from __future__ import annotations

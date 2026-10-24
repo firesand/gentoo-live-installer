@@ -436,3 +436,14 @@ def test_files_written_under_sudo_go_to_the_home_of_the_person_who_ran_sudo(tmp_
     changed.clear()
     Host().give_to_invoker(home / "y.log")
     assert changed == []
+
+
+def test_without_a_service_and_nobody_to_answer_the_exit_status_is_4(sock_dir: Path, host: FakeHost) -> None:
+    result = run_main(["--socket", str(sock_dir / "nobody.sock")], Script([("installer service is not running", END)]), host)
+    assert result.code == 4
+
+
+def test_a_pipe_instead_of_a_terminal_is_said_so(installer, host: FakeHost) -> None:
+    fake = serial_installer(installer)
+    script = Script([("Standard input is not a terminal", END)])
+    assert run_main(["--socket", fake.path], script, host).code == 130

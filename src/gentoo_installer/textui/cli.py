@@ -206,7 +206,7 @@ def connect(ctx: Context, *, ask_retry: bool) -> DaemonState | None:
             return None
         try:
             ctx.console.menu([Option("Try again")], default=0, back=False, help="The installer service does the real work. On the live disc it starts by itself a moment after boot.")
-        except Quit:
+        except (Quit, InputClosed):  # nobody answers: the service cannot be reached
             return None
 
 
@@ -344,6 +344,8 @@ def run_unattended(ctx: Context, manifest: InstallManifest) -> int:
 
 def run_wizard(ctx: Context, manifest: InstallManifest | None = None, *, from_file: bool = False) -> int:
     console = ctx.console
+    if not console.tty_in:
+        console.note("Standard input is not a terminal: the answers are read from it, one line each.")
     state = connect(ctx, ask_retry=True)
     if state is None:
         return EXIT_NO_DAEMON
