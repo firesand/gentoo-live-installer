@@ -413,7 +413,7 @@ class RescueSession:
         command = step.argv[0]
         if command == "umount":
             if os.path.exists(step.argv[-1]):
-                check_mount_destination(step.argv[-1], self.root)
+                check_mount_destination(step.argv[-1], self.root, file_ok=True)  # a bound file (resolv.conf, /proc/cmdline) is unmounted too
             return
         if command != "mount" or not step.mountpoint:
             return

@@ -197,7 +197,7 @@ class RescueManager:
                 result = stack.assemble_md(uuids, degraded_ok=bool(params.get("degraded_ok")))
             else:
                 raise RescueError("bad_request", "kind must be lvm or md")
-            self.audit.record("activate", kind=kind, params={key: value for key, value in params.items() if key in {"vg", "uuids"}}, sync=True)
+            self.audit.record("activate", what=kind, params={key: value for key, value in params.items() if key in {"vg", "uuids"}}, sync=True)
             fresh = Scanner(runner, self.pool_ctx, self.env.host, self.env.probe_root, sleep=self.env.sleep).scan(ScanOptions(probe=True))
             self._scans[fresh.scan_id] = fresh
             result["new_candidates"] = fresh.candidates
@@ -556,6 +556,8 @@ class RescueManager:
                 raise RescueError("not_found", f"There is no saved session {sid}", session_id=sid)
             return session.info()
         if action == "cleanup":
+            if params.get("all"):
+                return self.cleanup_all(force=bool(params.get("force", True)))
             if not sid:
                 return self._release_pool(op, bool(params.get("force")))
             session = self.sessions.get(sid) or self.adopt(sid)

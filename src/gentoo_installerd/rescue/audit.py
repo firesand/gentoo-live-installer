@@ -63,10 +63,11 @@ class AuditLog:
         except OSError:
             self.path = None  # a full or read-only audit directory must never stop a repair
 
-    def record(self, kind: str, *, sync: bool = False, **fields: Any) -> dict[str, Any]:
+    def record(self, event: str, /, *, sync: bool = False, **fields: Any) -> dict[str, Any]:
+        """Append one record; ``event`` is its kind (scan, mount, plan, exec, file, refused, ...), positional only so fields may be called anything."""
         with self._lock:
             self._seq += 1
-            entry: dict[str, Any] = {"ts": round(self.clock(), 3), "sid": self.sid, "seq": self._seq, "kind": kind}
+            entry: dict[str, Any] = {"ts": round(self.clock(), 3), "sid": self.sid, "seq": self._seq, "kind": event}
             entry.update(scrub(fields))
             self._records.append(entry)
             self._open()

@@ -146,7 +146,7 @@ def test_rebuilding_the_initramfs_with_dracut(lab_factory) -> None:
     assert "D02" in [f["id"] for f in info["findings"]] and info["recommended"][0] == "boot.initramfs"
     plan, result, _ = plan_and_run(manager, sid, "boot.initramfs")
     assert ("dracut", "--force", "--regenerate-all") in chroot_commands(lab) and result["outcome"] == "success"
-    assert result["post_checks"][0]["ok"] and "MiB" not in result["post_checks"][0]["text"] or True
+    assert result["post_checks"][0]["ok"] and result["post_checks"][0]["kind"] == "file_min_size"
     unmount(manager, sid)
     assert (tree / f"boot/initramfs-{fr.GENTOO_KVER}.img").stat().st_size >= 1 << 20
 

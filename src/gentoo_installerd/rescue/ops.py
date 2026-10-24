@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Any, Callable
 
 from gentoo_installerd.events import Event
+from gentoo_installerd.runner import InstallCancelled
 
 from .errors import RescueError
 
@@ -157,6 +158,10 @@ class Operation:
         except RescueError as exc:
             self.fail(exc)
             self.complete(False, exc.message)
+        except InstallCancelled:
+            cancelled = RescueError("cancelled", "The operation was cancelled")
+            self.fail(cancelled)
+            self.complete(False, cancelled.message)
         except Exception as exc:  # never lets an OSError/KeyError kill the handler thread silently
             self.emit("log", traceback.format_exc(limit=6))
             self.fail(exc)

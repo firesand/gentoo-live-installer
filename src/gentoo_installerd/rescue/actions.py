@@ -64,7 +64,7 @@ ACTIONS: dict[str, dict[str, Any]] = {
                     "params": [{"name": "username", "type": "text", "label": "User", "required": True}]},
     "pkg.finish": {"title": "Finish an interrupted package operation", "group": "packages", "risk": "medium", "writes": True, "description": "Completes what the package manager was doing when it was interrupted."},
 }
-QUERIES = ("diag.summary", "diag.deep", "boot.inventory", "efi.list", "fstab.show", "acct.users", "logs.sources", "logs.tail", "logs.journal", "logs.pstore", "logs.live_dmesg")
+QUERIES = ("actions.list", "diag.summary", "diag.deep", "boot.inventory", "efi.list", "fstab.show", "acct.users", "logs.sources", "logs.tail", "logs.journal", "logs.pstore", "logs.live_dmesg")
 PROBE_PARAMS = {"fs.check", "efi.delete", "efi.order", "efi.next", "acct.password", "acct.unlock", "efi.add"}
 
 
@@ -500,6 +500,9 @@ def run_query(manager: RescueManager, session: RescueSession, name: str, params:
     if name == "diag.summary":
         findings = diagnose(view, hardware_changed=bool(params.get("hardware_changed")), efi_state=_efi_state(session) if view.environment.uefi else None)
         return {"findings": [item.to_dict() for item in findings], "recommended": recommended_actions(findings)}
+    if name == "actions.list":
+        findings = diagnose(view)
+        return {"actions": [spec.to_dict() for spec in available_actions(manager, session, view, findings)], "recommended": recommended_actions(findings)}
     if name == "diag.deep":
         return {"findings": [item.to_dict() for item in deep_findings(manager, session, view)]}
     if name == "boot.inventory":
