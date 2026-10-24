@@ -229,6 +229,17 @@ class HostPolicy:
         if ".." in path.split("/") or not (path == root and allow_root or path.startswith(root + "/")):
             raise _fail(f"{path} is outside the session root", argv)
 
+    def _key_file_in_session(self, path: str, argv: Sequence[str]) -> None:
+        """A key file is a file of a mounted system. Unlocking a data disk with one runs before a session of its own exists (no session root yet): then any file below
+        a session directory of the session base will do, and nothing else."""
+        if self.ctx.session_root:
+            self._dir_in_session(path, argv, allow_root=False)
+            return
+        base = self.ctx.session_base.rstrip("/")
+        parts = path[len(base) + 1:].split("/") if base and path.startswith(base + "/") else []
+        if len(parts) < 2 or not SESSION_ID_RE.match(parts[0]) or any(part in {"", ".", ".."} for part in parts):
+            raise _fail(f"{path} is not a file of a repair session", argv)
+
     def _dir_in_probe(self, path: str) -> bool:
         return self.ctx.under(path, self.ctx.probe_root) and ".." not in path.split("/")
 
@@ -561,7 +572,7 @@ class HostPolicy:
         if not have_type or not key:
             raise _fail("cryptsetup open needs --type luks and --key-file", argv)
         if key != "-":
-            self._dir_in_session(key, argv, allow_root=False)
+            self._key_file_in_session(key, argv)
         if test_only:
             if len(positional) != 1:
                 raise _fail("cryptsetup open --test-passphrase takes only a device", argv)

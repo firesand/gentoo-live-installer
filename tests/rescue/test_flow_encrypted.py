@@ -133,3 +133,50 @@ def test_a_later_process_builds_the_same_command_line_for_the_encrypted_root(lab
     plan_and_run(later, sid, "boot.initramfs")
     assert all(f"rd.luks.uuid={fr.LUKS_UUID}" in snapshot["cmdline"] for snapshot in lab.system.chroot_snapshots)
     assert later.unmount(None, {"session_id": sid})["leftovers"] == []
+
+
+def keyfile_lab(lab_factory):
+    """A system on /dev/sda1 and a LUKS data disk on /dev/sdb1 whose key is a file of that system (crypttab says /etc/keys/data.key)."""
+    root_disk = lf.sata_disk("a", 0, 100 * lf.GiB, [lf.part("sda", 1, 90 * lf.GiB, 8, 0, fstype="ext4", uuid=fr.ROOT_UUID, parttype=lf.LINUX_ROOT, pttype="gpt")])
+    data_disk = lf.sata_disk("b", 1, 500 * lf.GiB, [lf.part("sdb", 1, 500 * lf.GiB, 8, 1, fstype="crypto_LUKS", fsver="2", uuid=fr.LUKS_UUID, parttype=lf.LINUX_LUKS, pttype="gpt")])
+    lab = lab_factory(lf.lsblk(root_disk, data_disk))
+    tree = lab.add_tree("/dev/sda1", "gentoo", firmware="bios", fstab=f"UUID={fr.ROOT_UUID} / ext4 defaults 0 1\n", crypttab=f"data UUID={fr.LUKS_UUID} /etc/keys/data.key luks\n")
+    fr.put(tree, "etc/keys/data.key", "s3cret-key-material", mode=0o600)
+    lab.system.luks["/dev/sdb1"] = LuksSpec(fr.LUKS_UUID, "s3cret-key-material")
+    return lab
+
+
+def test_a_data_disk_is_unlocked_with_a_key_file_of_an_open_system(lab_factory) -> None:
+    """'gentoo-rescue unlock --keyfile' was refused by the safety policy every time ('No session root is active')."""
+    from .flow import mount_through_the_manager
+
+    lab = keyfile_lab(lab_factory)
+    manager, sid, _info = mount_through_the_manager(lab, candidate_device="/dev/sda1")
+    session = manager.session(sid)
+    result = manager.unlock(None, {"device": "/dev/sdb1", "keyfile": "/etc/keys/data.key", "keyfile_session": sid})
+    assert result["mapper"] == f"/dev/mapper/{MAPPER}" and result["ours"] is True
+    command = lab.system.commands_with("cryptsetup", "open")[-1]
+    assert command == ("cryptsetup", "open", "--type", "luks", f"--key-file={session.root}/etc/keys/data.key", "/dev/sdb1", MAPPER)
+    call = next(c for c in lab.system.calls if c.argv == command)
+    assert call.stdin is None and call.secret is False  # the key stays in its file; nothing is typed or sent
+    assert [(entry.kind, entry.data["name"]) for entry in manager.pool_ledger] == [("luks", MAPPER)]
+    unmount(manager, sid)
+    manager.unmount(None, {})  # the unlocked disk is released again
+    assert lab.system.mapped == {}
+
+
+def test_a_key_file_that_is_not_a_regular_file_of_that_system_is_refused_before_cryptsetup(lab_factory) -> None:
+    from .flow import mount_through_the_manager
+
+    lab = keyfile_lab(lab_factory)
+    manager, sid, _info = mount_through_the_manager(lab, candidate_device="/dev/sda1")
+    for key, code in (("/etc", "bad_request"), ("/etc/keys/missing.key", None)):
+        with pytest.raises((RescueError, OSError)) as info:
+            manager.unlock(None, {"device": "/dev/sdb1", "keyfile": key, "keyfile_session": sid})
+        if code:
+            assert info.value.short == code  # type: ignore[union-attr]
+    with pytest.raises(RescueError) as info:
+        manager.unlock(None, {"device": "/dev/sdb1", "keyfile": "/etc/keys/data.key", "keyfile_session": "r000000"})
+    assert info.value.short == "not_found"
+    assert not lab.system.commands_with("cryptsetup", "open")
+    unmount(manager, sid)

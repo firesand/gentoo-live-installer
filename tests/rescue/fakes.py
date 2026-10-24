@@ -354,7 +354,11 @@ class FakeSystem:
             spec = self.luks.get(device)
             if spec is None:
                 return 4, "Device is not a valid LUKS device."
-            if (call.stdin or "") != spec.passphrase:
+            keyfile = next((a.split("=", 1)[1] for a in argv if a.startswith("--key-file=")), "-")
+            supplied = (call.stdin or "") if keyfile == "-" else Path(keyfile).read_text() if os.path.isfile(keyfile) else None  # a key file's whole content is the key
+            if supplied is None:
+                return 1, f"Cannot read keyfile {keyfile}."
+            if supplied != spec.passphrase:
                 return 2, "No key available with this passphrase."
             if "--test-passphrase" in argv:
                 return 0, ""
