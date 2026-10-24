@@ -1236,8 +1236,10 @@ class Configurer:
 
     def kernel_stage_atoms(self, manifest: InstallManifest, layout: Sequence[LayoutEntry] = (), plan: object | None = None) -> list[str]:
         """What must exist before the kernel and initramfs are built."""
+        # The console font is built into the initramfs, which copies every font installed when it is built.
+        fonts = ["media-fonts/terminus-font"] if manifest.system.console_font.startswith("ter-") else []
         return list(dict.fromkeys([*self.storage_tool_atoms(manifest), *self.early_boot_atoms(manifest, plan),
-                                   *self.filesystem_atoms(manifest, layout)]))
+                                   *self.filesystem_atoms(manifest, layout), *fonts]))
 
     def kernel_atoms(self, manifest: InstallManifest) -> list[str]:
         atoms = ["sys-kernel/installkernel"]
@@ -1761,6 +1763,11 @@ class Configurer:
                 arguments.append(f"rd.vconsole.keymap={keymap}")
                 # Non-systemd initramfs images take the keymap from the command line only; systemd ones read this file.
                 self.write("etc/vconsole.conf", f"KEYMAP={keymap}\n")
+        if manifest.system.console_font:
+            # The font of the early console and the passphrase prompt. dracut sets 8x16 unless told otherwise:
+            # a non-systemd initramfs takes the font from the command line, a systemd one from vconsole.conf.
+            arguments.append(f"rd.vconsole.font={manifest.system.console_font}")
+            self.set_shell_variable("etc/vconsole.conf", "FONT", manifest.system.console_font)
         if manifest.storage.lvm:
             arguments.append("rd.lvm.lv=gentoo/root")
             modules.append("lvm")

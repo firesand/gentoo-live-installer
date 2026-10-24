@@ -48,3 +48,50 @@ def test_legacy_bios_and_64_bit_firmware_have_no_such_finding():
     for m, machine in ((manifest(system={"bootloader": "efi-stub"}), profile()),
                        (manifest(storage={"firmware": "bios"}, system={"bootloader": "grub"}), profile(firmware="bios"))):
         assert "hw.fw_uefi32" not in {issue.code for issue in hwplan.validate_plan(m, machine)}
+
+
+# -- TGT-6: the console font hint ----------------------------------------------------------------------------------
+
+def panel(width, height, dpi):
+    from gentoo_installer import hardware as hw
+
+    return hw.DisplayInfo(connector="eDP-1", internal=True, width=width, height=height, dpi=dpi)
+
+
+def test_a_dense_panel_seeds_the_console_font():
+    from gentoo_installer import recommend
+
+    machine = profile(form="laptop", displays=(panel(3840, 2160, 290),))
+    m = manifest()
+    recommend.apply_defaults(m, machine)
+    assert m.system.console_font == "ter-132b"
+    assert not [error for error in m.validate() if "font" in error.lower()]
+
+
+def test_a_normal_panel_keeps_the_kernels_font():
+    from gentoo_installer import recommend
+
+    for machine in (profile(displays=(panel(1920, 1080, 110),)), profile(), profile(displays=(panel(2560, 1440, 109),))):
+        m = manifest()
+        recommend.apply_defaults(m, machine)
+        assert m.system.console_font == ""
+
+
+def test_the_users_font_and_a_portable_install_are_left_alone():
+    from gentoo_installer import recommend
+
+    machine = profile(displays=(panel(3840, 2160, 290),))
+    chosen = manifest(system={"console_font": "lat9w-16"})
+    recommend.apply_defaults(chosen, machine)
+    assert chosen.system.console_font == "lat9w-16"
+    portable = manifest(hardware={"target": "portable"})   # the disk will meet other screens
+    recommend.apply_defaults(portable, machine)
+    assert portable.system.console_font == ""
+
+
+def test_defaults_for_names_the_font_as_a_change_without_touching_the_manifest():
+    from gentoo_installer import recommend
+
+    m = manifest()
+    changes = recommend.defaults_for(profile(displays=(panel(3840, 2160, 290),)), m)
+    assert changes["system.console_font"] == "ter-132b" and m.system.console_font == ""
