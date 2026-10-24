@@ -727,9 +727,9 @@ class StoragePage(Page):
         self.existing.set_disk(disk)
         self.existing.setVisible(chosen)
         erase = self.mode.currentData() == "erase"
-        windows = chosen and erase and any(part.is_windows for part in disk.partitions)
+        windows = disk is not None and erase and any(part.is_windows for part in disk.partitions)
         self.windows_note.show_text(WINDOWS_NOTE if windows else "")
-        flash = chosen and (disk.removable or disk.path.startswith("/dev/mmcblk"))
+        flash = disk is not None and (disk.removable or disk.path.startswith("/dev/mmcblk"))
         self.removable_note.show_text(REMOVABLE_NOTE if flash else "")
         self._update_filesystem_note()
 
