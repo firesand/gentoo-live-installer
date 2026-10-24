@@ -533,7 +533,7 @@ class Installer:
                           resumable=bool(self._resumable()), bootable=self._bootable)
             message = "Installation cancelled" if cancelled else "Installation completed successfully" if success else "Installation failed"
             self.emit("completed", message=message, progress=100.0 if success else None, success=success,
-                      resumable=self._resumable() if not success else None, bootable=self._bootable,
+                      resumable=bool(self._resumable()) if not success else None, bootable=self._bootable,
                       degraded=list(self.degraded), warnings=list(self.warnings))
             LOG.info("Install job %s finished: %s", self.job_id, "success" if success else self._outcome)
             self._release_run_lock()

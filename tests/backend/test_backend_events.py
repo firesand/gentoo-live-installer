@@ -49,6 +49,8 @@ class TestErrorEvents:
         error = errors(events)[0]
         assert error.stage == "kernel" and error.message == "the kernel did not build"
         assert error.data == {"code": "install.failed", "retryable": True, "resumable": False, "bootable": False}
+        # a failed job always says whether it can be resumed, never by leaving the key out
+        assert completed(events).data == {"success": False, "resumable": False, "bootable": False, "degraded": [], "warnings": []}
 
     def test_a_storage_error_keeps_its_own_code(self, tmp_path):
         inst, events = installer(tmp_path)
@@ -105,15 +107,19 @@ class TestErrorEvents:
         assert not inst.run()
         assert errors(events)[0].data["bootable"] is True
 
-    def test_a_resumable_failure_says_so(self, tmp_path):
-        inst, events = installer(tmp_path)
-        inst.dry_run = False  # resumable means: storage was prepared and checkpointed, which a preview never does
-        inst.checkpoints.completed.add("storage")
-        assert inst._resumable() is True
+    def test_a_resumable_failure_says_so_and_a_preview_never_is(self, tmp_path):
+        inst, events = installer(tmp_path, dry_run=False, runner=FakeRunner())
+        for name in ("_preflight", "_storage", "_stage3", "_mounts", "_repository", "_portage", "_target", "_base", "_bootloader", "_desktop", "_validate"):
+            setattr(inst, name, lambda: None)  # storage is "prepared" (and checkpointed) by the stage that did nothing
         fail_in(inst, "kernel", InstallError("no network"))
-        inst.dry_run = True
         assert not inst.run()
-        assert errors(events)[0].data["resumable"] is False  # a preview is never resumable
+        assert errors(events)[0].stage == "kernel" and errors(events)[0].data["resumable"] is True
+        assert completed(events).data["resumable"] is True
+        inst._log_file.close()
+        preview, events = installer(tmp_path / "preview")
+        fail_in(preview, "kernel", InstallError("no network"))
+        assert not preview.run()
+        assert errors(events)[0].data["resumable"] is False
 
 
 class TestCompletedEvent:
