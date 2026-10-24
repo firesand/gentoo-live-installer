@@ -290,7 +290,7 @@ class BootloaderAndValidationTests(StageHarness):
         installer._validate()
         self.assertEqual(os.readlink(self.target / "etc/resolv.conf"), "../run/systemd/resolve/stub-resolv.conf")
         kept = self.keep_install_log(installer)
-        self.assertEqual(sorted(path.name for path in kept.iterdir()), ["install.log", "manifest.json"])
+        self.assertEqual(sorted(path.name for path in kept.iterdir()), ["hardware-plan.json", "install.log", "manifest.json"])
         self.assertEqual((kept / "install.log").stat().st_mode & 0o777, 0o600)
         self.assertNotIn("user-password", (kept / "manifest.json").read_text())
 

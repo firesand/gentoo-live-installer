@@ -19,7 +19,7 @@ from urllib.parse import urlsplit
 from gentoo_installer.manifest import InstallManifest
 
 from . import __version__
-from .configure import RECEIPT_PATH, Configurer, PackageInstallError, live_input_problems, render_fstab
+from .configure import GRUB_EFI_FILES, RECEIPT_PATH, Configurer, PackageInstallError, grub_efi_target, live_input_problems, render_fstab
 from .events import ErrorCode, Event, EventSink
 from .hwplan import PLAN_SCHEMA, HardwarePlan, blocking_issues
 from .hwplan import plan as plan_hardware
@@ -938,7 +938,8 @@ class Installer:
             result = self.runner.run(("blkid", "-s", "UUID", "-o", "value", entry.device))
             if result.stdout.strip():
                 uuids[entry.device] = result.stdout.strip().splitlines()[0]
-        self.configurer.write("etc/fstab", render_fstab(self.storage.layout, uuids))
+        discard = bool(getattr(self._plan(), "scalars", {}).get("btrfs_discard_async"))
+        self.configurer.write("etc/fstab", render_fstab(self.storage.layout, uuids, btrfs_discard=discard))
 
     def _base(self) -> None:
         """Essential packages and services: after this the system can be managed from a console."""
@@ -995,7 +996,7 @@ class Installer:
         for path in ("etc/fstab", "etc/portage/make.conf"):
             cfg.chroot(("test", "-s", f"/{path}"))
         cfg.chroot(("getent", "passwd", self.manifest.accounts.username))
-        problems = cfg.verify_boot_setup(self.manifest, self._root_device(), root_uuid=self._uuid_of(self._root_device()))
+        problems = cfg.verify_boot_setup(self.manifest, self._root_device(), root_uuid=self._uuid_of(self._root_device()), plan=self._plan())
         modules = cfg.initramfs_modules()
         if modules is not None:
             for wanted, needed in (("crypt", self.manifest.storage.luks), ("lvm", self.manifest.storage.lvm)):
@@ -1080,8 +1081,9 @@ class Installer:
             return False
         if self.manifest.system.bootloader == "efi-stub":
             return "Gentoo" in self.runner.run(("efibootmgr",)).stdout
+        installed, removable = GRUB_EFI_FILES[grub_efi_target(self._plan())]
         if self.manifest.system.bootloader == "grub" and self.manifest.storage.firmware == "uefi" \
-                and not (self._target_file(f"{efi}/EFI/Gentoo/grubx64.efi") or self._target_file(f"{efi}/EFI/BOOT/BOOTX64.EFI")):
+                and not (self._target_file(f"{efi}/EFI/Gentoo/{installed}") or self._target_file(f"{efi}/EFI/BOOT/{removable}")):
             return False
         path = "boot/grub/grub.cfg" if self.manifest.system.bootloader == "grub" else f"{efi}/loader/entries/gentoo.conf"
         return self._target_file(path)

@@ -711,6 +711,22 @@ def _plan_list(plan: object | None, name: str) -> list:
     return list(getattr(plan, name, None) or [])
 
 
+def _plan_scalar(plan: object | None, name: str, default: Any = None) -> Any:
+    """A resolved choice of the hardware plan (HardwarePlan.scalars), or ``default`` without a plan."""
+    scalars = getattr(plan, "scalars", None)
+    return scalars.get(name, default) if isinstance(scalars, dict) else default
+
+
+# GRUB's EFI file names by target: the program on the ESP and the one on the removable-media path.
+GRUB_EFI_FILES = {"x86_64-efi": ("grubx64.efi", "BOOTX64.EFI"), "i386-efi": ("grubia32.efi", "BOOTIA32.EFI")}
+
+
+def grub_efi_target(plan: object | None) -> str:
+    """x86_64-efi, or i386-efi for the PCs with 32-bit UEFI firmware (the plan knows which)."""
+    target = _plan_scalar(plan, "grub_target", "x86_64-efi")
+    return target if target in GRUB_EFI_FILES else "x86_64-efi"
+
+
 class Configurer:
     def __init__(self, runner: Runner, target_root: str | Path, *, dry_run: bool = False,
                  companion_bundle: str | Path = "/usr/local/share/gentoo-installer",
@@ -1483,9 +1499,10 @@ class Configurer:
         if system.desktop != "minimal":
             manager = {"kde": "sddm", "gnome": "gdm", "xfce": "lightdm"}[system.desktop]
             desktop.append(("display-manager" if system.init == "openrc" else manager, "default", True))
-        for item in _plan_list(plan, "services"):
+        for item in [*_plan_list(plan, "services"), *_plan_list(plan, "optional_services")]:
             name, runlevel = (item, "default") if isinstance(item, str) else (item[0], item[1])
-            desktop.append((str(name), str(runlevel), True))
+            if (str(name), str(runlevel), True) not in desktop:
+                desktop.append((str(name), str(runlevel), True))
         if phase == "base":
             return base
         if phase == "desktop":
@@ -1497,7 +1514,9 @@ class Configurer:
             return True
         if init == "openrc":
             return self.path(f"etc/init.d/{name}").exists()
-        return any(self.path(f"{prefix}/{name}.service").exists() for prefix in ("usr/lib/systemd/system", "lib/systemd/system", "etc/systemd/system"))
+        # A timer or a socket is named with its suffix (fstrim.timer); a plain name is a service.
+        unit = name if name.endswith((".service", ".timer", ".socket", ".path", ".target")) else f"{name}.service"
+        return any(self.path(f"{prefix}/{unit}").exists() for prefix in ("usr/lib/systemd/system", "lib/systemd/system", "etc/systemd/system"))
 
     def configure_services(self, manifest: InstallManifest, plan: object | None = None, phase: str = "all") -> list[str]:
         """Enable services; returns warnings for optional services whose package is not installed."""
@@ -1583,6 +1602,9 @@ class Configurer:
             # Dracut uses rd.luks.uuid to select the backing device. The
             # rd.luks.name mapping only names a device selected that way.
             arguments.extend((f"rd.luks.uuid={uuid}", f"rd.luks.name={uuid}=gentoo-root"))
+            if _plan_scalar(plan, "luks_allow_discards", False):
+                # TRIM through the encryption: the user accepted what that tells an attacker about free space.
+                arguments.append(f"rd.luks.options={uuid}=discard" if manifest.system.init == "systemd" else f"rd.luks.allow-discards={uuid}")
             modules.append("crypt")
             if self.luks_prompt_uses_console_keymap(manifest):
                 keymap = self.resolve_console_keymap(manifest)
@@ -1654,7 +1676,8 @@ class Configurer:
 
     def removable_fallback_wanted(self, manifest: InstallManifest, plan: object | None = None, *, nvram_failed: bool = False) -> bool:
         """Should the removable-media boot path (EFI/BOOT/BOOTX64.EFI) be written?"""
-        choice = str(getattr(self._plan(plan), "removable_fallback", "") or manifest.hardware.removable_fallback)
+        plan = self._plan(plan)
+        choice = str(_plan_scalar(plan, "removable_fallback", "") or getattr(plan, "removable_fallback", "") or manifest.hardware.removable_fallback)
         if choice == "auto":
             # An ESP the installer just created has nothing to protect; a shared one keeps other systems' files.
             choice = "always" if manifest.storage.mode == "erase" or manifest.hardware.target == "portable" else "if-missing"
@@ -1665,12 +1688,12 @@ class Configurer:
             return False
         if choice == "if-missing" and not nvram_failed:
             efi = self.efi_mountpoint(manifest).lstrip("/")
-            return self.dry_run or not self.path(f"{efi}/EFI/BOOT/BOOTX64.EFI").exists()
+            return self.dry_run or not self.path(f"{efi}/EFI/BOOT/{GRUB_EFI_FILES[grub_efi_target(plan)][1]}").exists()
         return True
 
     def _grub_install_efi(self, manifest: InstallManifest, plan: object | None, efi_mountpoint: str) -> bool:
         """Install GRUB for UEFI with a firmware entry and the removable fallback; True when NVRAM was written."""
-        base = ("grub-install", "--target=x86_64-efi", f"--efi-directory={efi_mountpoint}")
+        base = ("grub-install", f"--target={grub_efi_target(plan)}", f"--efi-directory={efi_mountpoint}")
         nvram = True
         try:
             self.chroot((*base, "--bootloader-id=Gentoo"))
@@ -1947,8 +1970,9 @@ class Configurer:
         self.write(RECEIPT_PATH, json.dumps(receipt, indent=2) + "\n", 0o644)
         return receipt
 
-    def verify_boot_setup(self, manifest: InstallManifest, root_device: str, *, root_uuid: str = "") -> list[str]:
+    def verify_boot_setup(self, manifest: InstallManifest, root_device: str, *, root_uuid: str = "", plan: object | None = None) -> list[str]:
         """Check the finished installation; returns a list of problems (empty when it looks bootable)."""
+        plan = self._plan(plan)
         if self.dry_run:
             return []
         system, storage = manifest.system, manifest.storage
@@ -1975,7 +1999,8 @@ class Configurer:
                     if present and wanted not in config:
                         problems.append(f"grub.cfg does not pass {wanted}, so the root filesystem would not be found")
             if storage.firmware == "uefi":
-                if not self.path(f"{efi}/EFI/Gentoo/grubx64.efi").is_file() and not self.path(f"{efi}/EFI/BOOT/BOOTX64.EFI").is_file():
+                installed, removable = GRUB_EFI_FILES[grub_efi_target(plan)]
+                if not self.path(f"{efi}/EFI/Gentoo/{installed}").is_file() and not self.path(f"{efi}/EFI/BOOT/{removable}").is_file():
                     problems.append("No GRUB EFI image was installed on the EFI system partition")
         elif system.bootloader == "systemd-boot":
             if not self.path(f"{efi}/loader/entries/gentoo.conf").is_file():

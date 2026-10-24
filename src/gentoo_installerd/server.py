@@ -31,7 +31,7 @@ from gentoo_installer.manifest import InstallManifest, ManifestError
 from . import __version__
 from .events import PROTECTED_EVENT_TYPES, PROTOCOL_VERSION, ErrorCode, Event, completed_event, error_event
 from .inspect import Discovery
-from .install import STAGE_WEIGHTS, STAGES, Installer
+from .install import STAGE_WEIGHTS, STAGES, Installer, tools_for_selection
 from .runner import SubprocessRunner, redact_text
 
 LOG = logging.getLogger(__name__)
@@ -599,11 +599,13 @@ class InstallManager:
         except BaseException as exc:  # noqa: BLE001 - whatever happened, the job must end cleanly for its clients
             LOG.exception("Installation job %s crashed", self.job_id)
             text = redact_text(f"Installer crashed: {exc}", getattr(installer, "secrets", ()))
-            self._emit(error_event(ErrorCode.FAILED, text, job_id=self.job_id, stage=self.stage, retryable=True))
+            self._emit(error_event(ErrorCode.FAILED, text, job_id=self.job_id, stage=self.stage or "preflight", retryable=True, resumable=False,
+                                   bootable=bool(getattr(installer, "_bootable", False))))
         finally:
             with self.lock:
                 if self._completed is None:
-                    self._emit(completed_event(result, "Installation completed successfully" if result else "Installation failed", job_id=self.job_id))
+                    self._emit(completed_event(result, "Installation completed successfully" if result else "Installation failed", job_id=self.job_id,
+                                               bootable=bool(getattr(installer, "_bootable", False)), degraded=[], warnings=[]))
                 self.status = "completed" if result else "cancelled" if cancel.is_set() else "failed"
                 if self.status == "failed" and not self.last_error:
                     self.last_error = GENERIC_FAILURE
@@ -922,9 +924,26 @@ def _merge_warnings(existing: Any, extra: Iterable[Any]) -> list[dict[str, Any]]
     return merged
 
 
+def _selection(raw: Any) -> InstallManifest | None:
+    """The settings an ``inspect`` request carries (no accounts, no secrets), or None when there are none or they make no sense."""
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return InstallManifest.from_dict(raw)
+    except ManifestError as exc:
+        LOG.debug("The inspect request carries settings that cannot be read: %s", exc)
+        return None
+
+
 def handle_inspect(request: dict, channel: Channel) -> None:
     runner = SubprocessRunner()
-    data = Discovery(runner).inspect().to_dict()
+    selection = _selection(request.get("manifest"))
+    # With the user's settings the network check goes to the mirror the install will use, through the proxy it will use.
+    discovery = Discovery(runner, mirror=selection.portage.mirror, proxy=selection.network.proxy) if selection else Discovery(runner)
+    inspection = discovery.inspect()
+    data = inspection.to_dict()
+    if selection is not None:
+        data["missing_for_selection"] = sorted(tool for tool in tools_for_selection(selection) if inspection.tools.get(tool) is False)
     # Discovery probes the hardware itself; this is for an inspector that does not.
     if "hardware" not in data and "hardware_error" not in data and module_available("gentoo_installer.hardware"):
         try:

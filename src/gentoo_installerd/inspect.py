@@ -7,6 +7,7 @@ thin compatibility names so older callers keep working.
 
 from __future__ import annotations
 
+import base64
 import json
 import logging
 import os
@@ -416,7 +417,12 @@ def _network_ready(host: str = "distfiles.gentoo.org", port: int = 443, proxy: s
         with socket.create_connection((parsed.hostname, parsed.port or 3128), timeout=timeout) as connection:
             if parsed.scheme not in {"http", "https"}:
                 return True  # SOCKS and friends: the proxy answering is all a probe can check
-            connection.sendall(f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n\r\n".encode())
+            # A proxy that wants a login answers 407 to a CONNECT without one, which is not "no network".
+            login = ""
+            if parsed.username is not None:
+                token = base64.b64encode(f"{urllib.parse.unquote(parsed.username)}:{urllib.parse.unquote(parsed.password or '')}".encode()).decode()
+                login = f"Proxy-Authorization: Basic {token}\r\n"
+            connection.sendall(f"CONNECT {host}:{port} HTTP/1.1\r\nHost: {host}:{port}\r\n{login}\r\n".encode())
             connection.settimeout(timeout)
             status = connection.recv(256).split(b"\r\n", 1)[0].split()
             return len(status) >= 2 and status[1] == b"200"
