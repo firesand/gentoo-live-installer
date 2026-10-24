@@ -405,7 +405,11 @@ main() {
 	resolve_build_plan
 	log "Build plan: ${PLAN} (BUILD_MODE=${BUILD_MODE}, flavour ${ISO_FLAVOR}, volume ${ISO_VOLID})"
 	write_catalyst_config
-	[[ ${PLAN} == stage2-only ]] || fetch_and_verify_seed
+	# Only a stage1 built from scratch needs the stage3 seed; stage2-only and reseed start
+	# from the verified stage1 archive.
+	if [[ ${PLAN} == full || ${PLAN} == stage1-only ]]; then
+		fetch_and_verify_seed
+	fi
 	prepare_snapshot
 	case ${PLAN} in
 		full | stage1-only | reseed) build_stage1 ;;

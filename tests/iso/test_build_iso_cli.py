@@ -225,7 +225,7 @@ def test_no_dead_binary_package_mount(stubs) -> None:
 
 @pytest.mark.parametrize(
     ("arguments", "mode"),
-    [([], "auto"), (["--reuse", "auto"], "auto"), (["--reuse", "none"], "full"), (["--reuse", "stage1"], "stage2-only"),
+    [([], "auto"), (["--reuse", "auto"], "auto"), (["--reuse-stage1"], "auto"), (["--reuse", "none"], "full"), (["--reuse", "stage1"], "stage2-only"),
      (["--stage2-only"], "stage2-only"), (["--stage1-only"], "stage1-only")],
 )
 def test_reuse_options_map_to_build_modes(stubs, arguments, mode) -> None:

@@ -41,6 +41,7 @@ ISO_LOG_DIR, BUILD_MEMORY (default 8g), BUILD_MIN_FREE_GIB (default 45), ISO_SEC
                        goes into it changed, reinstall only the project's own packages when
                        only those changed, otherwise build everything. none: always build
                        everything. stage1: like --stage2-only.
+  --reuse-stage1       Same as --reuse auto (the default), for scripts that want to say it.
   --stage2-only        Run only stage2 from a stage1 archive whose receipt matches the
                        current inputs; fails when there is none.
   --stage1-only        Build the stage1 archive and its receipt, no ISO.
@@ -77,6 +78,7 @@ while (($#)); do
 			REUSE=$2
 			shift
 			;;
+		--reuse-stage1) REUSE=auto ;;
 		--stage2-only) REUSE=stage1 ;;
 		--stage1-only) STAGE1_ONLY=1 ;;
 		--test-key-file)
