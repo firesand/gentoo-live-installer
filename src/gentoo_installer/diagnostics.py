@@ -29,7 +29,9 @@ LOG = logging.getLogger("gentoo_installer")
 LOG_NAME = "gui.log"
 LOG_BYTES = 1_000_000
 LOG_BACKUPS = 3
-USERINFO_RE = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*://)(?P<user>[^\s:@/]*)(?::[^\s@/]*)?@")
+# The credentials of an address end at the LAST "@" before the first "/", "?" or "#", as in the manifest (a proxy is accepted
+# with a user name that is an e-mail address, or an "@" in the password): http://john@corp.com:secret@proxy:3128
+USERINFO_RE = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*://)(?P<userinfo>[^\s/?#]*)@")
 BUNDLE_COMMANDS = (
     ("uname", ("uname", "-a")),
     ("cmdline", ("cat", "/proc/cmdline")),
@@ -45,7 +47,12 @@ BUNDLE_COMMANDS = (
 
 def redact_url_userinfo(value: str) -> str:
     """scheme://user:password@host -> scheme://user:<redacted>@host."""
-    return USERINFO_RE.sub(lambda m: f"{m['scheme']}{m['user']}:<redacted>@" if m["user"] else f"{m['scheme']}<redacted>@", value)
+
+    def hide(match: re.Match[str]) -> str:
+        user = match["userinfo"].partition(":")[0]
+        return f"{match['scheme']}{user}:<redacted>@" if user else f"{match['scheme']}<redacted>@"
+
+    return USERINFO_RE.sub(hide, value)
 
 
 def strip_url_userinfo(value: str) -> str:
