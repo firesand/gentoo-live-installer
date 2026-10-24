@@ -1,4 +1,8 @@
-"""Identify the operating system of a mounted root from its own files (review R9: read, never execute)."""
+"""Identify the operating system of a mounted root from its own files (review R9: read, never execute).
+
+This repair tool supports Gentoo only. A root is told apart as Gentoo (family "gentoo") or as any other Linux (family "generic"): the
+other systems are listed by the name they give themselves, with ``NOT_GENTOO`` as the reason they are not opened.
+"""
 
 from __future__ import annotations
 
@@ -9,27 +13,8 @@ from typing import Any
 from .errors import RescueError
 from .paths import RootFS
 
-FAMILY_TOKENS: dict[str, tuple[str, ...]] = {
-    "gentoo": ("gentoo", "funtoo", "calculate"),
-    "arch": ("arch", "archlinux", "manjaro", "endeavouros", "cachyos", "artix", "garuda", "arcolinux"),
-    "debian": ("debian", "ubuntu", "linuxmint", "pop", "kali", "raspbian", "devuan", "zorin", "elementary", "neon", "mx", "parrot", "deepin", "tuxedo"),
-    "fedora": ("fedora", "rhel", "centos", "almalinux", "rocky", "ol", "amzn", "nobara", "scientific", "eurolinux", "oracle"),
-    "suse": ("opensuse", "opensuse-leap", "opensuse-tumbleweed", "opensuse-microos", "opensuse-aeon", "opensuse-kalpa", "suse", "sles", "sled", "sle-micro", "leapmicro"),
-}
-TOKEN_TO_FAMILY = {token: family for family, tokens in FAMILY_TOKENS.items() for token in tokens}
-OSTREE_VARIANTS = {"silverblue", "kinoite", "sericea", "onyx", "coreos", "iot", "bazzite", "cosmic-atomic"}
-TRANSACTIONAL_IDS = {"opensuse-microos", "opensuse-aeon", "opensuse-kalpa", "leapmicro", "sle-micro"}
-
-LEGACY_FILES = (
-    ("/etc/gentoo-release", "gentoo", "Gentoo Linux"),
-    ("/etc/arch-release", "arch", "Arch Linux"),
-    ("/etc/fedora-release", "fedora", "Fedora"),
-    ("/etc/redhat-release", "fedora", "Red Hat compatible Linux"),
-    ("/etc/SuSE-release", "suse", "SUSE Linux"),
-    ("/etc/debian_version", "debian", "Debian"),
-    ("/etc/alpine-release", "alpine", "Alpine Linux"),
-    ("/etc/slackware-version", "slackware", "Slackware"),
-)
+NOT_GENTOO = "Not a Gentoo system - this repair tool only supports Gentoo"
+GENTOO_TOKENS = ("gentoo", "funtoo", "calculate")  # ID= and ID_LIKE= values of the systems that are Gentoo for this tool (Portage, the same boot files)
 _QUOTE_RE = re.compile(r"""^(["'])(.*)\1$""")
 
 
@@ -43,8 +28,7 @@ class OsInfo:
     version_id: str = ""
     variant_id: str = ""
     build_id: str = ""
-    family: str = "generic"
-    flavor: str = ""
+    family: str = "generic"  # "gentoo", or "generic" for every other Linux
     source: str = ""  # the file that identified the system
 
     def to_dict(self) -> dict[str, Any]:
@@ -75,12 +59,9 @@ def parse_os_release(text: str) -> dict[str, str]:
 
 
 def family_for(os_id: str, id_like: tuple[str, ...] | list[str] = ()) -> str:
-    """First of [ID] + ID_LIKE that is a known distribution wins; everything else is generic."""
-    for token in (os_id.lower(), *[item.lower() for item in id_like]):
-        family = TOKEN_TO_FAMILY.get(token)
-        if family:
-            return family
-    return "generic"
+    """"gentoo" when the ID or one of the ID_LIKE values is a Gentoo one, otherwise "generic"."""
+    tokens = (os_id.lower(), *[item.lower() for item in id_like])
+    return "gentoo" if any(token in GENTOO_TOKENS for token in tokens) else "generic"
 
 
 def _from_fields(fields: dict[str, str], source: str) -> OsInfo:
@@ -89,7 +70,7 @@ def _from_fields(fields: dict[str, str], source: str) -> OsInfo:
     return OsInfo(
         id=os_id, id_like=like, name=fields.get("NAME", ""), pretty_name=fields.get("PRETTY_NAME", ""),
         version=fields.get("VERSION", ""), version_id=fields.get("VERSION_ID", ""), variant_id=fields.get("VARIANT_ID", ""),
-        build_id=fields.get("BUILD_ID", ""), family=family_for(os_id, like), flavor=os_id, source=source,
+        build_id=fields.get("BUILD_ID", ""), family=family_for(os_id, like), source=source,
     )
 
 
@@ -102,29 +83,12 @@ def read_os_info(fs: RootFS) -> OsInfo | None:
             continue
         if fields.get("ID") or fields.get("NAME"):
             return _from_fields(fields, path)
-    for path, family, name in LEGACY_FILES:
-        if not fs.is_file(path):
-            continue
-        text = fs.read_text_or(path, "", 4096).strip()
-        os_id = family
-        if family == "debian" and "ubuntu" in fs.read_text_or("/etc/lsb-release", "", 4096).lower():
-            os_id, name = "ubuntu", "Ubuntu"
-        pretty = text.splitlines()[0] if text and family != "debian" else name
-        return OsInfo(id=os_id, name=name, pretty_name=pretty or name, family=family if family in FAMILY_TOKENS else "generic", flavor=os_id, source=path)
+    if fs.is_file("/etc/gentoo-release"):  # an old system without os-release
+        release = fs.read_text_or("/etc/gentoo-release", "", 4096).strip()
+        return OsInfo(id="gentoo", name="Gentoo Linux", pretty_name=release.splitlines()[0] if release else "Gentoo Linux", family="gentoo", source="/etc/gentoo-release")
     if fs.is_file("/etc/fstab") and (fs.is_dir("/usr/bin") or fs.is_dir("/bin")):
-        return OsInfo(id="linux", name="Linux", pretty_name="Unidentified Linux", family="generic", flavor="linux", source="/etc/fstab")
+        return OsInfo(id="linux", name="Linux", pretty_name="Unidentified Linux", family="generic", source="/etc/fstab")
     return None
-
-
-def detect_immutable(fs: RootFS, info: OsInfo) -> str:
-    """'ostree', 'transactional' or 'nix' for systems the rescue tool must not write to; '' otherwise."""
-    if info.id in TRANSACTIONAL_IDS or info.variant_id in {"microos"}:
-        return "transactional"
-    if info.variant_id in OSTREE_VARIANTS or fs.is_dir("/ostree/repo"):
-        return "ostree"
-    if info.id == "nixos" or fs.is_dir("/nix/store"):
-        return "nix"
-    return ""
 
 
 def detect_init(fs: RootFS) -> str:
@@ -157,18 +121,17 @@ class SystemFacts:
     os: OsInfo
     init: str = ""
     arch: str = ""
-    immutable: str = ""
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
-        return {"os": self.os.to_dict(), "init": self.init, "arch": self.arch, "immutable": self.immutable, "extra": self.extra}
+        return {"os": self.os.to_dict(), "init": self.init, "arch": self.arch, "extra": self.extra}
 
 
 def identify(fs: RootFS) -> SystemFacts | None:
     info = read_os_info(fs)
     if info is None:
         return None
-    facts = SystemFacts(info, detect_init(fs), fs.exe_arch(), detect_immutable(fs, info))
+    facts = SystemFacts(info, detect_init(fs), fs.exe_arch())
     if info.family == "gentoo":
         facts.extra["profile"] = _gentoo_profile(fs)
     return facts

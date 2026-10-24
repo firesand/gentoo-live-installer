@@ -876,7 +876,7 @@ class StorageManager:
             shown = ", ".join(names[:8]) + (", ..." if len(names) > 8 else "")
             raise StorageError(
                 f"The root partition {root.device} is kept (not formatted) but already contains files ({shown}). The new system would be "
-                "extracted over it, replacing its /etc, accounts and boot files. To keep and repair that system, use the rescue tools instead. "
+                "extracted over it, replacing its /etc, accounts and boot files. To keep and repair a Gentoo system that is on it, use the rescue tools instead. "
                 "To install over it, confirm the replacement in the installer, or format the partition.",
                 "storage.existing_system",
             )

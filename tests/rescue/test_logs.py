@@ -32,7 +32,8 @@ def logs_lab(lab_factory, **options):
     (tree / "var/log/messages.2.xz").write_bytes(lzma.compress(numbered(20, "older").encode()))
     (tree / "var/log/messages.3.bz2").write_bytes(bz2.compress(numbered(10, "oldest").encode()))
     fr.put(tree, "var/log/emerge.log", numbered(40, "emerge"))
-    fr.put(tree, "var/log/apt/history.log", numbered(5, "apt"))
+    fr.put(tree, "var/log/portage/elog/summary.log", numbered(5, "elog"))
+    fr.put(tree, "var/log/apt/history.log", numbered(5, "apt"))  # the log of another distribution's package manager is not in the catalogue
     fr.put(tree, "var/log/secret.txt", "not a catalogued log\n")
     fr.put(tree, "var/log/btmp", "failed logins\n")
     fr.put(tree, "var/log/journal/0123456789abcdef0123456789abcdef/system.journal", "binary")
@@ -48,9 +49,9 @@ def test_sources_list_the_catalogue_with_rotated_copies_and_the_journal(lab_fact
     manager, sid, _info = mount_through_the_manager(lab, candidate_device=DEVICE)
     sources = manager.query({"session_id": sid, "query": "logs.sources"})["data"]
     by_path = {item["path"]: item for item in sources["files"]}
-    assert {"/var/log/messages", "/var/log/messages-20260101.gz", "/var/log/messages.2.xz", "/var/log/messages.3.bz2", "/var/log/emerge.log", "/var/log/apt/history.log"} <= set(by_path)
+    assert {"/var/log/messages", "/var/log/messages-20260101.gz", "/var/log/messages.2.xz", "/var/log/messages.3.bz2", "/var/log/emerge.log", "/var/log/portage/elog/summary.log"} <= set(by_path)
     assert by_path["/var/log/messages-20260101.gz"]["compressed"] is True and by_path["/var/log/messages"]["compressed"] is False
-    assert "/var/log/secret.txt" not in by_path and "/var/log/btmp" not in by_path  # only catalogued logs are offered
+    assert "/var/log/secret.txt" not in by_path and "/var/log/btmp" not in by_path and "/var/log/apt/history.log" not in by_path  # only catalogued logs are offered
     assert sources["journal"] == [{"path": "/var/log/journal/0123456789abcdef0123456789abcdef", "files": 1}] and sources["persistent_journal"] is True
 
 
@@ -61,7 +62,10 @@ def test_tail_reads_plain_and_compressed_logs(lab_factory) -> None:
     assert tail(manager, sid, "/var/log/messages-20260101.gz", lines=2)["lines"] == ["old 29", "old 30"]
     assert tail(manager, sid, "/var/log/messages.2.xz", lines=2)["lines"] == ["older 19", "older 20"]
     assert tail(manager, sid, "/var/log/messages.3.bz2", lines=2)["lines"] == ["oldest 9", "oldest 10"]
-    assert tail(manager, sid, "/var/log/apt/history.log", lines=50)["lines"] == [f"apt {n}" for n in range(1, 6)]
+    assert tail(manager, sid, "/var/log/portage/elog/summary.log", lines=50)["lines"] == [f"elog {n}" for n in range(1, 6)]
+    with pytest.raises(RescueError) as err:
+        tail(manager, sid, "/var/log/apt/history.log")
+    assert err.value.short == "safety_violation"
 
 
 def test_tail_pages_backwards_and_bounds_its_answer(lab_factory) -> None:

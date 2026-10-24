@@ -1,5 +1,6 @@
-"""``gentoo-rescue``: find, mount, diagnose and repair an installed Linux from a terminal.
+"""``gentoo-rescue``: repair a Gentoo system that does not start, from a terminal.
 
+Gentoo is the only system it opens: any other Linux a scan finds is listed as "Not a Gentoo system" and refused (exit code 7).
 Works through the daemon socket, or with ``--local`` (root, no daemon, no GUI). Nothing is changed until a plan has been
 shown and confirmed: ``run`` prints the exact commands and either asks interactively or needs ``--confirm-plan <digest>``
 (taken from ``plan``), so scripts only ever run what was displayed. Exit codes: 0 ok, 1 failed, 2 usage, 3 refused by the
@@ -24,6 +25,7 @@ from .api import RescueApi, build_env
 from .client import DEFAULT_SOCKET, LocalTransport, RescueClient, RescueClientError, SocketTransport, Transport, attach_terminal
 from .errors import RescueError
 from .manager import RescueManager
+from .osrelease import NOT_GENTOO
 
 EXIT_OK, EXIT_FAILED, EXIT_USAGE, EXIT_REFUSED, EXIT_CONFIRM, EXIT_NOT_FOUND, EXIT_BUSY, EXIT_UNSUPPORTED, EXIT_INTERRUPTED = 0, 1, 2, 3, 4, 5, 6, 7, 130
 CODE_EXIT = {
@@ -107,10 +109,21 @@ def parse_choices(items: Sequence[str]) -> dict[str, dict[str, str]]:
 
 
 # ---- rendering ----------------------------------------------------------------------------------------------------------------------------------
+def found_line(item: dict[str, Any]) -> str:
+    """'Gentoo Linux on /dev/sda2 [c1a2b3c4d]' for a system that can be opened, the same without an id (there is nothing to type) and with the reason for the others."""
+    name = (item.get("os") or {}).get("pretty_name") or (item.get("os") or {}).get("name") or "Linux"
+    if item.get("supported", True):
+        return f"{name} on {item['device']} [{item['id']}]"
+    return f"{name} on {item['device']} - {' '.join(item.get('warnings') or [NOT_GENTOO])}"
+
+
 def render_systems(console: Console, scan: dict[str, Any]) -> list[dict[str, Any]]:
-    candidates = scan.get("candidates", [])
+    """Print what a scan found; returns the systems that can be opened, in the order of their numbers."""
+    found = scan.get("candidates", [])
+    candidates = [item for item in found if item.get("supported", True)]
+    others = [item for item in found if not item.get("supported", True) and item.get("kind") != "snapshot"]  # a snapshot of another system adds no line
     if not candidates:
-        console.say("No installed Linux system was found.")
+        console.say("No Gentoo system was found.")
     for index, item in enumerate(candidates, 1):
         osi = item.get("os", {})
         flags = ["snapshot"] if item.get("kind") == "snapshot" else []
@@ -119,6 +132,7 @@ def render_systems(console: Console, scan: dict[str, Any]) -> list[dict[str, Any
         console.say(f"  {index}) {osi.get('pretty_name') or osi.get('name') or 'Linux':<28} {item['device']:<22} {extras}   [{item['id']}]")
         for warning in item.get("warnings", []):
             console.say(f"       ! {warning}")
+    render_others(console, others)
     for node in scan.get("devices", []):
         if node.get("role") == "luks_locked":
             console.say(f"  locked: {node['path']} (encrypted: use 'gentoo-rescue unlock {node['path']}')")
@@ -131,6 +145,13 @@ def render_systems(console: Console, scan: dict[str, Any]) -> list[dict[str, Any
     for hint in scan.get("hints", []):
         console.say(f"  hint: {hint['text']}")
     return candidates
+
+
+def render_others(console: Console, others: list[dict[str, Any]]) -> None:
+    """The systems that are not Gentoo: listed by name with the plain reason, without a number or an id (they cannot be chosen)."""
+    for item in others:
+        osi = item.get("os", {})
+        console.say(f"  -  {osi.get('pretty_name') or osi.get('name') or 'Linux':<28} {item['device']:<22} {' '.join(item.get('warnings') or [NOT_GENTOO])}")
 
 
 def render_findings(console: Console, findings: list[dict[str, Any]]) -> None:
@@ -236,15 +257,16 @@ class Context:
 
 
 def auto_choice(ctx: Context) -> str:
-    """``mount --auto``: the one installed system that was found, or a clear explanation why none was chosen."""
+    """``mount --auto``: the one Gentoo system that was found (other systems are listed, not counted), or a clear explanation why none was chosen."""
     scan = ctx.client.result("rescue.scan", probe=True)
-    roots = [item for item in scan.get("candidates", []) if item.get("kind") != "snapshot"]
+    roots = [item for item in scan.get("candidates", []) if item.get("kind") != "snapshot" and item.get("supported", True)]
     if len(roots) == 1:
         return roots[0]["id"]
     if not roots:
-        raise RescueClientError("rescue.not_found", "No installed system was found. Unlock encrypted volumes ('gentoo-rescue unlock DEVICE') or activate LVM/RAID first, then try again.")
+        render_others(ctx.console, [item for item in scan.get("candidates", []) if not item.get("supported", True)])
+        raise RescueClientError("rescue.not_found", "No Gentoo system was found. Unlock encrypted volumes ('gentoo-rescue unlock DEVICE') or activate LVM/RAID first, then try again.")
     render_systems(ctx.console, scan)
-    raise RescueClientError("rescue.ambiguous", "Several systems were found. Choose one and give its id (for example c1a2b3c4d) or its device.")
+    raise RescueClientError("rescue.ambiguous", "Several Gentoo systems were found. Choose one and give its id (for example c1a2b3c4d) or its device.")
 
 
 def resolve_system(ctx: Context, text: str, args: argparse.Namespace) -> dict[str, Any]:
@@ -296,7 +318,7 @@ def cmd_unlock(ctx: Context, args: argparse.Namespace) -> int:
     for hint in result.get("luks", {}).get("hints", []):
         ctx.console.say(f"  note: {hint}")
     for candidate in result.get("new_candidates", []):
-        ctx.console.say(f"  found: {candidate['os'].get('pretty_name', 'Linux')} on {candidate['device']} [{candidate['id']}]")
+        ctx.console.say(f"  found: {found_line(candidate)}")
     return EXIT_OK
 
 
@@ -307,7 +329,7 @@ def cmd_activate(ctx: Context, args: argparse.Namespace) -> int:
     else:
         result = ctx.client.result("rescue.activate", kind="md", uuids=args.names, degraded_ok=args.degraded)
     for item in result.get("new_candidates", []):
-        ctx.console.say(f"  found: {item['os'].get('pretty_name', 'Linux')} on {item['device']} [{item['id']}]")
+        ctx.console.say(f"  found: {found_line(item)}")
     ctx.console.say("Done.")
     return EXIT_OK
 
@@ -601,7 +623,8 @@ def cmd_cleanup(ctx: Context, args: argparse.Namespace) -> int:
 
 # ---- argument parser -------------------------------------------------------------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="gentoo-rescue", description="Find, mount, diagnose and repair an installed Linux system that no longer boots.")
+    parser = argparse.ArgumentParser(prog="gentoo-rescue", description="Repair a Gentoo system that does not start: find it, open it read-only, see what is wrong and repair it. "
+                                     "Other Linux distributions are listed by a scan but not supported.")
     parser.add_argument("--socket", help="daemon socket (default: " + DEFAULT_SOCKET + ")")
     parser.add_argument("--local", action="store_true", help="run the rescue engine in this process (needs root; no daemon)")
     parser.add_argument("--json", action="store_true", help="print one JSON event per line")
@@ -613,7 +636,7 @@ def build_parser() -> argparse.ArgumentParser:
     wizard = sub.add_parser("wizard", help="guided text interface (the default when run on a terminal)")
     wizard.add_argument("--keep-mounted", action="store_true", help="leave the system mounted when the wizard ends")
 
-    scan = sub.add_parser("scan", help="list installed systems and encrypted volumes (read-only)")
+    scan = sub.add_parser("scan", help="list the Gentoo systems and the other systems found, and encrypted volumes (read-only)")
     scan.add_argument("--no-probe", action="store_true")
     scan.add_argument("--all", action="store_true", help="include loop devices")
     scan.add_argument("--network", action="store_true", help="also test the network")
@@ -631,9 +654,9 @@ def build_parser() -> argparse.ArgumentParser:
     activate.add_argument("names", nargs="+", metavar="NAME")
     activate.add_argument("--degraded", action="store_true")
 
-    mount = sub.add_parser("mount", help="mount a system read-only")
+    mount = sub.add_parser("mount", help="mount a Gentoo system read-only")
     mount.add_argument("system", nargs="?", help="system id from 'scan', or a device such as /dev/sda2[:subvolid=256]")
-    mount.add_argument("--auto", action="store_true", help="use the one installed system that was found (refuses when there are several)")
+    mount.add_argument("--auto", action="store_true", help="use the one Gentoo system that was found (refuses when there are several)")
     mount.add_argument("--inspect-only", action="store_true", help="never allow repairs: no program of the system can run")
     mount.add_argument("--mount", action="append", metavar="MP=DEV", help="mount DEV at MP below the system")
     mount.add_argument("--with-data", action="append", metavar="MP", help="also mount this data directory")

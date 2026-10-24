@@ -1,6 +1,6 @@
 """btrfs subvolume layouts: which subvolume is the system, and which are snapshots (review R10).
 
-The default subvolume is what the installed system itself boots (openSUSE depends on this), so
+The default subvolume is what the installed system itself boots (a snapper rollback depends on this), so
 it is the root candidate and stays writable unless the filesystem says it is read-only. Only
 other subvolumes that match a snapshot pattern are snapshot candidates.
 """

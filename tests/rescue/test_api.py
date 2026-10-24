@@ -43,7 +43,7 @@ def test_register_adds_every_action_with_the_feature(lab_factory) -> None:
     assert FEATURE == "rescue.v1" and set(registry.actions) == set(rescue_api.ACTIONS) and set(registry.features.values()) == {"rescue.v1"}
     assert len(registry.hooks) == 1
     caps = api.capabilities()
-    assert caps["api"] == 1 and caps["actions"] == list(rescue_api.ACTIONS) and "gentoo" in caps["repairs"] and "arch" not in caps["repairs"] and "arch" in caps["families"]
+    assert caps["api"] == 1 and caps["actions"] == list(rescue_api.ACTIONS) and caps["repairs"] == ["gentoo"] and caps["families"] == ["gentoo"]
 
 
 def test_the_api_is_off_outside_the_live_medium_by_default(lab_factory, tmp_path) -> None:

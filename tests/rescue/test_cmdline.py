@@ -41,16 +41,19 @@ def test_target_kernel_cmdline_file_wins(tmp_path: Path) -> None:
 
 
 def test_grub_defaults_then_bls_then_grub_cfg(tmp_path: Path) -> None:
-    debian = fr.make_root(tmp_path / "d", "debian", firmware="uefi")
-    with RootFS(debian) as fs:
+    """Without /etc/kernel/cmdline the command line comes from /etc/default/grub, else from a boot entry, else from the menu file."""
+    defaults = fr.make_root(tmp_path / "d", "gentoo", kernel_cmdline=False, firmware="uefi")
+    fr.put(defaults, "etc/default/grub", 'GRUB_DEFAULT=0\nGRUB_CMDLINE_LINUX_DEFAULT="quiet splash"\nGRUB_CMDLINE_LINUX=""\n')
+    with RootFS(defaults) as fs:
         derived = cmdline.derive(fs, fr.ROOT_UUID)
     assert derived.source == "/etc/default/grub" and derived.text.startswith("quiet splash") and f"root=UUID={fr.ROOT_UUID}" in derived.text and derived.text.endswith(" ro")
-    fedora = fr.make_root(tmp_path / "f", "fedora")
-    with RootFS(fedora) as fs:
+    entries = fr.make_root(tmp_path / "e", "gentoo", kernel_cmdline=False)
+    fr.put(entries, "boot/loader/entries/gentoo.conf", f"title Gentoo\nlinux /vmlinuz-{fr.GENTOO_KVER}\noptions root=UUID={fr.ROOT_UUID} ro rootflags=subvol=root\n")
+    with RootFS(entries) as fs:
         derived = cmdline.derive(fs, fr.ROOT_UUID)
     assert derived.source == "/boot/loader/entries" and "rootflags=subvol=root" in derived.text
-    arch = fr.make_root(tmp_path / "a", "arch")
-    with RootFS(arch) as fs:
+    menu = fr.make_root(tmp_path / "m", "gentoo", kernel_cmdline=False)
+    with RootFS(menu) as fs:
         derived = cmdline.derive(fs, fr.ROOT_UUID)
     assert derived.source == "grub.cfg" and derived.text == f"root=UUID={fr.ROOT_UUID} ro"
 

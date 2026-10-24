@@ -168,7 +168,7 @@ class PluginTests(unittest.TestCase):
     def test_what_a_plugin_can_do_is_shown_in_the_capabilities_reply(self) -> None:
         class Api:
             def capabilities(self):
-                return {"api": 1, "families": ["gentoo", "debian"]}
+                return {"api": 1, "families": ["gentoo"]}
 
         registry = ActionRegistry()
         self.install_module("gentoo_installerd.rescue.api", register=lambda reg: Api())
@@ -176,7 +176,7 @@ class PluginTests(unittest.TestCase):
         with patch.dict(sys.modules, {"gentoo_installerd.hwactions": None}):
             load_plugins(registry)
         capabilities = registry.capabilities()
-        self.assertEqual(capabilities["rescue"], {"api": 1, "families": ["gentoo", "debian"]})
+        self.assertEqual(capabilities["rescue"], {"api": 1, "families": ["gentoo"]})
         self.assertEqual(capabilities["protocol"], 1)  # a provider can never replace the daemon's own keys
 
     def test_a_capability_provider_that_fails_is_contained_and_silent_ones_leave_no_key(self) -> None:

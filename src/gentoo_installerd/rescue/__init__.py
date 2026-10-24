@@ -1,4 +1,4 @@
-"""Rescue mode: find, unlock, mount, diagnose and repair an installed Linux.
+"""Rescue mode: find, unlock, mount, diagnose and repair a Gentoo system that does not start.
 
 The package is the engine behind the daemon's ``rescue.*`` actions and the
 ``gentoo-rescue`` command. Importing it stays cheap: nothing here touches the

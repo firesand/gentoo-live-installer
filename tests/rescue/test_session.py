@@ -146,7 +146,7 @@ def test_the_esp_below_a_separate_boot_partition_is_mounted_read_only(lab_factor
     session.mount_ro(lab.graph_obj)
     assert session.failed_mounts == []
     assert [entry.data["mountpoint"] for entry in session.ledger.of_kind("mount")] == ["/", "/boot", "/boot/efi"]
-    assert (Path(session.root) / "boot/efi/EFI/ubuntu/shimx64.efi").exists()
+    assert (Path(session.root) / "boot/efi/EFI/Gentoo/grubx64.efi").exists()
     assert session.release().complete
 
 
@@ -164,7 +164,7 @@ def test_a_mount_point_missing_on_the_boot_partition_is_created_when_repairs_are
     run_all(session, steps)
     assert session.failed_mounts == []
     assert session.ledger.find("mount", mountpoint="/boot/efi").data["rw"] is True
-    assert (Path(session.root) / "boot/efi/EFI/ubuntu").is_dir()
+    assert (Path(session.root) / "boot/efi/EFI/Gentoo").is_dir()
     assert session.release().complete
     assert (boot / "efi").is_dir()  # the directory was made on the /boot partition, not on the root file system
 
@@ -243,7 +243,7 @@ def test_every_member_device_of_the_root_is_unprotected_and_made_writable_togeth
 
 def test_a_btrfs_raid_root_keeps_all_of_its_disks_writable(lab_factory) -> None:
     lab = lab_factory(lf.btrfs_multi_device())
-    lab.add_tree("/dev/sda1", "arch", firmware="uefi", fstab=f"UUID={fr.ROOT_UUID} / btrfs subvol=@,noatime 0 0\n")
+    lab.add_tree("/dev/sda1", "gentoo", firmware="uefi", fstab=f"UUID={fr.ROOT_UUID} / btrfs subvol=@,noatime 0 0\n")
     lab.system.subvolumes["/dev/sda1"] = {5: "", 256: ""}
     session = lab.session("/dev/sda1", rootflags="subvolid=256")
     session.mount_ro(lab.graph_obj)

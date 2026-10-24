@@ -14,6 +14,8 @@ from gentoo_installerd.rescue import cli
 from gentoo_installerd.rescue.api import RescueApi
 from gentoo_installerd.rescue.client import LocalTransport, RescueClientError
 
+from gentoo_installerd.rescue.osrelease import NOT_GENTOO
+
 from . import fakeroot as fr
 from . import lsblk_fixtures as lf
 from .apifake import FakeRegistry
@@ -56,6 +58,31 @@ def mount(run: Run) -> str:
     code, out, err = run("mount", cid, "--yes")
     assert code == 0, err
     return re.search(r"session (r[0-9a-f]{6})", out).group(1)
+
+
+def test_scan_lists_a_system_that_is_not_gentoo_by_name_without_a_number_or_an_id(lab_factory) -> None:
+    lab, _, run = prepared(lab_factory)  # Gentoo on the NVMe disk, a Debian on the second disk
+    code, out, err = run("scan")
+    assert code == 0, err
+    lines = out.splitlines()
+    gentoo = next(line for line in lines if "Gentoo Linux" in line)
+    debian = next(line for line in lines if "Debian GNU/Linux" in line)
+    assert "/dev/nvme0n1p5" in gentoo and "/dev/sdb1" in debian
+    assert gentoo.lstrip().startswith("1) Gentoo Linux") and re.search(r"\[c[0-9a-f]{8}\]", gentoo)
+    assert debian.lstrip().startswith("-  Debian GNU/Linux 13 (trixie)") and debian.endswith("Not a Gentoo system - this repair tool only supports Gentoo") and not re.search(r"\[c[0-9a-f]{8}\]", debian)
+    code, out, _ = run("--json", "scan")
+    sdb = next(item for item in next(json.loads(line) for line in out.splitlines() if '"candidates"' in line)["data"]["candidates"] if item["device"] == "/dev/sdb1")
+    assert sdb["supported"] is False
+
+
+def test_a_system_that_is_not_gentoo_cannot_be_mounted(lab_factory) -> None:
+    lab, _, run = prepared(lab_factory)
+    scan = next(json.loads(line) for line in run("--json", "scan")[1].splitlines() if '"candidates"' in line)["data"]
+    other = next(item["id"] for item in scan["candidates"] if item["device"] == "/dev/sdb1")
+    for system in ("/dev/sdb1", other):
+        code, out, err = run("mount", system, "--yes")
+        assert code == 7 and "Not a Gentoo system - this repair tool only supports Gentoo" in err and not lab.system.mounted_targets()
+        assert run("mount", system, "--dry-run")[0] == 7
 
 
 def test_scan_lists_the_system_and_hides_the_live_medium(lab_factory) -> None:
@@ -164,7 +191,7 @@ def test_exit_codes(lab_factory) -> None:
     assert run("plan", sid, "fstab.fix")[0] == 7  # nothing to fix on a healthy system: reported as not applicable
     assert run("plan", sid, "session.leave_write")[0] == 7
     code, _, err = run("mount", "/dev/sdb1", "--yes")
-    assert code == 0, err
+    assert code == 7 and "Not a Gentoo system - this repair tool only supports Gentoo" in err  # a system that is not Gentoo: refused, as "unsupported"
 
 
 def test_a_live_medium_is_refused_with_exit_3(lab_factory) -> None:
@@ -318,6 +345,37 @@ def test_the_wizard_quits_cleanly(lab_factory) -> None:
     assert "Please type one of the numbers" in out
 
 
+def test_the_wizard_lists_a_system_that_is_not_gentoo_but_gives_it_no_number(lab_factory) -> None:
+    lab, _, run = prepared(lab_factory)  # one Gentoo (1) and a Debian, which would have been 2
+    code, out, err = run("wizard", answers=["2", "q"], interactive=True)
+    assert code == 0, err
+    assert "1) Gentoo Linux" in out and "-  Debian GNU/Linux 13 (trixie)" in out and "Not a Gentoo system - this repair tool only supports Gentoo" in out
+    assert "Please type one of the numbers shown." in out and not lab.system.mounted_targets()
+    only = lab_factory(lf.plain_sata_mbr(), name="only")
+    only.add_tree("/dev/sda1", "ubuntu")
+    code, out, err = Run(only)("wizard", answers=["1", "q"], interactive=True)
+    assert code == 0, err
+    assert "No Gentoo system was found." in out and "-  Ubuntu 24.04.1 LTS" in out and "Please type one of the numbers shown." in out and not only.system.mounted_targets()  # there is no 1 to choose
+
+
+def test_a_snapshot_of_a_system_that_is_not_gentoo_is_not_listed_again() -> None:
+    """A Btrfs machine with Timeshift or snapper has a dozen snapshots of the same Ubuntu: one line says what the system is."""
+    scan = {"candidates": [
+        {"id": "c1", "device": "/dev/sda2", "kind": "root", "fstype": "btrfs", "supported": True, "os": {"pretty_name": "Gentoo Linux"}, "warnings": []},
+        {"id": "c2", "device": "/dev/sdb2", "kind": "root", "fstype": "btrfs", "supported": False, "os": {"pretty_name": "Ubuntu 24.04.1 LTS"}, "warnings": [NOT_GENTOO]},
+        {"id": "c3", "device": "/dev/sdb2", "kind": "snapshot", "fstype": "btrfs", "supported": False, "os": {"pretty_name": "Ubuntu 24.04.1 LTS"}, "warnings": [NOT_GENTOO]},
+    ]}
+    out = io.StringIO()
+    shown = cli.render_systems(cli.Console(out=out, err=io.StringIO(), interactive=False), scan)
+    assert [item["id"] for item in shown] == ["c1"] and out.getvalue().count("Ubuntu 24.04.1 LTS") == 1 and out.getvalue().count(NOT_GENTOO) == 1
+
+
+def test_help_says_what_the_tool_is_for(capsys) -> None:
+    assert cli.main(["--help"], console=cli.Console(out=io.StringIO(), err=io.StringIO(), interactive=False)) == 0
+    help_text = " ".join(capsys.readouterr().out.split())
+    assert "Repair a Gentoo system that does not start" in help_text and "Other Linux distributions are listed by a scan but not supported" in help_text
+
+
 def test_old_daemons_are_reported_clearly() -> None:
     class Old:
         def call(self, request):
@@ -340,12 +398,19 @@ def test_mount_has_no_option_that_pretends_to_unmount_another_mount(lab_factory,
     assert "--unmount-existing" not in capsys.readouterr().out
 
 
-def test_mount_auto_picks_the_only_system_and_refuses_when_there_are_several(lab_factory) -> None:
-    lab, _, run = prepared(lab_factory)  # Gentoo on the NVMe disk and a Debian on the second disk
+def test_mount_auto_picks_the_only_gentoo_and_refuses_when_there_are_several(lab_factory) -> None:
+    lab, _, run = prepared(lab_factory)  # Gentoo on the NVMe disk and a Debian on the second disk: the Debian is listed, but it is not a choice
     code, out, err = run("mount", "--auto", "--yes")
-    assert code == 2 and "Several systems were found" in err and "/dev/nvme0n1p5" in out and "/dev/sdb1" in out and not lab.system.mounted_targets()
+    assert code == 0, err
+    assert "Mounted at" in out and len(lab.system.mounted_targets()) == 2 and not any("sdb1" in target for target in lab.system.mounted_targets())
+    run("cleanup")
     code, out, err = run("mount", "--yes")
     assert code == 2 and "Say which system to mount" in err
+    two = lab_factory(lf.multiboot_three(), name="two")
+    two.add_tree("/dev/nvme0n1p2", "gentoo", firmware="uefi")
+    two.add_tree("/dev/nvme0n1p3", "gentoo", firmware="uefi", root_uuid=fr.HOME_UUID)
+    code, out, err = Run(two)("mount", "--auto", "--yes")
+    assert code == 2 and "Several Gentoo systems were found" in err and "/dev/nvme0n1p2" in out and "/dev/nvme0n1p3" in out and not two.system.mounted_targets()
     single = lab_factory(lf.plain_sata_mbr())
     single.add_tree("/dev/sda1", "gentoo")
     code, out, err = Run(single)("mount", "--auto", "--yes")
@@ -353,10 +418,17 @@ def test_mount_auto_picks_the_only_system_and_refuses_when_there_are_several(lab
     assert "Mounted at" in out and single.system.mounted_targets()
 
 
+def test_mount_auto_does_not_pick_a_system_that_is_not_gentoo(lab_factory) -> None:
+    lab = lab_factory(lf.plain_sata_mbr())
+    lab.add_tree("/dev/sda1", "ubuntu")
+    code, out, err = Run(lab)("mount", "--auto", "--yes")
+    assert code == 5 and "No Gentoo system was found" in err and "Not a Gentoo system - this repair tool only supports Gentoo" in out and not lab.system.mounted_targets()
+
+
 def test_mount_auto_explains_an_empty_scan(lab_factory) -> None:
     lab = lab_factory(lf.windows_only())
     code, out, err = Run(lab)("mount", "--auto", "--yes")
-    assert code == 5 and "No installed system was found" in err and "unlock" in err and not lab.system.mounted_targets()
+    assert code == 5 and "No Gentoo system was found" in err and "unlock" in err and not lab.system.mounted_targets()
 
 
 class SpawnedShell:

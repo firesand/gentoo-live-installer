@@ -472,3 +472,93 @@ def test_portage_versions_are_ordered_like_a_person_would() -> None:
 
     ordered = ["6.9.12", "6.10.0_rc1", "6.10.0", "6.10.0-r1", "6.10.0_p1", "6.10.1", "6.11.2", "7.0.0"]
     assert sorted(reversed(ordered), key=version_key) == ordered
+
+
+# ---- a Gentoo that the live system cannot run, or that cannot be repaired from here -------------------------------------------------------------------------------
+def test_a_foreign_architecture_gets_no_chroot(lab_factory) -> None:
+    from gentoo_installerd.rescue.scan import ScanOptions
+
+    lab, _ = uefi_gentoo_lab(lab_factory, arch="aarch64")
+    manager, sid, info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    candidate = next(item for item in manager.scan(None, ScanOptions())["candidates"] if item["device"] == "/dev/nvme0n1p5")
+    assert info["arch"] == "aarch64" and info["family"] == "gentoo" and any("aarch64 system" in warning for warning in candidate["warnings"])
+    with pytest.raises(RescueError) as err:
+        manager.plan({"session_id": sid, "action_id": "boot.initramfs"})
+    assert "aarch64" in err.value.message and not lab.system.chroot_calls
+
+
+def test_the_chroot_can_be_refused_in_an_inspect_only_session(lab_factory) -> None:
+    lab, _ = uefi_gentoo_lab(lab_factory)
+    manager, sid, info = mount_through_the_manager(lab, allow_write=False, candidate_device="/dev/nvme0n1p5")
+    assert all(a["available"] is False for a in info["actions"] if a["id"] != "session.leave_write")
+    with pytest.raises(RescueError) as err:
+        manager.plan({"session_id": sid, "action_id": "boot.config"})
+    assert err.value.short == "needs_write"
+    assert all("noexec" in c[4].split(",") for c in lab.system.commands_named("mount")[1:3] if c[1] == "-t")
+
+
+def test_a_truncated_kernel_image_is_an_error_with_the_kernel_reinstall_as_the_fix(lab_factory) -> None:
+    lab, tree = uefi_gentoo_lab(lab_factory)
+    (tree / f"boot/vmlinuz-{fr.GENTOO_KVER}").write_bytes(b"")
+    manager, sid, info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    errors = [f for f in info["findings"] if f["severity"] == "error"]
+    assert [(f["id"], f["actions"]) for f in errors] == [("D01", ["boot.kernel"])] and "incomplete" in errors[0]["title"]
+    assert info["recommended"] == ["boot.kernel"]
+
+
+def test_a_plan_that_downloads_refuses_to_start_offline(lab_factory) -> None:
+    from gentoo_installerd.rescue.scan import ScanOptions
+
+    lab, _ = uefi_gentoo_lab(lab_factory)
+    manager = lab.manager(network_check=lambda: {"ip": False, "dns": False})
+    scan = manager.scan(None, ScanOptions())
+    cand = next(item for item in scan["candidates"] if item["device"] == "/dev/nvme0n1p5")
+    dry = manager.mount(None, {"candidate": cand["id"], "scan_id": scan["scan_id"], "dry_run": True})
+    sid = manager.mount(None, {"candidate": cand["id"], "scan_id": scan["scan_id"], "plan_digest": dry["mount_plan"]["digest"]})["session_id"]
+    plan = manager.plan({"session_id": sid, "action_id": "boot.kernel", "params": {"mode": "remerge"}})  # a re-merge downloads the kernel package
+    assert plan["needs"]["network"] is True
+    with pytest.raises(RescueError) as err:
+        manager.run_plan(manager.new_op("run", sid), {"session_id": sid, "plan_id": plan["plan_id"], "digest": plan["digest"], "confirm": True, "typed": plan["confirm"]["typed"]})
+    assert err.value.short == "needs_network" and "no route" in err.value.message
+    assert manager.session(sid).mode == "ro"
+
+
+# ---- the kernel command line of boot entries made inside the repaired system (review R3) ----------------------------------------------------------------------------
+def test_a_kernel_reinstall_for_systemd_boot_says_which_command_line_the_new_entry_gets(lab_factory) -> None:
+    lab, _ = uefi_gentoo_lab(lab_factory, installkernel_use="dracut systemd-boot\n")
+    manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    plan = manager.plan({"session_id": sid, "action_id": "boot.kernel"})
+    assert any(f"Boot entries made by these steps use the kernel command line: root=UUID={fr.ROOT_UUID}" in item["text"] for item in plan["preconditions"])  # the reviewer sees it before confirming
+
+
+def test_boot_entries_made_in_the_chroot_never_carry_the_live_command_line(lab_factory) -> None:
+    """installkernel runs kernel-install, which falls back to /proc/cmdline; there the live system's root=live:... would end up in the boot entry of the repaired system."""
+    lab, tree = uefi_gentoo_lab(lab_factory, installkernel_use="dracut systemd-boot\n", kernel_cmdline=False)
+    assert not (tree / "etc/kernel/cmdline").exists()
+    manager, sid, _info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    plan, result, _ = plan_and_run(manager, sid, "boot.kernel")
+    assert result["outcome"] == "success" and any("synthesized" in warning for warning in plan["warnings"])
+    seen = [snapshot["cmdline"] for snapshot in lab.system.chroot_snapshots]
+    assert seen and all("root=live" not in text and "rd.live" not in text and "CDLABEL" not in text for text in seen)
+    unmount(manager, sid)
+    entries = sorted((tree / "boot/loader/entries").glob("*.conf"))
+    assert entries, "kernel-install added no boot entry"
+    for entry in entries:
+        text = entry.read_text()
+        assert f"options root=UUID={fr.ROOT_UUID} ro" in text, text
+        assert "root=live" not in text and "rd.live" not in text and "CDLABEL" not in text and "cdroot" not in text
+
+
+def test_live_arguments_in_a_boot_entry_are_removed_and_nothing_else_is_touched(lab_factory) -> None:
+    """The entries installkernel makes for systemd-boot (/boot/loader/entries) are cleaned like the other sources of the boot command line."""
+    lab, tree = uefi_gentoo_lab(lab_factory)
+    entry = fr.put(tree, "boot/loader/entries/gentoo-6.18.conf", f"title Gentoo Linux\nversion {fr.GENTOO_KVER}\nlinux /vmlinuz-{fr.GENTOO_KVER}\ninitrd /initramfs-{fr.GENTOO_KVER}.img\n"
+                   "options root=live:CDLABEL=GENTOO_INSTALLER_AMD64 rd.live.image quiet\n")
+    manager, sid, info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    assert "D21" in {f["id"] for f in info["findings"]}
+    plan, result, _ = plan_and_run(manager, sid, "boot.config")
+    assert result["outcome"] == "success" and "-options root=live:CDLABEL=GENTOO_INSTALLER_AMD64 rd.live.image quiet" in plan["diff"]
+    unmount(manager, sid)
+    lines = entry.read_text().splitlines()
+    assert f"options root=UUID={fr.ROOT_UUID} quiet" in lines and "title Gentoo Linux" in lines and f"version {fr.GENTOO_KVER}" in lines
+    assert len(list((tree / "boot/loader/entries").glob("*.gentoo-rescue-*"))) == 1  # the entry as it was found is kept

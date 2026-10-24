@@ -23,7 +23,7 @@ from .errors import RescueError
 from .fstab import Fstab, parse_crypttab, resolve_all
 from .fsprobe import mount_readonly
 from .hostenv import Environment, Host, collect_environment
-from .osrelease import SystemFacts, identify
+from .osrelease import NOT_GENTOO, SystemFacts, identify
 from .paths import RootFS
 from .runner import RescueRunner
 from .safety import PolicyContext
@@ -254,7 +254,8 @@ class Scanner:
                 continue
             if found:
                 found["busy_elsewhere"] = mountpoint
-                found["warnings"].append(f"{node.path} is mounted at {mountpoint}; rescue will ask you to unmount it before repairing")
+                if found["supported"]:
+                    found["warnings"].append(f"{node.path} is mounted at {mountpoint}; rescue will ask you to unmount it before repairing")
                 return [found]
         return []
 
@@ -282,22 +283,24 @@ class Scanner:
         fstab = Fstab.parse(fstab_text)
         crypt = parse_crypttab(fs.read_text_or("/etc/crypttab"))
         resolved = resolve_all(fstab, graph, crypttab=crypt)
+        supported = facts.os.family == "gentoo"
         warnings: list[str] = []
-        if rung:
-            warnings.append("The file system needed recovery options to mount; some data may be unreadable")
-        if facts.arch and facts.arch != "x86_64" and facts.arch != "i386":
-            warnings.append(f"This is a {facts.arch} system; programs in it cannot run here, so only file-level repairs are possible")
-        if facts.immutable:
-            warnings.append(f"This is an image-based ({facts.immutable}) system; repairs are not offered")
-        if subvol and subvol.kind == "snapshot":
-            warnings.append("Snapshots are read-only history; repair the active system instead")
-        if subvol and subvol.read_only:
-            warnings.append("This subvolume is read-only")
+        if not supported:
+            warnings.append(NOT_GENTOO)  # the only thing worth saying about a system this tool does not open
+        else:
+            if rung:
+                warnings.append("The file system needed recovery options to mount; some data may be unreadable")
+            if facts.arch and facts.arch != "x86_64" and facts.arch != "i386":
+                warnings.append(f"This is a {facts.arch} system; programs in it cannot run here, so only file-level repairs are possible")
+            if subvol and subvol.kind == "snapshot":
+                warnings.append("Snapshots are read-only history; repair the active system instead")
+            if subvol and subvol.read_only:
+                warnings.append("This subvolume is read-only")
         identifier = candidate_id(node.uuid, rootflags, node.path)
         return {
             "id": identifier, "device": node.path, "node": node.id, "stack": stack_labels(graph, node), "fstype": node.fstype, "uuid": node.uuid, "label": node.label,
             "rootflags": rootflags, "subvol": subvol.to_dict() if subvol else None, "kind": subvol.kind if subvol else "root",
-            "os": facts.os.to_dict(), "init": facts.init, "arch": facts.arch, "immutable": facts.immutable, "extra": facts.extra, "boot": boot.to_dict(),
+            "os": facts.os.to_dict(), "supported": supported, "init": facts.init, "arch": facts.arch, "extra": facts.extra, "boot": boot.to_dict(),
             "fstab": {"present": bool(fstab_text.strip()), "entries": len(fstab.entries), "dead": sum(1 for item in resolved if item.status in {"unresolved", "ambiguous"}),
                       "needs_unlock": sum(1 for item in resolved if item.status == "needs_unlock")},
             "confidence": "high" if facts.os.source in {"/etc/os-release", "/usr/lib/os-release"} else "medium" if facts.os.id != "linux" else "low",
@@ -327,11 +330,14 @@ def _hint(identifier: str, severity: str, text: str) -> dict[str, str]:
 def make_hints(graph: DeviceGraph, candidates: list[dict[str, Any]], env: Environment, stacks: dict[str, list[dict[str, Any]]]) -> list[dict[str, str]]:
     """Plain-language checklist for a scan that found nothing, or found something unexpected."""
     hints: list[dict[str, str]] = []
+    gentoo = [item for item in candidates if item.get("supported")]
     disks = [node for node in graph if node.type == "disk" and not node.live_medium]
     if not disks:
         hints.append(_hint("no_disks", "warn", "No disks were detected. If this laptop's firmware is set to 'RAID On' or 'Intel RST', switch SATA mode to AHCI. NVMe disks behind Intel VMD are supported by this kernel; "
                            "check that they are not hidden by the firmware setting."))
-    if disks and not candidates:
+    if candidates and not gentoo:
+        hints.append(_hint("no_gentoo", "info", "No Gentoo system was found. The systems listed are other Linux distributions, and this tool only repairs Gentoo."))
+    if disks and not gentoo:
         if any(node.role == "luks_locked" for node in graph):
             hints.append(_hint("locked_volumes", "info", "Encrypted volumes were found. Unlock them to look inside."))
         if any(node.role == "lvm_pv" for node in graph) and not any(group.get("active") for group in stacks.get("vgs", [])):

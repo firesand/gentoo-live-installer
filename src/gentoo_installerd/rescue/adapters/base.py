@@ -1,4 +1,4 @@
-"""Distribution adapters: how each family reinstalls a boot loader, rebuilds an initramfs and reinstalls a kernel.
+"""The adapter: how Gentoo reinstalls a boot loader, rebuilds an initramfs and reinstalls a kernel, and the building blocks it uses.
 
 An adapter only *describes* work as plan steps through a ``PlanBuilder``; running them is the executor's job. Programs
 of the repaired system run inside a chroot (clean environment, gid 0, no supplementary groups); the live system supplies
@@ -15,9 +15,9 @@ from ..builder import PlanBuilder
 from ..cmdline import contains_live_arguments, effective_text, sanitize
 from ..errors import RescueError, Unsupported
 from ..fstab import unified_diff
+from ..osrelease import NOT_GENTOO
 from ..view import SessionView
 
-SUPPORTED_FAMILIES = ("gentoo", "debian", "fedora")
 ID_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,31}$")
 
 
@@ -27,21 +27,14 @@ class Adapter:
     tools: ClassVar[frozenset[str]] = frozenset()
     default_bootloader_id: ClassVar[str] = "linux"
     esp_default: ClassVar[str] = "/boot/efi"
-    selects_kernels: ClassVar[bool] = False  # 'Reinstall the kernel' takes a list of kernel versions
 
     # ---- capabilities --------------------------------------------------------------------------------------------------
     def write_refusal(self, view: SessionView) -> str:
         """Why repairs are refused for this system, or '' when they are offered."""
-        if view.immutable == "ostree":
-            return "This is an image-based system (rpm-ostree). Roll back from its boot menu or run 'rpm-ostree rollback' on the running system."
-        if view.immutable == "transactional":
-            return "This is a transactional system. Boot the previous snapshot or run 'transactional-update rollback' on the running system."
-        if view.immutable == "nix":
-            return "NixOS keeps boot generations; use 'nixos-enter' and 'nixos-rebuild boot --install-bootloader' in the terminal."
+        if view.family != "gentoo":
+            return NOT_GENTOO
         if view.arch not in {"x86_64", "i386", ""}:
             return f"This is a {view.arch} system; its programs cannot run on this computer, so only the terminal and read-only views are available."
-        if view.family not in SUPPORTED_FAMILIES:
-            return f"Automatic repairs are not available for {view.os.title} in this version. You can inspect the system, read its logs and open a terminal in it."
         return ""
 
     # ---- the actions an adapter implements ---------------------------------------------------------------------------------------
@@ -155,16 +148,16 @@ def nvram_ok(env: Any) -> bool:
     return bool(env.uefi) and env.efivars != "ro"
 
 
-def grub_uefi_steps(b: PlanBuilder, install: str, esp: Any, ident: str, *, secure_boot: bool = False, removable: bool = False) -> None:
+def grub_uefi_steps(b: PlanBuilder, install: str, esp: Any, ident: str, *, removable: bool = False) -> None:
     """GRUB for UEFI inside the system, with the live-side GRUB as the fallback when the system cannot run its programs."""
     target = grub_target(b)
     common = [f"--target={target}", f"--efi-directory={esp.mountpoint}"]
-    flags = ["--recheck"] + (["--uefi-secure-boot"] if secure_boot else []) + ([] if nvram_ok(b.env) else ["--no-nvram"])
+    flags = ["--recheck"] + ([] if nvram_ok(b.env) else ["--no-nvram"])
     if not nvram_ok(b.env):
         b.warn("This live session cannot store UEFI boot entries; the boot loader is written to the EFI partition and the firmware must be pointed at it (fallback path or its boot menu).")
     b.chroot([install, *common, f"--bootloader-id={ident}", *flags], writes=(f"{esp.mountpoint}/EFI/{ident}/*", "UEFI boot entry"), timeout=600, when="chroot_ok")
     if removable:
-        b.chroot([install, *common, "--removable", "--recheck", *(["--uefi-secure-boot"] if secure_boot else [])], writes=(f"{esp.mountpoint}/EFI/BOOT/BOOTX64.EFI",), timeout=600, when="chroot_ok")
+        b.chroot([install, *common, "--removable", "--recheck"], writes=(f"{esp.mountpoint}/EFI/BOOT/BOOTX64.EFI",), timeout=600, when="chroot_ok")
     live = ["grub-install", f"--boot-directory={b.root}/boot", f"--efi-directory={b.root}{esp.mountpoint}", f"--target={target}", f"--bootloader-id={ident}", "--recheck"]
     live += [] if nvram_ok(b.env) else ["--no-nvram"]
     b.host(live, display="grub-install (live system's GRUB) " + " ".join(live[1:]), writes=(f"{esp.mountpoint}/EFI/{ident}/*",), timeout=600, when="chroot_broken", atomic=False)
@@ -248,9 +241,8 @@ def grub_config_checks(b: PlanBuilder, path: str) -> None:
     b.check("no_live_args", path=path)
 
 
-def esp_loader_checks(b: PlanBuilder, esp: Any, ident: str, removable: bool, files: tuple[str, ...] = ("grubx64.efi",)) -> None:
-    for name in files:
-        b.check("esp_file", dir=f"{esp.mountpoint}/EFI/{ident}", name=name)
+def esp_loader_checks(b: PlanBuilder, esp: Any, ident: str, removable: bool) -> None:
+    b.check("esp_file", dir=f"{esp.mountpoint}/EFI/{ident}", name="grubx64.efi")
     if removable:
         b.check("esp_file", dir=f"{esp.mountpoint}/EFI/BOOT", name="BOOTX64.EFI")
 

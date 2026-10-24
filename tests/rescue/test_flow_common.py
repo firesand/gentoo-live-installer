@@ -1,4 +1,4 @@
-"""The family-independent repairs: fstab, file system checks, accounts, EFI entries, fallback boot file, cancel."""
+"""The repairs that do not depend on the boot loader: fstab, file system checks, accounts, EFI entries, fallback boot file, cancel."""
 
 from __future__ import annotations
 
@@ -366,12 +366,13 @@ def test_the_fallback_boot_file_is_a_copy_with_a_backup(lab_factory) -> None:
     assert list((esp / "EFI/BOOT").glob("BOOTX64.EFI.gentoo-rescue-*"))
 
 
-def test_shim_systems_are_not_given_a_hand_made_fallback(lab_factory) -> None:
-    lab, _ = uefi_gentoo_lab(lab_factory, "debian")
+def test_systems_that_start_through_a_shim_are_not_given_a_hand_made_fallback(lab_factory) -> None:
+    lab, _ = uefi_gentoo_lab(lab_factory)
+    fr.put(lab.system.device_trees["/dev/nvme0n1p1"], "EFI/Gentoo/shimx64.efi", size=1 << 20)  # a signed shim chain that was set up by hand
     manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
     with pytest.raises(RescueError) as info:
         manager.plan({"session_id": sid, "action_id": "boot.esp_fallback"})
-    assert info.value.short == "unsupported_action" and "shim" in info.value.message
+    assert info.value.short == "unsupported_action" and "shim" in info.value.message and "Secure Boot" in info.value.message
 
 
 def test_cancel_stops_between_steps_and_still_runs_the_cleanup(lab_factory) -> None:

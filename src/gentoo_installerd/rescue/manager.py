@@ -25,6 +25,7 @@ from .hostenv import Environment, check_network, collect_environment
 from .ledger import Ledger, write_json_atomic
 from .mountplan import MountPlan, RootSpec, plan_mounts
 from .ops import Operation, OperationTable
+from .osrelease import NOT_GENTOO, identify
 from .plan import Plan, PlanStore
 from .paths import RootFS
 from .runner import RescueRunner
@@ -35,6 +36,7 @@ from .stack import StackManager
 
 POOL_VERSION = 1
 KEEP_SCANS = 3
+ESP_DEFAULT_MOUNTPOINT = "/efi"  # where the Gentoo Handbook mounts the EFI system partition
 ROOTFLAGS_RE = re.compile(r"subvolid=\d{1,10}")
 
 
@@ -263,9 +265,12 @@ class RescueManager:
         try:
             with probe_mounted(runner, self.env.host, self.env.probe_root, node, subvolid=spec.subvolid, sleep=self.env.sleep, graph=graph) as (target, rung):
                 with RootFS(target) as fs:
+                    facts = identify(fs)  # the one place that decides: whatever way the system was named (scan id or device), only a Gentoo is opened
+                    if facts is None or facts.os.family != "gentoo":
+                        raise RescueError("unsupported_system", NOT_GENTOO, device=node.path)
                     plan = plan_mounts(
                         spec, fs, Fstab.parse(fs.read_text_or("/etc/fstab")), parse_crypttab(fs.read_text_or("/etc/crypttab")), graph, include_tier4=params.get("include_tier4", []),
-                        overrides=params.get("overrides", []), allow_write=bool(params.get("allow_write", True)), esp_default_mountpoint="/efi" if candidate.get("os", {}).get("family") == "gentoo" else "/boot/efi")
+                        overrides=params.get("overrides", []), allow_write=bool(params.get("allow_write", True)), esp_default_mountpoint=ESP_DEFAULT_MOUNTPOINT)
         except RescueError as exc:
             if exc.short == "mounted_elsewhere":
                 exc.details["leftover"] = self._made_by_rescue(node, str(exc.details.get("mountpoint", "")))
@@ -337,8 +342,7 @@ class RescueManager:
 
         def verify(fs: RootFS) -> None:
             again = plan_mounts(spec, fs, Fstab.parse(fs.read_text_or("/etc/fstab")), parse_crypttab(fs.read_text_or("/etc/crypttab")), graph, include_tier4=params.get("include_tier4", []),
-                                overrides=params.get("overrides", []), allow_write=session.allow_write, esp_default_mountpoint="/efi" if candidate.get("os", {}).get("family") == "gentoo" else "/boot/efi",
-                                own_root=session.root)
+                                overrides=params.get("overrides", []), allow_write=session.allow_write, esp_default_mountpoint=ESP_DEFAULT_MOUNTPOINT, own_root=session.root)
             if again.digest != plan.digest:
                 raise PlanStale("The system's fstab changed while it was being mounted; review the mount plan again")
 

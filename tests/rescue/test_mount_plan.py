@@ -160,10 +160,10 @@ def test_data_mounts_are_only_offered_so_a_kernel_name_there_is_listed_not_refus
     assert [(item.mountpoint, item.device, item.tier, item.selected) for item in plan.items] == [("/backups", "/dev/sda1", 4, False)] and plan.unresolved == []
 
 
-def test_ubuntu_lvm_plan_orders_parents_first(tmp_path: Path) -> None:
+def test_lvm_plan_orders_parents_first(tmp_path: Path) -> None:
     fstab = (f"UUID={fr.ROOT_UUID} / ext4 defaults 0 1\nUUID={fr.ESP_UUID} /boot/efi vfat umask=0077 0 1\nUUID={fr.BOOT_UUID} /boot ext4 defaults 0 2\n"
              "/dev/mapper/ubuntu--vg-ubuntu--lv /home ext4 defaults 0 2\n")
-    plan, _ = make_plan(tmp_path, "ubuntu", lf.ubuntu_lvm(), "/dev/mapper/ubuntu--vg-ubuntu--lv", fstab=fstab, mounts=["/boot", "/boot/efi", "/home"])
+    plan, _ = make_plan(tmp_path, "gentoo", lf.ubuntu_lvm(), "/dev/mapper/ubuntu--vg-ubuntu--lv", fstab=fstab, mounts=["/boot", "/boot/efi", "/home"])
     assert [item.mountpoint for item in plan.items] == ["/boot", "/home", "/boot/efi"]  # the same depth keeps fstab order, /boot/efi comes after its parent
     order = [item.mountpoint for item in plan.selected]
     assert order.index("/boot") < order.index("/boot/efi")
@@ -192,7 +192,7 @@ def test_noauto_boot_is_still_planned(tmp_path: Path) -> None:
 def test_option_allow_list_keeps_subvol_and_drops_the_rest(tmp_path: Path) -> None:
     fstab = (f"UUID={fr.ROOT_UUID} / btrfs subvol=root,compress=zstd:1 0 0\nUUID={fr.BOOT_UUID} /boot ext4 defaults,discard,x-systemd.automount,nobarrier,data=journal 0 2\n"
              f"UUID={fr.ESP_UUID} /boot/efi vfat umask=0077,shortname=winnt,iocharset=ascii,_netdev,user,owner 0 2\n")
-    plan, _ = make_plan(tmp_path, "fedora", lf.fedora_cloud_btrfs(), "/dev/vda4", fstab=fstab, mounts=["/boot", "/boot/efi"])
+    plan, _ = make_plan(tmp_path, "gentoo", lf.fedora_cloud_btrfs(), "/dev/vda4", fstab=fstab, mounts=["/boot", "/boot/efi"])
     options = {item.mountpoint: item.options for item in plan.items}
     assert options["/boot"] == []
     assert options["/boot/efi"] == ["umask=0077", "shortname=winnt", "iocharset=ascii"]
@@ -211,7 +211,7 @@ def test_btrfs_subvol_options_pass_through_when_safe() -> None:
 
 def test_unusual_subvolume_names_become_unresolved(tmp_path: Path) -> None:
     fstab = f"UUID={fr.ROOT_UUID} / btrfs defaults 0 0\nUUID={fr.BOOT_UUID} /boot ext4 subvol=a;b 0 2\n"
-    plan, _ = make_plan(tmp_path, "fedora", lf.fedora_cloud_btrfs(), "/dev/vda4", fstab=fstab, mounts=["/boot"])
+    plan, _ = make_plan(tmp_path, "gentoo", lf.fedora_cloud_btrfs(), "/dev/vda4", fstab=fstab, mounts=["/boot"])
     assert plan.items == [] and plan.unresolved[0]["status"] == "unusable" and "unusual" in plan.unresolved[0]["reason"]
 
 
@@ -310,12 +310,12 @@ def test_missing_fstab_suggests_the_esp_on_the_roots_disk(tmp_path: Path) -> Non
 
 def test_btrfs_multi_device_members_are_part_of_the_plan_devices(tmp_path: Path) -> None:
     fstab = f"UUID={fr.ROOT_UUID} / btrfs subvol=@,noatime 0 0\n"
-    plan, _ = make_plan(tmp_path, "arch", lf.btrfs_multi_device(), "/dev/sda1", fstab=fstab, rootflags="subvolid=256")
+    plan, _ = make_plan(tmp_path, "gentoo", lf.btrfs_multi_device(), "/dev/sda1", fstab=fstab, rootflags="subvolid=256")
     assert plan.root.rootflags == "subvolid=256" and plan.root.extra_devices == ["/dev/sdb1"]
     assert plan.devices() == ["/dev/sda1", "/dev/sdb1"]  # every member is flagged, made writable and allowed together (review R7c)
     assert plan.members_of("/dev/sda1") == ["/dev/sda1", "/dev/sdb1"] and plan.members_of("/dev/sdz9") == ["/dev/sdz9"]
     assert plan.to_dict()["root"]["extra_devices"] == ["/dev/sdb1"]
-    other, _ = make_plan(tmp_path / "x", "arch", lf.btrfs_multi_device(), "/dev/sda1", fstab=fstab, rootflags="subvolid=256")
+    other, _ = make_plan(tmp_path / "x", "gentoo", lf.btrfs_multi_device(), "/dev/sda1", fstab=fstab, rootflags="subvolid=256")
     assert other.digest == plan.digest
 
 

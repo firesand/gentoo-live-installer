@@ -817,7 +817,7 @@ class ChrootPolicy:
             for token in re.split(r"[=,]", arg):
                 if token.startswith("/dev/") and not self._device_ok(token):
                     raise _fail(f"{token} was not selected for this session", argv)
-        if name in ("grub-install", "grub2-install"):
+        if name == "grub-install":
             self._grub_install(argv)
         elif name == "bootctl":
             for arg in argv[1:]:

@@ -51,7 +51,7 @@ def test_finds_a_gentoo_root_on_an_internal_disk_and_never_the_live_stick(lab_fa
 
 def test_each_probe_is_a_separate_directory_under_the_probe_root(lab_factory) -> None:
     lab = lab_factory(lf.nvme_dualboot())
-    lab.add_tree("/dev/nvme0n1p5", "ubuntu", firmware="uefi")
+    lab.add_tree("/dev/nvme0n1p5", "gentoo", firmware="uefi")
     run_scan(lab)
     target = lab.system.commands_named("mount")[0][-1]
     assert target.startswith(str(lab.probe_root) + "/") and target.endswith("nvme0n1p5")
@@ -89,20 +89,21 @@ def test_unknown_filesystem_types_map_to_unsupported(lab_factory) -> None:
     assert any("cannot mount" in warning for warning in result.warnings)
 
 
-def test_debian_cloud_layout(lab_factory) -> None:
+def test_cloud_vm_layout(lab_factory) -> None:
+    """A virtual machine's disk: root, a BIOS boot partition and an ESP."""
     lab = lab_factory(lf.debian_cloud())
-    lab.add_tree("/dev/vda1", "debian", firmware="uefi")
+    lab.add_tree("/dev/vda1", "gentoo", firmware="uefi")
     result = run_scan(lab)
     assert len(result.candidates) == 1
     candidate = result.candidates[0]
-    assert candidate["os"]["id"] == "debian" and candidate["boot"]["kernels"][0]["version"] == fr.DEBIAN_KVER
+    assert candidate["os"]["id"] == "gentoo" and candidate["boot"]["kernels"][0]["version"] == fr.GENTOO_KVER
     roles = {device["path"]: device["role"] for device in result.to_dict()["devices"]}
     assert roles["/dev/vda14"] == "bios_boot" and roles["/dev/vda15"] == "esp"
 
 
 def test_candidate_ids_are_stable_across_rescans(lab_factory) -> None:
     lab = lab_factory(lf.plain_sata_mbr())
-    lab.add_tree("/dev/sda1", "arch")
+    lab.add_tree("/dev/sda1", "gentoo")
     first = run_scan(lab).candidates[0]["id"]
     second = run_scan(lab).candidates[0]["id"]
     assert first == second and first.startswith("c") and len(first) == 9
@@ -177,7 +178,7 @@ def test_blkid_fills_in_signatures_udev_missed(lab_factory) -> None:
             child["uuid"] = None
     lab = lab_factory(json.dumps(data))
     lab.system.blkid["/dev/sda1"] = f"DEVNAME=/dev/sda1\nUUID={fr.ROOT_UUID}\nTYPE=ext4\nLABEL=root\n"
-    lab.add_tree("/dev/sda1", "alpine")
+    lab.add_tree("/dev/sda1", "gentoo")
     result = run_scan(lab)
     assert ("blkid", "-p", "-o", "export", "/dev/sda1") in lab.system.commands
     assert [item["device"] for item in result.candidates] == ["/dev/sda1"]
