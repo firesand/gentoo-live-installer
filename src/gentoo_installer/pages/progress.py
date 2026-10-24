@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 import re
 import time
@@ -25,6 +26,8 @@ from .. import daemon_client, diagnostics
 from ..backend import BackendWorker
 from ..manifest import InstallManifest
 from ..widgets import Card, FlowLayout, Page, wrapped_label
+
+LOG = logging.getLogger("gentoo_installer.progress")
 
 # The visible log keeps the newest lines only; the daemon keeps the whole log.
 LOG_MAX_BLOCKS = 5000
@@ -166,10 +169,14 @@ class _FileJob(QThread):
         raise NotImplementedError
 
     def run(self) -> None:
+        # Nothing may leave run(): an exception that does freezes PySide6 on Python 3.14 (the window stops answering).
         try:
             self.done.emit(True, self.work())
         except OSError as exc:
             self.done.emit(False, f"Could not write {self.path}: {exc.strerror or exc}")
+        except Exception as exc:  # noqa: BLE001 - whatever went wrong is reported, never raised out of the thread
+            LOG.exception("Writing %s failed", self.path)
+            self.done.emit(False, f"Could not write {self.path}: {type(exc).__name__}: {exc}")
 
 
 class LogExporter(_FileJob):
@@ -214,7 +221,7 @@ class DiagnosticsExporter(_FileJob):
 
     def work(self) -> str:
         diagnostics.write_bundle(self.path, self.collect())
-        return f"Saved diagnostics to {self.path}. Review it before sharing; serial numbers are shortened and passwords removed."
+        return f"Saved diagnostics to {self.path}. Review it before sharing; serial numbers and other identifiers are shortened or removed, and passwords are removed."
 
 
 class ProgressPage(Page):

@@ -59,7 +59,7 @@ class Host:
     @staticmethod
     def _run(argv: Sequence[str], timeout: float = 15.0) -> tuple[bool, str]:
         try:
-            result = subprocess.run(list(argv), capture_output=True, text=True, timeout=timeout, check=False)
+            result = subprocess.run(list(argv), capture_output=True, text=True, errors="replace", timeout=timeout, check=False)
         except FileNotFoundError:
             return False, f"{argv[0]} is not installed on this system"
         except (OSError, subprocess.SubprocessError) as exc:
@@ -148,7 +148,8 @@ class Host:
         Used by --dry-run when the daemon cannot be asked. It has the same keys, but it cannot
         say whether the network works or which tools the daemon sees."""
         try:
-            result = subprocess.run(list(blockdev.lsblk_argv()), capture_output=True, text=True, check=True, timeout=15)
+            # A model name or label can hold bytes that are not UTF-8: replace them instead of finding no disks at all.
+            result = subprocess.run(list(blockdev.lsblk_argv()), capture_output=True, text=True, errors="replace", check=True, timeout=15)
             roots = blockdev.parse_lsblk(result.stdout)
         except (OSError, subprocess.SubprocessError, ValueError):
             roots = []

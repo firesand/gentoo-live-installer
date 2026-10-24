@@ -416,7 +416,8 @@ def _is_uefi() -> bool:
 
 def _lsblk_roots() -> list[blockdev.BlockDevice]:
     try:
-        result = subprocess.run(list(blockdev.lsblk_argv()), capture_output=True, text=True, check=True, timeout=10)
+        # A model name or label can hold bytes that are not UTF-8: replace them instead of finding no disks at all.
+        result = subprocess.run(list(blockdev.lsblk_argv()), capture_output=True, text=True, errors="replace", check=True, timeout=10)
         return blockdev.parse_lsblk(result.stdout)
     except (OSError, subprocess.SubprocessError, ValueError):
         return []
@@ -429,7 +430,7 @@ def _mount_sources() -> list[str]:
         try:
             result = subprocess.run(
                 ["findmnt", "--noheadings", "--output", "SOURCE", "--target", target],
-                capture_output=True, text=True, check=False, timeout=5,
+                capture_output=True, text=True, errors="replace", check=False, timeout=5,
             )
         except (OSError, subprocess.SubprocessError):
             continue

@@ -25,6 +25,8 @@ from pathlib import Path
 from types import TracebackType
 from typing import Any, Callable
 
+from . import blockdev
+
 LOG = logging.getLogger("gentoo_installer")
 LOG_NAME = "gui.log"
 LOG_BYTES = 1_000_000
@@ -32,10 +34,17 @@ LOG_BACKUPS = 3
 # The credentials of an address end at the LAST "@" before the first "/", "?" or "#", as in the manifest (a proxy is accepted
 # with a user name that is an e-mail address, or an "@" in the password): http://john@corp.com:secret@proxy:3128
 USERINFO_RE = re.compile(r"(?P<scheme>[A-Za-z][A-Za-z0-9+.-]*://)(?P<userinfo>[^\s/?#]*)@")
+# lsblk columns that name one particular device (serial numbers, WWNs, UUIDs, partition-table ids, the udev ID that holds the
+# serial number): the bundle shows the layout of the disks, never which disks they are.
+IDENTIFYING_COLUMNS = frozenset({"SERIAL", "WWN", "UUID", "PTUUID", "PARTUUID", "ID", "ID-LINK"})
+LSBLK_BUNDLE_COLUMNS = (
+    *(column for column in blockdev.LSBLK_COLUMNS if column not in IDENTIFYING_COLUMNS),
+    "VENDOR", "REV", "ROTA", "STATE", "PKNAME", "HCTL", "FSSIZE", "FSUSED",
+)
 BUNDLE_COMMANDS = (
     ("uname", ("uname", "-a")),
     ("cmdline", ("cat", "/proc/cmdline")),
-    ("lsblk", ("lsblk", "--output-all", "--json")),
+    ("lsblk", ("lsblk", "--json", "--bytes", "--output", ",".join(LSBLK_BUNDLE_COLUMNS))),
     ("findmnt", ("findmnt", "--list")),
     ("lspci", ("lspci", "-nnk")),
     ("lsusb", ("lsusb",)),
@@ -58,6 +67,21 @@ def redact_url_userinfo(value: str) -> str:
 def strip_url_userinfo(value: str) -> str:
     """Remove credentials from a URL completely (used for the saved draft)."""
     return USERINFO_RE.sub(lambda m: m["scheme"], value)
+
+
+# Device-path nodes of efibootmgr -v that carry an identifier of one particular disk or adapter.
+BOOT_ENTRY_IDS = (
+    (re.compile(r"(HD\(\d+,(?:GPT|MBR),)[^,)]+"), r"\1<removed>"),  # the partition GUID, or the disk signature of an MBR disk
+    (re.compile(r"(NVMe\([^,)]*,)[^)]+"), r"\1<removed>"),  # the namespace's EUI-64
+    (re.compile(r"(MAC\()[0-9A-Fa-f]+"), r"\1<removed>"),  # the network adapter's address
+)
+
+
+def scrub_efibootmgr(text: str) -> str:
+    """The boot entries without the identifiers of the disks, partitions and adapters they point at."""
+    for pattern, replacement in BOOT_ENTRY_IDS:
+        text = pattern.sub(replacement, text)
+    return text
 
 
 def scrub_text(text: str, secrets: list[str]) -> str:
@@ -148,7 +172,10 @@ def install_excepthook(show: Callable[[str, Path | None], None] | None = None) -
     _dialog_budget["left"] = 3
 
     def hook(exc_type, exc, tb):
-        handle_exception(exc_type, exc, tb, show=show)
+        # PySide hands an exception that leaves QThread.run() to sys.excepthook in that thread. A dialog built outside
+        # the GUI thread kills the program, so only the main thread shows one; the others are logged.
+        on_main_thread = threading.current_thread() is threading.main_thread()
+        handle_exception(exc_type, exc, tb, show=show if on_main_thread else None)
 
     def thread_hook(args):
         handle_exception(args.exc_type, args.exc_value, args.exc_traceback, show=None)
@@ -161,10 +188,14 @@ def install_excepthook(show: Callable[[str, Path | None], None] | None = None) -
 # --- the bundle --------------------------------------------------------------------------------
 
 
+# What is done to the output of a command before it goes into the bundle.
+COMMAND_FILTERS: dict[str, Callable[[str], str]] = {"efibootmgr": scrub_efibootmgr}
+
+
 def run_command(argv: tuple[str, ...], timeout: float = 6.0, limit: int = 60_000) -> str:
     """Read-only helper command; never raises, output is size-limited."""
     try:
-        result = subprocess.run(list(argv), capture_output=True, text=True, timeout=timeout, check=False)
+        result = subprocess.run(list(argv), capture_output=True, text=True, errors="replace", timeout=timeout, check=False)
     except (OSError, subprocess.SubprocessError) as exc:
         return f"(not available: {exc})"
     output = (result.stdout or "") + (("\n" + result.stderr) if result.stderr.strip() and not result.stdout.strip() else "")
@@ -254,7 +285,7 @@ def collect_bundle(
         except Exception as exc:  # noqa: BLE001 - a bundle with a missing part is still useful
             bundle["daemon"] = {"error": str(exc)}
     if commands:
-        bundle["commands"] = {name: run_command(argv) for name, argv in BUNDLE_COMMANDS}
+        bundle["commands"] = {name: COMMAND_FILTERS.get(name, str)(run_command(argv)) for name, argv in BUNDLE_COMMANDS}
     text = scrub_text(json.dumps(bundle, default=str), secrets)
     return json.loads(text)
 
