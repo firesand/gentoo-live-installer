@@ -13,6 +13,9 @@ from gentoo_installer import layout as guided_layout
 from gentoo_installer.manifest import CMDLINE_TOKEN_RE, InstallManifest, System
 
 from .configure_base import _plan_list, _plan_scalar, ConfigurationError, ConfigurerBase
+from .configure_boot_extra import (  # noqa: F401 - re-exported for the callers of the old module
+    DIST_KERNELS, ENROLL_FILE, SAFE_GRAPHICS_TITLE, SAFE_GRAPHICS_UKI, SECURE_BOOT_CERT, SECURE_BOOT_KEY, SHIM_NOT_YET, BootExtrasMixin,
+    safe_tokens, secure_boot_enroll_steps)
 from .configure_fstab import ExistingStack
 from .runner import Runner, RunnerError
 from .storage import LayoutEntry
@@ -38,6 +41,11 @@ ROOT="${ESP_SYNC_ROOT:-}"
 ESP="@ESP@"
 UKI=@UKI@
 FALLBACK_COPY=@FALLBACK@
+SAFE=@SAFE@
+SIGN=@SIGN@
+SIGN_LOADER=@SIGN_LOADER@
+SB_KEY="@SB_KEY@"
+SB_CERT="@SB_CERT@"
 case "$1" in
     add) shift ;;
     remove) exit 0 ;;
@@ -62,37 +70,68 @@ esp="$ROOT$ESP"
 replace() {
     cp "$1" "$2.new" && mv -f "$2.new" "$2" || { rm -f "$2.new"; return 1; }
 }
+# Secure Boot: sign a file with the installed key unless it is already signed with it.
+sign() {
+    [ "$SIGN" = 1 ] || return 0
+    if sbverify --cert "$ROOT$SB_CERT" "$1" >/dev/null 2>&1; then return 0; fi
+    if sbsign --key "$ROOT$SB_KEY" --cert "$ROOT$SB_CERT" --output "$1.signed" "$1" && mv -f "$1.signed" "$1"; then return 0; fi
+    rm -f "$1.signed"
+    echo "gentoo-installer-esp: could not sign $1; the PC may refuse to start it with Secure Boot on" >&2
+    return 1
+}
+# One Unified Kernel Image: name, file with its kernel command line.
+build_uki() {
+    name="$1"; cmdfile="$2"; out="$esp/EFI/Linux/$1"
+    set -- ukify build --linux "$kernel" --cmdline "$(cat "$ROOT/etc/kernel/$cmdfile" 2>/dev/null)" --output "$out.new"
+    [ -n "$initrd" ] && set -- "$@" --initrd "$initrd"
+    if "$@" && sign "$out.new" && mv -f "$out.new" "$out"; then return 0; fi
+    rm -f "$out.new"
+    echo "gentoo-installer-esp: could not build the Unified Kernel Image $name for $version" >&2
+    return 1
+}
 if [ "$UKI" = 1 ]; then
     mkdir -p "$esp/EFI/Linux"
-    set -- ukify build --linux "$kernel" --cmdline "$(cat "$ROOT/etc/kernel/cmdline" 2>/dev/null)" --output "$esp/EFI/Linux/gentoo.efi.new"
-    [ -n "$initrd" ] && set -- "$@" --initrd "$initrd"
-    if "$@" && mv -f "$esp/EFI/Linux/gentoo.efi.new" "$esp/EFI/Linux/gentoo.efi"; then
+    if build_uki gentoo.efi cmdline; then
         [ "$FALLBACK_COPY" = 1 ] && replace "$esp/EFI/Linux/gentoo.efi" "$esp/EFI/BOOT/BOOTX64.EFI"
-    else
-        rm -f "$esp/EFI/Linux/gentoo.efi.new"
-        echo "gentoo-installer-esp: could not build the Unified Kernel Image for $version" >&2
     fi
+    [ "$SAFE" = 1 ] && build_uki gentoo-safe.efi cmdline-safe
 else
     replace "$kernel" "$esp/vmlinuz" || echo "gentoo-installer-esp: could not copy the kernel to $ESP" >&2
     if [ -n "$initrd" ]; then
         replace "$initrd" "$esp/initramfs" || echo "gentoo-installer-esp: could not copy the initramfs to $ESP" >&2
     fi
 fi
+# systemd-boot itself is updated by systemd; the new copy is unsigned until it is signed here.
+if [ "$SIGN_LOADER" = 1 ]; then
+    for loader in "$esp/EFI/systemd/systemd-bootx64.efi" "$esp/EFI/BOOT/BOOTX64.EFI"; do
+        [ -f "$loader" ] && sign "$loader"
+    done
+fi
 exit 0
 """
 
 
-def render_esp_sync_hook(esp: str, uki: bool, fallback_copy: bool = False) -> str:
+def render_esp_sync_hook(esp: str, uki: bool, fallback_copy: bool = False, *, safe: bool = False, sign: bool = False,
+                         sign_loader: bool = False) -> str:
+    """The hook script. ``safe`` also builds the safe-graphics image, ``sign`` signs each new image with the key in /etc/secureboot,
+    ``sign_loader`` also signs systemd-boot (and the fallback copy) when systemd has replaced it."""
     if not re.fullmatch(r"/[A-Za-z0-9_./-]+", esp):
         raise ConfigurationError("Invalid EFI system partition mount point")
-    return _ESP_SYNC_TEMPLATE.replace("@ESP@", esp).replace("@UKI@", "1" if uki else "0").replace("@FALLBACK@", "1" if fallback_copy else "0")
+    flag = lambda value: "1" if value else "0"  # noqa: E731
+    return (_ESP_SYNC_TEMPLATE.replace("@ESP@", esp).replace("@UKI@", flag(uki)).replace("@FALLBACK@", flag(fallback_copy))
+            .replace("@SAFE@", flag(safe)).replace("@SIGN@", flag(sign)).replace("@SIGN_LOADER@", flag(sign_loader))
+            .replace("@SB_KEY@", SECURE_BOOT_KEY).replace("@SB_CERT@", SECURE_BOOT_CERT))
 
 
 # --- checks on the live system, for the daemon's preflight --------------------------------------------
 
 
 def check_secure_boot_material(runner: Runner, system: System) -> list[str]:
-    """Is the Secure Boot signing key readable and does the certificate belong to it?"""
+    """Is the Secure Boot signing key readable and does the certificate belong to it? (Nothing to check when the installer makes the key.)"""
+    if system.secure_boot_mode == "create":
+        return []
+    if system.secure_boot_mode == "shim":
+        return [SHIM_NOT_YET]
     key, certificate = Path(system.secure_boot_key), Path(system.secure_boot_certificate)
     problems: list[str] = []
     for label, path in (("signing key", key), ("certificate", certificate)):
@@ -125,7 +164,7 @@ def efi_arch(plan: object | None) -> str:
     return "ia32" if grub_efi_target(plan) == "i386-efi" else "x64"
 
 
-class BootMixin(ConfigurerBase):
+class BootMixin(BootExtrasMixin):
     # ----- package sets ------------------------------------------------------------------------
 
     def early_boot_atoms(self, manifest: InstallManifest, plan: object | None = None) -> list[str]:
@@ -146,11 +185,19 @@ class BootMixin(ConfigurerBase):
             atoms.append(f"sys-kernel/{manifest.system.kernel}")
         if manifest.system.initramfs == "dracut":
             atoms.append("sys-kernel/dracut")
-        return atoms
+        return [*atoms, *self.kernel_extra_atoms(manifest)]
+
+    def kernel_extra_atoms(self, manifest: InstallManifest) -> list[str]:
+        """Tools that go with a distribution kernel: the right I/O scheduler per disk, and eclean-kernel when asked for."""
+        if manifest.system.kernel not in DIST_KERNELS:
+            return []
+        return ["sys-block/io-scheduler-udev-rules", *(["app-admin/eclean-kernel"] if manifest.options.eclean_kernel else [])]
 
     def bootloader_atoms(self, manifest: InstallManifest) -> list[str]:
         system = manifest.system
         systemd_package = self.systemd_package(system)
+        if system.bootloader == "none":
+            return []  # the user sets the boot loader up
         atoms = [{"grub": "sys-boot/grub", "systemd-boot": systemd_package, "efi-stub": "sys-boot/efibootmgr"}[system.bootloader]]
         if system.bootloader == "grub" and system.dual_boot:
             atoms.append("sys-boot/os-prober")
@@ -216,6 +263,7 @@ class BootMixin(ConfigurerBase):
             arguments.append(f"resume={'UUID=' + swap_uuid if swap_uuid else resume_device}")
             modules.append("resume")  # included by hostonly="no" anyway; asked for so that it stays that way
         arguments.extend(token for token in _plan_list(plan, "kernel_cmdline") if CMDLINE_TOKEN_RE.fullmatch(str(token)))
+        arguments.extend(self.serial_console_tokens(manifest))
         arguments.extend(manifest.system.kernel_cmdline_extra.split())
         cmdline = " ".join(arguments)
         self.write("etc/kernel/cmdline", cmdline + "\n")
@@ -227,6 +275,7 @@ class BootMixin(ConfigurerBase):
         self.write("etc/dracut.conf.d/gentoo-installer.conf", dracut_config)
         if manifest.system.bootloader == "grub" and len(arguments) > 2:
             self.set_grub_setting("GRUB_CMDLINE_LINUX", " ".join(arguments[2:]))
+        self.link_cmdline_for_dracut(manifest)
 
     def set_grub_setting(self, key: str, value: str) -> None:
         self.set_shell_variable("etc/default/grub", key, value)
@@ -277,10 +326,16 @@ class BootMixin(ConfigurerBase):
         efi_mountpoint = self.efi_mountpoint(manifest)
         efi_prefix = efi_mountpoint.lstrip("/")
         cmdline = self._kernel_cmdline(root_device)
+        if system.bootloader == "none":
+            self.notify("No boot loader was installed, as you asked. The kernel and initramfs are under /boot and the kernel options "
+                        "are in /etc/kernel/cmdline: set up your own boot loader before you restart.")
+            return
+        if system.secure_boot and system.secure_boot_mode == "shim":
+            raise ConfigurationError(SHIM_NOT_YET)
         if system.secure_boot and storage.firmware != "uefi":
             raise ConfigurationError("Secure Boot requires UEFI firmware")
         if system.secure_boot and system.bootloader == "grub":
-            raise ConfigurationError("Secure Boot is not supported with GRUB; choose systemd-boot or the EFI stub with a signed UKI")
+            raise ConfigurationError("Secure Boot is not supported with GRUB yet; choose systemd-boot or the EFI stub with a signed UKI")
         if system.secure_boot and system.bootloader != "grub" and not system.uki:
             raise ConfigurationError("Secure Boot with systemd-boot or EFI stub requires a signed UKI")
         if system.uki and storage.firmware != "uefi":
@@ -289,8 +344,14 @@ class BootMixin(ConfigurerBase):
             problems = self.secure_boot_problems(manifest)
             if problems:
                 raise ConfigurationError("; ".join(problems))
+        if system.secure_boot:
+            self.prepare_secure_boot(manifest)  # the key stays on the installed system, so kernel updates are signed too
+        safe = self.write_safe_graphics_files(manifest, cmdline, plan)
+        safe_cmdline = " ".join(safe_tokens(cmdline))
         if system.uki:
             self._build_uki(manifest, root_device)
+            if safe:
+                self._build_uki(manifest, root_device, SAFE_GRAPHICS_UKI, safe_cmdline)
         elif system.bootloader != "grub":
             self._copy_boot_files(manifest)
         fallback_written = False
@@ -306,10 +367,10 @@ class BootMixin(ConfigurerBase):
                     ("blkid", "-s", "UUID", "-o", "value", efi_device)).stdout.strip()
                 if not self.dry_run and not re.fullmatch(r"[0-9a-fA-F-]+", efi_uuid):
                     raise ConfigurationError("EFI system partition has no valid UUID")
-                self.write("etc/grub.d/40_custom", '#!/bin/sh\nexec tail -n +3 $0\n\n'
-                           'menuentry "Gentoo Linux" {\n'
-                           f'    search --no-floppy --fs-uuid --set=root {efi_uuid}\n'
-                           '    chainloader /EFI/Linux/gentoo.efi\n}\n', 0o755)
+                entries = self._grub_chain_entry("Gentoo Linux", efi_uuid, "gentoo.efi")
+                if safe:
+                    entries += self._grub_chain_entry(SAFE_GRAPHICS_TITLE, efi_uuid, SAFE_GRAPHICS_UKI)
+                self.write("etc/grub.d/40_custom", '#!/bin/sh\nexec tail -n +3 $0\n\n' + entries, 0o755)
             if system.dual_boot:
                 # GRUB ships with os-prober disabled; other systems only appear in the menu when it is enabled.
                 self.set_grub_setting("GRUB_DISABLE_OS_PROBER", "false")
@@ -323,10 +384,14 @@ class BootMixin(ConfigurerBase):
                 self.notify("warning: the firmware refused the boot entry; systemd-boot is installed on the fallback path only")
                 self.chroot(("bootctl", f"--path={efi_mountpoint}", "--no-variables", "install"))
             initrd = "initrd /initramfs\n" if system.initramfs != "none" and not system.uki else ""
-            linux = "/EFI/Linux/gentoo.efi" if system.uki else "/vmlinuz"
-            options = "" if system.uki else f"options {cmdline}\n"
             self.write(f"{efi_prefix}/loader/loader.conf", "default gentoo.conf\ntimeout 3\n")
-            self.write(f"{efi_prefix}/loader/entries/gentoo.conf", f"title Gentoo Linux\nlinux {linux}\n{initrd}{options}")
+            entries = [("gentoo", "Gentoo Linux", "gentoo.efi", cmdline)]
+            if safe:
+                entries.append(("gentoo-safe", SAFE_GRAPHICS_TITLE, SAFE_GRAPHICS_UKI, safe_cmdline))
+            for name, title, uki_name, options in entries:
+                linux = f"/EFI/Linux/{uki_name}" if system.uki else "/vmlinuz"
+                self.write(f"{efi_prefix}/loader/entries/{name}.conf",
+                           f"title {title}\nlinux {linux}\n{initrd}" + ("" if system.uki else f"options {options}\n"))
         else:
             if not root_device.startswith("/dev/"):
                 raise ConfigurationError("EFI stub requires a stable root device")
@@ -341,30 +406,44 @@ class BootMixin(ConfigurerBase):
                 if not part.isdigit() or not re.fullmatch(r"[A-Za-z0-9._+-]+", parent):
                     raise ConfigurationError("Could not determine the EFI partition number and parent disk")
                 disk = "/dev/" + parent
-            loader = "\\EFI\\Linux\\gentoo.efi" if system.uki else "\\vmlinuz"
-            command = ["efibootmgr", "--create", "--disk", disk, "--part", part, "--label", "Gentoo", "--loader", loader]
-            if not system.uki:
-                initrd = " initrd=\\initramfs" if system.initramfs != "none" else ""
-                command.extend(("--unicode", f"{cmdline}{initrd}"))
+            # efibootmgr puts each new entry first in the boot order: the safe one is made first so that "Gentoo" stays the default.
+            if safe:
+                try:
+                    self._efi_stub_entry("Gentoo (safe graphics)", SAFE_GRAPHICS_UKI, safe_cmdline, disk, part, manifest)
+                except RunnerError:
+                    self.notify("warning: the firmware refused the safe-graphics boot entry")
             try:
-                self.chroot(tuple(command))
+                self._efi_stub_entry("Gentoo", "gentoo.efi", cmdline, disk, part, manifest)
             except RunnerError:
                 if not fallback_written:
                     raise
                 self.notify("warning: the firmware refused the boot entry; the system boots from the fallback path")
-        if system.bootloader != "grub" or system.uki:
-            self.install_esp_sync_hook(manifest, fallback_copy=fallback_written)
+        self.install_esp_sync_hook(manifest, fallback_copy=fallback_written, safe=safe)
         if system.secure_boot:
-            self._sign_boot_images(manifest, efi_mountpoint, sign_fallback_copy=fallback_written)
+            self._sign_boot_images(manifest, efi_mountpoint, sign_fallback_copy=fallback_written, safe=safe)
 
-    def install_esp_sync_hook(self, manifest: InstallManifest, fallback_copy: bool = False) -> None:
-        """Make kernel updates reach the EFI system partition (systemd-boot, EFI stub, UKI)."""
+    @staticmethod
+    def _grub_chain_entry(title: str, efi_uuid: str, image: str) -> str:
+        return (f'menuentry "{title}" {{\n'
+                f'    search --no-floppy --fs-uuid --set=root {efi_uuid}\n'
+                f'    chainloader /EFI/Linux/{image}\n}}\n')
+
+    def _efi_stub_entry(self, label: str, uki_name: str, options: str, disk: str, part: str, manifest: InstallManifest) -> None:
         system = manifest.system
-        if system.secure_boot:
-            self.notify("Secure Boot: kernel updates are not copied to the EFI system partition automatically, "
-                        "because the new boot image would have to be signed again")
+        loader = f"\\EFI\\Linux\\{uki_name}" if system.uki else "\\vmlinuz"
+        command = ["efibootmgr", "--create", "--disk", disk, "--part", part, "--label", label, "--loader", loader]
+        if not system.uki:
+            initrd = " initrd=\\initramfs" if system.initramfs != "none" else ""
+            command.extend(("--unicode", f"{options}{initrd}"))
+        self.chroot(tuple(command))
+
+    def install_esp_sync_hook(self, manifest: InstallManifest, fallback_copy: bool = False, safe: bool = False) -> None:
+        """Make kernel updates reach the EFI system partition (systemd-boot, EFI stub, UKI), signed again when Secure Boot is on."""
+        system = manifest.system
+        if system.bootloader == "grub" and not system.uki:
             return
-        script = render_esp_sync_hook(self.efi_mountpoint(manifest), system.uki, fallback_copy)
+        script = render_esp_sync_hook(self.efi_mountpoint(manifest), system.uki, fallback_copy, safe=safe and system.uki,
+                                      sign=system.secure_boot, sign_loader=system.secure_boot and system.bootloader == "systemd-boot")
         for hook in ESP_SYNC_HOOKS:
             self.write(hook, script, 0o755)
 
@@ -385,27 +464,11 @@ class BootMixin(ConfigurerBase):
         """Problems with the signing key and certificate on the live system (readable, matching pair)."""
         return check_secure_boot_material(self.runner, manifest.system)
 
-    def _stage_signing_material(self, system: object) -> tuple[str, str]:
-        """Copy key and certificate into a root-only directory of the live tmpfs, never onto the target disk."""
-        self.secret_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-        self.secret_dir.chmod(0o700)
-        key_path = self.secret_dir / "signing.key"
-        cert_path = self.secret_dir / "signing.crt"
-        for source, destination, mode in ((Path(getattr(system, "secure_boot_key")), key_path, 0o600),
-                                          (Path(getattr(system, "secure_boot_certificate")), cert_path, 0o644)):
-            descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, mode)
-            with os.fdopen(descriptor, "wb") as handle:
-                handle.write(source.read_bytes())
-            destination.chmod(mode)
-        return f"{self.secret_chroot_dir}/signing.key", f"{self.secret_chroot_dir}/signing.crt"
-
     def cleanup_secrets(self) -> None:
-        """Remove staged signing material; plain filesystem calls so a cancelled install still cleans up."""
+        """Remove signing material an older installer left on the live system; plain filesystem calls so a cancelled install still cleans up."""
         for name in ("signing.key", "signing.crt"):
             try:
                 os.unlink(self.secret_dir / name)
-            except FileNotFoundError:
-                pass
             except OSError:
                 pass
         try:
@@ -413,38 +476,33 @@ class BootMixin(ConfigurerBase):
         except OSError:
             pass
 
-    def _sign_boot_images(self, manifest: InstallManifest, efi_mountpoint: str, *, sign_fallback_copy: bool = False) -> None:
+    def _sign_boot_images(self, manifest: InstallManifest, efi_mountpoint: str, *, sign_fallback_copy: bool = False, safe: bool = False) -> None:
+        """Sign what the firmware starts, with the key that stays in /etc/secureboot of the installed system."""
         system = manifest.system
         images: list[str] = []
         if system.uki:
             images.append(f"{efi_mountpoint}/EFI/Linux/gentoo.efi")
+            if safe:
+                images.append(f"{efi_mountpoint}/EFI/Linux/{SAFE_GRAPHICS_UKI}")
         if system.bootloader == "systemd-boot":
             images.extend((f"{efi_mountpoint}/EFI/systemd/systemd-bootx64.efi", f"{efi_mountpoint}/EFI/BOOT/BOOTX64.EFI"))
         elif sign_fallback_copy:  # the copy of the UKI that was put on the removable-media path
             images.append(f"{efi_mountpoint}/EFI/BOOT/BOOTX64.EFI")
-        if self.dry_run:
-            key, certificate = f"{self.secret_chroot_dir}/signing.key", f"{self.secret_chroot_dir}/signing.crt"
-        else:
-            key, certificate = self._stage_signing_material(system)
-        try:
-            for image in dict.fromkeys(images):
-                signed = image + ".signed"
-                self.chroot(("sbsign", "--key", key, "--cert", certificate, "--output", signed, image))
-                self.chroot(("sbverify", "--cert", certificate, signed))
-                self.chroot(("mv", signed, image))
-            if not self.dry_run:
-                self._publish_certificate(manifest, efi_mountpoint)
-        finally:
-            self.cleanup_secrets()
+        for image in dict.fromkeys(images):
+            signed = image + ".signed"
+            self.chroot(("sbsign", "--key", SECURE_BOOT_KEY, "--cert", SECURE_BOOT_CERT, "--output", signed, image))
+            self.chroot(("sbverify", "--cert", SECURE_BOOT_CERT, signed))
+            self.chroot(("mv", signed, image))
+        self._publish_certificate(manifest, efi_mountpoint)
 
     def _publish_certificate(self, manifest: InstallManifest, efi_mountpoint: str) -> None:
         """Put the certificate (DER) on the ESP so it can be enrolled from the firmware's setup menu."""
-        destination = self.path(f"{efi_mountpoint.lstrip('/')}/EFI/enroll")
-        destination.mkdir(parents=True, exist_ok=True)
-        self.runner.run(("openssl", "x509", "-in", manifest.system.secure_boot_certificate, "-outform", "DER",
-                         "-out", str(destination / "gentoo-secureboot.cer")))
-        self.notify("Secure Boot: enroll EFI/enroll/gentoo-secureboot.cer from the firmware setup (append it to the db key store), "
-                    "or with 'bootctl' while the firmware is in Setup Mode")
+        destination = f"{efi_mountpoint}/{ENROLL_FILE}"
+        if not self.dry_run:
+            self.path(destination.lstrip("/")).parent.mkdir(parents=True, exist_ok=True)
+        self.chroot(("openssl", "x509", "-in", SECURE_BOOT_CERT, "-outform", "DER", "-out", destination))
+        for line in secure_boot_enroll_steps(manifest):
+            self.notify(line)
 
     # ----- boot images -----------------------------------------------------------------------------
 
@@ -462,7 +520,7 @@ class BootMixin(ConfigurerBase):
             initramfs = images[0]
         return kernels[0], initramfs
 
-    def _build_uki(self, manifest: InstallManifest, root_device: str) -> None:
+    def _build_uki(self, manifest: InstallManifest, root_device: str, name: str = "gentoo.efi", cmdline: str | None = None) -> None:
         efi_mountpoint = self.efi_mountpoint(manifest)
         efi_prefix = efi_mountpoint.lstrip("/")
         if self.dry_run:
@@ -471,7 +529,8 @@ class BootMixin(ConfigurerBase):
             kernel_path, initramfs_path = self._boot_images(manifest)
             kernel, initramfs = "/boot/" + kernel_path.name, "/boot/" + initramfs_path.name if initramfs_path else None
             self.path(f"{efi_prefix}/EFI/Linux").mkdir(parents=True, exist_ok=True)
-        command = ["ukify", "build", "--linux", kernel, "--cmdline", self._kernel_cmdline(root_device), "--output", f"{efi_mountpoint}/EFI/Linux/gentoo.efi"]
+        command = ["ukify", "build", "--linux", kernel, "--cmdline", cmdline if cmdline is not None else self._kernel_cmdline(root_device),
+                   "--output", f"{efi_mountpoint}/EFI/Linux/{name}"]
         if initramfs:
             command.extend(("--initrd", initramfs))
         self.chroot(tuple(command))
@@ -507,6 +566,8 @@ class BootMixin(ConfigurerBase):
         elif not root_uuid and root_device not in fstab:
             problems.append("/etc/fstab does not mention the root filesystem")
         efi = self.efi_mountpoint(manifest).lstrip("/")
+        if system.bootloader == "none":
+            return problems  # the user installs the boot loader
         if system.bootloader == "grub":
             config = self.read_text("boot/grub/grub.cfg")
             if not re.search(r"^\s*linux(?:efi)?\s+\S+", config, re.MULTILINE):

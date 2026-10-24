@@ -297,7 +297,7 @@ class TestWarnings:
     def test_the_known_limits_are_stated(self):
         text = " ".join(with_changes(system__kernel="manual", system__initramfs="none", system__secure_boot=True, system__dual_boot=True,
                                     system__bootloader="systemd-boot", network__import_live_profiles=True).warnings())
-        for fragment in ("manual kernel", "Secure Boot: new kernels are not signed", "Dual boot detection works with GRUB only", "Wi-Fi passwords"):
+        for fragment in ("manual kernel", "Kernel updates are signed automatically", "Dual boot detection works with GRUB only", "Wi-Fi passwords"):
             assert fragment in text
 
     def test_advice_never_blocks(self):

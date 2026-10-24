@@ -93,6 +93,10 @@ CHANGES = [
 ]
 
 
+# Choices that are accepted in a saved file but have no effect yet: the validation refuses them (BOOT items 8, 10, 11).
+NOT_AVAILABLE_YET = {"system.kernel", "system.initramfs", "system.hostonly", "system.generic_uki", "system.secure_boot_mode"}
+
+
 def configured(path: str, value: object) -> InstallManifest:
     m = valid_manifest()
     section, name = path.split(".")
@@ -111,7 +115,14 @@ def configured(path: str, value: object) -> InstallManifest:
 @pytest.mark.parametrize(("path", "value"), CHANGES, ids=[path for path, _ in CHANGES])
 def test_every_new_setting_round_trips(path, value):
     m = configured(path, value)
-    assert m.validate() == [], m.validate()
+    if path in NOT_AVAILABLE_YET:  # still saved and loaded, but the validation says so instead of ignoring it
+        assert any("not available yet" in error for error in m.validate()), m.validate()
+        section, name = path.split(".")
+        restored = InstallManifest.from_dict(m.to_dict())
+        assert getattr(getattr(restored, section), name) == value and restored.to_dict() == m.to_dict()
+        return
+    else:
+        assert m.validate() == [], m.validate()
     section, name = path.split(".")
     assert getattr(getattr(reload(m), section), name) == value
     assert reload(m).to_dict() == m.to_dict()
@@ -206,7 +217,8 @@ def test_bootloader_none_needs_no_uefi_and_ugrd_needs_a_manual_or_custom_kernel(
     m.system.initramfs = "ugrd"
     assert any("require Dracut" in error for error in m.validate())
     m.system.kernel = "custom"
-    assert m.validate() == []
+    assert any("custom kernel is not available yet" in error for error in m.validate())  # accepted values that do nothing are refused
+    assert any("ugrd initramfs is not available yet" in error for error in m.validate())
 
 
 @pytest.mark.parametrize("desktop", ["cinnamon", "mate", "lxqt", "gnome-light", "sway", "i3"])

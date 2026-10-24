@@ -17,6 +17,9 @@ class KernelStage(StorageStages):
             raise InstallError(stack.unsupported)
         self.configurer.configure_initramfs(self.manifest, root, self.storage._stack.get("luks_device"), plan, resume_device=self._resume_device(), stack=stack)
         kernel = self.manifest.system.kernel
+        self.configurer.write_boot_portage_files(self.manifest, plan)  # dist-kernel USE, kernel config lines, Secure Boot signing, README
+        self.configurer.prepare_secure_boot(self.manifest)  # the signing key must exist before the kernel image is built and signed
+        self.configurer.configure_serial_getty(self.manifest)
         if kernel == "manual":
             # "Manual kernel" is a command-line option: the graphical installer cannot pause for it.
             if self.resume and self._verify_kernel():
@@ -43,7 +46,7 @@ class KernelStage(StorageStages):
             for relative, message in expected:
                 if not self.dry_run and not self.configurer.path(relative).exists():
                     raise InstallError(message)
-        self.configurer.emerge(self.manifest, ("--noreplace", "sys-kernel/installkernel", f"sys-kernel/{kernel}"))
+        self.configurer.emerge(self.manifest, ("--noreplace", "sys-kernel/installkernel", f"sys-kernel/{kernel}", *self.configurer.kernel_extra_atoms(self.manifest)))
         # Files and out-of-tree drivers from the hardware plan must exist before the initramfs is built.
         self.configurer.write_plan_files(plan)
         driver_atoms = [str(atom) for atom in getattr(plan, "driver_atoms", None) or []]
