@@ -506,3 +506,55 @@ def fstab_preview(manifest: InstallManifest, *, btrfs_subvolumes: bool = True) -
             if row.filesystem != "none":
                 add(row.device, row.mountpoint, row.filesystem, label=row.label)
     return render_fstab_text(entries, sources, atime=storage.atime, tz_utc=not manifest.system.rtc_local, boot_noauto=storage.boot_noauto)
+
+
+# --- the "what will be created" table ----------------------------------------------------------
+
+PURPOSES = {
+    "efi": "EFI system partition: the small area your computer reads first; Gentoo puts its boot files there",
+    "bios_boot": "BIOS boot partition: lets GRUB start from a GPT disk on an old BIOS computer",
+    "boot": "Boot partition: the kernel and start-up files, kept readable so the computer can load them",
+    "swap": "Swap: spare space the computer uses when memory runs short",
+    "swapfile": "Swap file: the same spare space, kept as a file inside the system",
+    "root": "The system: Gentoo itself, your programs and, unless /home is separate, your files",
+    "home": "Your files: kept apart so that reinstalling the system does not touch them",
+    "data": "Other data",
+}
+
+
+@dataclass(frozen=True)
+class TableRow:
+    """One line of the table that says what the installer writes to the disk."""
+
+    partition: str  # EFI system partition, BIOS boot partition, Swap, System ...
+    mountpoint: str
+    filesystem: str
+    size_mib: int  # 0 = the rest of the disk
+    purpose: str
+    role: str
+    action: str = "create"
+    note: str = ""
+
+    @property
+    def size_text(self) -> str:
+        return "The rest of the disk" if not self.size_mib else human_size(self.size_mib * MIB)
+
+
+_ROLE_TITLES = {"efi": "EFI system partition", "bios_boot": "BIOS boot partition", "boot": "Boot", "swap": "Swap", "swapfile": "Swap file",
+                "root": "System", "home": "Home", "data": "Data"}
+_FS_TEXT = {"vfat": "FAT32", "none": "no filesystem", "swap": "swap"}
+
+
+def plan_table(disk: PlannedDisk, *, lvm: bool = False) -> list[TableRow]:
+    """The partitions of a planned disk as table rows, in the order they are created (what StorageManager._erase_layout makes)."""
+    rows: list[TableRow] = []
+    for volume in disk.volumes:
+        purpose = PURPOSES.get(volume.role, PURPOSES["data"])
+        note = volume.note
+        if volume.role == "root" and volume.encrypted:
+            purpose += "; encrypted with LUKS2" + (", with LVM inside" if lvm else "")
+        elif volume.role == "root" and lvm:
+            purpose += "; on an LVM volume"
+        title = volume.device or _ROLE_TITLES.get(volume.role, volume.role)
+        rows.append(TableRow(title, volume.mountpoint or "-", _FS_TEXT.get(volume.filesystem, volume.filesystem), volume.size_mib, purpose, volume.role, volume.action, note))
+    return rows
