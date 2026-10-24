@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "description": "What scripts/verify-iso.py requires of every finished ISO. Keep it in step with iso/specs, iso/root_overlay and iso/fsscript-stage2.sh; tests/iso checks the obvious drift. An item with \"when_source\" only applies while that file exists in the source tree.",
+  "description": "What scripts/verify-iso.py requires of every finished ISO. Keep it in step with iso/specs, iso/root_overlay and iso/fsscript-stage2.sh; tests/iso checks the obvious drift. An item with \"when_source\" only applies while that file exists in the source tree (or, as {path, contains}, while it contains that text).",
   "iso": {
     "required_files": [
       "boot/gentoo",
@@ -76,8 +76,8 @@
       {"path": "usr/bin/portagehub", "type": "file|slink"},
       {"path": "usr/libexec/portagehub-helper", "type": "file"},
       {"path": "usr/share/applications/gentoo-installer.desktop", "type": "file"},
-      {"path": "usr/bin/gentoo-rescue", "type": "file|slink", "when_source": "src/gentoo_installerd/rescue/__init__.py"},
-      {"path": "usr/bin/gentoo-rescue-gui", "type": "file|slink", "when_source": "src/gentoo_installerd/rescue/__init__.py"},
+      {"path": "usr/bin/gentoo-rescue", "type": "file|slink", "when_source": {"path": "pyproject.toml", "contains": "gentoo-rescue ="}},
+      {"path": "usr/bin/gentoo-rescue-gui", "type": "file|slink", "when_source": {"path": "pyproject.toml", "contains": "gentoo-rescue-gui ="}},
       {"path": "usr/share/applications/gentoo-rescue.desktop", "type": "file", "when_source": "src/gentoo_installerd/rescue/__init__.py"},
       {"path": "boot/memtest86plus/memtest64.bios", "type": "file"},
       {"path": "boot/memtest86plus/memtest.efi64", "type": "file"},

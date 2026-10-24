@@ -595,12 +595,17 @@ def check_squashfs(
     root_stat: str,
     builder_ids: Iterable[int],
     source_exists: Callable[[str], bool],
+    source_contains: Callable[[str, str], bool] = lambda path, text: False,
 ) -> None:
     rules = contract.get("squashfs", {})
 
     def applies(item: Mapping[str, Any]) -> bool:
         condition = item.get("when_source")
-        return not condition or source_exists(condition)
+        if not condition:
+            return True
+        if isinstance(condition, str):
+            return source_exists(condition)
+        return source_contains(condition["path"], condition["contains"])
 
     def exists(path: str) -> bool:
         return path in entries
@@ -785,6 +790,7 @@ def verify(
         tools.squashfs_root_stat(),
         builder_ids,
         lambda relative: (workspace / relative).exists(),
+        lambda relative, text: (workspace / relative).is_file() and text in (workspace / relative).read_text(encoding="utf-8", errors="replace"),
     )
     if previous_size and iso_size:
         report.expect(

@@ -122,10 +122,8 @@ def test_installer_installs_the_service_files_and_the_rescue_launcher_when_prese
     assert 'newinitd "${FILESDIR}/gentoo-installerd.initd" gentoo-installerd' in text
     assert 'newconfd "${FILESDIR}/gentoo-installerd.confd" gentoo-installerd' in text
     assert 'systemd_dounit "${FILESDIR}/gentoo-installerd.service"' in text
-    assert 'domenu "${S}/data/gentoo-rescue.desktop"' in text
-    # python-exec makes console scripts symlinks that dangle inside ${ED}; the test must look at the link
-    assert "-L ${ED}/usr/bin/gentoo-rescue-gui" in text
-    assert "gentoo-rescue-gui" in (ROOT / "data/gentoo-rescue.desktop").read_text()
+    # the launcher follows the source tree, not the names of console scripts that pyproject.toml may define
+    assert re.search(r'if \[\[ -d \$\{S\}/src/gentoo_installerd/rescue \]\]; then\s+domenu "\$\{S\}/data/gentoo-rescue.desktop"', text)
 
 
 def test_rescue_desktop_entry_is_valid() -> None:
@@ -133,7 +131,7 @@ def test_rescue_desktop_entry_is_valid() -> None:
     parser.optionxform = str
     parser.read_string((ROOT / "data/gentoo-rescue.desktop").read_text())
     entry = parser["Desktop Entry"]
-    assert entry["Type"] == "Application" and entry["Exec"] == "gentoo-rescue-gui" and entry["Terminal"] == "false"
+    assert entry["Type"] == "Application" and entry["Exec"] == "gentoo-installer --mode repair" and entry["Terminal"] == "false"
     assert entry["Categories"].endswith(";")
 
 

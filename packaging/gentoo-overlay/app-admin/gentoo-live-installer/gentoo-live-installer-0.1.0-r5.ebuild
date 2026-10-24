@@ -68,10 +68,10 @@ src_unpack() {
 src_install() {
 	distutils-r1_src_install
 	domenu "${FILESDIR}/gentoo-installer.desktop"
-	# The repair tool belongs to the same Python package once the sources contain it; its
-	# console scripts come from pyproject.toml. They are symlinks to python-exec, so test
-	# for the link itself.
-	if [[ -e ${ED}/usr/bin/gentoo-rescue-gui || -L ${ED}/usr/bin/gentoo-rescue-gui ]]; then
+	# The repair tool belongs to the same Python package once the sources contain it. Its
+	# launcher starts the installer GUI in repair mode; the console scripts (gentoo-rescue)
+	# come from pyproject.toml and are installed by distutils-r1 when it declares them.
+	if [[ -d ${S}/src/gentoo_installerd/rescue ]]; then
 		domenu "${S}/data/gentoo-rescue.desktop"
 	fi
 	newinitd "${FILESDIR}/gentoo-installerd.initd" gentoo-installerd

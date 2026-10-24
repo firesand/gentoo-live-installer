@@ -245,10 +245,28 @@ def test_content_rules() -> None:
 
 
 def test_rescue_items_apply_only_when_the_source_has_the_tool() -> None:
-    without = squashfs_report(LISTING, source=lambda p: False)
-    assert "usr/bin/gentoo-rescue" not in next(c.detail for c in without.errors if c.id == "squashfs.required")
-    with_rescue = squashfs_report(LISTING, source=lambda p: p == "src/gentoo_installerd/rescue/__init__.py")
-    assert "usr/bin/gentoo-rescue-gui" in next(c.detail for c in with_rescue.errors if c.id == "squashfs.required")
+    names = lambda report: next((c.detail for c in report.errors if c.id == "squashfs.required"), "")  # noqa: E731
+    without = squashfs_report(LISTING)
+    assert "usr/bin/gentoo-rescue" not in names(without) and "gentoo-rescue.desktop" not in names(without)
+    package_only = squashfs_report(LISTING, source=lambda p: p == "src/gentoo_installerd/rescue/__init__.py")
+    assert "usr/share/applications/gentoo-rescue.desktop" in names(package_only)
+    assert "usr/bin/gentoo-rescue" not in names(package_only).replace("usr/share/applications/gentoo-rescue.desktop", ""), "console scripts follow pyproject.toml"
+
+
+def test_console_scripts_are_required_only_when_pyproject_declares_them() -> None:
+    def report(declared: str):
+        entries = verify.parse_description(LISTING)
+        result = verify.Report()
+        verify.check_squashfs(result, entries, CONTRACT, [], "testkey", lambda p: b"", "UID: 0\nGID: 0", (), lambda p: False,
+                              lambda path, text: path == "pyproject.toml" and text in declared)
+        return next((c.detail for c in result.errors if c.id == "squashfs.required"), "")
+
+    assert "usr/bin/gentoo-rescue" not in report("")
+    cli_only = report('gentoo-rescue = "x"')
+    assert "usr/bin/gentoo-rescue," in cli_only + "," or cli_only.endswith("usr/bin/gentoo-rescue")
+    assert "usr/bin/gentoo-rescue-gui" not in cli_only
+    both = report('gentoo-rescue = "x"\ngentoo-rescue-gui = "y"')
+    assert "usr/bin/gentoo-rescue-gui" in both
 
 
 def test_package_rules() -> None:
