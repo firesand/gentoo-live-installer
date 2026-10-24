@@ -174,7 +174,9 @@ class CheckpointStore:
             raw = json.loads(self.path.with_name("layout.json").read_text())
             if not isinstance(raw, dict) or raw.get("fingerprint") != self.fingerprint:
                 raise ValueError("layout does not match this manifest")
-            return [LayoutEntry(str(item["device"]), str(item["mountpoint"]), str(item["filesystem"]), bool(item["format"])) for item in raw["layout"]]
+            # options and source arrived later than the other fields; a file without them is a plain layout.
+            return [LayoutEntry(str(item["device"]), str(item["mountpoint"]), str(item["filesystem"]), bool(item["format"]),
+                                str(item.get("options", "")), str(item.get("source", ""))) for item in raw["layout"]]
         except (OSError, ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
             raise InstallError(f"Saved storage layout is invalid: {exc}") from exc
 
@@ -788,13 +790,18 @@ class Installer:
         self.configurer.configure_identity(self.manifest)
         self.configurer.configure_accounts(self.manifest)
         self.configurer.configure_network(self.manifest)
+        self._write_fstab()
+        self.configurer.configure_privileges(self.manifest)
+
+    def _write_fstab(self) -> None:
         uuids: dict[str, str] = {}
         for entry in self.storage.layout:
+            if entry.source or entry.device in uuids:
+                continue  # a swap file is named by its path, not by the UUID mkswap gave it; one lookup per device
             result = self.runner.run(("blkid", "-s", "UUID", "-o", "value", entry.device))
             if result.stdout.strip():
                 uuids[entry.device] = result.stdout.strip().splitlines()[0]
         self.configurer.write("etc/fstab", render_fstab(self.storage.layout, uuids))
-        self.configurer.configure_privileges(self.manifest)
 
     def _base(self) -> None:
         """Essential packages and services: after this the system can be managed from a console."""

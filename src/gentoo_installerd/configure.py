@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import hashlib
-import inspect
 import ipaddress
 import json
 import os
@@ -22,7 +21,7 @@ from gentoo_installer import keymaps
 from gentoo_installer.manifest import ATOM_RE, CMDLINE_TOKEN_RE, USE_TOKEN_RE, InstallManifest, Network, System
 
 from .proxy import make_conf_settings, proxy_environment
-from .runner import CommandResult, Runner, RunnerError
+from .runner import CommandResult, Runner, RunnerError, accepts_keyword
 from .storage import LayoutEntry
 
 
@@ -227,18 +226,28 @@ def render_package_use(package_use: Mapping[str, Sequence[str]]) -> str:
     return "\n".join(lines) + ("\n" if lines else "")
 
 
-def render_fstab(layout: Sequence[LayoutEntry], uuids: Mapping[str, str]) -> str:
+def render_fstab(layout: Sequence[LayoutEntry], uuids: Mapping[str, str], *, btrfs_discard: bool = False) -> str:
+    """The target's /etc/fstab.
+
+    An entry is named by ``LayoutEntry.source`` when it has one (a swap file inside the target),
+    else by UUID, else by its device path. ``LayoutEntry.options`` (Btrfs ``subvol=...``) is
+    appended to the default mount options. ``btrfs_discard`` adds asynchronous TRIM to every
+    Btrfs mount (mount options are per filesystem, so all subvolumes get the same).
+    """
     lines = ["# <file system> <mount point> <type> <options> <dump> <pass>"]
     for entry in sorted(layout, key=lambda item: (item.mountpoint != "/", item.mountpoint)):
         uuid = uuids.get(entry.device, "")
-        source = f"UUID={uuid}" if uuid else entry.device
+        source = entry.source or (f"UUID={uuid}" if uuid else entry.device)
         if entry.filesystem == "swap":
             lines.append(f"{source} none swap sw 0 0")
         elif entry.mountpoint:
             # fsck.btrfs is a stub that only prints a notice, so btrfs is never checked at boot.
             pass_number = 0 if entry.filesystem == "btrfs" else 1 if entry.mountpoint == "/" else 2
             options = "defaults,noatime" if entry.filesystem != "vfat" else "defaults,umask=0077"
-            lines.append(f"{source} {entry.mountpoint} {entry.filesystem} {options} 0 {pass_number}")
+            extra = [entry.options] if entry.options else []
+            if btrfs_discard and entry.filesystem == "btrfs":
+                extra.append("discard=async")
+            lines.append(f"{source} {entry.mountpoint} {entry.filesystem} {','.join([options, *extra])} 0 {pass_number}")
     return "\n".join(lines) + "\n"
 
 
@@ -692,14 +701,6 @@ class DesktopResult:
     failed: list[str] = field(default_factory=list)
 
 
-def _accepts_keyword(function: Callable[..., object], name: str) -> bool:
-    try:
-        parameter = inspect.signature(function).parameters.get(name)
-    except (TypeError, ValueError):
-        return False
-    return parameter is not None and parameter.kind in {inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
-
-
 def _plan_list(plan: object | None, name: str) -> list:
     return list(getattr(plan, name, None) or [])
 
@@ -722,8 +723,11 @@ class Configurer:
         self.sleep: Callable[[float], None] = time.sleep
         self.resources: Callable[[], Resources] = machine_resources
         # The daemon's runner takes root_identity=True so chrooted tools run as root:root and do
-        # not inherit the live service's group; other runners (tests) do not know the keyword.
-        self._root_identity = _accepts_keyword(runner.run, "root_identity")
+        # not inherit the live service's group, and capture=False so the output of a long emerge
+        # is streamed to the log instead of being kept in memory; other runners (tests) do not
+        # know these keywords.
+        self._root_identity = accepts_keyword(runner.run, "root_identity")
+        self._can_skip_capture = accepts_keyword(runner.run, "capture")
 
     # ----- paths and files ------------------------------------------------------------------
 
@@ -809,12 +813,15 @@ class Configurer:
         self.write(relative, "\n".join(line for line in kept).strip("\n") + "\n")
 
     def chroot(self, argv: Sequence[str], *, stdin: str | None = None, secret: bool = False,
-               env: Mapping[str, str] | None = None) -> CommandResult:
+               env: Mapping[str, str] | None = None, capture: bool = False) -> CommandResult:
+        """Run ``argv`` inside the target. Its output is only logged unless ``capture`` asks to read it back."""
         extra: dict[str, Any] = {}
         if env:
             extra["env"] = env
         if self._root_identity:
             extra["root_identity"] = True
+        if self._can_skip_capture and not capture:
+            extra["capture"] = False
         return self.runner.run(("chroot", str(self.root), *argv), stdin=stdin, secret=secret, **extra)
 
     # ----- Portage configuration ------------------------------------------------------------------
@@ -1287,10 +1294,11 @@ class Configurer:
 
     # ----- installing packages --------------------------------------------------------------------
 
-    def emerge(self, manifest: InstallManifest, arguments: Sequence[str], *, environment: Mapping[str, str] | None = None) -> CommandResult:
+    def emerge(self, manifest: InstallManifest, arguments: Sequence[str], *, environment: Mapping[str, str] | None = None,
+               capture: bool = False) -> CommandResult:
         env = self.emerge_environment(manifest)
         env.update(environment or {})
-        return self.chroot(("emerge", *arguments), env=env)
+        return self.chroot(("emerge", *arguments), env=env, capture=capture)
 
     def is_installed(self, atom: str) -> bool:
         if self.dry_run:
@@ -1385,7 +1393,7 @@ class Configurer:
         stage3) are not drift.
         """
         try:
-            output = self.emerge(manifest, ("--pretend", "--update", "--deep", "--newuse", "--usepkg=n", "--getbinpkg=n", "@world")).stdout
+            output = self.emerge(manifest, ("--pretend", "--update", "--deep", "--newuse", "--usepkg=n", "--getbinpkg=n", "@world"), capture=True).stdout
         except RunnerError:
             return []
         rebuilds: list[str] = []
@@ -1993,7 +2001,7 @@ class Configurer:
         if not images:
             return None
         try:
-            output = self.chroot(("lsinitrd", "-m", "/boot/" + images[0].name)).stdout
+            output = self.chroot(("lsinitrd", "-m", "/boot/" + images[0].name), capture=True).stdout
         except RunnerError:
             return None
         modules = {line.strip() for line in output.splitlines() if re.fullmatch(r"\s*[a-z0-9][a-z0-9_-]*", line)}

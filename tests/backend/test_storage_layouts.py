@@ -9,7 +9,6 @@ import pytest
 
 from gentoo_installer.manifest import InstallManifest, Partition
 from gentoo_installerd import configure
-from gentoo_installerd import storage as storage_module
 from gentoo_installerd.storage import LayoutEntry, StorageError
 
 from tests.backend.test_storage_identity import ESP_ROW, ROOT_ON_B, erase, machine, manual, no_writes, vda
@@ -24,25 +23,6 @@ from tests.backend.test_storage_support import (
     first_write,
     make_manager,
 )
-
-
-def supports(monkeypatch, options: bool = True, source: bool = True) -> None:
-    monkeypatch.setattr(storage_module, "fstab_supports_layout_fields", lambda: (options, source))
-
-
-def render_with_layout_fields(layout, uuids):
-    """The proposed render_fstab: LayoutEntry.source replaces UUID=/device, LayoutEntry.options is appended."""
-    lines = ["# <file system> <mount point> <type> <options> <dump> <pass>"]
-    for entry in sorted(layout, key=lambda item: (item.mountpoint != "/", item.mountpoint)):
-        uuid = uuids.get(entry.device, "")
-        source = entry.source or (f"UUID={uuid}" if uuid else entry.device)
-        extra = f",{entry.options}" if entry.options else ""
-        if entry.filesystem == "swap":
-            lines.append(f"{source} none swap sw 0 0")
-        elif entry.mountpoint:
-            options = ("defaults,noatime" if entry.filesystem != "vfat" else "defaults,umask=0077") + extra
-            lines.append(f"{source} {entry.mountpoint} {entry.filesystem} {options} 0 {1 if entry.mountpoint == '/' else 2}")
-    return "\n".join(lines) + "\n"
 
 
 class TestManualSwap:
@@ -138,7 +118,7 @@ class TestPreservedPartitions:
 
 
 class TestLabels:
-    def run(self, tmp_path, filesystem, label, monkeypatch=None):
+    def run(self, tmp_path, filesystem, label):
         runner = StatefulRunner(machine())
         rows = (ESP_ROW, ROOT_ON_B, Partition("/dev/sdb2", "/data" if filesystem != "swap" else "", filesystem, format=True, label=label))
         make_manager(runner, tmp_path).prepare(manual(*rows, additional_device_ids=["SER-B"]))
@@ -177,15 +157,14 @@ def encrypted(**changes) -> InstallManifest:
 class TestEncryptedSwap:
     """An encrypted install must not leave swap in the clear: it lives in a file inside the encrypted root."""
 
-    def prepare(self, tmp_path, monkeypatch, **changes):
-        supports(monkeypatch)
+    def prepare(self, tmp_path, **changes):
         runner = StatefulRunner([FakeDisk("/dev/vda", 80 * GiB, serial="SER", wwn="WWN-1")])
         manager = make_manager(runner, tmp_path)
         manager.prepare(encrypted(**changes))
         return runner, manager
 
-    def test_guided_luks_has_no_plain_swap_partition_and_no_plain_mkswap(self, tmp_path, monkeypatch):
-        runner, manager = self.prepare(tmp_path, monkeypatch)
+    def test_guided_luks_has_no_plain_swap_partition_and_no_plain_mkswap(self, tmp_path):
+        runner, manager = self.prepare(tmp_path)
         assert [name for name in commands_text(runner) if name.startswith("sgdisk --new")] == [
             "sgdisk --new=1:0:+1024MiB --typecode=1:EF00 --change-name=1:EFI /dev/vda",
             "sgdisk --new=2:0:+1024MiB --typecode=2:8300 --change-name=2:boot /dev/vda",
@@ -194,8 +173,8 @@ class TestEncryptedSwap:
         assert all(c[-1] != "/dev/vda2" for c in runner.commands if c[0] == "mkswap")
         assert not any(c[0] == "mkswap" and not c[1:2] == ("--file",) for c in runner.commands)
 
-    def test_the_swap_file_is_created_on_the_mounted_encrypted_root_and_used(self, tmp_path, monkeypatch):
-        runner, manager = self.prepare(tmp_path, monkeypatch)
+    def test_the_swap_file_is_created_on_the_mounted_encrypted_root_and_used(self, tmp_path):
+        runner, manager = self.prepare(tmp_path)
         swap_file = str(tmp_path / "target" / "swapfile")
         text = commands_text(runner)
         assert f"mkswap --file --size 4096MiB {swap_file}" in text
@@ -204,35 +183,26 @@ class TestEncryptedSwap:
         assert entry == LayoutEntry(swap_file, "", "swap", True, source="/swapfile")
         assert swap_file in manager.owned_swaps
 
-    def test_btrfs_keeps_the_swap_file_in_its_own_subvolume(self, tmp_path, monkeypatch):
-        runner, manager = self.prepare(tmp_path, monkeypatch, filesystem="btrfs")
+    def test_btrfs_keeps_the_swap_file_in_its_own_subvolume(self, tmp_path):
+        runner, manager = self.prepare(tmp_path, filesystem="btrfs")
         target = str(tmp_path / "target")
         text = commands_text(runner)
         assert f"btrfs subvolume create {target}/swap" in text
         assert f"btrfs filesystem mkswapfile --size 4096m {target}/swap/swapfile" in text
         assert next(e for e in manager.layout if e.source).source == "/swap/swapfile"
 
-    def test_without_swap_there_is_no_file(self, tmp_path, monkeypatch):
-        runner, manager = self.prepare(tmp_path, monkeypatch, swap_mib=0)
+    def test_without_swap_there_is_no_file(self, tmp_path):
+        runner, manager = self.prepare(tmp_path, swap_mib=0)
         assert not any("swapfile" in " ".join(c) or c[0] == "swapon" for c in runner.commands)
 
-    def test_an_fstab_writer_that_cannot_describe_a_swap_file_gets_no_swap_file(self, tmp_path, monkeypatch):
-        supports(monkeypatch, options=True, source=False)
-        runner = StatefulRunner([FakeDisk("/dev/vda", 80 * GiB, serial="SER", wwn="WWN-1")])
-        manager = make_manager(runner, tmp_path)
-        manager.prepare(encrypted())
-        assert not any(c[0] in {"swapon", "mkswap"} for c in runner.commands)
-        assert any("Swap was skipped" in note for note in manager.notes)
-
-    def test_the_swap_file_counts_against_the_disk(self, tmp_path, monkeypatch):
-        supports(monkeypatch)
+    def test_the_swap_file_counts_against_the_disk(self, tmp_path):
         runner = StatefulRunner([FakeDisk("/dev/vda", 36 * GiB, serial="SER", wwn="WWN-1")])
         with pytest.raises(StorageError, match="swap file 16.0 GiB inside the encrypted root"):
             make_manager(runner, tmp_path).prepare(encrypted(swap_mib=16384))
         no_writes(runner)
 
-    def test_a_swap_file_is_released_before_the_root_is_unmounted(self, tmp_path, monkeypatch):
-        runner, manager = self.prepare(tmp_path, monkeypatch)
+    def test_a_swap_file_is_released_before_the_root_is_unmounted(self, tmp_path):
+        runner, manager = self.prepare(tmp_path)
         runner.commands.clear()
         manager.cleanup()
         target = str(tmp_path / "target")
@@ -241,8 +211,8 @@ class TestEncryptedSwap:
         assert text.index(f"swapoff {swap_file}") < text.index(f"umount -R {target}")
         assert manager.owned_swaps == [] and manager.owned_mounts == []
 
-    def test_resume_reactivates_the_swap_file_without_creating_anything(self, tmp_path, monkeypatch):
-        runner, manager = self.prepare(tmp_path, monkeypatch)
+    def test_resume_reactivates_the_swap_file_without_creating_anything(self, tmp_path):
+        runner, manager = self.prepare(tmp_path)
         receipt = json.loads(json.dumps(manager.snapshot()))
         assert receipt["version"] == 2 and "uuids" in receipt and not any(device.endswith("swapfile") for device in receipt["uuids"])
         manager.cleanup()
@@ -257,26 +227,21 @@ class TestEncryptedSwap:
         assert any(e.source == "/swapfile" for e in again.layout)
         assert first_write(runner.commands) is None, runner.commands
 
-    @pytest.mark.parametrize("fstab_can_describe_a_swap_file", [True, False])
-    def test_the_summary_is_true_whether_or_not_the_swap_file_could_be_created(self, tmp_path, monkeypatch, fstab_can_describe_a_swap_file):
-        supports(monkeypatch, options=True, source=fstab_can_describe_a_swap_file)
-        runner = StatefulRunner([FakeDisk("/dev/vda", 80 * GiB, serial="SER", wwn="WWN-1")])
-        manager = make_manager(runner, tmp_path)
-        manager.prepare(encrypted())
+    def test_the_summary_says_swap_is_never_stored_unencrypted(self, tmp_path):
+        runner, manager = self.prepare(tmp_path)
         assert "swap is never stored unencrypted" in manager.manifest.storage.encryption_summary()
-        assert not any(c[0] == "mkswap" and "--file" not in c for c in runner.commands)  # no plain swap either way
+        assert not any(c[0] == "mkswap" and "--file" not in c for c in runner.commands)  # no plain swap
 
 
 class TestBtrfsSubvolumes:
-    def prepare(self, tmp_path, monkeypatch, *, options=True, **changes):
-        supports(monkeypatch, options=options)
+    def prepare(self, tmp_path, **changes):
         runner = StatefulRunner([FakeDisk("/dev/vda", 80 * GiB, serial="SER", wwn="WWN-1")])
         manager = make_manager(runner, tmp_path)
         manager.prepare(erase(filesystem="btrfs", **changes))
         return runner, manager
 
-    def test_subvolumes_are_created_before_the_final_mounts(self, tmp_path, monkeypatch):
-        runner, manager = self.prepare(tmp_path, monkeypatch)
+    def test_subvolumes_are_created_before_the_final_mounts(self, tmp_path):
+        runner, manager = self.prepare(tmp_path)
         target = str(tmp_path / "target")
         text = commands_text(runner)
         order = [
@@ -295,39 +260,22 @@ class TestBtrfsSubvolumes:
         assert [e.format for e in manager.layout if e.device == "/dev/vda3"] == [True, False]
         assert manager.owned_mounts.count(tmp_path / "target") == 1
 
-    def test_a_separate_home_partition_leaves_only_the_root_subvolume(self, tmp_path, monkeypatch):
-        runner, manager = self.prepare(tmp_path, monkeypatch, separate_home=True, home_mib=10 * 1024)
+    def test_a_separate_home_partition_leaves_only_the_root_subvolume(self, tmp_path):
+        runner, manager = self.prepare(tmp_path, separate_home=True, home_mib=10 * 1024)
         text = commands_text(runner)
         assert not any(line.endswith("@home") for line in text)
         assert [e.mountpoint for e in manager.layout if e.options] == ["/"]
 
-    def test_the_fstab_writer_decides_whether_subvolumes_are_used(self, tmp_path, monkeypatch):
-        runner, manager = self.prepare(tmp_path, monkeypatch, options=False)
-        assert not any(c[0] == "btrfs" for c in runner.commands)
-        assert all(not e.options for e in manager.layout)
-        assert ("mount", "/dev/vda3", str(tmp_path / "target")) in runner.commands
-
-    def test_the_proposed_fstab_renderer_writes_the_subvolume_options(self, tmp_path, monkeypatch):
-        runner, manager = self.prepare(tmp_path, monkeypatch)
+    def test_the_fstab_writer_renders_the_subvolume_options(self, tmp_path):
+        runner, manager = self.prepare(tmp_path)
         uuids = {e.device: manager._uuid(e.device) for e in manager.layout if not e.source}
-        text = render_with_layout_fields(manager.layout, uuids)
-        assert f"UUID={uuids['/dev/vda3']} / btrfs defaults,noatime,subvol=@,compress=zstd:3 0 1" in text
-        assert f"UUID={uuids['/dev/vda3']} /home btrfs defaults,noatime,subvol=@home,compress=zstd:3 0 2" in text
+        text = configure.render_fstab(manager.layout, uuids)
+        # Btrfs is never fsck'd at boot (fsck.btrfs is a stub), so its pass number is 0 for / and /home alike.
+        assert f"UUID={uuids['/dev/vda3']} / btrfs defaults,noatime,subvol=@,compress=zstd:3 0 0" in text
+        assert f"UUID={uuids['/dev/vda3']} /home btrfs defaults,noatime,subvol=@home,compress=zstd:3 0 0" in text
 
-    def test_the_capability_probe_asks_the_real_fstab_writer(self, monkeypatch):
-        monkeypatch.setattr(configure, "render_fstab", render_with_layout_fields)
-        assert storage_module.fstab_supports_layout_fields() == (True, True)
-        monkeypatch.setattr(configure, "render_fstab", lambda layout, uuids: "")
-        assert storage_module.fstab_supports_layout_fields() == (False, False)
-
-        def explode(layout, uuids):
-            raise RuntimeError("boom")
-
-        monkeypatch.setattr(configure, "render_fstab", explode)
-        assert storage_module.fstab_supports_layout_fields() == (False, False)
-
-    def test_resume_mounts_every_subvolume_with_its_options(self, tmp_path, monkeypatch):
-        runner, manager = self.prepare(tmp_path, monkeypatch)
+    def test_resume_mounts_every_subvolume_with_its_options(self, tmp_path):
+        runner, manager = self.prepare(tmp_path)
         receipt = json.loads(json.dumps(manager.snapshot()))
         manager.cleanup()
         runner.commands.clear()
@@ -339,8 +287,8 @@ class TestBtrfsSubvolumes:
         assert ("mount", "-o", "subvol=@home,compress=zstd:3", "/dev/vda3", target + "/home") in runner.commands
         assert not any(c[0].startswith("mkfs") or c[0] in {"btrfs", "sgdisk", "wipefs"} for c in runner.commands)
 
-    def test_resume_accepts_a_filesystem_mounted_twice_at_the_expected_places(self, tmp_path, monkeypatch):
-        runner, manager = self.prepare(tmp_path, monkeypatch)
+    def test_resume_accepts_a_filesystem_mounted_twice_at_the_expected_places(self, tmp_path):
+        runner, manager = self.prepare(tmp_path)
         receipt = json.loads(json.dumps(manager.snapshot()))
         runner.commands.clear()
         again = make_manager(runner, tmp_path)

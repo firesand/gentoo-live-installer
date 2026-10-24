@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import codecs
+import inspect
 import logging
 import os
 import queue
@@ -71,6 +72,19 @@ class CommandResult:
     argv: tuple[str, ...]
     returncode: int
     stdout: str
+
+
+def accepts_keyword(function: Callable[..., object], name: str) -> bool:
+    """Whether ``function`` takes the keyword ``name``.
+
+    Test fakes and older runners do not know the newer Runner keywords (timeout, capture,
+    root_identity); callers that want them ask first and leave them out otherwise.
+    """
+    try:
+        parameter = inspect.signature(function).parameters.get(name)
+    except (TypeError, ValueError):
+        return False
+    return parameter is not None and parameter.kind in {inspect.Parameter.KEYWORD_ONLY, inspect.Parameter.POSITIONAL_OR_KEYWORD}
 
 
 class Runner(Protocol):
