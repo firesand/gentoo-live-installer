@@ -58,7 +58,29 @@ def test_retrying_the_desktop_step_resumes_with_the_same_manifest(page):
     page.resume_button.click()
     assert FakeWorker.instances[-1] is not worker and FakeWorker.instances[-1].kwargs == {"resume": True}
     assert FakeWorker.instances[-1].manifest is manifest
-    assert not page.result_panel.isVisible() and not page.reboot.isVisible() and not page.bootable  # a new run starts clean
+    assert not page.result_panel.isVisible() and not page.reboot.isVisible()  # the panel of the last run is gone
+    assert page.bootable  # a resumed run starts from a system that already boots
+
+
+def test_a_retry_that_is_refused_before_it_starts_still_says_the_system_can_start(page):
+    started(page)
+    stage(page, "storage", "completed", progress=20)
+    desktop_failure(page)
+    page.resume_button.click()
+    page.handle_event({"type": "error", "message": "The settings differ from the interrupted installation", "data": {"code": "install.invalid_manifest"}})
+    page.handle_event({"type": "completed", "data": {"success": False}})
+    assert page.stage.text() == "Your new system is installed and can start" and page.reboot.isVisible()
+    assert "incomplete" not in page.result_hint.text()
+
+
+def test_the_service_can_still_say_that_a_retried_run_left_the_system_unbootable(page):
+    started(page)
+    stage(page, "storage", "completed", progress=20)
+    desktop_failure(page)
+    page.resume_button.click()
+    page.handle_event({"type": "error", "stage": "kernel", "message": "The kernel could not be built", "data": {"bootable": False, "resumable": True, "retryable": True}})
+    page.handle_event({"type": "completed", "data": {"success": False, "bootable": False}})
+    assert page.stage.text().startswith("Installation needs attention") and not page.reboot.isVisible() and not page.bootable
 
 
 def test_the_retry_button_is_hidden_when_the_daemon_says_it_cannot_resume(page):

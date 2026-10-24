@@ -277,6 +277,7 @@ class InstallerWindow(QMainWindow):
         self.readiness.hardwareActionRequested.connect(self.run_hardware_action)
         self.review.importRequested.connect(self.import_settings)
         self.storage.manual_editor.rescanRequested.connect(self.refresh_readiness)
+        self.storage.rescanRequested.connect(self.refresh_readiness)
         self.accounts.keyboardChangeRequested.connect(lambda: self.go_to(WELCOME))
         self.accounts.keyboardPicked.connect(self._keyboard_picked)
         self.system.desktopChanged.connect(self.customize.desktop_changed)

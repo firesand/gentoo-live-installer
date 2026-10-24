@@ -83,15 +83,14 @@ def test_the_empty_state_waits_for_the_first_scan_and_disappears_with_a_disk(mak
     assert not window.storage.empty_card.isVisibleTo(window.storage)
 
 
-def test_rescan_of_the_manual_editor_checks_again(make_window, monkeypatch):
+def test_the_window_connects_the_rescan_buttons_to_a_new_inspection(make_window, monkeypatch):
     window = make_window(info=info_of(laptop()))
-    calls = []
-    monkeypatch.setattr(window, "refresh_readiness", lambda: calls.append(1))
-    window.manual_editor = window.storage.manual_editor
-    window.storage.manual_editor.rescanRequested.disconnect()
-    window.storage.manual_editor.rescanRequested.connect(window.refresh_readiness)
+    started = []
+    monkeypatch.setattr(type(window), "_start_inspection", lambda self: started.append(1))
+    window.background_inspection = True
+    window.storage.rescan_button.click()
     window.storage.manual_editor.rescan_button.click()
-    assert calls == [1]
+    assert started == [1, 1]
 
 
 # --- disks that share their serial number -------------------------------------------------------------------------------------------

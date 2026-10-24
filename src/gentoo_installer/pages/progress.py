@@ -405,7 +405,8 @@ class ProgressPage(Page):
         self._busy = False
         self._retryable = None
         self._resumable = None
-        self._bootable = False
+        if not keep_log:
+            self._bootable = False  # a resumed run starts from a system that already boots: only the service can say it does not
         self._degraded = []
         self._warnings = []
         self._refresh_outcome_details()
@@ -585,6 +586,8 @@ class ProgressPage(Page):
         changed = False
         if data.get("bootable") is True and not self._bootable:
             self._bootable, changed = True, True
+        elif data.get("bootable") is False and self._bootable:
+            self._bootable, changed = False, True
         for key, store in (("degraded", self._degraded), ("warnings", self._warnings)):
             items = data.get(key)
             for item in items if isinstance(items, list) else []:
