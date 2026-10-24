@@ -265,16 +265,20 @@ def test_a_mount_point_below_another_mount_is_not_judged_by_the_root_file_system
     assert [(item.mountpoint, item.needs_mkdir) for item in alone.selected] == [("/boot/efi", True)]
 
 
-def test_devices_mounted_elsewhere_are_refused_unless_confirmed(tmp_path: Path) -> None:
+def test_devices_mounted_elsewhere_are_refused_and_the_message_says_how_to_free_them(tmp_path: Path) -> None:
+    """Nothing in the program unmounts another mount, so nothing may pretend to: the person frees the disk first (the old --unmount-existing only silenced this check)."""
+    import inspect
+
     with pytest.raises(RescueError) as info:
         make_plan(tmp_path, "gentoo", lf.desktop_automount(), "/dev/sda1", fstab="")
     assert info.value.short == "mounted_elsewhere" and "/run/media/gentoo/root" in info.value.message
-    plan, _ = make_plan(tmp_path / "ok", "gentoo", lf.desktop_automount(), "/dev/sda1", fstab="", unmount_existing=["/run/media/gentoo/root"])
+    assert "umount /run/media/gentoo/root" in info.value.message and "eject" in info.value.message and "confirm" not in info.value.message
+    assert info.value.details["mountpoint"] == "/run/media/gentoo/root" and info.value.details["device"] == "/dev/sda1"
+    assert "unmount_existing" not in inspect.signature(plan_mounts).parameters
+    data = json.loads(lf.desktop_automount())
+    data["blockdevices"][0]["children"][0]["mountpoints"] = []
+    plan, _ = make_plan(tmp_path / "freed", "gentoo", json.dumps(data), "/dev/sda1", fstab="")
     assert plan.root.device == "/dev/sda1"
-    for forbidden in ("/", "/boot", "/mnt/gentoo", "/mnt/rescue/r123456", "/run/initramfs/live", "/home/user"):
-        text = lf.desktop_automount().replace("/run/media/gentoo/root", forbidden)
-        with pytest.raises(RescueError):
-            make_plan(tmp_path / forbidden.strip("/").replace("/", "_"), "gentoo", text, "/dev/sda1", fstab="", unmount_existing=[forbidden])
 
 
 def test_missing_fstab_suggests_the_esp_on_the_roots_disk(tmp_path: Path) -> None:

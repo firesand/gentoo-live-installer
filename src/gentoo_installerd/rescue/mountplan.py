@@ -30,7 +30,6 @@ CARRIED_VALUE_OPTIONS = ("subvol", "subvolid", "device", "uid", "gid", "umask", 
 CARRIED_FLAGS = frozenset({"utf8"})
 DEVICE_OPTIONS = ("device", "logdev", "rtdev", "journal_path")
 PROTECTED_MOUNT_AREAS = ("/proc", "/sys", "/dev", "/run")
-MOVABLE_ROOTS = ("/media", "/run/media", "/mnt")
 
 
 def tier_of(mountpoint: str) -> int:
@@ -270,7 +269,6 @@ def plan_mounts(
     overrides: Iterable[dict[str, str]] = (),
     allow_write: bool = True,
     esp_default_mountpoint: str = "/boot/efi",
-    unmount_existing: Iterable[str] = (),
     own_root: str = "",
 ) -> MountPlan:
     """Plan the file systems below the root; ``fs`` reads the already mounted (read-only) root."""
@@ -283,7 +281,6 @@ def plan_mounts(
     trusted = _trusted_disks(root_node, resolved, graph)
     claimed = {root_node.key}
     used_mountpoints = {"/"}
-    movable = tuple(unmount_existing)
     for position, item in enumerate(resolved):
         entry = item.entry
         mountpoint = _normalise_mountpoint(entry.file)
@@ -326,7 +323,7 @@ def plan_mounts(
         plan.items.append(MountItem(mountpoint, node.path, node.fstype, carried, tier, "fstab", node.id, selected, False, _extra_devices(carried, graph, node), position))
         claimed.add(node.key)
     _apply_overrides(plan, overrides, graph, used_mountpoints, chosen_tier4)
-    _check_busy(plan, graph, root_node, movable, own_root)
+    _check_busy(plan, graph, root_node, own_root)
     mounted_below = [item.mountpoint.rstrip("/") + "/" for item in plan.selected]
     for mount in plan.items:
         # Below another mount the directory lives on that file system (/boot/efi on a separate /boot): only the session can tell, once it is mounted.
@@ -376,17 +373,16 @@ def _apply_overrides(plan: MountPlan, overrides: Iterable[dict[str, str]], graph
         used.add(mountpoint)
 
 
-def _check_busy(plan: MountPlan, graph: DeviceGraph, root_node: DeviceNode, movable: tuple[str, ...], own_root: str) -> None:
-    """Refuse devices that are mounted elsewhere unless the caller listed those mounts and they are safe to move."""
+def _check_busy(plan: MountPlan, graph: DeviceGraph, root_node: DeviceNode, own_root: str) -> None:
+    """Refuse devices that are mounted elsewhere: nothing here unmounts them, the person frees the disk first."""
     nodes = [root_node] + [graph.find(item.device) for item in plan.selected]
     for node in nodes:
         for mountpoint in node.mountpoints:
             if mountpoint == "[SWAP]" or (own_root and (mountpoint == own_root or mountpoint.startswith(own_root + "/"))):
                 continue
-            if mountpoint in movable and mountpoint.startswith(MOVABLE_ROOTS) and not mountpoint.startswith(("/mnt/gentoo", "/mnt/rescue", "/run/initramfs")):
-                continue
             hint = f" ({', '.join(node.fsroots)})" if node.fsroots else ""
-            raise RescueError("mounted_elsewhere", f"{node.path}{hint} is mounted at {mountpoint}. Unmount it first (or confirm that rescue may unmount it).", device=node.path, mountpoint=mountpoint)
+            raise RescueError("mounted_elsewhere", f"{node.path}{hint} is mounted at {mountpoint}. Unmount it first (the eject button of the file manager, or 'umount {mountpoint}'), then try again.",
+                              device=node.path, mountpoint=mountpoint)
 
 
 def suggest_boot_mounts(graph: DeviceGraph, root_node: DeviceNode, esp_mountpoint: str, taken: set[str]) -> list[dict[str, Any]]:

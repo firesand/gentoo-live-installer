@@ -264,8 +264,7 @@ class RescueManager:
             with RootFS(target) as fs:
                 plan = plan_mounts(
                     spec, fs, Fstab.parse(fs.read_text_or("/etc/fstab")), parse_crypttab(fs.read_text_or("/etc/crypttab")), graph, include_tier4=params.get("include_tier4", []),
-                    overrides=params.get("overrides", []), allow_write=bool(params.get("allow_write", True)), esp_default_mountpoint="/efi" if candidate.get("os", {}).get("family") == "gentoo" else "/boot/efi",
-                    unmount_existing=params.get("unmount_existing", []))
+                    overrides=params.get("overrides", []), allow_write=bool(params.get("allow_write", True)), esp_default_mountpoint="/efi" if candidate.get("os", {}).get("family") == "gentoo" else "/boot/efi")
         env = self.environment(runner)
         if env.uefi is False and any(item.get("mountpoint") in {"/efi", "/boot/efi"} for item in [it.to_dict() for it in plan.items]):
             plan.warnings.append("This live session started in legacy BIOS mode but the system boots with UEFI. Boot entries cannot be written from here; the fallback boot path still works.")
@@ -329,7 +328,7 @@ class RescueManager:
         def verify(fs: RootFS) -> None:
             again = plan_mounts(spec, fs, Fstab.parse(fs.read_text_or("/etc/fstab")), parse_crypttab(fs.read_text_or("/etc/crypttab")), graph, include_tier4=params.get("include_tier4", []),
                                 overrides=params.get("overrides", []), allow_write=session.allow_write, esp_default_mountpoint="/efi" if candidate.get("os", {}).get("family") == "gentoo" else "/boot/efi",
-                                unmount_existing=params.get("unmount_existing", []), own_root=session.root)
+                                own_root=session.root)
             if again.digest != plan.digest:
                 raise PlanStale("The system's fstab changed while it was being mounted; review the mount plan again")
 

@@ -101,7 +101,8 @@ def test_mount_rows_start_with_the_root_and_mark_data_as_optional() -> None:
 
 
 def test_the_real_mount_repeats_the_dry_run_request_exactly() -> None:
-    choice = MountChoice("c1", "s1", allow_write=False, include_tier4=["/home"], overrides=[{"mountpoint": "/efi", "device": "/dev/sda1"}], unmount_existing=["/run/media/x"])
+    choice = MountChoice("c1", "s1", allow_write=False, include_tier4=["/home"], overrides=[{"mountpoint": "/efi", "device": "/dev/sda1"}])
+    assert set(choice.request()) == {"candidate", "scan_id", "allow_write", "include_tier4", "overrides"}  # nothing in the window asks the engine to unmount another mount
     dry = {**choice.request(), "dry_run": True}
     real = {**choice.request(), "plan_digest": "abc"}
     assert {key: value for key, value in dry.items() if key != "dry_run"} == {key: value for key, value in real.items() if key != "plan_digest"}

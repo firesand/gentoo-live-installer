@@ -304,7 +304,7 @@ def cmd_activate(ctx: Context, args: argparse.Namespace) -> int:
 
 def cmd_mount(ctx: Context, args: argparse.Namespace) -> int:
     request = {**resolve_system(ctx, args.system, args), "allow_write": not args.inspect_only, "allow_degraded": args.allow_degraded, "include_tier4": args.with_data or [],
-               "overrides": [{"mountpoint": item.partition("=")[0], "device": item.partition("=")[2]} for item in args.mount or []], "unmount_existing": args.unmount_existing or []}
+               "overrides": [{"mountpoint": item.partition("=")[0], "device": item.partition("=")[2]} for item in args.mount or []]}
     dry = ctx.client.result("rescue.mount", dry_run=True, **request)
     render_mount_plan(ctx.console, dry["mount_plan"])
     if args.dry_run:
@@ -627,7 +627,6 @@ def build_parser() -> argparse.ArgumentParser:
     mount.add_argument("--inspect-only", action="store_true", help="never allow repairs: no program of the system can run")
     mount.add_argument("--mount", action="append", metavar="MP=DEV", help="mount DEV at MP below the system")
     mount.add_argument("--with-data", action="append", metavar="MP", help="also mount this data directory")
-    mount.add_argument("--unmount-existing", action="append", metavar="PATH", help="allow unmounting this existing mount of the same device")
     mount.add_argument("--allow-degraded", action="store_true")
     mount.add_argument("--dry-run", action="store_true", help="show the mount plan and its digest only")
     mount.add_argument("--yes", action="store_true", help="mount without asking")
