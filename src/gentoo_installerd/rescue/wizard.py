@@ -6,7 +6,7 @@ import argparse
 from typing import Any
 
 from .cli import (
-    EXIT_CONFIRM, EXIT_FAILED, EXIT_OK, Context, cmd_run, render_findings, render_mount_plan, render_systems,
+    EXIT_CONFIRM, EXIT_FAILED, EXIT_OK, Context, cmd_run, render_findings, render_mount_plan, render_systems, typed_number,
 )
 from .client import RescueClientError
 
@@ -64,10 +64,11 @@ def run_wizard(ctx: Context, args: argparse.Namespace) -> int:
                     if not vg.get("active") and console.ask(f'Volume group "{vg["name"]}" is not active. Activate it? It makes its logical volumes available. [y/N] ').lower() in {"y", "yes"}:
                         ctx.client.result("rescue.activate", kind="lvm", vg=vg["name"])
                 continue
-            if not answer.isdigit() or not 1 <= int(answer) <= len(candidates):
+            number = typed_number(answer)
+            if number is None or not 1 <= number <= len(candidates):
                 console.say("Please type one of the numbers shown.")
                 continue
-            chosen = candidates[int(answer) - 1]
+            chosen = candidates[number - 1]
             request = {"candidate": chosen["id"], "scan_id": scan["scan_id"], "allow_write": chosen.get("kind") != "snapshot"}
             dry = ctx.client.result("rescue.mount", dry_run=True, **request)
             render_mount_plan(console, dry["mount_plan"])
@@ -110,9 +111,9 @@ def repair_menu(ctx: Context, session: str, info: dict[str, Any]) -> int:
             sources = ctx.client.result("rescue.query", session_id=session, query="logs.sources")["data"]["files"]
             for number, item in enumerate(sources, 1):
                 console.say(f"  {number}) {item['path']} ({item['size']} bytes)")
-            pick = console.ask("Which log? (number, empty to go back) ")
-            if pick.isdigit() and 1 <= int(pick) <= len(sources):
-                lines = ctx.client.result("rescue.query", session_id=session, query="logs.tail", params={"path": sources[int(pick) - 1]["path"], "lines": 60})["data"]["lines"]
+            pick = typed_number(console.ask("Which log? (number, empty to go back) "))
+            if pick is not None and 1 <= pick <= len(sources):
+                lines = ctx.client.result("rescue.query", session_id=session, query="logs.tail", params={"path": sources[pick - 1]["path"], "lines": 60})["data"]["lines"]
                 for line in lines:
                     console.say(line)
             continue

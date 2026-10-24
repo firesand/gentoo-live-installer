@@ -34,6 +34,7 @@ CODE_EXIT = {
 BOOL_PARAMS = {"generic", "unlock", "expire", "make_default", "all_disks", "no_entry", "confirm_exec", "kernel", "hardware_changed"}
 LIST_PARAMS = {"order", "kernels"}
 CANDIDATE_RE = re.compile(r"^c[0-9a-f]{8}$")
+MAX_NUMBER_DIGITS = 9  # a menu entry or a line of fstab never has more, and int() stays far below its own limit on digits
 
 
 class Console:
@@ -70,6 +71,14 @@ def exit_code_for(error: RescueClientError) -> int:
     return CODE_EXIT.get(error.short, EXIT_FAILED)
 
 
+def typed_number(text: str) -> int | None:
+    """The number in ``text``, or None when it is not one.
+
+    ``str.isdigit()`` is also true for ², ³, ¹ and ① (a French keyboard has ² next to the 1), which ``int()`` refuses, and
+    ``int()`` refuses a few thousand digits too. Digits of other scripts (٣) are numbers: ``int()`` reads them."""
+    return int(text) if text.isdecimal() and len(text) <= MAX_NUMBER_DIGITS else None
+
+
 def parse_params(items: Sequence[str]) -> dict[str, Any]:
     params: dict[str, Any] = {}
     for item in items or []:
@@ -89,10 +98,11 @@ def parse_choices(items: Sequence[str]) -> dict[str, dict[str, str]]:
     choices: dict[str, dict[str, str]] = {}
     for item in items or []:
         line, _, rest = item.partition("=")
-        if not line.isdigit() or not rest:
+        number = typed_number(line)
+        if number is None or not rest:
             raise ValueError(f"--choose needs LINE=ACTION[:SPEC], not {item!r}")
         action, _, spec = rest.partition(":")
-        choices[line] = {"action": action, **({"spec": spec} if spec else {})}
+        choices[str(number)] = {"action": action, **({"spec": spec} if spec else {})}
     return choices
 
 
