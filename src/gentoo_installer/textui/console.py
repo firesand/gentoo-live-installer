@@ -456,9 +456,9 @@ class Console:
                 return Selection(command=text)
             if not text and default is not None:
                 return Selection(index=default)
-            number = typed_number(text)
-            if number is not None and 1 <= number <= len(options):
-                return Selection(index=number - 1)
+            chosen = typed_number(text)
+            if chosen is not None and 1 <= chosen <= len(options):
+                return Selection(index=chosen - 1)
             self.say("Please type one of the numbers or letters shown." if commands else "Please type one of the numbers shown.")
 
     def pick(
