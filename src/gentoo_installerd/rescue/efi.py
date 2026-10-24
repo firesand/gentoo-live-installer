@@ -14,7 +14,10 @@ from .hostenv import Environment
 
 ENTRY_RE = re.compile(r"^Boot([0-9A-Fa-f]{4})(\*?)\s+(.*?)(?:\t(.*))?$")
 HD_RE = re.compile(r"HD\((\d+),GPT,([0-9a-fA-F-]{36}),")
-FILE_RE = re.compile(r"File\(([^)]*)\)")
+HD_MBR_RE = re.compile(r"HD\((\d+),MBR,0x([0-9a-fA-F]{1,8}),")
+FILE_RE = re.compile(r"File\(([^)]*)\)")  # efibootmgr 17 and older: HD(...)/File(\EFI\x\y.efi)
+FILE_TAIL_RE = re.compile(r"\)/(\\.*)$")  # efibootmgr 18: HD(...)/\EFI\x\y.efi, optional data glued to the end of it
+EFI_EXTENSION_RE = re.compile(r"\.efi", re.IGNORECASE)
 LABEL_CLEAN_RE = re.compile(r"[^A-Za-z0-9 ._-]")
 
 
@@ -54,6 +57,38 @@ class EfiState:
                 "entries": [entry.to_dict() for entry in self.entries]}
 
 
+def loader_of(device_path: str) -> str:
+    """The file a boot entry starts (``\\EFI\\dir\\file.efi``), from either spelling of the device path.
+
+    efibootmgr 18 prints the optional data of an entry directly after the path: as text when it is printable, else as
+    hex digits (``...BOOTX64.EFI0000424f``). The file name ends at the ``.efi`` after which only hex digits remain, or
+    at the first ``.efi`` when nothing fits.
+    """
+    old = FILE_RE.search(device_path)
+    if old:
+        return old.group(1)
+    tail = FILE_TAIL_RE.search(device_path)
+    if not tail:
+        return ""
+    text = tail.group(1)
+    ends = [match.end() for match in EFI_EXTENSION_RE.finditer(text)]
+    for end in ends:
+        if re.fullmatch(r"[0-9a-fA-F]*", text[end:]):
+            return text[:end]
+    return text[:ends[0]] if ends else text
+
+
+def partition_of(device_path: str) -> tuple[str, int]:
+    """(PARTUUID as lsblk prints it, partition number) of the hard disk node of a device path, or ('', 0)."""
+    gpt = HD_RE.search(device_path)
+    if gpt:
+        return gpt.group(2).lower(), int(gpt.group(1))
+    mbr = HD_MBR_RE.search(device_path)
+    if mbr:
+        return f"{int(mbr.group(2), 16):08x}-{int(mbr.group(1)):02x}", int(mbr.group(1))  # Linux names a DOS partition <disk signature>-<number>
+    return "", 0
+
+
 def parse_efibootmgr(text: str, returncode: int = 0) -> EfiState:
     """Parse ``efibootmgr -v`` output; an error message (no efivarfs, no UEFI) becomes ``usable=False``."""
     state = EfiState()
@@ -73,10 +108,8 @@ def parse_efibootmgr(text: str, returncode: int = 0) -> EfiState:
             match = ENTRY_RE.match(line)
             if match:
                 path = match.group(4) or ""
-                hd = HD_RE.search(path)
-                file = FILE_RE.search(path)
-                state.entries.append(BootEntry(match.group(1).upper(), bool(match.group(2)), match.group(3).strip(), path, hd.group(2).lower() if hd else "", int(hd.group(1)) if hd else 0,
-                                               file.group(1) if file else ""))
+                partuuid, partition = partition_of(path)
+                state.entries.append(BootEntry(match.group(1).upper(), bool(match.group(2)), match.group(3).strip(), path, partuuid, partition, loader_of(path)))
     return state
 
 

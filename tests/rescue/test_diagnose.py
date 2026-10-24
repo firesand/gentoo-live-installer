@@ -149,7 +149,9 @@ def test_d08_esp_that_cannot_be_mounted(lab_factory) -> None:
     lab, _ = lab_for(lab_factory, esp=False)
     lab.system.fail_mount["/dev/nvme0n1p1"] = "mount: wrong fs type, bad option, bad superblock"
     findings = findings_of(lab)
-    assert "M01" in ids(findings) and any(f.id == "D08" or f.id == "M01" for f in findings)
+    m01 = [f for f in findings if f.id == "M01"]
+    assert len(m01) == 1 and m01[0].severity == "error" and m01[0].actions == ["fs.check"] and "damaged vfat file system" in m01[0].detail
+    assert "D08" not in ids(findings)  # one finding for one cause: the failed mount is already reported
 
 
 def test_d09_gpt_disk_without_bios_boot_partition(lab_factory) -> None:
@@ -252,5 +254,5 @@ def test_efi_parser_and_case_insensitive_fat_lookup() -> None:
     assert not efi.esp_file_exists("\\EFI\\debian\\grubx64.efi", lambda path: listing.get(path, []), "/boot/efi")
     bad = efi.parse_efibootmgr("EFI variables are not supported on this system.\n", 2)
     assert bad.usable is False and "not supported" in bad.error
-    assert efi.sanitize_label("Gentoo; rm -rf /") == "Gentoo rm -rf"[:64] or efi.sanitize_label("a;b") == "ab"
+    assert efi.sanitize_label("Gentoo; rm -rf /") == "Gentoo rm -rf" and efi.sanitize_label("a;b") == "ab"
     assert efi.loader_for_entry("/EFI/BOOT/BOOTX64.EFI") == "\\EFI\\BOOT\\BOOTX64.EFI"

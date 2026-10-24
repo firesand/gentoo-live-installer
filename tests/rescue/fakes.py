@@ -509,7 +509,9 @@ class FakeSystem:
         lines.append("BootOrder: " + ",".join(nvram["order"]))
         for number, entry in nvram["entries"].items():
             partuuid = entry.get("partuuid", "11111111-2222-3333-4444-555555555555")
-            lines.append(f"Boot{number}{'*' if entry['active'] else ' '} {entry['label']}\tHD({entry.get('part', 1)},GPT,{partuuid},0x800,0x100000)/File({entry['loader']})")
+            # efibootmgr 18: the file path follows the hard disk node directly, optional data is glued to its end, and -v adds the raw device path
+            lines.append(f"Boot{number}{'*' if entry['active'] else ' '} {entry['label']}\tHD({entry.get('part', 1)},GPT,{partuuid},0x800,0x100000)/{entry['loader']}{entry.get('data', '')}")
+            lines.append("      dp: 04 01 2a 00 01 00 00 00 00 08 00 00 00 00 00 00 00 00 20 00 00 00 00 00 / 04 04 34 00 5c 00 45 00 46 00 49 00 / 7f ff 04 00")
         return "\n".join(lines) + "\n"
 
     # ---- chroot ---------------------------------------------------------------------------------------------------------------------

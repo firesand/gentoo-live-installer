@@ -202,7 +202,10 @@ def test_password_asks_twice_and_never_prints_it(lab_factory) -> None:
     lab, tree, run = prepared(lab_factory)
     sid = mount(run)
     code, out, err = run("password", sid, "root", answers=["y"], secrets=["a", "b"], interactive=True)
-    assert code == 4 or code == 2
+    assert code == 4 and "Nothing was run." in out  # the device name must be typed first (high risk)
+    assert not [c for c in lab.system.calls if c.secret]
+    code, out, err = run("password", sid, "root", answers=["nvme0n1p5"], secrets=["first", "second"], interactive=True)
+    assert code == 2 and "The two password entries differ. Nothing was run." in err and "first" not in out + err
     assert not [c for c in lab.system.calls if c.secret]
     code, out, err = run("password", sid, "root", "--confirm-plan", re.search(r"digest ([0-9a-f]{64})", run("plan", sid, "acct.password", "--param", "username=root")[1]).group(1), "--typed", "nvme0n1p5", secrets=["N3w-pass", "N3w-pass"])
     assert code == 0 and "N3w-pass" not in out + err
