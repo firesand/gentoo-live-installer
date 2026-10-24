@@ -80,10 +80,14 @@ def cases() -> list[dict]:
         "cron-less-trim": (manifest(options={"cron": False}), profile()),
         "portable-everything": (manifest(hardware={"target": "portable", "fwupd": True}), profile()),
         "uefi-32": (manifest(), uefi_32_machine()),
+        "japanese-kde": (manifest(system={"locale": "ja_JP.UTF-8"}), profile()),
+        "arabic-xfce": (manifest(system={"desktop": "xfce", "locale": "ar_EG.UTF-8", "profile": "default/linux/amd64/23.0/desktop"}), profile()),
+        "chinese-gnome": (manifest(system={"desktop": "gnome", "locale": "zh_CN.UTF-8", "profile": "default/linux/amd64/23.0/desktop/gnome"}), profile()),
     }
     for case_id, (m, machine) in extras.items():
         out.append(case_for(case_id, m, machine))
-    out[-1]["atoms"] = [*out[-1]["atoms"], "sys-boot/grub"]   # GRUB_PLATFORMS must switch the efi-32 flag on
+        if case_id == "uefi-32":
+            out[-1]["atoms"] = [*out[-1]["atoms"], "sys-boot/grub"]   # GRUB_PLATFORMS must switch the efi-32 flag on
     return out
 
 

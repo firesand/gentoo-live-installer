@@ -95,3 +95,57 @@ def test_defaults_for_names_the_font_as_a_change_without_touching_the_manifest()
     m = manifest()
     changes = recommend.defaults_for(profile(displays=(panel(3840, 2160, 290),)), m)
     assert changes["system.console_font"] == "ter-132b" and m.system.console_font == ""
+
+
+# -- TGT-5: fonts for the script of the chosen language --------------------------------------------------------------
+
+CJK = ["media-fonts/noto-cjk"]
+NOTO = ["media-fonts/noto"]
+
+
+def font_atoms(locale, desktop):
+    m = manifest(system={"locale": locale, "desktop": desktop, "profile": "default/linux/amd64/23.0" if desktop == "minimal" else ""})
+    return [atom for atom in hwplan.plan(m, profile()).optional_atoms if atom.startswith("media-fonts/")]
+
+
+@pytest.mark.parametrize(("locale", "desktop", "expected"), [
+    ("ja_JP.UTF-8", "kde", CJK), ("ja_JP.UTF-8", "gnome", CJK), ("ja_JP.UTF-8", "xfce", CJK),
+    ("zh_CN.UTF-8", "kde", CJK), ("zh_TW.UTF-8", "gnome", CJK), ("zh_HK.UTF-8", "xfce", CJK), ("ko_KR.UTF-8", "kde", CJK), ("yue_HK.UTF-8", "gnome", CJK),
+    ("ar_EG.UTF-8", "gnome", NOTO), ("he_IL.UTF-8", "xfce", NOTO), ("fa_IR.UTF-8", "gnome", NOTO), ("th_TH.UTF-8", "xfce", NOTO),
+    ("hi_IN.UTF-8", "gnome", NOTO), ("bn_BD.UTF-8", "xfce", NOTO), ("ta_IN.UTF-8", "gnome", NOTO), ("km_KH.UTF-8", "xfce", NOTO), ("ka_GE.UTF-8", "gnome", NOTO),
+    ("ar_EG.UTF-8", "kde", []),          # the KDE package set brings media-fonts/noto along
+    ("en_US.UTF-8", "kde", []), ("en_GB.UTF-8", "gnome", []), ("de_DE.UTF-8", "xfce", []), ("pt_BR.UTF-8", "kde", []), ("tr_TR.UTF-8", "gnome", []),
+    ("ru_RU.UTF-8", "gnome", []), ("uk_UA.UTF-8", "xfce", []), ("el_GR.UTF-8", "gnome", []), ("vi_VN.UTF-8", "xfce", []),   # Latin, Cyrillic, Greek: the default fonts cover them
+    ("ja_JP.UTF-8", "minimal", []), ("ar_EG.UTF-8", "minimal", []),      # a console install has no use for them
+    ("C", "kde", []), ("C.UTF-8", "gnome", []), ("POSIX", "xfce", []),
+    ("de_DE@euro", "gnome", []), ("ja_JP.eucJP", "xfce", CJK),
+])
+def test_the_script_of_the_locale_gets_a_font(locale, desktop, expected):
+    assert font_atoms(locale, desktop) == expected
+
+
+def test_the_summary_says_which_fonts_were_added():
+    m = manifest(system={"locale": "ja_JP.UTF-8"})
+    result = hwplan.plan(m, profile())
+    assert any(line.startswith("Fonts:") and "Chinese, Japanese" in line for line in result.summary)
+    assert any("media-fonts/noto-cjk" in note for note in result.notes)
+    assert not any(line.startswith("Fonts:") for line in hwplan.plan(manifest(), profile()).summary)
+
+
+def test_fonts_are_optional_so_a_failed_download_only_degrades():
+    result = hwplan.plan(manifest(system={"locale": "ja_JP.UTF-8"}), profile())
+    assert "media-fonts/noto-cjk" in result.optional_atoms and "media-fonts/noto-cjk" not in result.required_atoms
+    assert "media-fonts/noto-cjk" in result.all_atoms()
+
+
+def test_the_default_locale_changes_no_plan():
+    assert hwplan.plan(manifest(), profile()).optional_atoms == hwplan.plan(manifest(system={"locale": "de_DE.UTF-8"}), profile()).optional_atoms
+
+
+def test_the_script_of_a_locale_is_decided_on_the_language_alone():
+    from gentoo_installer import keyboard_data
+
+    expected = {"ja_JP.UTF-8": "cjk", "zh_CN": "cjk", "ko_KR.EUC-KR": "cjk", "yue_HK.UTF-8": "cjk", "ar_SA.UTF-8": "complex", "sat_IN": "complex",
+                "ckb_IQ.UTF-8": "complex", "bo_CN.UTF-8": "complex", "dz_BT": "complex", "de_DE@euro": "", "ku_TR.UTF-8": "", "C": "", "a": "", "": ""}
+    assert {locale: keyboard_data.locale_script(locale) for locale in expected} == expected
+    assert keyboard_data.locale_language("pt_BR.UTF-8") == "pt" and keyboard_data.locale_language("sat_IN") == "sat"

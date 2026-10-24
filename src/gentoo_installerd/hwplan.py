@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Sequence
 
 from gentoo_installer import hardware_data as data
-from gentoo_installer import recommend
+from gentoo_installer import keyboard_data, recommend
 from gentoo_installer.hardware import DiskInfo, GpuInfo, HardwareProfile, gpu_label, is_hybrid, parent_disk_name
 from gentoo_installer.manifest import InstallManifest
 
@@ -63,6 +63,8 @@ A_PIPEWIRE = "media-video/pipewire"
 A_MESA = "media-libs/mesa"
 A_AVAHI = "net-dns/avahi"
 A_HWMONUX = "app-misc/hwmonux"
+A_NOTO = "media-fonts/noto"
+A_NOTO_CJK = "media-fonts/noto-cjk"
 
 LIC_FIRMWARE = "linux-fw-redistributable"
 LIC_INTEL_UCODE = "intel-ucode"
@@ -288,6 +290,7 @@ class _Planner:
         self.nvidia_gpus = [gpu for gpu in self.gpus if gpu.vendor == "nvidia"]
         self.proprietary = ""  # nvidia branch when the proprietary path is active
         self.firmware_reasons: list[str] = []
+        self.fonts: tuple[str, str] | None = None  # (atom, what it covers) when the locale needs a font package
 
     # -- accumulation helpers ---------------------------------------------------------------------------------------
 
@@ -337,6 +340,7 @@ class _Planner:
         self.audio()
         self.boot()
         self.display()
+        self.locale()
         self.companions()
         self.finish()
         return p
@@ -695,6 +699,24 @@ class _Planner:
         if dpi > 96 and self.desktop == "xfce":
             self.file("/etc/skel/.config/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml", xfce_xsettings(dpi))
 
+    def locale(self) -> None:
+        """Fonts for the script of the chosen language; without them a translated desktop shows empty boxes.
+
+        DejaVu, Liberation and Adwaita cover Latin, Greek and Cyrillic only. The KDE package set already brings
+        media-fonts/noto (kde-plasma/plasma-integration needs it); nothing in it has Chinese, Japanese or Korean
+        glyphs. Both packages are large downloads, so they are optional atoms: a failure only degrades.
+        """
+        if self.desktop == "minimal":
+            return
+        script = keyboard_data.locale_script(self.m.system.locale)
+        if script == "cjk":
+            self.fonts = (A_NOTO_CJK, "Chinese, Japanese and Korean text")
+        elif script == "complex" and self.desktop != "kde":
+            self.fonts = (A_NOTO, "Arabic, Hebrew, Indic, Thai and other scripts")
+        if self.fonts:
+            self.p.optional_atoms.append(self.fonts[0])
+            self.note(f"{self.fonts[0]} was added for the language {self.m.system.locale}: the default fonts have no glyphs for {self.fonts[1]}.")
+
     def companions(self) -> None:
         """COMP-NEW-3: HWMonux reads NVIDIA sensors through NVML only when the proprietary driver is installed.
 
@@ -768,6 +790,8 @@ class _Planner:
             lines.append("Boot: " + {"always": "fallback boot path is always written", "if-missing": "fallback boot path is written only if missing"}[s["removable_fallback"]])
         if s["hidpi"] != "off" and self.desktop == "xfce":
             lines.append(f"Display: {s['hidpi'][4:]} dpi interface scale for Xfce")
+        if self.fonts:
+            lines.append(f"Fonts: {self.fonts[0].rsplit('/', 1)[1]} for {self.fonts[1]}")
         if self.p.warnings:
             lines.extend(issue.message for issue in self.p.warnings if issue.severity != "info")
         return lines
