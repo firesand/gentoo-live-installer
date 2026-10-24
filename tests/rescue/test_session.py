@@ -456,6 +456,18 @@ def test_a_saved_session_keeps_everything_a_later_process_needs(lab_factory) -> 
     adopted = session_from_state(lab.session_env(), json.loads(session.state_path.read_text()))
     assert adopted.plan.root.options == ["logdev=/dev/sdb1"] and adopted.plan.root.extra_devices == ["/dev/sdb1"] and adopted.plan.devices() == session.plan.devices() == ["/dev/sda2", "/dev/sdb1"]
     assert adopted.candidate["subvol"] == {"id": 256, "path": "root"} and adopted.stack_args == session.stack_args and adopted.readonly_md == ["/dev/md127"]
+    assert adopted.failed_mounts == session.failed_mounts
     assert [step.display for step in adopted.enter_write_steps(with_virtual=False)] == [step.display for step in session.enter_write_steps(with_virtual=False)]  # the same commands, md arrays included
     assert adopted.plan.digest == session.plan.digest
     assert adopted.release().complete and not any(lab.system.ro.values())
+
+
+def test_a_mount_that_failed_is_remembered_by_a_later_process(lab_factory) -> None:
+    lab = gentoo_lab(lab_factory)
+    lab.system.fail_mount["/dev/nvme0n1p1"] = "mount: wrong fs type, bad option, bad superblock on /dev/nvme0n1p1"
+    session = lab.session("/dev/nvme0n1p5")
+    session.mount_ro(lab.graph_obj)
+    assert [item["mountpoint"] for item in session.failed_mounts] == ["/efi"]
+    adopted = session_from_state(lab.session_env(), json.loads(session.state_path.read_text()))
+    assert adopted.failed_mounts == session.failed_mounts and adopted.failed_mounts[0]["kind"] == "failed"
+    assert adopted.release().complete

@@ -173,7 +173,7 @@ class RescueSession:
             "version": STATE_VERSION, "sid": self.sid, "created": self.created, "pid": self.env.pid, "mode": self.mode, "allow_write": self.allow_write, "state": self.state,
             "generation": self.generation, "root": self.plan.root.identity() | {"candidate": self.candidate.get("id", ""), "path": self.root, "os": self.candidate.get("os", {}),
                                                                                  "label": self.candidate.get("label", "")},
-            "candidate_info": self.candidate, "stack": self.stack_args, "readonly_md": self.readonly_md, "pool_devices": self.pool_devices,
+            "candidate_info": self.candidate, "stack": self.stack_args, "readonly_md": self.readonly_md, "pool_devices": self.pool_devices, "failed_mounts": self.failed_mounts,
             "items": [item.to_dict() | {"device": item.device, "extra_devices": item.extra_devices} for item in self.plan.items], "depends": self.depends,
             "ledger": self.ledger.to_state(), "audit": str(self.audit.path or ""), "cmdline": str(self.cmdline_path), "resolv": str(self.resolv_path),
         }
@@ -724,6 +724,7 @@ def session_from_state(env: SessionEnv, raw: dict[str, Any], graph: DeviceGraph 
     session = RescueSession(env, raw["sid"], plan, candidate, graph, allow_write=raw.get("allow_write", True), depends=raw.get("depends", []), pool_devices=raw.get("pool_devices", []),
                             readonly_md=raw.get("readonly_md", []))
     session.stack_args = dict(raw.get("stack", {}))
+    session.failed_mounts = [dict(item) for item in raw.get("failed_mounts", [])]
     session.created = raw.get("created", session.created)
     if raw.get("audit"):  # keep appending to the log the previous process wrote
         session.audit = AuditLog(Path(raw["audit"]), raw["sid"], clock=env.clock)
