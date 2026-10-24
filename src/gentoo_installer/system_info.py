@@ -12,7 +12,6 @@ import email.utils
 import http.client
 import os
 import platform
-import re
 import shutil
 import ssl
 import subprocess

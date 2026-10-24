@@ -5,7 +5,7 @@ from functools import partial
 from pathlib import Path
 
 from PySide6.QtCore import Signal
-from PySide6.QtWidgets import QCheckBox, QFormLayout, QHBoxLayout, QLineEdit, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import QCheckBox, QFormLayout, QLineEdit, QPushButton, QVBoxLayout
 
 from .. import diagnostics, theme
 from ..manifest import InstallManifest

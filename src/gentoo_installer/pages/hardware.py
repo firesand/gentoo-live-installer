@@ -437,6 +437,11 @@ class HardwareTab(QWidget):
         self._touched.add(name)
         if name == "gpu_driver":
             self._touched.add("nvidia_license_accepted")
+            if self.gpu_driver.value() == "nvidia":
+                # Accepting NVIDIA's licence is its own act: choosing the driver never ticks it, whatever was loaded before.
+                self.nvidia_license.blockSignals(True)
+                self.nvidia_license.setChecked(False)
+                self.nvidia_license.blockSignals(False)
         self.refresh()
         self.changed.emit()
 

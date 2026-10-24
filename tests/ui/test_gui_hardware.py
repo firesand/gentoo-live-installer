@@ -641,3 +641,14 @@ def test_the_first_control_of_the_customization_page_is_a_choice_card(make_windo
     window.customize.focus_first()
     focused = window.focusWidget()
     assert focused is not None and focused is window.customize.hardware.target.cards["this"]
+
+
+def test_choosing_the_nvidia_driver_never_ticks_the_licence_for_the_user(make_window):
+    manifest = InstallManifest()
+    manifest.hardware.nvidia_license_accepted = True  # from an old settings file: the driver itself is not chosen there
+    window = make_window(manifest=manifest, info=machine("asus-desktop-rtx4090"))
+    tab = tab_of(window)
+    assert tab.nvidia_license.isChecked()  # shown as loaded
+    tab.gpu_driver.set_value("nvidia")
+    assert not tab.nvidia_license.isChecked()
+    assert any("licence" in problem for problem in tab.problems())
