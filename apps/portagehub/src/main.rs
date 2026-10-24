@@ -46,7 +46,10 @@ fn self_test() {
     println!("vdb: {} installed, world {} ({:?})", vdb.pkgs.len(), vdb.world_raw.len(), t.elapsed());
     let t = std::time::Instant::now();
     let h = portage::history::load();
-    println!("history: {} merges, {} syncs, median {:?} ({:?})", h.merges.len(), h.syncs.len(), h.median_build, t.elapsed());
+    match &h.problem {
+        Some(p) => println!("history: unavailable — {} ({:?})", p.message().0, t.elapsed()),
+        None => println!("history: {} merges, {} syncs, median {:?} ({:?})", h.merges.len(), h.syncs.len(), h.median_build, t.elapsed()),
+    }
     let cfg = portage::config::load();
     for s in &cfg.sets {
         println!("  {:<26} exists={} dir={} files={} entries={}", s.kind.file_name(), s.exists, s.is_dir, s.files.len(), s.entry_count());

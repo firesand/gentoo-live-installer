@@ -30,7 +30,9 @@ pub fn show(app: &mut App, ui: &mut Ui) {
         return;
     };
     if !h.readable {
-        w::empty_state(ui, icon::LOCK, "emerge.log is not readable", "Add your user to the portage group to see the history.");
+        // A log that is merely missing is not a permissions problem: do not send people to groups.
+        let (title, advice) = h.problem.as_ref().map(|p| p.message()).unwrap_or(("emerge.log is not readable", String::new()));
+        w::empty_state(ui, if h.problem == Some(crate::portage::history::LogProblem::Missing) { icon::CLOCK_COUNTER_CLOCKWISE } else { icon::LOCK }, title, &advice);
         return;
     }
     egui::Frame::new().inner_margin(Margin::symmetric(24, 12)).show(ui, |ui| {
