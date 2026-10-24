@@ -361,3 +361,49 @@ def test_a_forced_cancel_during_the_write_transition_returns_to_the_read_only_mo
     lab.system.run = original  # type: ignore[method-assign]
     assert session.mode == "ro" and session.root in lab.system.mounts
     assert unmount(manager, sid)["leftovers"] == []
+
+
+def test_fix_everything_recommended_is_one_reviewed_plan(lab_factory) -> None:
+    lab, tree = uefi_gentoo_lab(lab_factory, initramfs=False)
+    (tree / "boot/grub/grub.cfg").unlink()
+    manager, sid, info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    spec = {a["id"]: a for a in info["actions"]}["repair.recommended"]
+    assert spec["available"] and spec["recommended"] and spec["risk"] == "high"  # the catalogue states the worst case; the plan states its own
+    plan = manager.plan({"session_id": sid, "action_id": "repair.recommended"})
+    assert plan["title"] == "Fix everything recommended" and plan["params"]["actions"] == ["boot.initramfs", "boot.config"] and plan["risk"] == "medium"
+    ids = [step["id"] for step in plan["steps"]]
+    assert len(ids) == len(set(ids)), "merged steps need unique ids"
+    assert ids.count("smoke") == 1 and ids.count("enter-write-mount-root") == 1  # one read-write switch and one smoke test for the whole plan
+    shown = [step["display"] for step in plan["steps"]]
+    assert next(i for i, d in enumerate(shown) if "dracut" in d) < next(i for i, d in enumerate(shown) if "grub-mkconfig" in d)  # the menu is generated after the initramfs exists
+    plan, result, _ = plan_and_run(manager, sid, "repair.recommended")
+    assert result["outcome"] == "success" and result["post_checks"] and all(check["ok"] for check in result["post_checks"])
+    unmount(manager, sid)
+    assert (tree / "boot/grub/grub.cfg").exists() and (tree / f"boot/initramfs-{fr.GENTOO_KVER}.img").exists()
+
+
+def test_fix_everything_recommended_fixes_fstab_first_and_says_what_it_left_out(lab_factory) -> None:
+    lab, tree = uefi_gentoo_lab(lab_factory, fstab=DEAD_FSTAB, initramfs=False)
+    (tree / "boot/grub/grub.cfg").unlink()
+    manager, sid, info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    plan = manager.plan({"session_id": sid, "action_id": "repair.recommended"})
+    assert plan["params"]["actions"] == ["fstab.fix", "boot.initramfs"]
+    assert plan["risk"] == "high" and plan["confirm"]["typed"] == "nvme0n1p5"  # the worst step decides how much confirmation is asked
+    assert any(w.startswith("Skipped: Reinstall the boot loader") and "EFI system partition" in w for w in plan["warnings"])  # the user is told why, not left guessing
+    shown = [step["display"] for step in plan["steps"]]
+    assert next(i for i, d in enumerate(shown) if d.startswith("write /etc/fstab")) < next(i for i, d in enumerate(shown) if "dracut" in d)
+    assert plan["diff"].startswith("--- a/etc/fstab")
+    plan, result, _ = plan_and_run(manager, sid, "repair.recommended")
+    assert result["outcome"] == "success" and all(check["ok"] for check in result["post_checks"])
+    unmount(manager, sid)
+    assert (tree / f"boot/initramfs-{fr.GENTOO_KVER}.img").exists()
+    assert f"UUID={fr.ESP_UUID}\t/efi" in (tree / "etc/fstab").read_text()
+
+
+def test_nothing_recommended_means_no_composite_plan(lab_factory) -> None:
+    lab, _ = uefi_gentoo_lab(lab_factory)
+    manager, sid, info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    assert {a["id"]: a for a in info["actions"]}["repair.recommended"]["available"] is False
+    with pytest.raises(RescueError) as err:
+        manager.plan({"session_id": sid, "action_id": "repair.recommended"})
+    assert err.value.short == "unsupported_action"

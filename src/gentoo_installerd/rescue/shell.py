@@ -71,9 +71,12 @@ def host_command(session: RescueSession, term: str) -> list[str]:
     return ["/usr/bin/env", "-i", "HOME=/root", f"TERM={term}", "LANG=C.UTF-8", f"PATH={CHROOT_PATH}", f"RESCUE_SESSION={session.sid}", f"RESCUE_ROOT={session.root}", "/bin/bash", "-l"]
 
 
+TRANSCRIPT_LIMIT = "64MiB"  # one runaway program (cat of a disk image) must not fill the live system's RAM disk (review R12)
+
+
 def script_command(inner: list[str], transcript: Path) -> list[str]:
     """setsid --ctty script --log-out FILE --command 'inner': the child's exit status is propagated (--return)."""
-    return ["setsid", "--ctty", "script", "--quiet", "--return", "--flush", "--log-out", str(transcript), "--command", shlex.join(inner)]
+    return ["setsid", "--ctty", "script", "--quiet", "--return", "--flush", "--output-limit", TRANSCRIPT_LIMIT, "--log-out", str(transcript), "--command", shlex.join(inner)]
 
 
 class ShellManager:

@@ -31,6 +31,8 @@ ACTIONS: dict[str, dict[str, Any]] = {
     "session.enter_write": {"title": "Enable repairs (switch to read-write)", "group": "session", "risk": "high", "writes": True,
                             "description": "Unmounts the system and mounts it again read-write so repairs can change files."},
     "session.leave_write": {"title": "Return to read-only", "group": "session", "risk": "low", "writes": False, "description": "Mounts the system read-only again."},
+    "repair.recommended": {"title": "Fix everything recommended", "group": "recommended", "risk": "high", "writes": True,
+                           "description": "Applies the repairs the diagnosis recommends, in the right order (disk list, kernel, initramfs, boot menu, boot loader, firmware entry) as one reviewed plan."},
     "boot.bootloader": {"title": "Reinstall the boot loader", "group": "boot", "risk": "high", "writes": True,
                         "description": "Writes the boot loader to the EFI partition or the disk and regenerates its menu.",
                         "params": [{"name": "loader", "type": "enum", "label": "Boot loader", "choices": ["grub", "systemd-boot"], "default": ""},
@@ -98,14 +100,27 @@ def build_plan(manager: RescueManager, session: RescueSession, view: SessionView
             raise Unsupported(reason)
     if not session.allow_write and action != "session.leave_write":
         raise RescueError("needs_write", "This session was opened for inspection only. Mount the system again with repairs allowed.")
-    efi_state = _efi_state(session) if action.startswith("efi.") and view.environment.uefi else None
-    b = PlanBuilder(view, action, params, environment=view.environment, efi_state=efi_state)
+    b = _new_builder(view, session, action, params)
     b.title, b.risk = meta["title"], meta["risk"]
     b.summary = meta["description"]
     if action == "session.enter_write":
         return _plan_enter_write(b)
     if action == "session.leave_write":
         return _plan_leave_write(b)
+    if action == "repair.recommended":
+        _plan_recommended(manager, session, view, adapter, b)
+        return b.build()
+    fill_builder(manager, session, view, adapter, b, action)
+    return b.build()
+
+
+def _new_builder(view: SessionView, session: RescueSession, action: str, params: dict[str, Any]) -> PlanBuilder:
+    efi_state = _efi_state(session) if action.startswith("efi.") and view.environment.uefi else None
+    return PlanBuilder(view, action, params, environment=view.environment, efi_state=efi_state)
+
+
+def fill_builder(manager: RescueManager, session: RescueSession, view: SessionView, adapter: Any, b: PlanBuilder, action: str) -> None:
+    """Describe one action in a builder (the steps, checks and warnings; the caller assembles the plan)."""
     if action.startswith("boot.") and action != "boot.esp_fallback":
         if not view.can_run_programs:
             raise Unsupported("Programs of this system cannot run here (inspection-only session).")
@@ -126,7 +141,67 @@ def build_plan(manager: RescueManager, session: RescueSession, view: SessionView
         if not view.can_run_programs:
             raise Unsupported("Programs of this system cannot run here (inspection-only session).")
         _plan_account(b, adapter)
-    return b.build()
+    else:
+        raise RescueError("bad_request", f"{action} cannot be planned here", action=action)
+
+
+REPAIR_ORDER = ("fstab.fix", "boot.kernel", "boot.initramfs", "boot.config", "boot.bootloader", "boot.esp_fallback", "efi.add")
+RISK_RANK = {"info": 0, "low": 1, "medium": 2, "high": 3, "dangerous": 4}
+
+
+def _plan_recommended(manager: RescueManager, session: RescueSession, view: SessionView, adapter: Any, b: PlanBuilder) -> None:
+    """One plan for everything the diagnosis flags as an error: a novice reviews and confirms once (review R18)."""
+    findings = diagnose(view, efi_state=_efi_state(session) if view.environment.uefi else None)
+    wanted = [action for action in REPAIR_ORDER if action in set(recommended_actions(findings))]
+    if "boot.kernel" in wanted:  # reinstalling the kernel rebuilds the initramfs and the menu itself
+        wanted = [a for a in wanted if a not in {"boot.initramfs", "boot.config"}]
+    if "boot.bootloader" in wanted:  # a bootloader reinstall regenerates the menu
+        wanted = [a for a in wanted if a != "boot.config"]
+    if not wanted:
+        raise Unsupported("The diagnosis found nothing that needs repairing.")
+    included: list[str] = []
+    skipped: list[str] = []
+    for action in wanted:
+        sub = _new_builder(view, session, action, {})
+        sub.title, sub.risk = ACTIONS[action]["title"], ACTIONS[action]["risk"]
+        try:
+            fill_builder(manager, session, view, adapter, sub, action)
+        except Unsupported as exc:
+            skipped.append(f"{ACTIONS[action]['title']}: {exc.message}")
+            continue
+        _merge(b, sub, action)
+        included.append(action)
+    if not included:
+        raise Unsupported("None of the recommended repairs can be done here. " + " ".join(skipped))
+    b.title, b.params = "Fix everything recommended", {"actions": included}
+    b.summary = "Runs, in this order: " + "; ".join(ACTIONS[a]["title"].lower() for a in included) + "."
+    b.risk = max((ACTIONS[a]["risk"] for a in included), key=lambda r: RISK_RANK[r])
+    for note in skipped:
+        b.warn("Skipped: " + note)
+
+
+def _merge(master: PlanBuilder, sub: PlanBuilder, action: str) -> None:
+    tag = action.replace(".", "-")
+    for step in sub.steps:
+        step.id = f"{tag}-{step.id}"
+        master.steps.append(step)
+    for step in sub.cleanup:
+        step.id = f"{tag}-{step.id}"
+        master.cleanup.append(step)
+    master.uses_chroot = master.uses_chroot or sub.uses_chroot
+    master.chroot_tools.update(sub.chroot_tools)
+    master.post_checks.extend(sub.post_checks)
+    master.preconditions.extend({"ok": item["ok"], "text": f"{ACTIONS[action]['title']}: {item['text']}"} for item in sub.preconditions)
+    for warning in sub.warnings:
+        master.warn(warning)
+    for hint in sub.hints:
+        if hint not in master.hints:
+            master.hints.append(hint)
+    master.needs["network"] = bool(master.needs.get("network")) or bool(sub.needs.get("network"))
+    master.needs["uefi_nvram"] = bool(master.needs.get("uefi_nvram")) or bool(sub.needs.get("uefi_nvram"))
+    if sub.diff:
+        master.diff += sub.diff
+    master.secrets = tuple(dict.fromkeys((*master.secrets, *sub.secrets)))
 
 
 def _efi_state(session: RescueSession) -> efimod.EfiState:
@@ -450,7 +525,8 @@ def available_actions(manager: RescueManager, session: RescueSession, view: Sess
     specs: list[ActionSpec] = []
     for action, meta in ACTIONS.items():
         spec = ActionSpec(action, meta["title"], meta["group"], meta["risk"], meta["description"], params=list(meta.get("params", [])),
-                          needs={"write": bool(meta.get("writes")), "uefi_nvram": bool(meta.get("needs_nvram")), "secrets": list(meta.get("secrets", []))}, recommended=action in recommended)
+                          needs={"write": bool(meta.get("writes")), "uefi_nvram": bool(meta.get("needs_nvram")), "secrets": list(meta.get("secrets", []))},
+                          recommended=action in recommended or (action == "repair.recommended" and bool(recommended)))
         if action == "session.enter_write":
             spec.available, spec.reason = (session.allow_write and session.mode == "ro"), ("" if session.allow_write else "This session is inspection-only") if session.mode == "ro" else "Repairs are already enabled"
         elif action == "session.leave_write":

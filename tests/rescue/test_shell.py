@@ -26,7 +26,7 @@ def test_chroot_terminal_command_shape(lab_factory) -> None:
     session = manager.session(sid)
     shell = manager.shell_for(session)
     argv, info = shell.prepare({"session_id": sid, **confirm(), "term": "xterm-256color"})
-    assert argv[:7] == ["setsid", "--ctty", "script", "--quiet", "--return", "--flush", "--log-out"]
+    assert argv[:9] == ["setsid", "--ctty", "script", "--quiet", "--return", "--flush", "--output-limit", "64MiB", "--log-out"]  # the transcript has a size limit (review R12)
     inner = argv[argv.index("--command") + 1]
     assert inner.startswith("sh -c 'umask 022 && exec chroot \"$@\"' rescue-chroot --userspec=0:0 --groups= " + session.root + " /usr/bin/env -i ")
     assert "TERM=xterm-256color" in inner and "RESCUE_SESSION=" + sid in inner and "SHELL=/usr/bin/bash" in inner and inner.endswith("/usr/bin/bash -l")
