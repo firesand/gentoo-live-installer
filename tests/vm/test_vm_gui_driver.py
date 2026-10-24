@@ -147,6 +147,17 @@ def test_fields_the_wizard_seeds_from_the_hardware_are_recorded_never_compared()
     assert driver.compare_manifests(expected, actual, recorded) == ["system.desktop: expected 'kde', the wizard has 'xfce'"]
 
 
+@pytest.mark.parametrize("fixture", ["qemu-q35-virtio", "vmware-guest"])
+def test_on_a_virtual_machine_the_wizard_seeds_only_what_the_plan_records(fixture):
+    """If the wizard starts to seed another field from the hardware report (a console font on a big screen is one), a detect-mode run would
+    fail at the review page with 'expected X, the wizard has Y': the harness has to learn the field first."""
+    from gentoo_installer import recommend
+    from tests.hardware.helpers import fixture_dict
+
+    seeded = set(recommend.defaults_for(fixture_dict(fixture), InstallManifest()))
+    assert seeded <= set(vm.WIZARD_SEEDED) | {"storage.firmware"}, sorted(seeded - set(vm.WIZARD_SEEDED))
+
+
 def test_the_plan_the_harness_writes_names_exactly_the_fields_the_driver_may_not_compare(tmp_path):
     runner = vm.ScenarioRunner.__new__(vm.ScenarioRunner)
     runner.args = SimpleNamespace(gui_detect=None, memory=12288)

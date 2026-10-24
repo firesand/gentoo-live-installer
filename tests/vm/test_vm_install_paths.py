@@ -263,7 +263,7 @@ def test_an_encrypted_install_with_a_swap_partition_fails_the_run(lab):
 
 def test_luks_with_lvm_inside_is_unlocked_installed_and_checked_with_the_names_the_storage_stage_gives(lab):
     lab.rules = guest_rules(vm, "uefi-luks-lvm")
-    lab.qemu_config.update(serial_text_target="Please enter passphrase for disk root (gentoo-crypt): (press TAB for no echo)", unlock_line=vm.TEST_LUKS_PASSPHRASE)
+    lab.qemu_config.update(serial_text_target="Enter passphrase for /dev/vda3: \r\n", unlock_line=vm.TEST_LUKS_PASSPHRASE)  # the prompt of the first real OpenRC guest
     assert lab.run("--scenario", "uefi-luks-lvm", "--keep") == 0
     run, result = lab.run_dir(), lab.result()
     storage = json.loads((run / "fake-guest" / "manifest.json").read_text())["storage"]
