@@ -5,6 +5,7 @@ real orchestration (processes, sockets, files, timeouts) against scripts from ``
 """
 from __future__ import annotations
 
+import base64
 import json
 import os
 import socket
@@ -99,12 +100,39 @@ def guest_rules(vm, scenario_name: str, *, guard: str = "vm_disk_guard", install
          "stdout": ("/dev/mapper/gentoo-root" if scenario.luks else "/dev/vda2") + "\n"},
         {"user": "^vmtest$", "match": r"^swapon ", "stdout": f"/dev/vda3 partition {swap_mib * 2**20 - 4096}\n"},
     ]
+    rules.append({"user": "^vmtest$", "match": r"/var/db/pkg/", "stdout": "plasma-meta\n"})
     if companions:
         rules += [
             {"user": "^vmtest$", "match": r"^hwmonux --dump$", "stdout": "vm-host\nSensor Value Min Max\n"},
             {"user": "^vmtest$", "match": r"^portagehub --self-test$", "stdout": "repos: 1\ncatalog: 2\nvdb: 3\n"},
         ]
     rules.append({"user": "^vmtest$", "match": "nmcli", "stdout": STATIC_NETWORK + "\n"})
+    return rules
+
+
+PNG = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"\0" * 32).decode()
+
+
+def gui_rules(*, detected: dict | None = None, cancel: bool = False, success: bool = True) -> list[dict]:
+    """Rules for the graphical install: the driver's uploads, the live XFCE session, the driver run and its artifacts."""
+    out = "/tmp/gentoo-vm-gui-cancel" if cancel else "/tmp/gentoo-vm-gui"
+    events = [{"type": "stage", "stage": "storage", "data": {"status": "completed"}},
+              {"type": "completed", "data": {"success": success}, "message": "done"},
+              {"type": "gui_result", "success": success, "reboot_enabled": success}]
+    rules = [
+        {"user": "^root$", "match": r"^cat > /run/vm-gui-install\.py$", "stdin_to": "vm-gui-install.py"},
+        {"user": "^root$", "match": r"^cat > /run/vm_guard\.py$", "stdin_to": "vm_guard.py"},
+        {"user": "^root$", "match": r"^cat > /run/vm-gui-plan\.json$", "stdin_to": "vm-gui-plan.json"},
+        {"user": "^root$", "match": r"^chown gentoo:gentoo-installer ", "rc": 0},
+        {"user": "^root$", "match": r"xfce4-session", "stdout": json.dumps({"type": "gui_environment", "environment": {
+            "DISPLAY": ":0", "XAUTHORITY": "/home/gentoo/.Xauthority"}}) + "\n"},
+        {"user": "^root$", "match": r"^runuser -u gentoo -- env ", "events": events},
+        {"user": "^root$", "match": rf"^base64 -w0 -- {out}/(?:review|result)\.png$", "stdout": PNG},
+        {"user": "^root$", "match": rf"^base64 -w0 -- {out}/gui\.log$", "stdout": base64.b64encode(b"gui log\n").decode()},
+        {"user": "^root$", "match": rf"^base64 -w0 -- {out}/detected\.json$",
+         "stdout": base64.b64encode(json.dumps(detected or {}).encode()).decode()},
+        {"user": "^root$", "match": r"^cat /var/lib/gentoo-installer/install\.log$", "stdout": "daemon log\n"},
+    ]
     return rules
 
 
