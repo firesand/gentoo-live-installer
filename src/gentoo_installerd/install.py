@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import os
 import threading
@@ -294,7 +295,7 @@ class Installer:
         if not hardware:
             return None
         try:
-            from . import hwplan
+            hwplan = importlib.import_module("gentoo_installerd.hwplan")  # written by the hardware planner; may be absent
         except ImportError:
             return None
         try:
