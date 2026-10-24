@@ -515,7 +515,7 @@ def test_the_language_follows_the_keyboard_unless_the_user_chose_otherwise(start
 def test_the_defaults_come_from_the_hardware(start) -> None:
     wizard, _, _ = start([], inspect_reply("old-bios-sata-radeon"))
     assert wizard.manifest.storage.firmware == "bios"
-    assert wizard.manifest.storage.swap_mib == 2048  # 3.8 GiB of memory: compressed RAM swap plus a small disk swap
+    assert wizard.manifest.storage.swap_mib == 4096  # 3.8 GiB of memory: the Handbook table (up to 4 GiB of RAM: 4 GiB)
     machine, _, _ = start([])
     assert machine.manifest.storage.firmware == "uefi" and machine.manifest.options.microcode is False  # in a virtual machine
 

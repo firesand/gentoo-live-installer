@@ -233,9 +233,13 @@ def recommend(profile: HardwareProfile | Mapping[str, Any] | None, manifest: Ins
                                           f"Hibernation writes all memory to swap: the Handbook advises at least {wanted / 1024:.0f} GiB of swap for {gib:.0f} GiB of memory.",
                                           "storage.swap_mib", str(wanted)))
         elif manifest.storage.swap_mib == DEFAULT_SWAP_MIB and manifest.storage.swap_choice == "custom":
-            wanted = recommend_swap_mib(total_kib, zram=hardware.zram != "no" and zram_by_default(total_kib))
+            wanted = recommend_swap_mib(total_kib)
             if wanted != DEFAULT_SWAP_MIB:
                 out.append(Recommendation("rec.swap_size", "info", f"For {gib:.0f} GiB of memory the Handbook advises {wanted / 1024:.0f} GiB of swap.", "storage.swap_mib", str(wanted)))
+        if zram_by_default(total_kib) and hardware.zram != "no" and manifest.storage.swap_kind == "auto" and not hardware.hibernate:
+            out.append(Recommendation("rec.swap_zram", "info",
+                                      f"With {gib:.0f} GiB of memory, a small compressed-memory swap (zram) is used first and is much faster than swap on the disk. "
+                                      "Choose it as the swap type to skip the swap partition.", "storage.swap_kind", "zram"))
 
     # Build speed: the old fixed default is far too low on a big machine
     if manifest.portage.make_opts == LEGACY_MAKE_OPTS and hw.cpu.threads > 4:
@@ -305,8 +309,10 @@ def defaults_for(profile: HardwareProfile | Mapping[str, Any] | None, manifest: 
     if include_firmware and not hw.errors_for("firmware") and hw.firmware.mode in ("uefi", "bios"):
         changes["storage.firmware"] = hw.firmware.mode
     if hw.memory.total_kib and manifest.storage.swap_mib == DEFAULT_SWAP_MIB and manifest.storage.swap_choice == "custom":
-        zram = manifest.hardware.zram == "yes" or (manifest.hardware.zram == "auto" and zram_by_default(hw.memory.total_kib))
-        changes["storage.swap_mib"] = recommend_swap_mib(hw.memory.total_kib, zram=zram, hibernate=manifest.hardware.hibernate)
+        # A new installation opens on "Recommended for this computer"; the size is stored too, so every screen shows the same number.
+        hibernate = manifest.hardware.hibernate and hibernation_advised(hw.memory.total_kib)
+        changes["storage.swap_choice"] = "hibernate" if hibernate else "recommended"
+        changes["storage.swap_mib"] = recommend_swap_mib(hw.memory.total_kib, hibernate=hibernate)
     if not hw.errors_for("usb") and not hw.bluetooth.present and manifest.options.bluetooth:
         changes["options.bluetooth"] = False
     if hw.machine.hypervisor and manifest.options.microcode:

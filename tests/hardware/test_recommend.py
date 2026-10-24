@@ -162,7 +162,12 @@ def test_swap_advice():
     assert "rec.swap_size" not in found(manifest(storage={"swap_mib": 8192}), profile(ram_gib=16))       # a deliberate value is left alone
     result = found(manifest(hardware={"hibernate": True}), profile(ram_gib=16))
     assert result["rec.hibernate_swap"].suggestion == "24576" and result["rec.hibernate_swap"].severity == "warning"
-    assert found(manifest(), profile(ram_gib=4))["rec.swap_size"].suggestion == "2048"   # with zram on a small machine
+    assert "rec.swap_size" not in found(manifest(), profile(ram_gib=4))                  # 4 GiB is already the default
+    zram = found(manifest(), profile(ram_gib=4))["rec.swap_zram"]
+    assert (zram.field, zram.suggestion) == ("storage.swap_kind", "zram")
+    assert "rec.swap_zram" not in found(manifest(), profile(ram_gib=16))
+    assert "rec.swap_zram" not in found(manifest(storage={"swap_kind": "zram"}), profile(ram_gib=4))
+    assert "rec.swap_zram" not in found(manifest(hardware={"zram": "no"}), profile(ram_gib=4))
 
 
 def test_make_opts_advice_only_replaces_the_old_fixed_default():
@@ -232,7 +237,7 @@ def test_apply_defaults_seeds_machine_facts():
     m = InstallManifest()
     rec.apply_defaults(m, fixture_dict("old-bios-sata-radeon"))
     assert m.storage.firmware == "bios"                    # G2: a BIOS-booted session must not preselect UEFI
-    assert m.storage.swap_mib == 2048                      # 4 GiB with zram
+    assert (m.storage.swap_choice, m.storage.swap_mib) == ("recommended", 4096)   # the Handbook size for 4 GiB
     assert m.options.bluetooth is False                    # no radio on this PC
     assert m.options.microcode is True
 
@@ -300,7 +305,7 @@ def test_resolving_auto_does_not_change_what_the_planner_decides(name, builder):
 def test_defaults_for_is_a_pure_preview():
     m = InstallManifest()
     changes = rec.defaults_for(fixture_dict("old-bios-sata-radeon"), m)
-    assert changes == {"storage.firmware": "bios", "storage.swap_mib": 2048, "options.bluetooth": False}
+    assert changes == {"storage.firmware": "bios", "storage.swap_choice": "recommended", "storage.swap_mib": 4096, "options.bluetooth": False}
     assert m == InstallManifest()
 
 

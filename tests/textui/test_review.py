@@ -30,7 +30,7 @@ def test_the_summary_lists_the_settings_the_hardware_plan_and_what_happens_to_th
     run_main(["--socket", fake.path], script, host)
     text = script.flat
     for expected in (
-        "Disk /dev/vda", "ALL DATA ON IT WILL BE ERASED", "Boot mode UEFI, GPT partition table", "Filesystem ext4, 2048 MiB swap", "Encryption Not enabled",
+        "Disk /dev/vda", "ALL DATA ON IT WILL BE ERASED", "Boot mode UEFI, GPT partition table", "Filesystem ext4, 4096 MiB swap", "Encryption Not enabled",
         "System OpenRC with Xfce; binary packages", "Account alice on a computer named mybox", "Region Europe/Berlin, de_DE.UTF-8",
         "Chosen for this computer:", "Virtual machine: qemu", "What will happen to the disks:", "ERASE /dev/vda", "CREATE EFI system partition", "Other disks will not be modified.",
     ):

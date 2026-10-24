@@ -17,7 +17,7 @@
     },
     {
      "code": "hw.disk_small",
-     "message": "The root filesystem would get 37 GiB; 40 GiB is recommended.",
+     "message": "The root filesystem would get 35 GiB; 40 GiB is recommended.",
      "severity": "warning"
     }
    ],
@@ -156,7 +156,7 @@
     },
     {
      "code": "hw.disk_small",
-     "message": "The root filesystem would get 37 GiB; 40 GiB is recommended.",
+     "message": "The root filesystem would get 35 GiB; 40 GiB is recommended.",
      "severity": "warning"
     }
    ],
@@ -297,7 +297,7 @@
     },
     {
      "code": "hw.disk_small",
-     "message": "The root filesystem would get 37 GiB; 40 GiB is recommended.",
+     "message": "The root filesystem would get 35 GiB; 40 GiB is recommended.",
      "severity": "warning"
     }
    ],

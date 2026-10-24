@@ -100,6 +100,14 @@ class TestSwap:
         sizes = [a for argv in runner.commands if argv[0] == "sgdisk" for a in argv if ":0:+" in a and "--new=" in a]
         assert any(item.endswith(f":0:+{mib}MiB") for item in sizes), sizes
 
+    def test_48_gib_with_hibernation_gets_one_and_a_half_times_the_memory(self, tmp_path):
+        from tests.backend.test_storage_support import FakeDisk
+
+        with_memory(tmp_path, 48)
+        runner = StatefulRunner([FakeDisk("/dev/vda", 200 * GiB, serial="SER", wwn="WWN-1")])
+        make_manager(runner, tmp_path).prepare(erase(swap_choice="hibernate"))
+        assert any(a.endswith(":0:+73728MiB") for argv in runner.commands if argv[0] == "sgdisk" for a in argv)
+
     def test_none_creates_no_swap(self, tmp_path):
         runner = StatefulRunner([vda()])
         make_manager(runner, tmp_path).prepare(erase(swap_choice="none", swap_mib=4096))
