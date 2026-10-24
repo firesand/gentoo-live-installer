@@ -385,10 +385,10 @@ class BootMixin(BootExtrasMixin):
                 self.chroot(("bootctl", f"--path={efi_mountpoint}", "--no-variables", "install"))
             initrd = "initrd /initramfs\n" if system.initramfs != "none" and not system.uki else ""
             self.write(f"{efi_prefix}/loader/loader.conf", "default gentoo.conf\ntimeout 3\n")
-            entries = [("gentoo", "Gentoo Linux", "gentoo.efi", cmdline)]
+            boot_entries = [("gentoo", "Gentoo Linux", "gentoo.efi", cmdline)]
             if safe:
-                entries.append(("gentoo-safe", SAFE_GRAPHICS_TITLE, SAFE_GRAPHICS_UKI, safe_cmdline))
-            for name, title, uki_name, options in entries:
+                boot_entries.append(("gentoo-safe", SAFE_GRAPHICS_TITLE, SAFE_GRAPHICS_UKI, safe_cmdline))
+            for name, title, uki_name, options in boot_entries:
                 linux = f"/EFI/Linux/{uki_name}" if system.uki else "/vmlinuz"
                 self.write(f"{efi_prefix}/loader/entries/{name}.conf",
                            f"title {title}\nlinux {linux}\n{initrd}" + ("" if system.uki else f"options {options}\n"))

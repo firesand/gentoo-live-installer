@@ -409,6 +409,7 @@ bootloader, hardware), ACCT (accounts, tools, text installer).
 | `gentoo_installerd/configure_packages.py` | PORT | the emerge engine, package sets, failure diagnosis, cycle breaking |
 | `gentoo_installerd/configure_desktop.py` | PORT | desktop atoms, `install_desktop`, desktop session files |
 | `gentoo_installerd/configure_boot.py` | BOOT | kernel and bootloader atoms, initramfs, GRUB/systemd-boot/EFI stub, UKI, Secure Boot, `verify_boot_setup` |
+| `gentoo_installerd/configure_boot_extra.py` | BOOT | safe-graphics entries, dist-kernel files (USE, config snippet, README), serial console, Secure Boot keys kept in `/etc/secureboot` |
 | `gentoo_installerd/configure_hardware.py` | BOOT | applying the hardware plan (`run_plan_steps`, `write_plan_files`) |
 | `gentoo_installerd/configure_system.py` | BOOT | hostname, locale, time zone, keyboard, hosts, services, logger, cron, sshd, `live_input_problems` |
 | `gentoo_installerd/configure_accounts.py` | ACCT | users, groups, privileges |

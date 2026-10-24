@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from PySide6.QtGui import QStandardItemModel
 from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QVBoxLayout, QWidget
 
 from ..manifest import Hardware, InstallManifest, System
@@ -152,9 +153,7 @@ class BootSection(QWidget):
         self.secure_mode = QComboBox()
         for value, label in SECURE_MODES:
             self.secure_mode.addItem(label, value)
-        shim_item = self.secure_mode.model().item(self.secure_mode.findData("shim"))
-        if shim_item is not None:
-            shim_item.setEnabled(False)
+        self._disable_items(self.secure_mode, ("shim",))
         self.secure_mode.currentIndexChanged.connect(lambda _=0: self._update_boot_rules())
         secure_layout.addRow("Signing key", self.secure_mode)
         self.signing_key = QLineEdit()
@@ -184,10 +183,7 @@ class BootSection(QWidget):
         self.initramfs.addItem("Dracut", "dracut")
         self.initramfs.addItem("ugrd (experimental) - not available yet", "ugrd")
         self.initramfs.addItem("None (manual kernel with a plain root) - not available yet", "none")
-        for value in ("ugrd", "none"):
-            item = self.initramfs.model().item(self.initramfs.findData(value))
-            if item is not None:
-                item.setEnabled(False)
+        self._disable_items(self.initramfs, ("ugrd", "none"))
         form.addRow("Initramfs", self.initramfs)
         self.extra_options = QLineEdit()
         self.extra_options.setPlaceholderText("quiet")
@@ -306,6 +302,16 @@ class BootSection(QWidget):
             choices.append((value, f"{value} {NOT_AVAILABLE}", "Choose a Gentoo kernel to continue.", False))
         self.kernel.set_choices(choices)
         self.kernel.set_value(value if value else "gentoo-kernel-bin")
+
+    @staticmethod
+    def _disable_items(combo: QComboBox, values: tuple[str, ...]) -> None:
+        """List a choice that is not finished but cannot be picked."""
+        model = combo.model()
+        if isinstance(model, QStandardItemModel):
+            for value in values:
+                item = model.item(combo.findData(value))
+                if item is not None:
+                    item.setEnabled(False)
 
     @staticmethod
     def _select_combo(combo: QComboBox, value: str, unavailable: str = NOT_AVAILABLE) -> None:
