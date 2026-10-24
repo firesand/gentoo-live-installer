@@ -595,12 +595,12 @@ class PlanPage(RescuePage):
         call.then(self._job_found, lambda *_a: self._schedule_reattach(), lambda *_a: self._schedule_reattach())
 
     def _job_found(self, info: dict[str, Any]) -> None:
+        """The session says which operation holds it. When it is idle the run may have finished already, so the events are asked for by session
+        (the daemon answers with the latest operation of the session); a result that is not of this plan is not shown as the result."""
         busy = info.get("busy") or {}
         if busy.get("op") and self.tracker is not None:
             self.tracker.job_id = str(busy["op"])
-            self._schedule_reattach()
-        else:
-            self._show_result(unknown=True)
+        self._schedule_reattach()
 
     def _schedule_reattach(self) -> None:
         QTimer.singleShot(self.RECONNECT_MS, self._reattach)
@@ -625,7 +625,9 @@ class PlanPage(RescuePage):
 
     def _reattached(self, _result: dict[str, Any]) -> None:
         self.notice.clear()
-        self._show_result()
+        tracker = self.tracker
+        # the replayed operation may not be this run at all (the request never arrived): then there is no result of ours to show
+        self._show_result(unknown=tracker is None or tracker.result is None)
 
     def _reattach_failed(self, code: str, text: str, _data: dict[str, Any]) -> None:
         if code == "rescue.not_found":  # the daemon does not know the operation any more (it was restarted, or it is too old)

@@ -7,6 +7,7 @@ import shiboken6
 
 from gentoo_installer.rescue_app import DIAGNOSE
 from gentoo_installer.rescue_ui import messages
+from gentoo_installer.rescue_ui.model import RunTracker
 from gentoo_installer.rescue_ui.plan_page import PlanPage
 from tests.rescue.flow import plan_and_run
 from tests.ui.rescue_fakes import (  # noqa: F401  (fixtures)
@@ -78,7 +79,7 @@ def test_when_the_daemon_stays_away_the_window_says_so_and_can_try_again(qtbot, 
     assert page.tracker.outcome == "success" and again.count("rescue.events") >= 1 and len(lab.system.chroot_calls) >= 1
 
 
-def test_a_connection_that_breaks_before_anything_arrived_asks_the_session_what_it_is_doing(qtbot, gentoo_machine, repair_kit, proxy_factory) -> None:
+def test_a_connection_that_breaks_before_anything_arrived_asks_the_session_and_finds_its_own_result(qtbot, gentoo_machine, repair_kit, proxy_factory) -> None:
     daemon, lab, tree = gentoo_machine
     (tree / "boot/grub/grub.cfg").unlink()
     proxy = proxy_factory(daemon)
@@ -89,10 +90,25 @@ def test_a_connection_that_breaks_before_anything_arrived_asks_the_session_what_
     qtbot.waitUntil(lambda: window.plan_page.state == "result", timeout=30000)
     page = window.plan_page
     assert proxy.count("rescue.session") >= 1  # it did not guess which operation was its own
-    # the run had already finished when the window looked: the session is idle, so the result is reported as not known
-    # (never the result of some other operation)
-    assert page.tracker.result is None or page.tracker.outcome in {"success", ""}
-    assert page.result_title.text() in {"The result is not known", messages.OUTCOME_TITLES["success"]}
+    events = [request for request in proxy.requests if request["action"] == "rescue.events"]
+    assert events and events[0]["after_seq"] == 0 and events[0]["session_id"] == window.system.session_id  # no job id was known: the session's latest operation
+    assert page.tracker.outcome == "success" and page.result_title.text() == messages.OUTCOME_TITLES["success"]  # and it is this plan's result (the plan id matches)
+    assert page.tracker.result["plan_id"] == page.plan["plan_id"]
+    assert [call for _root, _env, call in lab.system.chroot_calls if call[0] == "grub-mkconfig"] == [("grub-mkconfig", "-o", "/boot/grub/grub.cfg")]  # the repair ran once
+
+
+def test_a_result_that_is_not_of_this_plan_is_never_shown_as_its_result(qtbot, gentoo_machine, repair_kit) -> None:
+    daemon, _lab, _tree = gentoo_machine
+    window = repair_kit.open(daemon.path)
+    system = open_system(qtbot, window)
+    page = window.plan_page
+    request_action(qtbot, window, "boot.config")
+    page.tracker = RunTracker(page.plan)  # as if the events of some other operation had been replayed
+    page.tracker.feed({"type": "result", "seq": 1, "job_id": "o1", "data": {"plan_id": "pSOMEONEELSE", "outcome": "success", "steps": [], "post_checks": []}})
+    page.tracker.feed({"type": "completed", "seq": 2, "data": {"success": True}})
+    page._set_state("running")
+    page._show_result()
+    assert page.result_title.text() == "The result is not known" and system is not None
 
 
 # ---- cancel and close ----------------------------------------------------------------------------------------------------------
