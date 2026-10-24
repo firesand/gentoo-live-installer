@@ -180,7 +180,8 @@ the ISO and starts QEMU with the entry's kernel, initramfs and arguments (`-kern
 `-append`) while the ISO stays attached as the CD-ROM. **GRUB itself is not part of such a run**
 (`scripts/verify-iso.py` checks the menu file; every other run boots through GRUB). Afterwards the
 harness reads `/proc/cmdline` in the live system and requires every argument of the entry to be
-there. `text-install` uses `--boot-entry text`.
+there. An entry with `nox` starts no desktop, so it cannot be combined with `--install-mode gui` or
+the graphical check of `--live-only`. `text-install` uses `--boot-entry text`.
 
 ### What is checked after an install
 
@@ -437,7 +438,7 @@ start (grub rescue>); see serial-final-uefi.log, final-uefi.ppm and final-uefi-s
 ## The Wave 3 matrix
 
 `test-vm.py --matrix wave3` runs the acceptance matrix: one child `test-vm.py` per entry, each
-with its own SSH port (`--ssh-port` is the first, the next entry gets the next), its own signal
+with its own SSH port (counted up from `--ssh-port`, one per running job), its own signal
 handling and its own QEMU. **At most two VMs run at the same time**, in the order below (the
 longest first), and a job starts only when the memory of all running VMs plus its own stays within
 `--matrix-memory-budget` (default 24576 MiB) and the host has that much `MemAvailable` plus 3 GiB.

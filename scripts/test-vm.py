@@ -565,7 +565,9 @@ def qemu_command(
         args.extend(("-drive", f"file={extra},if=none,id=extra{index},format=raw",
                      *vm_hw.disk_device_arguments(hw, f"extra{index}", extra_disk_serial(index), index)))
     if live:
-        if cd_first:
+        # A directly booted kernel is itself the first boot device of QEMU (bootindex 0): a CD with bootindex=0 would conflict with it,
+        # and the order does not matter because nothing is booted from a disk.
+        if cd_first and direct_boot is None:
             args.extend(("-drive", f"file={iso},if=none,id=cd0,media=cdrom,readonly=on,format=raw",
                          "-device", "ide-cd,drive=cd0,bootindex=0"))
         else:
@@ -2230,8 +2232,10 @@ class ScenarioRunner:
         degraded = self.install_degraded()
         probes.extend(installed_system_probes(manifest, self.scenario, world=not getattr(self.args, "no_world_probe", False),
                                               world_timeout=getattr(self.args, "world_timeout", 1800), hardware_plan=plan, degraded=degraded))
-        results: list[ProbeResult] = [self.install_completion_probe(manifest, plan)]
-        results.extend(self.hardware_plan_findings(manifest, plan))
+        results: list[ProbeResult] = []
+        if "install_artifacts" in self.__dict__:  # this run installed the system: what the installer said about itself can be judged
+            results.append(self.install_completion_probe(manifest, plan))
+            results.extend(self.hardware_plan_findings(manifest, plan))
         for name, command, parser, *rest in probes:
             code, log = self.ssh(TEST_USERNAME, command, f"verify-{name}{label}.log", rest[1] if len(rest) > 1 else self.args.command_timeout,
                                  stdin=rest[0] if rest else None)
@@ -2338,6 +2342,9 @@ class ScenarioRunner:
             direct = vm_iso.prepare_direct_boot(self.iso, query, self.run_dir / "boot-entry")
         except vm_iso.IsoError as exc:
             raise HarnessError(f"--boot-entry {query}: {exc}") from None
+        wants_desktop = self.install_mode() == "gui" or (bool(getattr(self.args, "live_only", False)) and self.scenario.hardware.vga != "none")
+        if wants_desktop and "nox" in direct.entry.arguments:
+            raise HarnessError(f"--boot-entry {query}: the entry {direct.entry.label!r} starts no desktop (nox), but this run needs the graphical session")
         self.direct_boot = direct
         self.boot_entry = direct.entry
         result["boot_entry"] = {"query": query, "entry": direct.entry.label, "arguments": list(direct.entry.arguments), "kernel": direct.entry.kernel,

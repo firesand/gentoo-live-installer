@@ -155,6 +155,14 @@ def test_an_existing_image_is_attached_through_an_overlay_and_never_written(lab,
     assert guard["disks"][0]["size"] == 21 * 2**30 + 5 * 2**20 and guard["disks"][0]["blank"] is False
 
 
+def test_an_image_that_was_installed_earlier_is_not_judged_by_what_this_run_could_not_see(lab, image):
+    lab.rules = guest_rules(vm, "bios")
+    assert lab.run("--scenario", "bios", "--target-image", str(image)) == 0
+    names = {probe["name"] for probe in lab.result()["probes"]}
+    assert names.isdisjoint({"install-degraded", "hardware-plan-file", "hardware-plan"}), "no install, no installer events, no plan file in this run"
+    assert "receipt" in names and "world-resolve" in names, "but the system itself is still probed"
+
+
 def test_booting_an_existing_image_without_break_or_repair_is_a_smoke_test(lab, image):
     lab.rules = guest_rules(vm, "bios")
     assert lab.run("--scenario", "bios", "--target-image", str(image)) == 0

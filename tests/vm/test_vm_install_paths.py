@@ -343,6 +343,12 @@ def test_an_unknown_boot_entry_stops_before_a_disk_is_created(lab):
     assert not lab.qemu_img_log.exists() and not list(lab.run_dir().glob("qemu-*.log"))
 
 
+def test_an_entry_without_a_desktop_cannot_serve_a_graphical_install(lab):
+    text_lab(lab, scenario="openrc")
+    assert lab.run("--scenario", "openrc", "--boot-entry", "text", "--install-mode", "gui") == 1
+    assert "starts no desktop (nox), but this run needs the graphical session" in lab.result()["error"]
+
+
 def test_an_iso_that_is_not_an_iso_cannot_be_asked_for_entries(lab, capsys):
     with pytest.raises(SystemExit) as raised:
         vm.main(["--list-boot-entries", "--iso", str(lab.iso)])
