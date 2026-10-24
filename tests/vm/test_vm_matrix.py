@@ -336,3 +336,66 @@ def test_run_matrix_starts_the_children_with_their_own_ports_and_reports_the_ver
     assert "START systemd" in out and "FAIL bios" in out and re.search(r"Summary: .*matrix-result\.json", out)
     summaries = list((lab.root).glob("matrix-wave3-*/matrix-result.json"))
     assert len(summaries) == 1 and json.loads(summaries[0].read_text())["failed"] == ["bios"]
+
+
+@pytest.mark.slow
+def test_without_a_port_the_matrix_starts_at_the_default_and_every_slot_is_checked(tmp_path, monkeypatch, capsys):
+    from tests.vm.fake_env import Lab as FakeLab
+
+    lab = FakeLab(vm, tmp_path, monkeypatch)
+    checked: list[int] = []
+    monkeypatch.setattr(vm, "check_port", lambda host, port: checked.append(port))
+    clock = Clock()
+    fake = Lab(tmp_path, clock)
+    parser = vm.build_parser()
+    argv = [part for index, part in enumerate(lab.argv("--matrix", "wave3", "--matrix-only", "bios,openrc")) if part not in ("--ssh-port", str(lab.port))]
+    args = parser.parse_args(argv)
+    assert args.ssh_port is None
+    assert vm.run_matrix(args, parser, spawn=fake, available_mib=lambda: 40000, sleep=clock.sleep) == 0
+    assert checked == [vm_matrix.DEFAULT_BASE_PORT, vm_matrix.DEFAULT_BASE_PORT + 1]
+    assert {int(a[a.index("--ssh-port") + 1]) for _t, _n, a in fake.started} == {vm_matrix.DEFAULT_BASE_PORT, vm_matrix.DEFAULT_BASE_PORT + 1}
+
+
+@pytest.mark.slow
+def test_a_port_the_second_job_would_need_that_is_taken_is_reported_before_anything_starts(tmp_path, monkeypatch, capsys):
+    from tests.vm.fake_env import Lab as FakeLab
+
+    lab = FakeLab(vm, tmp_path, monkeypatch)
+
+    def check_port(host, port):
+        if port == lab.port + 1:
+            raise vm.HarnessError(f"SSH forward endpoint {host}:{port} is unavailable: in use")
+
+    monkeypatch.setattr(vm, "check_port", check_port)
+    parser = vm.build_parser()
+    args = parser.parse_args(lab.argv("--matrix", "wave3", "--matrix-only", "bios,openrc"))
+    with pytest.raises(SystemExit) as raised:
+        vm.run_matrix(args, parser, spawn=Lab(tmp_path, Clock()), available_mib=lambda: 40000)
+    assert raised.value.code == 2 and f"127.0.0.1:{lab.port + 1} is unavailable" in capsys.readouterr().err
+    assert not list(lab.root.glob("matrix-*")), "nothing was started or created"
+
+
+@pytest.mark.slow
+def test_a_matrix_that_needs_an_image_or_a_menu_entry_that_is_not_there_stops_before_the_first_job(tmp_path, monkeypatch, capsys):
+    from tests.vm.fake_env import Lab as FakeLab
+    from tests.vm.iso_fixture import write_iso
+
+    lab = FakeLab(vm, tmp_path, monkeypatch)
+    monkeypatch.setattr(vm, "check_port", lambda host, port: None)
+    parser = vm.build_parser()
+    started: list = []
+
+    def run(*extra):
+        args = parser.parse_args(lab.argv("--matrix", "wave3", *extra))
+        with pytest.raises(SystemExit) as raised:
+            vm.run_matrix(args, parser, spawn=lambda argv, log: started.append(argv), available_mib=lambda: 40000)
+        assert raised.value.code == 2
+        return capsys.readouterr().err
+
+    empty = tmp_path / "no-images"
+    empty.mkdir()
+    assert "debian-13-genericcloud-amd64.qcow2 was not found in" in run("--matrix-only", "rescue-debian", "--rescue-images", str(empty))
+    write_iso(lab.iso, {"/boot/grub/grub.cfg": b"menuentry 'Desktop' {\n\tlinux /boot/gentoo cdroot\n}\n", "/boot/gentoo": b"k"})
+    message = run("--matrix-only", "text-install")
+    assert "the boot menu of" in message and "no boot menu entry matches 'text'" in message
+    assert not started and not list(lab.root.glob("matrix-*"))

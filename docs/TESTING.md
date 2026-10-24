@@ -438,13 +438,16 @@ start (grub rescue>); see serial-final-uefi.log, final-uefi.ppm and final-uefi-s
 ## The Wave 3 matrix
 
 `test-vm.py --matrix wave3` runs the acceptance matrix: one child `test-vm.py` per entry, each
-with its own SSH port (counted up from `--ssh-port`, one per running job), its own signal
-handling and its own QEMU. **At most two VMs run at the same time**, in the order below (the
-longest first), and a job starts only when the memory of all running VMs plus its own stays within
-`--matrix-memory-budget` (default 24576 MiB) and the host has that much `MemAvailable` plus 3 GiB.
-A job that cannot ever fit is skipped with the reason. Every job gets `--strict-probes`; UEFI
-installs also get `--fresh-nvram-check`. Options of the caller (ISO, SSH key, timeouts, image
-directory) are passed to every job.
+with its own SSH port (counted up from `--ssh-port`, or from 40222 when none is named, one per
+running job), its own signal handling and its own QEMU. **At most two VMs run at the same time**,
+in the order below (the longest first), and a job starts only when the memory of all running VMs
+plus its own stays within `--matrix-memory-budget` (default 24576 MiB) and the host has that much
+`MemAvailable` plus 3 GiB. A job that cannot ever fit is skipped with the reason. Before the first
+job starts, the matrix checks what the last one needs: the SSH ports of all slots, the cloud images
+and the boot menu entries of the ISO; a missing input is a usage error (exit status 2), not a
+failure hours later. Every job gets `--strict-probes`; UEFI installs also get
+`--fresh-nvram-check`. Options of the caller (ISO, SSH key, timeouts, image directory) are passed
+to every job.
 
 | Entry | Scenario and options | RAM | CPUs | Minutes |
 |---|---|---|---|---|

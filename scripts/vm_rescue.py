@@ -115,7 +115,7 @@ FATAL_PATTERNS = (re.compile(r"(?m)^grub> ?"), re.compile(r"(?m)^\(initramfs\) "
 EVIDENCE_MARKERS = FATAL_MARKERS + ("grub>", "error: file", "error: unknown filesystem", "error: no such device", "Boot failed", "Failed to mount", "Dependency failed for")
 REBOOT_MARKERS = ("reboot: Restarting system", "systemd-shutdown[1]: Rebooting")
 COMMAND_LINE_RE = re.compile(r"(?m)^(?:\[[^\]]*\]\s*)?(?:Kernel command line|Command line):\s*(.+?)\s*$")
-LIVE_ARGUMENT_RE = re.compile(r"root=live:\S*|rd\.live\.\S*|\S*CDLABEL=\S*|\bcdroot\b")
+LIVE_ARGUMENT_RE = re.compile(r"root=live:\S*|rd\.live\.\S*|CDLABEL=\S*|\bcdroot\b")
 
 
 def clean_serial(text: str) -> str:
@@ -426,6 +426,8 @@ class RescueDriver:
         data = last_result(events, "session_id")
         if data is None or not data.get("session_id"):
             raise self.error(f"gentoo-rescue mount printed no session; see {self.log_of('mount')}")
+        if data.get("mode") not in (None, "ro"):  # nothing may be writable before a plan that was shown and confirmed runs
+            raise self.error(f"gentoo-rescue mounted the system {data.get('mode')!r}, not read-only; see {self.log_of('mount')}")
         return data
 
     def diagnose(self, session: str, *, deep: bool = False) -> dict[str, Any]:

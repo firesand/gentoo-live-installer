@@ -352,6 +352,13 @@ def test_the_live_medium_must_never_be_offered_as_a_system():
         vm_rescue.RescueDriver(Script()).choose(leaking, disk="/dev/vda", os_id="debian")
 
 
+def test_a_system_that_was_mounted_writable_before_any_plan_ran_is_an_error():
+    session = result({"session_id": "r1a2b3", "path": "/mnt/rescue/r1a2b3", "mode": "rw"})
+    with pytest.raises(vm_rescue.RescueFlowError, match="mounted the system 'rw', not read-only"):
+        vm_rescue.RescueDriver(Script((0, session))).mount({"id": "c1"})
+    assert vm_rescue.RescueDriver(Script((0, result({"session_id": "r1a2b3", "mode": "ro"})))).mount({"id": "c1"})["mode"] == "ro"
+
+
 def test_the_plan_is_only_taken_when_nothing_in_it_is_blocked():
     blocked = result({"digest": "d", "preconditions": [{"ok": False, "text": "The computer has no network route"}], "steps": []})
     with pytest.raises(vm_rescue.RescueFlowError, match="cannot run here: The computer has no network route"):

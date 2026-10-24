@@ -2495,8 +2495,8 @@ class ScenarioRunner:
         """Boot the disk alone and wait for a login prompt on the serial console; power the machine off afterwards.
 
         A machine that restarts itself before the prompt (the SELinux relabel of Fedora ends with a reboot, and QEMU runs with
-        -no-reboot) is started again, at most ``restarts`` times, with the NVRAM it left. The evidence is recorded in
-        result.json whether the boot works or not.
+        -no-reboot) is started again, at most ``restarts`` times, with the NVRAM it left, and gets the whole time again. The
+        evidence is recorded in result.json whether the boot works or not.
         """
         limit = timeout or int_option(self.args, "login_timeout", 600)
         started = time.monotonic()
@@ -2504,7 +2504,7 @@ class ScenarioRunner:
         name = label
         while True:
             vm = self.launch(name, live=False, firmware=firmware, nvram=nvram if evidence["restarts"] == 0 else "keep")
-            state, text = self.watch_boot(vm, started + limit)
+            state, text = self.watch_boot(vm, time.monotonic() + limit)  # every start gets the whole time: the relabel of Fedora is a boot of its own
             evidence["serial_log"] = vm.serial_log.name
             if state == "rebooted" and evidence["restarts"] < restarts:
                 evidence["restarts"] += 1
@@ -2618,10 +2618,13 @@ class ScenarioRunner:
                 raise HarnessError(f"After breaking {mode} the rescue tool does not see or plan the repair: " + "; ".join(problems))
             outcome = driver.execute_plan(session, action, plan)
             evidence["outcome"] = {"outcome": outcome.get("outcome"), "post_checks": outcome.get("post_checks"), "warnings": outcome.get("warnings")}
-            if self.scenario.firmware == "uefi":  # what the firmware knows after the repair, for whoever reads the evidence
+            if self.scenario.firmware == "uefi":  # what the firmware knows after the repair; an EFI stub entry carries a command line of its own
                 code, log = self.ssh(self.args.ssh_user, "efibootmgr -v", f"rescue-{mode}-efibootmgr.log", self.args.command_timeout)
                 if code == 0:
                     evidence["efibootmgr"] = log.name
+                    entries_with_live_arguments = vm_rescue.live_arguments(log.read_text(errors="replace"))
+                    if entries_with_live_arguments:
+                        raise HarnessError("A firmware boot entry carries arguments of the live medium: " + ", ".join(entries_with_live_arguments) + f"; see {log}")
             code, log = self.ssh(self.args.ssh_user, vm_rescue.boot_files_command(str(mounted["path"])), f"rescue-{mode}-boot-files.log", self.args.command_timeout)
             try:
                 report = vm_rescue.parse_boot_files(code, log.read_text(errors="replace"))
@@ -2854,8 +2857,7 @@ class ScenarioRunner:
     # --- a distribution's own image: Debian, Ubuntu, Fedora, Arch -----------------------------------------------------
 
     def rescue_images_dir(self) -> Path:
-        chosen = getattr(self.args, "rescue_images", None) or os.environ.get("GENTOO_RESCUE_IMAGES")
-        return Path(chosen) if chosen else PROJECT_ROOT / "build" / "rescue-images"
+        return rescue_images_directory(self.args)
 
     def final_boot_modes(self, image: vm_rescue.RescueImage) -> list[str]:
         chosen = getattr(self.args, "final_boots", None)
@@ -3073,6 +3075,12 @@ def check_port(host: str, port: int) -> None:
             listener.bind((host, port))
     except OSError as exc:
         raise HarnessError(f"SSH forward endpoint {host}:{port} is unavailable: {exc}") from exc
+
+
+def rescue_images_directory(args: argparse.Namespace) -> Path:
+    """Where the distribution cloud images are: --rescue-images, $GENTOO_RESCUE_IMAGES, else build/rescue-images."""
+    chosen = getattr(args, "rescue_images", None) or os.environ.get("GENTOO_RESCUE_IMAGES")
+    return Path(chosen) if chosen else PROJECT_ROOT / "build" / "rescue-images"
 
 
 def needs_uefi(scenario: Scenario, args: argparse.Namespace) -> bool:
@@ -3386,6 +3394,22 @@ def failure_logs(run_dir: Path) -> list[Path]:
     return ordered
 
 
+def matrix_inputs_exist(args: argparse.Namespace, scenarios: Sequence[Scenario]) -> None:
+    """What the last job of a matrix needs must be there before the first one starts: the images, and the boot menu entries."""
+    directory = rescue_images_directory(args)
+    for scenario in scenarios:
+        if scenario.image:
+            vm_rescue.resolve_image(directory, vm_rescue.IMAGES[scenario.image], error=HarnessError)
+    queries = sorted({scenario.boot_entry for scenario in scenarios if scenario.boot_entry} | ({args.boot_entry} if args.boot_entry else set()))
+    if queries:
+        try:
+            menu = vm_iso.load_menu(args.iso)
+            for query in queries:
+                vm_iso.select_entry(menu, query)
+        except vm_iso.IsoError as exc:
+            raise HarnessError(f"the boot menu of {args.iso}: {exc}") from None
+
+
 def run_matrix(args: argparse.Namespace, parser: argparse.ArgumentParser, *, spawn: Callable[[list[str], Path], Any] | None = None,
                available_mib: Callable[[], int] | None = None, sleep: Callable[[float], None] = time.sleep) -> int:
     """--matrix: one child test-vm.py per entry, at most two at a time, each with its own SSH port; exit 0 only when every entry passed."""
@@ -3396,11 +3420,13 @@ def run_matrix(args: argparse.Namespace, parser: argparse.ArgumentParser, *, spa
     except ValueError as exc:
         parser.error(str(exc))
     shared = vm_matrix.passthrough_arguments(args)
+    base_port = args.ssh_port or vm_matrix.DEFAULT_BASE_PORT
+    parallel = min(args.matrix_parallel, vm_matrix.PARALLEL_MAX)
     problems: list[str] = []
     scenarios: list[Scenario] = []
     first: argparse.Namespace | None = None
     for entry in entries:
-        child = parser.parse_args(vm_matrix.job_argv(entry, port=args.ssh_port or 1, shared=shared))
+        child = parser.parse_args(vm_matrix.job_argv(entry, port=base_port, shared=shared))
         first = first or child
         scenario = apply_overrides(SCENARIO_MAP[entry.scenario], child)
         scenarios.append(scenario)
@@ -3410,18 +3436,20 @@ def run_matrix(args: argparse.Namespace, parser: argparse.ArgumentParser, *, spa
     assert first is not None
     try:
         preflight(first, scenarios)
+        for slot in range(1, parallel):  # preflight checked the first port; every job that may run next to it needs its own
+            check_port(first.ssh_host, base_port + slot)
         public_key_from_private(first.ssh_keygen, first.ssh_private_key)
+        matrix_inputs_exist(first, scenarios)
     except HarnessError as exc:
         parser.exit(2, f"test-vm.py: error: {exc}\n")
     VM_ROOT.mkdir(parents=True, exist_ok=True)
     VM_ROOT.chmod(0o700)
     directory = Path(tempfile.mkdtemp(prefix=f"matrix-{matrix.name}-{datetime.now(timezone.utc).strftime('%Y%m%dT%H%M%SZ')}-", dir=VM_ROOT))
-    parallel = min(args.matrix_parallel, vm_matrix.PARALLEL_MAX)
     print(vm_matrix.format_plan(matrix, entries, parallel=parallel, budget_mib=args.matrix_memory_budget), flush=True)
     print(f"Logs and results in {directory}", flush=True)
     scheduler = vm_matrix.Scheduler(
         entries, directory=directory, spawn=spawn or vm_matrix.spawn_child(Path(__file__).resolve()), parallel=parallel,
-        budget_mib=args.matrix_memory_budget, base_port=args.ssh_port or 40222, sleep=sleep,
+        budget_mib=args.matrix_memory_budget, base_port=base_port, sleep=sleep,
         available_mib=available_mib or vm_matrix.host_memory_available_mib, say=lambda text: print(text, flush=True))
     status = 0
     try:

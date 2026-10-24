@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any, Callable, Protocol, Sequence
 
 PARALLEL_MAX = 2                 # VMs at the same time, however many the caller asks for
+DEFAULT_BASE_PORT = 40222        # the first job's SSH port when the caller names none; a job next to it gets the next port
 MARGIN_MIB = 3072                # host memory that stays free beyond the VMs (docs/TESTING.md, "Memory rule")
 DEFAULT_BUDGET_MIB = 24576       # the sum of the memory of all running VMs
 RUN_DIR_RE = re.compile(r"^RUN (\S+): logs in (.+)$", re.M)
@@ -184,7 +185,7 @@ class Scheduler:
     """Starts the entries in order, never more than ``parallel`` at once and never more memory than allowed; collects their results."""
 
     def __init__(self, entries: Sequence[MatrixEntry], *, directory: Path, spawn: Callable[[list[str], Path], Process],
-                 parallel: int = PARALLEL_MAX, budget_mib: int = DEFAULT_BUDGET_MIB, base_port: int = 40222,
+                 parallel: int = PARALLEL_MAX, budget_mib: int = DEFAULT_BUDGET_MIB, base_port: int = DEFAULT_BASE_PORT,
                  available_mib: Callable[[], int] = host_memory_available_mib, clock: Callable[[], float] = time.monotonic,
                  sleep: Callable[[float], None] = time.sleep, poll: float = 2.0, say: Callable[[str], None] = lambda _text: None) -> None:
         self.parallel = max(1, min(parallel, PARALLEL_MAX))

@@ -230,6 +230,16 @@ def test_live_arguments_on_the_kernel_command_line_of_the_booted_system_are_caug
     assert "arguments of the live medium (rd.live.image, root=live:CDLABEL=GENTOO)" in lab.result()["error"]
 
 
+def test_a_firmware_boot_entry_with_live_arguments_is_caught_too(lab, images):
+    prepare(lab, "debian", mode="grub-cfg")
+    for rule in lab.rules:
+        if rule.get("match") == "^efibootmgr -v$":
+            rule["stdout"] = "Boot0003* Linux\tHD(1,GPT,AAAA)/File(\\vmlinuz)root=live:CDLABEL=GENTOO rd.live.image initrd=\\initrd\n"
+    assert run(lab, images, "rescue-debian") == 1
+    assert "A firmware boot entry carries arguments of the live medium: rd.live.image, root=live:CDLABEL=GENTOO" in lab.result()["error"]
+    assert not (lab.run_dir() / "fake-qemu-argv-target-3.json").exists()
+
+
 def test_a_menu_file_check_that_found_no_menu_proves_nothing(lab, images):
     prepare(lab, "debian", no_menu_files=True)
     assert run(lab, images, "rescue-debian") == 1
