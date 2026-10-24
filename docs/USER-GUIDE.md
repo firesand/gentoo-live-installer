@@ -196,6 +196,8 @@ Try *More options > Old firmware* (turns off ACPI and APIC) only if the normal e
 
 Start the disc. The best entry is **Repair a system (text console)**: it works on every PC. On the desktop, open **Repair an Existing System** in the applications menu (or the button *Repair an existing system* on the installer's Welcome page). In a terminal, run `sudo gentoo-rescue`.
 
+Need the USB port for an external disk? Choose *More options > Text console in RAM* (needs 4 GiB of memory). The disc is copied to memory, you can remove the stick, and you start the tool yourself with `sudo gentoo-rescue`.
+
 ### What the tool does
 
 1. It looks at all disks and finds installed Linux systems. To look, it mounts read-only. It never writes at this stage.
@@ -222,7 +224,16 @@ Repairs that work the same on every system:
 * **Add, remove or reorder firmware boot entries** (UEFI): `efibootmgr`. Also: boot an entry once, and create the fallback file `EFI/BOOT/BOOTX64.EFI` so that firmware which forgot its entries can still find the system.
 * **Check a file system**: a read-only check first. Repairs only when you ask, with the file system unmounted. Works for ext2/3/4, XFS, Btrfs, FAT, F2FS, exFAT, JFS and NTFS (NTFS only gets a check with `ntfsfix -n`).
 * **Reset a password** or unlock an account in the repaired system.
-* **Diagnosis** (no changes): a missing kernel, a missing or empty initramfs, a missing boot menu, an empty EFI partition, a BIOS or UEFI mismatch, a boot configuration that still has live-disc arguments, a firmware with no working entry, a full `/boot`, a cloned disk with the same ID, and more. Every finding says what it means and what repair helps.
+* **Diagnosis** (changes nothing). It looks for, among other things:
+  * a missing kernel, or a missing or empty initramfs;
+  * a missing or empty boot menu;
+  * an empty EFI partition, or a firmware with no working boot entry;
+  * a BIOS or UEFI mismatch between the disc and the installed system;
+  * a boot configuration that still has arguments of a live disc;
+  * a full `/boot`;
+  * a cloned disk with the same ID.
+
+  Every finding says what it means and which repair helps.
 
 A moved disk (a system now in another computer): choose *Rebuild the initramfs* with the option for many kinds of hardware. It adds the drivers for the new machine.
 
