@@ -62,7 +62,7 @@ def stage_label(stage: str) -> str:
 class Outcome:
     """How a followed installation ended."""
 
-    state: str  # success | failed | cancelled | busy | invalid | detached | unreachable
+    state: str  # success | failed | cancelled | busy | blocked | invalid | detached | unreachable
     message: str = ""
     code: str = ""
     stage: str = ""
@@ -233,6 +233,7 @@ class _Run:
     degraded: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     events: int = 0
+    storage_passed: bool = False  # this job finished (or, resumed, verified) its storage stage: its own checkpoint exists
 
 
 class InstallFollower:
@@ -255,7 +256,7 @@ class InstallFollower:
         self.console.quit_note = "The installation keeps running in the background. To follow it again, run: gentoo-installer-text --attach"
         outcome = self._run(request)
         if outcome.state != "detached":
-            self.console.quit_note = "" if outcome.ok else "The installation stopped; the disk may be partly installed (the log says how far it got)."
+            self.console.quit_note = "" if outcome.ok or outcome.state == "blocked" else "The installation stopped; the disk may be partly installed (the log says how far it got)."
         return outcome
 
     def _run(self, request: dict[str, Any]) -> Outcome:
@@ -355,6 +356,8 @@ class InstallFollower:
             run.percent = max(run.percent, min(100.0, float(progress)))
         if event.get("stage") and kind in {"stage", "progress"}:
             run.stage = str(event["stage"])
+        if kind == "stage" and event.get("stage") == "storage" and data.get("status") in {"completed", "skipped"}:
+            run.storage_passed = True
         replay = isinstance(seq, int) and seq <= self.quiet_until
         self.sink.event(event, replay=replay)
         if kind == "error":
@@ -427,13 +430,20 @@ class InstallFollower:
             return outcome
         code = str(detail.get("code") or "")
         outcome.state = {"install.cancelled": "cancelled", "install.busy": "busy", "install.invalid_manifest": "invalid"}.get(code, "failed")
+        if outcome.state == "busy" and detail.get("blocked") is True:
+            outcome.state = "blocked"  # a repair session holds the disks: there is no running installation to follow
         outcome.code = code
         outcome.stage = str(failing.get("stage") or run.stage)
         outcome.message = str(failing.get("error") or failing.get("message") or (run.completed or {}).get("message") or "The installation failed.")
         outcome.retryable = bool(detail.get("retryable"))
         outcome.resumable = bool(detail.get("resumable") or done.get("resumable"))
         outcome.bootable = bool(detail.get("bootable") or done.get("bootable"))
-        if not outcome.resumable:
+        # The status reads the checkpoints on disk, and those may be an EARLIER job's: a job that failed in preflight with other
+        # settings would be offered a resume that the service then refuses. So the job's own word counts. The status is asked
+        # when the job said nothing (a service that predates the key), or when this job finished its storage stage itself (the
+        # service's crash path always writes resumable=false, while the checkpoint this job wrote is there).
+        said = "resumable" in detail or "resumable" in done
+        if not outcome.resumable and (not said or run.storage_passed):
             outcome.resumable = self._status_flag("resumable")
         return outcome
 

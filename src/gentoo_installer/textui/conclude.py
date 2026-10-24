@@ -32,6 +32,8 @@ def describe(console: Console, outcome: Outcome) -> None:
         c.say(c.style("The installation was cancelled" + where + ".", "yellow", "bold"))
     elif outcome.state == "busy":
         c.say(c.style("Another installation is already running on this computer.", "yellow", "bold"))
+    elif outcome.state == "blocked":
+        c.say(c.style("The installation cannot start yet.", "yellow", "bold"))
     elif outcome.state == "invalid":
         c.say(c.style("The installer service refused the settings.", "red", "bold"))
     elif outcome.state == "detached":
@@ -42,6 +44,8 @@ def describe(console: Console, outcome: Outcome) -> None:
         c.say(c.style("The installation stopped" + where + ".", "red", "bold"))
     if outcome.message:
         c.para(outcome.message, indent=2)
+    if outcome.state == "blocked":
+        c.para("Nothing was started and nothing on your disks was changed. Close the repair tool (or unmount what it holds), then start again.")
     if outcome.state in {"failed", "cancelled", "unreachable"}:
         c.para(f"The installation log is on this computer: {outcome.log_path or DEFAULT_LOG_PATH} (only root can read that file; the menu below can show it).")
     if outcome.bootable:
@@ -118,8 +122,9 @@ def conclude(console: Console, host: Host, daemon: Daemon, outcome: Outcome, *, 
             offer("Resume the installation", "resume", "Continues where it stopped. The disk is not erased again.")
         if outcome.bootable and not outcome.ok:
             offer("Restart the computer now", "restart", "The system installed so far can start. Remove the installation medium first.")
-        if outcome.state in {"failed", "cancelled", "invalid"}:
-            offer("Go back to the summary", "again", "Change a setting, or start over. Starting over erases the disk again." if outcome.state != "invalid" else "")
+        if outcome.state in {"failed", "cancelled", "invalid", "blocked"}:
+            hint = {"invalid": "", "blocked": "Start again from the summary once the repair tool has let go of the disks."}
+            offer("Go back to the summary", "again", hint.get(outcome.state, "Change a setting, or start over. Starting over erases the disk again."))
         offer("Show the last lines of the installation log", "log")
         offer("Save the installation log to a file", "save")
         offer("Quit", "done")

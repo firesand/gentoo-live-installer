@@ -108,3 +108,33 @@ def test_a_cancel_after_storage_still_points_to_resume(page):
     cancelled_in(page, "kernel", resumable=True)
     assert page.resume_button.isVisible()
     assert "choose Resume" in page.detail.text() and "Resume continues" in page.result_hint.text()
+
+
+# --- BUSY-1: a start that a repair session blocked is not "an installation is already running" ---------------------------------------------
+
+
+REASON = "A repair session holds /dev/sda3; unmount it first"
+
+
+def refused_start(page, **data):
+    page.handle_event({"type": "error", "message": REASON, "error": REASON, "data": {"code": "install.busy", "retryable": False, **data}})
+    page.handle_event({"type": "completed", "message": REASON, "data": {"success": False}})
+
+
+def test_a_start_blocked_by_a_repair_session_shows_the_reason_and_no_reconnect(page):
+    started(page)
+    refused_start(page, blocked=True)
+    assert page.stage.text() == "The installation cannot start yet"
+    assert REASON in page.detail.text()
+    assert "already running" not in page.detail.text() and "already running" not in page.result_hint.text()
+    assert not page.reconnect_button.isVisible()
+    assert page.retry_button.isVisible() and page.retry_button.text() == "Try again" and page.settings_button.isVisible()
+    assert "repair" in page.result_hint.text() and "Nothing was started" in page.result_hint.text()
+    assert not page.resume_button.isVisible()
+
+
+def test_a_second_start_while_a_job_runs_still_offers_to_follow_it(page):
+    started(page)
+    refused_start(page)  # no `blocked` key: another installation
+    assert page.stage.text() == "An installation is already running"
+    assert page.reconnect_button.isVisible() and not page.retry_button.isVisible()

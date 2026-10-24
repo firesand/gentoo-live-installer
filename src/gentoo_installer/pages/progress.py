@@ -254,6 +254,7 @@ class ProgressPage(Page):
         self._warnings: list[str] = []  # things that went wrong after the install itself succeeded (cleanup)
         self._cancelled = False
         self._busy = False
+        self._blocked = False  # a repair session holds the disks: the start was refused, no installation is running
         self._terminal = False
         self._failure_reported = False
         self._finished_emitted = False
@@ -410,6 +411,7 @@ class ProgressPage(Page):
         self._finished_emitted = False
         self._cancelled = False
         self._busy = False
+        self._blocked = False
         self._retryable = None
         self._resumable = None
         if not keep_log:
@@ -472,12 +474,14 @@ class ProgressPage(Page):
         elif kind in {"error", "failed"}:
             retryable, resumable = data.get("retryable"), data.get("resumable")
             self._absorb_outcome(data)
+            refused = data.get("code") == "install.busy" and data.get("blocked") is True  # install.busy for a repair session, not a job
             self._fail(
                 str(message or event.get("error") or "The installation failed. Review the log for details."),
                 stage=stage,
                 cancelled=event.get("error") == "cancelled" or data.get("code") == "install.cancelled",
                 retryable=retryable if isinstance(retryable, bool) else None,
-                busy=data.get("code") == "install.busy",
+                busy=data.get("code") == "install.busy" and not refused,
+                blocked=refused,
                 resumable=resumable if isinstance(resumable, bool) else None,
             )
         elif kind == "completed":
@@ -648,12 +652,14 @@ class ProgressPage(Page):
         elif learned:
             self._present_failure()  # the completed event knew more than the error event (the system can start)
 
-    def _fail(self, message: str, *, stage: str = "", cancelled: bool = False, retryable: bool | None = None, busy: bool = False, resumable: bool | None = None) -> None:
+    def _fail(self, message: str, *, stage: str = "", cancelled: bool = False, retryable: bool | None = None, busy: bool = False, blocked: bool = False,
+              resumable: bool | None = None) -> None:
         self.flush_log()
         first = not self._failure_reported
         self._failure_reported = True
         self._cancelled = self._cancelled or cancelled
         self._busy = self._busy or busy
+        self._blocked = self._blocked or blocked
         if retryable is not None:
             self._retryable = retryable
         if resumable is not None:
@@ -685,6 +691,9 @@ class ProgressPage(Page):
         elif self._busy:
             self.stage.setText("An installation is already running")
             self.detail.setText("Another installation is in progress on this computer. Reconnect to follow it.")
+        elif self._blocked:
+            self.stage.setText("The installation cannot start yet")
+            self.detail.setText(summarize(message))  # the service's own words: what holds the disks, and what to do
         elif self._bootable:
             self.stage.setText("Your new system is installed and can start")
             self.detail.setText(summarize((f"The last step did not finish ({label.lower()}). " if label else "A later step did not finish. ") + message))
@@ -707,6 +716,8 @@ class ProgressPage(Page):
         self.resume_button.setText("Resume installation")
         if self._busy:
             hint = "Nothing was started. The running installation keeps going; reconnect to follow it."
+        elif self._blocked:
+            hint = "Nothing was started and nothing on your disks was changed. Close the repair tool (or unmount what it holds), then try again."
         elif bootable:
             step = "the desktop step" if self._failure_stage == "desktop" else "the last step"
             hint = ("The computer can start the new system now. One later step did not finish, so some programs may be missing. "
