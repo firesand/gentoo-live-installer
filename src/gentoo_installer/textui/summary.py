@@ -18,6 +18,9 @@ from .inventory import MachineView
 
 MAX_ADVICE = 5
 INIT_NAMES = {"openrc": "OpenRC", "systemd": "systemd"}
+# Advice about choices the text installer does not offer.
+ONLY_ELSEWHERE_FIELDS = frozenset({"hardware.gpu_driver", "hardware.prime", "hardware.cpu_flags_mode"})
+ONLY_ELSEWHERE = "(The text installer cannot change this: use the graphical installer or a settings file.)"
 
 
 @dataclass
@@ -113,7 +116,10 @@ def build_summary(manifest: InstallManifest, view: MachineView, *, require_ident
         if finding.severity == "warning":
             notes.append(finding.message)
     try:
-        summary.advice = [item.message for item in recommend.recommend(view.hardware, manifest)][:MAX_ADVICE]
+        summary.advice = [
+            item.message + (f" {ONLY_ELSEWHERE}" if item.field in ONLY_ELSEWHERE_FIELDS else "")
+            for item in recommend.recommend(view.hardware, manifest)
+        ][:MAX_ADVICE]
     except Exception:  # noqa: BLE001
         summary.advice = []
     summary.problems = list(dict.fromkeys(problems))

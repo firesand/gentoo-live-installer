@@ -99,6 +99,14 @@ def nic_text(nic: NicInfo) -> str:
     return f"{name}: {nic.kind}"
 
 
+def keeps_windows(view: MachineView, target: str) -> bool:
+    """Whether Windows stays on this computer next to the new system: its clock is already in local time, or it has a boot entry
+    and Windows partitions on a disk other than the target (a Windows disk that is erased is not a second system)."""
+    profile = view.profile
+    elsewhere = any(node.fstype in {"ntfs", "bitlocker"} for root in view.roots if root.path != target for node in root.walk())
+    return profile.clock.rtc_mode == "local" or bool(profile.firmware.windows_boot_entry and elsewhere)
+
+
 def disk_option(entry: DiskEntry) -> Option:
     """One line for the disk menu: what the disk is, and what is on it today."""
     disk = entry.disk
@@ -340,7 +348,7 @@ class Wizard:
                 c.para(line, hanging=2)
             options = [Option("Continue")] if connected else [
                 Option("Check again"),
-                Option("Continue without the internet", detail="The installation will stop at its first download."),
+                Option("Continue without the internet", detail="You can answer the questions now. The installation cannot start until the internet works."),
             ]
             commands = {"n": "connect to Wi-Fi (nmtui)", "p": "set a download proxy"}
             if connected:
@@ -760,7 +768,7 @@ class Wizard:
     # --- 8. time zone and language ----------------------------------------------------------------------------------------
 
     def step_region(self) -> None:
-        self.substeps(self._ask_timezone, self._ask_locale)
+        self.substeps(self._ask_timezone, self._ask_locale, self._ask_hardware_clock)
 
     def _ask_timezone(self) -> bool:
         c = self.console
@@ -811,6 +819,17 @@ class Wizard:
             c.warn(problem)
             raise GoBack
         system.locale = locales[index]
+        return True
+
+    def _ask_hardware_clock(self) -> bool:
+        """Windows keeps local time in the hardware clock; two systems on one PC must agree on it."""
+        system = self.manifest.system
+        if system.rtc_local or not keeps_windows(self.view, self.manifest.storage.device):
+            return False
+        system.rtc_local = self.console.confirm(
+            "Keep the hardware clock in local time?", default=True,
+            detail="Windows seems to be installed on this computer and to stay on it. It keeps local time in the hardware clock, while Linux normally keeps UTC; "
+                   "if the two disagree, the clock is wrong by some hours after you switch between them. Answer yes if you will use both.")
         return True
 
     # --- the review -----------------------------------------------------------------------------------------------------------------

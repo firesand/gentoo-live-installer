@@ -464,8 +464,10 @@ def accounts(user: str = "alice", root_mode: str = "1") -> list[tuple[str, Any]]
     ]
 
 
-def region() -> list[tuple[str, Any]]:
-    return [("Step 8 of 9: Time zone", "5"), ("Choose your time zone", "berlin"), ("Which language", "de_DE")]
+def region(clock: str | None = None) -> list[tuple[str, Any]]:
+    """Step 8; ``clock`` is the answer to the hardware clock question that only a computer with Windows on it is asked."""
+    asked = [] if clock is None else [("Keep the hardware clock in local time?", clock)]
+    return [("Step 8 of 9: Time zone", "5"), ("Choose your time zone", "berlin"), ("Which language", "de_DE"), *asked]
 
 
 def walk_to_review(disk: str = "1", *, approve: str | None = None, luks: str | None = None, desktop: str = "", user: str = "alice") -> list[tuple[str, Any]]:

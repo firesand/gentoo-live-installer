@@ -10,6 +10,7 @@ import pytest
 
 from gentoo_installer.manifest import InstallManifest
 from gentoo_installer.textui.inventory import MachineView
+from gentoo_installer.textui.wizard import keeps_windows
 
 from tests.hardware.helpers import FIXTURE_NAMES
 from tests.textui.support import END, FakeHost, Script, accounts, inspect_reply, region, run_main, to_disk_step
@@ -25,7 +26,9 @@ def answers_for(view: MachineView) -> tuple[list[tuple[str, object]], str]:
         steps.append(("neither a serial number nor a WWN", "y"))
     if entry.disk.removable or entry.disk.hotplug:
         steps.append(("start this system on other computers", "n"))
-    steps += [("Step 5 of 9", ""), ("Encrypt", ""), ("Step 6 of 9", ""), ("init system", ""), *accounts(), *region(), ("type the disk name exactly", entry.disk.path), ("The installation", "4")]
+    windows = keeps_windows(view, entry.disk.path)  # a PC that keeps Windows is asked about the clock
+    steps += [("Step 5 of 9", ""), ("Encrypt", ""), ("Step 6 of 9", ""), ("init system", ""), *accounts(), *region("n" if windows else None),
+              ("type the disk name exactly", entry.disk.path), ("The installation", "4")]
     return steps, entry.disk.path
 
 

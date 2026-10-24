@@ -622,3 +622,52 @@ def test_a_disk_whose_serial_number_is_shared_needs_the_hardware_path(start) -> 
     storage = wizard.manifest.storage
     assert storage.device_id_kind == "path" and storage.device_id.startswith("pci-0000:00:14.0-usb-0:sdc|")
     assert "cannot tell them apart" in script.flat
+
+
+def windows_next_to_the_target() -> dict:
+    """A virtual machine whose second disk holds a Windows partition and whose firmware lists Windows Boot Manager."""
+    from gentoo_installer import blockdev
+
+    reply = inspect_reply("qemu-q35-virtio", serials={"/dev/vda": "VDA-SERIAL-0001"})
+    reply["hardware"]["firmware"]["windows_boot_entry"] = True
+    windows = blockdev.BlockDevice(name="sdc", path="/dev/sdc", type="disk", size=100 * GIB, serial="WIN-1", maj_min=device_number("sdc"),
+                                   children=(blockdev.BlockDevice(name="sdc1", path="/dev/sdc1", type="part", size=90 * GIB, fstype="ntfs", maj_min=device_number("sdc1")),))
+    reply["disks"].append(windows.to_dict())
+    return reply
+
+
+def test_a_computer_that_keeps_windows_is_asked_about_the_hardware_clock(start) -> None:
+    wizard, script, _ = start([("Where are you", ""), ("Which language", ""), ("Keep the hardware clock in local time?", "y")], windows_next_to_the_target())
+    wizard.manifest.storage.device = "/dev/vda"
+    wizard.step_region()
+    assert wizard.manifest.system.rtc_local is True and "Windows seems to be installed" in script.flat
+    plain, script2, _ = start([("Where are you", ""), ("Which language", "")])
+    plain.step_region()
+    assert plain.manifest.system.rtc_local is False and "hardware clock" not in script2.flat
+
+
+def test_erasing_the_windows_disk_is_not_a_dual_boot(start) -> None:
+    wizard, script, _ = start([("Where are you", ""), ("Which language", "")], windows_next_to_the_target())
+    wizard.manifest.storage.device = "/dev/sdc"  # the disk with Windows is the one being erased
+    wizard.step_region()
+    assert wizard.manifest.system.rtc_local is False and "hardware clock" not in script.flat
+
+
+def test_a_clock_that_is_already_in_local_time_is_a_reason_to_ask(start) -> None:
+    reply = inspect_reply("qemu-q35-virtio", serials={"/dev/vda": "VDA-SERIAL-0001"})
+    reply["hardware"]["clock"]["rtc_mode"] = "local"
+    wizard, script, _ = start([("Where are you", ""), ("Which language", ""), ("hardware clock in local time", "n")], reply)
+    wizard.manifest.storage.device = "/dev/vda"
+    wizard.step_region()
+    assert wizard.manifest.system.rtc_local is False
+
+
+def test_advice_about_choices_the_text_installer_does_not_offer_says_so(installer, host: FakeHost) -> None:
+    from gentoo_installer.textui.summary import ONLY_ELSEWHERE, build_summary
+    from tests.textui.support import valid_manifest
+
+    reply = inspect_reply("asus-desktop-rtx4090")
+    view = MachineView(reply)
+    manifest = valid_manifest("/dev/nvme0n1")
+    advice = build_summary(manifest, view).advice
+    assert any("NVIDIA proprietary driver" in item and item.endswith(ONLY_ELSEWHERE) for item in advice)
