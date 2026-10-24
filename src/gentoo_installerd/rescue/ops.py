@@ -33,6 +33,8 @@ class RescueEvent(Event):
         result = super().to_dict()
         if self.seq:
             result["seq"] = self.seq
+        else:
+            result.pop("seq", None)  # an event outside a job has no sequence number (docs/protocol.md)
         return result
 
 
