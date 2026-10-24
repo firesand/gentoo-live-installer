@@ -10,7 +10,10 @@ from __future__ import annotations
 import io
 import tarfile
 import time
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
+
+from gentoo_installer.layout import human_size
 
 from . import efi as efimod
 from .audit import tail
@@ -28,7 +31,8 @@ if TYPE_CHECKING:  # pragma: no cover
     from .manager import RescueManager
 
 LOG_RATE = 50  # log lines per second per operation
-MAX_BACKUP_BYTES = 64 << 20
+MAX_BACKUP_BYTES = 64 << 20  # what the ESP backup holds at most
+MAX_BACKUP_FILE = 16 << 20  # a single file above this is left out: firmware capsules and recovery images, not boot loaders
 
 
 class PlanExecutor:
@@ -88,6 +92,8 @@ class PlanExecutor:
         try:
             if step.id == SMOKE_ID:
                 rc, output = self._smoke(step)
+            elif step.handler == "backup-esp":
+                rc, output = self._backup_esp(step)
             else:
                 rc, output = self.session.run_step(step, runner, self.secrets)
         except RescueError as exc:
@@ -107,7 +113,7 @@ class PlanExecutor:
         self.op.stage("step", step.display, progress, step=step.id, status=status, rc=rc, duration=duration, **({"error": error} if error else {}))
         self.results.append({"id": step.id, "status": status, "rc": rc, "duration": duration, **({"error": error} if error else {})})
         if not ok and step.on_fail == "continue":
-            self.plan.warnings.append(f"{step.display} did not succeed (exit code {rc}); the plan continued")
+            self.plan.warnings.append(f"{step.display} did not succeed (exit code {rc}{': ' + error if error else ''}); the plan continued")
             return True
         return ok
 
@@ -123,6 +129,12 @@ class PlanExecutor:
 
     # ---- internal steps that need the executor ---------------------------------------------------------------------------------------------
     # (the session handles check-idle, resolv-bind and cmdline-bind; the ESP backup lives here because it writes a tar archive)
+    def _backup_esp(self, step: Step) -> tuple[int, str]:
+        backup = backup_esp(self.session, step.args["mountpoint"])
+        if backup.skipped:
+            shown = ", ".join(backup.skipped[:3]) + (f" and {len(backup.skipped) - 3} more" if len(backup.skipped) > 3 else "")
+            self.plan.warnings.append(f"Files over {MAX_BACKUP_FILE >> 20} MiB, and what does not fit in {MAX_BACKUP_BYTES >> 20} MiB, are not copied into the backup of the EFI partition: {shown}.")
+        return 0, f"saved {backup.path}"
 
     # ---- the plan ----------------------------------------------------------------------------------------------------------------------------
     def execute(self) -> dict[str, Any]:
@@ -247,31 +259,49 @@ class PlanExecutor:
         return result.stdout, result.returncode
 
 
-def backup_esp(session: RescueSession, mountpoint: str) -> str:
-    """Archive <ESP>/EFI into the repaired system (internal step handler); returns the archive path."""
+@dataclass
+class EspBackup:
+    path: str
+    skipped: list[str] = field(default_factory=list)  # 'EFI/HP/capsule.cap (66.0 MiB)': what was left out
+
+
+def backup_esp(session: RescueSession, mountpoint: str) -> EspBackup:
+    """Archive <ESP>/EFI into the repaired system (internal step handler).
+
+    A safety net, not a condition: an ESP with Windows and an OEM's firmware capsules is bigger than any backup should be, and that must not stop a repair.
+    Files above ``MAX_BACKUP_FILE`` are left out; of the rest the smallest go in first (boot loaders before payloads) until ``MAX_BACKUP_BYTES`` is full.
+    """
     with session.fs(writable=True) as fs:
+        files: list[tuple[int, str]] = []
         buffer = io.BytesIO()
-        total = 0
-        with tarfile.open(fileobj=buffer, mode="w:gz") as archive, fs.sub(mountpoint) as esp:
-            def add(directory: str) -> None:
-                nonlocal total
+        with fs.sub(mountpoint) as esp:
+            def walk(directory: str) -> None:
                 for name in esp.listdir_or(directory):
                     path = f"{directory.rstrip('/')}/{name}"
                     if esp.is_dir(path) and not esp.is_symlink(path):
-                        add(path)
+                        walk(path)
                     elif esp.is_file(path) and not esp.is_symlink(path):
-                        data = esp.read_bytes(path, MAX_BACKUP_BYTES)
-                        total += len(data)
-                        if total > MAX_BACKUP_BYTES:
-                            raise RescueError("precondition_failed", "The EFI partition holds more than 64 MiB; it is not backed up automatically")
-                        info = tarfile.TarInfo(path.lstrip("/"))
-                        info.size = len(data)
-                        info.mtime = int(session.env.clock())
-                        info.mode = 0o644
-                        archive.addfile(info, io.BytesIO(data))
+                        files.append((esp.stat(path).st_size, path))
 
-            add("/EFI")
+            walk("/EFI")
+            chosen: list[str] = []
+            skipped: list[str] = []
+            total = 0
+            for size, path in sorted(files):
+                if size > MAX_BACKUP_FILE or total + size > MAX_BACKUP_BYTES:
+                    skipped.append(f"{path.lstrip('/')} ({human_size(size)})")
+                else:
+                    chosen.append(path)
+                    total += size
+            with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+                for path in sorted(chosen):
+                    data = esp.read_bytes(path, MAX_BACKUP_FILE)
+                    info = tarfile.TarInfo(path.lstrip("/"))
+                    info.size = len(data)
+                    info.mtime = int(session.env.clock())
+                    info.mode = 0o644
+                    archive.addfile(info, io.BytesIO(data))
         stamp = time.strftime("%Y%m%dT%H%M%SZ", time.gmtime(session.env.clock()))
         result = fs.write_atomic(f"/var/lib/gentoo-rescue/backups/esp-{stamp}.tar.gz", buffer.getvalue(), mode=0o600, uid=0, gid=0, parents=True)
-        session.audit.record("file", op="backup-esp", path=result.path, after=result.after_sha256, sync=True)
-        return result.path
+        session.audit.record("file", op="backup-esp", path=result.path, after=result.after_sha256, skipped=skipped, sync=True)
+        return EspBackup(result.path, sorted(skipped))

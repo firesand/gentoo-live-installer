@@ -182,6 +182,71 @@ def test_reinstalling_grub_for_uefi_keeps_the_existing_id_and_backs_up_the_esp(l
         assert "EFI/Gentoo/grubx64.efi" in archive.getnames() and "EFI/BOOT/BOOTX64.EFI" in archive.getnames()
 
 
+def test_a_big_esp_is_backed_up_as_far_as_it_goes_and_the_plan_goes_on(lab_factory) -> None:
+    """Windows plus an OEM payload: a 66 MiB firmware capsule used to stop every boot loader plan with 'not backed up automatically' before anything was written."""
+    import tarfile
+
+    lab, tree = uefi_gentoo_lab(lab_factory)
+    esp = lab.system.device_trees["/dev/nvme0n1p1"]
+    fr.put(esp, "EFI/Microsoft/Boot/bootmgfw.efi", size=1_700_000)
+    fr.put(esp, "EFI/HP/BIOSUpdate/capsule.cap", size=66 << 20)
+    manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    plan, result, _ = plan_and_run(manager, sid, "boot.bootloader")
+    assert result["outcome"] == "success", result
+    assert ("grub-install", "--target=x86_64-efi", "--efi-directory=/efi", "--bootloader-id=Gentoo", "--recheck") in chroot_commands(lab)
+    assert [step["status"] for step in result["steps"] if step["id"].startswith("i")] == ["completed"]
+    assert any("EFI/HP/BIOSUpdate/capsule.cap" in warning and "not copied into the backup" in warning for warning in result["warnings"])
+    assert "16 MiB" in next(step["display"] for step in plan["steps"] if step["display"].startswith("Back up"))  # the plan says what the backup leaves out
+    unmount(manager, sid)
+    [backup] = list((tree / "var/lib/gentoo-rescue/backups").glob("esp-*.tar.gz"))
+    with tarfile.open(backup) as archive:
+        names = archive.getnames()
+    assert "EFI/Microsoft/Boot/bootmgfw.efi" in names and "EFI/Gentoo/grubx64.efi" in names and "EFI/HP/BIOSUpdate/capsule.cap" not in names
+
+
+def test_the_backup_takes_the_small_files_first_and_never_more_than_its_total(lab_factory, monkeypatch) -> None:
+    import tarfile
+
+    from gentoo_installerd.rescue import executor
+
+    monkeypatch.setattr(executor, "MAX_BACKUP_BYTES", 5000)
+    monkeypatch.setattr(executor, "MAX_BACKUP_FILE", 3000)
+    lab, _tree = uefi_gentoo_lab(lab_factory)
+    esp = lab.system.device_trees["/dev/nvme0n1p1"]
+    for path in list((esp / "EFI").rglob("*")):
+        if path.is_file():
+            path.unlink()
+    fr.put(esp, "EFI/a/small.efi", size=1000)
+    fr.put(esp, "EFI/a/middle.efi", size=2500)
+    fr.put(esp, "EFI/b/other.efi", size=2500)
+    fr.put(esp, "EFI/b/huge.cap", size=4000)  # over the limit for one file
+    fr.put(esp, "EFI/z/last.efi", size=1500)
+    manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    plan_and_run(manager, sid, "session.enter_write")
+    session = manager.session(sid)
+    backup = executor.backup_esp(session, "/efi")
+    assert sorted(item.split(" ")[0] for item in backup.skipped) == ["EFI/b/huge.cap", "EFI/b/other.efi"]  # the biggest go first when the total is full, and a single big file always
+    with tarfile.open(Path(session.root) / backup.path.lstrip("/")) as archive:
+        sizes = {member.name: member.size for member in archive.getmembers()}
+    assert sizes == {"EFI/a/small.efi": 1000, "EFI/z/last.efi": 1500, "EFI/a/middle.efi": 2500} and sum(sizes.values()) <= 5000
+    unmount(manager, sid)
+
+
+def test_a_backup_that_cannot_be_written_is_a_warning_and_the_repair_goes_on(lab_factory, monkeypatch) -> None:
+    from gentoo_installerd.rescue import executor
+
+    def no_room(session, mountpoint):
+        raise OSError(28, "No space left on device")
+
+    monkeypatch.setattr(executor, "backup_esp", no_room)
+    lab, _tree = uefi_gentoo_lab(lab_factory)
+    manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    plan, result, _ = plan_and_run(manager, sid, "boot.bootloader")
+    assert result["outcome"] == "success" and ("grub-install", "--target=x86_64-efi", "--efi-directory=/efi", "--bootloader-id=Gentoo", "--recheck") in chroot_commands(lab)
+    assert any("Back up /efi/EFI" in warning and "No space left on device" in warning and "the plan continued" in warning for warning in result["warnings"])
+    unmount(manager, sid)
+
+
 def test_grub_removable_fallback_when_asked(lab_factory) -> None:
     lab, tree = uefi_gentoo_lab(lab_factory)
     manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")

@@ -546,7 +546,7 @@ class RescueSession:
         if step.handler == "backup-esp":
             from .executor import backup_esp
 
-            return f"saved {backup_esp(self, step.args['mountpoint'])}"
+            return f"saved {backup_esp(self, step.args['mountpoint']).path}"
         raise RescueError("internal", f"Unknown internal step {step.handler}")
 
     def _resolv_source(self) -> tuple[str, str]:
