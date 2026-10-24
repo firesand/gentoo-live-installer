@@ -325,7 +325,9 @@ about hardware. Its public API only grows:
   package and the first error line of its log, or says that its compiler was killed for lack of
   memory (`kind == "memory"`). `Configurer.explain(exception_or_output)` does that with
   `Configurer.build_log_tail(path)`, which reads the log below the target root and never outside it.
-  Every emerge of the installer goes through `explain`.
+  Every failure the Configurer retries or degrades on goes through `explain`, and so does the
+  hardware driver step of the kernel stage; a failed emerge of the other kernel and bootloader steps
+  still ends the job with the plain command error.
 * `Configurer.emerge(..., one_job=True)` is the retry of a build that was killed for lack of
   memory (one compile job, one package at a time); `install_essential` and `emerge_keep_going` use it
   once and then stop: when the packages already had one job (`compile_jobs(package)` reads MAKEOPTS and
