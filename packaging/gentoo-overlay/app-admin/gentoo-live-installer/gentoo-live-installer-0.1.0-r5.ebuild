@@ -41,6 +41,7 @@ RDEPEND="
 	sys-fs/e2fsprogs
 	sys-fs/lvm2
 	sys-fs/mdadm
+	sys-process/lsof
 	sys-process/psmisc
 	virtual/udev
 	x11-apps/setxkbmap

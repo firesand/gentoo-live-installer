@@ -50,7 +50,7 @@ required_commands=(
 	smartctl nvme hdparm lshw lspci lsusb dmidecode ddrescue testdisk fuser
 	cpuid2cpuflags setxkbmap xrandr xset
 	# helpers
-	chronyd jq pv links gpg gpgv tar rsync gparted
+	chronyd chronyc jq pv links gpg gpgv tar rsync gparted lsof lvs lscpu
 )
 for command_name in "${required_commands[@]}"; do
 	command -v "${command_name}" >/dev/null 2>&1 || fail "Required live tool is missing: ${command_name}"

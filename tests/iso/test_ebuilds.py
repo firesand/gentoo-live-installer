@@ -69,6 +69,9 @@ TOOL_PACKAGE = {
     "cpuid2cpuflags": "app-portage/cpuid2cpuflags", "setxkbmap": "x11-apps/setxkbmap", "xrandr": "x11-apps/xrandr",
     "lspci": "sys-apps/pciutils", "smartctl": "sys-apps/smartmontools", "nvme": "sys-apps/nvme-cli", "fuser": "sys-process/psmisc",
     "dosfsck": "sys-fs/dosfstools", "e2fsck": "sys-fs/e2fsprogs", "mkfs.fat": "sys-fs/dosfstools",
+    # storage preflight and clean-up: holders, device-mapper maps, Btrfs, wiping
+    "wipefs": "sys-apps/util-linux", "blkdiscard": "sys-apps/util-linux", "lscpu": "sys-apps/util-linux", "lsof": "sys-process/lsof",
+    "dmsetup": "sys-fs/lvm2", "lvs": "sys-fs/lvm2", "btrfs": "sys-fs/btrfs-progs",
 }
 
 

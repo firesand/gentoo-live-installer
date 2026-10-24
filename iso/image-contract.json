@@ -94,7 +94,7 @@
       "efibootmgr", "grub-install", "os-prober", "mokutil", "sbverify", "sbsign",
       "smartctl", "nvme", "hdparm", "lshw", "lspci", "lsusb", "dmidecode", "ddrescue", "testdisk", "fuser",
       "cpuid2cpuflags", "setxkbmap", "xrandr", "xset", "chronyd", "jq", "pv", "links", "gpg", "gpgv",
-      "tar", "rsync", "gparted", "loadkeys", "nmtui", "nmcli"
+      "tar", "rsync", "gparted", "lsof", "lvs", "lscpu", "chronyc", "loadkeys", "nmtui", "nmcli"
     ],
     "implicit_services": [["autoconfig", "default"], ["xdm", "default"], ["fixinittab", "default"], ["syslog-ng", "default"]],
     "forbidden_services": ["acpid"],
