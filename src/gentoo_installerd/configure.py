@@ -150,6 +150,12 @@ def _require_use(package_use: MutableMapping[str, list[str]], atom: str, *flags:
     current.extend(flag for flag in flags if flag not in current)
 
 
+def _default_use(package_use: MutableMapping[str, list[str]], atom: str, *flags: str) -> None:
+    """Set a flag for atom unless the user already decided it, either way."""
+    current = package_use.setdefault(atom, [])
+    current.extend(flag for flag in flags if flag.lstrip("-") not in {item.lstrip("-") for item in current})
+
+
 def _forbid_use(package_use: MutableMapping[str, list[str]], atom: str, *flags: str) -> None:
     """Make sure every flag is disabled for atom, overriding a user's flag."""
     current = package_use.setdefault(atom, [])
@@ -863,9 +869,6 @@ class Configurer:
         if system.bootloader == "grub" and system.dual_boot:
             # os-prober needs grub's mount support to read the other systems' filesystems.
             _require_use(package_use, "sys-boot/grub", "mount")
-        if options.microcode:
-            _require_use(package_use, "sys-kernel/linux-firmware", "initramfs", "redistributable")
-            _require_use(package_use, "sys-firmware/intel-microcode", "initramfs")
         if system.uki or system.bootloader == "systemd-boot":
             atom = "sys-apps/systemd" if system.init == "systemd" else "sys-apps/systemd-utils"
             boot_flags = ["boot", *(["kernel-install"] if system.init == "openrc" else []), *(["ukify"] if system.uki else [])]
@@ -877,6 +880,9 @@ class Configurer:
             _require_use(package_use, "dev-qt/qtbase", "opengl")
             _require_use(package_use, "dev-qt/qttools", "opengl")
             _require_use(package_use, "x11-libs/libxkbcommon", "X")
+            # NVIDIA sensors need NVML, which needs the licence-masked proprietary driver: the hardware plan
+            # turns that flag on when the driver is really installed. USB sensors (liquidctl) are optional.
+            _default_use(package_use, "app-misc/hwmonux", "-nvidia", "liquidctl")
         if options.install_hwmonux or options.install_portagehub:
             # Both companions can pull in Mesa[X], which requires libglvnd[X] on the minimal profile.
             _require_use(package_use, "media-libs/libglvnd", "X")
@@ -902,20 +908,10 @@ class Configurer:
                 _require_use(package_use, atom, *flags)
         return package_use
 
-    def package_license_lines(self, manifest: InstallManifest) -> list[str]:
-        lines: list[str] = []
-        if manifest.options.firmware or manifest.options.microcode:
-            lines.append("sys-kernel/linux-firmware linux-fw-redistributable")
-        if manifest.options.microcode:
-            lines.append("sys-firmware/intel-microcode intel-ucode")
-        return lines
-
     def configure_portage(self, manifest: InstallManifest, plan: object | None = None) -> None:
         plan = self._plan(plan)
         self.write("etc/portage/make.conf", render_make_conf(manifest, plan, make_opts=self.effective_make_opts(manifest, plan)))
         self.write("etc/portage/package.use/installer", render_package_use(self.package_use_table(manifest, plan)))
-        licenses = self.package_license_lines(manifest)
-        self.write("etc/portage/package.license/installer", "\n".join(licenses) + ("\n" if licenses else ""))
         hardware_use = getattr(plan, "package_use", None)
         if hardware_use:
             # Alphabetically after "installer", so within one directory the hardware lines win.
@@ -1148,13 +1144,8 @@ class Configurer:
     # ----- package sets ------------------------------------------------------------------------
 
     def early_boot_atoms(self, manifest: InstallManifest, plan: object | None = None) -> list[str]:
-        atoms: list[str] = []
-        if manifest.options.firmware or manifest.options.microcode:
-            atoms.append("sys-kernel/linux-firmware")
-        if manifest.options.microcode:
-            atoms.append("sys-firmware/intel-microcode")
-        atoms.extend(str(atom) for atom in _plan_list(self._plan(plan), "early_atoms"))
-        return list(dict.fromkeys(atoms))
+        """Firmware and microcode: the hardware plan decides (it reads options.firmware and options.microcode)."""
+        return list(dict.fromkeys(str(atom) for atom in _plan_list(self._plan(plan), "early_atoms")))
 
     def filesystem_atoms(self, manifest: InstallManifest, layout: Sequence[LayoutEntry] = ()) -> list[str]:
         """Userland for the filesystems in use, so the installed system can check and repair them."""
@@ -1249,7 +1240,7 @@ class Configurer:
         if system.desktop == "kde":
             result.required.extend((
                 "kde-plasma/plasma-meta", "kde-apps/kde-apps-meta" if options.kde_apps == "full" else "kde-apps/kdecore-meta",
-                "gui-apps/sddm", "x11-base/xorg-server", "sys-power/power-profiles-daemon"))
+                "gui-apps/sddm", "x11-base/xorg-server"))
         elif system.desktop == "gnome":
             result.required.extend(("gnome-base/gnome", "gnome-base/gdm", "x11-base/xorg-server"))
         elif system.desktop == "xfce":

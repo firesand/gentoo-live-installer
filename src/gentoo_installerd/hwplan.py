@@ -233,7 +233,7 @@ def nvidia_decision(manifest: InstallManifest, hw: HardwareProfile) -> NvidiaDec
     if manifest.system.secure_boot:
         errors.append(Issue("hw.nvidia_secure_boot", "error", "The proprietary NVIDIA driver cannot be used together with Secure Boot signing: its kernel modules would be unsigned "
                             "and refused. Turn Secure Boot signing off or use the open driver."))
-    if not portable and not gpus:
+    if not portable and not gpus and _detected(hw):  # a probe that found nothing at all cannot tell
         errors.append(Issue("hw.nvidia_no_gpu", "error", "The proprietary NVIDIA driver was selected but no NVIDIA graphics card was found in this PC. "
                             "Choose the open driver, or select 'portable' if the disk will run on another computer."))
     explicit = choice.nvidia_branch
@@ -629,6 +629,9 @@ class _Planner:
         elif hypervisor == "vmware":
             # Never add vmware to VIDEO_CARDS: open-vm-tools[resolutionkms] needs mesa[-video_cards_vmware].
             self.p.optional_atoms.append(A_VMTOOLS)
+            if not graphical:
+                # The resolution plugin is for graphical sessions; it would pull the whole X server into a console-only system.
+                self.use(A_VMTOOLS, "-resolutionkms")
             self.service("vmware-tools" if self.init == "openrc" else "vmtoolsd", optional=True)
             if self.init == "systemd":
                 self.service("vgauthd", optional=True)

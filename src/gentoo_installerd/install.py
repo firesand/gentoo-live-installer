@@ -3,7 +3,6 @@ from __future__ import annotations
 import errno
 import fcntl
 import hashlib
-import importlib
 import json
 import logging
 import os
@@ -20,8 +19,10 @@ from urllib.parse import urlsplit
 from gentoo_installer.manifest import InstallManifest
 
 from . import __version__
-from .configure import RECEIPT_PATH, Configurer, PackageInstallError, render_fstab
+from .configure import RECEIPT_PATH, Configurer, PackageInstallError, live_input_problems, render_fstab
 from .events import ErrorCode, Event, EventSink
+from .hwplan import PLAN_SCHEMA, HardwarePlan, blocking_issues
+from .hwplan import plan as plan_hardware
 from .inspect import Discovery, Inspection
 from .proxy import proxy_environment
 from .runner import DryRunRunner, InstallCancelled, Runner, RunnerError, SubprocessRunner, redact_text
@@ -80,6 +81,55 @@ def stage_weights(desktop: str = "") -> dict[str, int]:
 # "emerge --verbose" announces every package as ">>> Emerging (3 of 10) cat/pkg-1.2::repo".
 EMERGE_PROGRESS = re.compile(r"^>>> Emerging(?: binary)? \((\d+) of (\d+)\)")
 LOG_DIRECTORY_IN_TARGET = "var/log/gentoo-installer"
+
+
+# More than this and TLS certificates, signatures and Portage timestamps start to disagree with the mirror.
+CLOCK_TOLERANCE_SECONDS = 600
+
+
+def describe_clock_offset(seconds: float) -> str:
+    """"20 minutes", "5 hours" or "3 days" for a clock that is off by ``seconds``."""
+    minutes = round(seconds / 60)
+    if minutes < 120:
+        return f"{max(minutes, 1)} minutes"
+    hours = round(seconds / 3600)
+    return f"{hours} hours" if hours < 48 else f"{round(seconds / 86400)} days"
+
+
+def error_code(exc: BaseException) -> str:
+    """The data.code of a failure: an exception that names its own (StorageError: storage.*) keeps it."""
+    code = getattr(exc, "code", None)
+    return code if isinstance(code, str) and code.startswith(("storage.", "install.", "proto.")) else ErrorCode.FAILED
+
+
+def tools_for_selection(manifest: InstallManifest) -> set[str]:
+    """Programs of the live system that this configuration will run, so a missing one is found before any disk is touched.
+
+    Signing tools are not among them: Secure Boot images are signed inside the new system, after
+    app-crypt/sbsigntools was installed there.
+    """
+    storage, system = manifest.storage, manifest.system
+    tools: set[str] = set()
+    if storage.firmware == "uefi":
+        tools.add("mkfs.vfat")
+    if storage.filesystem in {"xfs", "btrfs"}:
+        tools.add("mkfs." + storage.filesystem)
+    if storage.filesystem == "btrfs" and storage.mode == "erase":
+        tools.add("btrfs")  # subvolumes and the swap file of an encrypted install
+    for partition in storage.partitions:
+        if partition.format and partition.filesystem in {"ext4", "xfs", "btrfs", "vfat"}:
+            tools.add("mkfs." + partition.filesystem)
+    if storage.swap_mib or any(p.filesystem == "swap" for p in storage.partitions):
+        tools.update(("swapon", "swapoff"))
+    if storage.luks:
+        tools.add("cryptsetup")
+    if storage.lvm:
+        tools.update(("pvcreate", "vgcreate", "lvcreate", "pvs", "vgchange"))
+    if storage.raid_level:
+        tools.add("mdadm")
+    if system.bootloader == "efi-stub":
+        tools.add("efibootmgr")
+    return tools
 
 
 class InstallError(RuntimeError):
@@ -276,6 +326,8 @@ class Installer:
         storage: StorageManager | None = None,
         stage3: Stage3Manager | None = None,
         configurer: Configurer | None = None,
+        allow_unverified_disk: bool = False,
+        live_root: str | Path = "/",
     ) -> None:
         manifest.require_valid()
         self.manifest = manifest
@@ -324,12 +376,21 @@ class Installer:
         }
         self.checkpoints = CheckpointStore(self.state_dir / "checkpoints.json", fingerprint, secret_groups)
         self.inspector = inspector or Discovery(self.runner)
-        self.storage = storage or StorageManager(self.runner, self.target_root)
+        self.storage = storage or StorageManager(self.runner, self.target_root, allow_unverified_disk=allow_unverified_disk)
         self.stage3 = stage3 or Stage3Manager(self.runner, cache_dir, cancel=self.cancel)
         self.configurer = configurer or Configurer(self.runner, self.target_root, dry_run=dry_run)
         self.inspection: Inspection | None = None
+        self.hardware_plan: HardwarePlan | None = None
+        self._plan_attempted = False
+        # Where the live system's zone, keymap and locale lists are looked up (a test points it elsewhere).
+        self.live_root = Path(live_root)
         self._cleanup_done = False
         self._failed = False
+        # The bootloader stage completed: the disk boots, whatever happens to the stages after it.
+        self._bootable = False
+        self._stage3_archive: Path | None = None
+        # Texts for completed.data.warnings: things that went wrong after the installation itself succeeded.
+        self.warnings: list[str] = []
 
     # ------------------------------------------------------------------ events and log
 
@@ -443,27 +504,37 @@ class Installer:
         except InstallCancelled as exc:
             cancelled = True
             self._failed = True
-            self.emit("error", message=str(exc), error="cancelled", code=ErrorCode.CANCELLED, retryable=True, resumable=self._resumable())
+            self._report_failure(exc, str(exc), ErrorCode.CANCELLED, error="cancelled")
         except InstallBusyError as exc:
             self._failed = True
-            self.emit("error", message=str(exc), error=str(exc), code=ErrorCode.BUSY, retryable=False)
+            self._report_failure(exc, str(exc), ErrorCode.BUSY, retryable=False)
         except Exception as exc:
             self._failed = True
             clean = redact_text(str(exc), self.secrets)
             self.log(f"Installation failed: {clean}")
-            self.emit("error", message=clean, error=clean, code=ErrorCode.FAILED, retryable=True, resumable=self._resumable())
+            self._report_failure(exc, clean, error_code(exc))
         finally:
             self._outcome = "completed" if success else "cancelled" if cancelled else "failed"
+            problem = ""
             try:
                 if locked:
                     self._cleanup()
             except Exception as exc:
-                success = False
+                problem = redact_text(str(exc), self.secrets)
+            if problem and success:
+                # Every stage worked; only releasing the disks failed. The system is installed, so say what to do.
+                warning = (f"{problem} The installation itself is complete. Before you restart, release the disks by hand: "
+                           f"run 'umount -R {self.target_root}' and 'swapoff -a', then 'cryptsetup close' or 'vgchange -an' for an encrypted or LVM root.")
+                self.warnings.append(warning)
+                self.emit("status", "cleanup", warning, warning=True)
+            elif problem:
                 self._failed = True
-                clean = redact_text(str(exc), self.secrets)
-                self.emit("error", stage="cleanup", message=clean, error=clean, code=ErrorCode.CLEANUP_FAILED, retryable=True, resumable=self._resumable())
+                self.emit("error", stage="cleanup", message=problem, error=problem, code=ErrorCode.CLEANUP_FAILED, retryable=True,
+                          resumable=bool(self._resumable()), bootable=self._bootable)
             message = "Installation cancelled" if cancelled else "Installation completed successfully" if success else "Installation failed"
-            self.emit("completed", message=message, progress=100.0 if success else None, success=success, resumable=self._resumable() if not success else None)
+            self.emit("completed", message=message, progress=100.0 if success else None, success=success,
+                      resumable=self._resumable() if not success else None, bootable=self._bootable,
+                      degraded=list(self.degraded), warnings=list(self.warnings))
             LOG.info("Install job %s finished: %s", self.job_id, "success" if success else self._outcome)
             self._release_run_lock()
             if self._log_file:
@@ -472,6 +543,11 @@ class Installer:
                 except Exception:
                     pass
         return success
+
+    def _report_failure(self, exc: BaseException, message: str, code: str, *, error: str | None = None, retryable: bool = True) -> None:
+        """The error event of a failed job: always with the stage, a machine-readable code and what can still be done."""
+        self.emit("error", stage=self._stage or "preflight", message=message, error=message if error is None else error, code=code,
+                  retryable=retryable, resumable=bool(self._resumable()), bootable=self._bootable or bool(getattr(exc, "bootable", False)))
 
     def _resumable(self) -> bool | None:
         """Whether a later run with resume=True can continue (storage was prepared and checkpointed)."""
@@ -540,12 +616,20 @@ class Installer:
                 continue
             if self.resume and self.checkpoints.is_complete(name, verifier):
                 self.emit("stage", name, f"Verified checkpoint; skipping {name}", status="skipped")
+                self._stage_done(name)
                 continue
             self.emit("stage", name, f"Starting {name}", status="running")
             operation()
             if not self.dry_run:
                 self._save_checkpoint(name)
+            self._stage_done(name)
             self.emit("stage", name, f"Completed {name}", status="completed")
+
+    def _stage_done(self, name: str) -> None:
+        if name == "bootloader":
+            self._bootable = True
+        elif name == "stage3":
+            self._discard_stage3_archive()
 
     def _preflight(self) -> None:
         if self.target_root.resolve() == Path("/") or not self.target_root.is_absolute():
@@ -564,7 +648,14 @@ class Installer:
         for warning in self.inspection.warnings:
             self.log(f"Preflight warning: {warning}")
         # Structured findings decide (severity "error" blocks); no message wording is matched.
-        fatal = self.inspection.blocking_errors()
+        hardware = getattr(self.inspection, "hardware", None) or None
+        fatal = [
+            *self.inspection.blocking_errors(),
+            *(issue.message for issue in blocking_issues(self.manifest, hardware)),
+            *live_input_problems(self.manifest, root=self.live_root, runner=self.runner),
+            *self._clock_problems(),
+        ]
+        fatal = list(dict.fromkeys(fatal))
         if fatal and self.dry_run:
             # A preview cannot know the real machine's network, tools or disks: report, never block.
             for error in fatal:
@@ -572,36 +663,33 @@ class Installer:
             fatal = []
         if fatal:
             raise InstallError("Preflight failed: " + "; ".join(fatal))
-        selected_tools: set[str] = set()
-        if self.manifest.storage.firmware == "uefi":
-            selected_tools.add("mkfs.vfat")
-        if self.manifest.storage.filesystem in {"xfs", "btrfs"}:
-            selected_tools.add("mkfs." + self.manifest.storage.filesystem)
-        if self.manifest.storage.filesystem == "btrfs" and self.manifest.storage.mode == "erase":
-            selected_tools.add("btrfs")  # subvolumes and the swap file of an encrypted install
-        for partition in self.manifest.storage.partitions:
-            if partition.format and partition.filesystem in {"ext4", "xfs", "btrfs", "vfat"}:
-                selected_tools.add("mkfs." + partition.filesystem)
-        if self.manifest.storage.swap_mib or any(p.filesystem == "swap" for p in self.manifest.storage.partitions):
-            selected_tools.update(("swapon", "swapoff"))
-        if self.manifest.storage.luks:
-            selected_tools.add("cryptsetup")
-        if self.manifest.storage.lvm:
-            selected_tools.update(("pvcreate", "vgcreate", "lvcreate", "pvs", "vgchange"))
-        if self.manifest.storage.raid_level:
-            selected_tools.add("mdadm")
-        if self.manifest.system.secure_boot:
-            selected_tools.update(("sbsign", "sbverify"))
-        if self.manifest.system.bootloader == "efi-stub":
-            selected_tools.add("efibootmgr")
-        missing = sorted(tool for tool in selected_tools if self.inspection.tools.get(tool) is False)
+        missing = sorted(tool for tool in tools_for_selection(self.manifest) if self.inspection.tools.get(tool) is False)
         if missing and self.dry_run:
             self.log("[dry-run] selected configuration needs tools missing on this machine: " + ", ".join(missing))
         elif missing:
             raise InstallError("Selected configuration needs missing tools: " + ", ".join(missing))
         if self.manifest.system.kernel == "manual":
             self.log("Manual kernel selected: installation will stop at the kernel stage with interactive instructions")
-        self.emit("progress", "preflight", "System readiness checked", 5.0, inspection=self.inspection.to_dict())
+        plan = self._plan()
+        setup = list(plan.summary) if plan is not None else []
+        for line in setup:
+            self.log(f"Hardware setup: {line}")
+        for note in plan.notes if plan is not None else []:
+            self.log(f"Hardware note: {note}")
+        # The probe's full result went to the client with the inspect reply; the event keeps the summary.
+        found = self.inspection.to_dict()
+        found.pop("hardware", None)
+        self.emit("progress", "preflight", "System readiness checked", 5.0, inspection=found, hardware_setup=setup)
+
+    def _clock_problems(self) -> list[str]:
+        """A clock that is far off breaks certificate and signature checks, so say so before anything is changed."""
+        if self.dry_run or self.inspection is None:
+            return []
+        # skew_seconds is the mirror's time minus this computer's clock (Discovery asked the mirror; None when it was unreachable).
+        skew = (getattr(self.inspection, "clock", None) or {}).get("skew_seconds")
+        if not isinstance(skew, (int, float)) or abs(skew) <= CLOCK_TOLERANCE_SECONDS:
+            return []
+        return [f"The system clock is off by {describe_clock_offset(abs(skew))}. Set the date or connect to the network so it syncs, then try again."]
 
     def _storage(self) -> None:
         # What will happen to which disk goes into the log before anything is changed. A plan is
@@ -627,34 +715,73 @@ class Installer:
         """Optional pieces that could not be installed; the installation still finishes."""
         return self.__dict__.setdefault("_degraded", [])
 
-    def _plan(self) -> object | None:
-        """The hardware plan (a gentoo_installerd.hwplan.HardwarePlan), or None when there is none.
+    # --- the hardware plan -----------------------------------------------------------------
 
-        _preflight may set ``hardware_plan`` (for example restored from the saved state of a resumed
-        install). Otherwise the plan is made once from the hardware probe of the inspection, when
-        the hwplan module and the probe exist; without a plan the stages behave as they always did.
+    def _plan(self) -> HardwarePlan | None:
+        """What this machine needs on top of the manifest (microcode, firmware, drivers, power, ...).
+
+        Decided once per job from the hardware probe of the inspection, or restored on a resume so
+        that the stages after the interruption follow the decisions of the stages before it. Every
+        installation has a plan: without probe data it is the generic one, which still decides
+        microcode and firmware from the manifest options.
         """
-        plan = getattr(self, "hardware_plan", None)
-        if plan is None and not self.__dict__.get("_plan_attempted"):
+        if self.hardware_plan is None and not self._plan_attempted:
             self._plan_attempted = True
-            plan = self._make_plan()
-            if plan is not None:
-                self.hardware_plan = plan
-        return plan
+            self.hardware_plan = self._restore_plan()
+            if self.hardware_plan is None:
+                self.hardware_plan = self._make_plan()
+                if self.hardware_plan is not None:
+                    self._save_plan(self.hardware_plan)
+        return self.hardware_plan
 
-    def _make_plan(self) -> object | None:
-        hardware = getattr(self.inspection, "hardware", None) if self.inspection is not None else None
-        if not hardware:
-            return None
+    def _make_plan(self) -> HardwarePlan | None:
+        hardware = getattr(self.inspection, "hardware", None) or None
         try:
-            hwplan = importlib.import_module("gentoo_installerd.hwplan")  # written by the hardware planner; may be absent
-        except ImportError:
-            return None
-        try:
-            return hwplan.plan(self.manifest, hardware)
-        except Exception as exc:  # noqa: BLE001 - a planning bug must not stop an install that does not need it
+            return plan_hardware(self.manifest, hardware)
+        except Exception as exc:  # noqa: BLE001 - a planning bug must not stop an install that can go on without it
             self.log(f"WARNING: the hardware-specific setup could not be planned ({exc}); continuing with the generic setup")
+        if hardware is not None:
+            try:
+                return plan_hardware(self.manifest, None)
+            except Exception:  # noqa: BLE001
+                pass
+        self.degraded.append("The hardware-specific setup (microcode, firmware, drivers) could not be planned and was skipped")
+        return None
+
+    @property
+    def plan_path(self) -> Path:
+        return self.state_dir / "hardware-plan.json"
+
+    def _save_plan(self, plan: HardwarePlan) -> None:
+        """Keep the decision (private, bound to this manifest) so a resume does not decide again.
+
+        The file is on the live system only and holds the plan's file contents; the copy that goes
+        to the installed system keeps just their paths and hashes.
+        """
+        if self.dry_run:
+            return
+        record = {"version": 1, "fingerprint": self.checkpoints.fingerprint, "created": _timestamp(), "plan": plan.to_dict()}
+        try:
+            _write_private(self.plan_path, json.dumps(record, indent=2) + "\n")
+        except OSError as exc:
+            self.log(f"WARNING: the hardware-specific setup could not be saved ({exc}); a resume will decide it again")
+
+    def _restore_plan(self) -> HardwarePlan | None:
+        """The plan an earlier run of this job decided, or None when this is not a resume or none was saved."""
+        if not self.resume or self.dry_run:
             return None
+        try:
+            raw = json.loads(self.plan_path.read_text())
+        except FileNotFoundError:
+            self.log("No saved hardware-specific setup was found; deciding it again")
+            return None
+        except (OSError, ValueError) as exc:
+            raise InstallError(f"The saved hardware-specific setup cannot be read ({exc}); start the installation again") from exc
+        plan = raw.get("plan") if isinstance(raw, dict) else None
+        if not isinstance(plan, dict) or raw.get("version") != 1 or raw.get("fingerprint") != self.checkpoints.fingerprint or plan.get("schema") != PLAN_SCHEMA:
+            raise InstallError("The saved hardware-specific setup does not belong to this installation; start the installation again")
+        self.log("Using the hardware-specific setup that was decided when this installation started")
+        return HardwarePlan.from_dict(plan)
 
     def _root_device(self) -> str:
         return next(entry.device for entry in self.storage.layout if entry.mountpoint == "/")
@@ -678,13 +805,23 @@ class Installer:
             extra["proxy"] = self.manifest.network.proxy
         if self.manifest.portage.mirror_fallbacks:
             extra["fallback_mirrors"] = tuple(self.manifest.portage.mirror_fallbacks)
-        self.stage3.install(
+        self._stage3_archive = self.stage3.install(
             self.manifest.portage.mirror,
             self.manifest.system.stage_variant,
             self.target_root,
             lambda current, total: self.emit("progress", "stage3", "Downloading stage3", current * 100 / total if total else None, downloaded=current, total=total),
             **extra,
         )
+
+    def _discard_stage3_archive(self) -> None:
+        """The unpacked stage3 is checkpointed, so the archive can go: the live system keeps its cache in memory."""
+        archive, self._stage3_archive = self._stage3_archive, None
+        if archive is None or self.dry_run:
+            return
+        try:
+            self.stage3.discard(archive)
+        except Exception as exc:  # noqa: BLE001 - a leftover archive costs memory, it must not fail the installation
+            self.log(f"The downloaded stage3 archive could not be removed ({exc})")
 
     def _mounts(self) -> None:
         if not self.dry_run:
@@ -877,6 +1014,8 @@ class Installer:
         self._stage = "cleanup"
         self.emit("stage", "cleanup", "Cleaning up installer-owned mounts", status="running")
         self._preserve_install_log()
+        if not self.dry_run:
+            self.configurer.cleanup_secrets()  # signing keys staged on the live system never outlive the job
         self.storage.cleanup()
         self._cleanup_done = True
         self.emit("stage", "cleanup", "Cleanup completed", status="completed")
@@ -914,6 +1053,10 @@ class Installer:
             _chown_root(temporary)
             os.replace(temporary, directory / "install.log")
             _write_private(directory / "manifest.json", redact_text(self.manifest.to_json(redact=True), self.secrets) + "\n")
+            if self.hardware_plan is not None:
+                # For whoever supports this system later: what was decided, with the paths and hashes of the files but not their contents.
+                plan = {"version": 1, "created": _timestamp(), "plan": self.hardware_plan.to_dict(redact_files=True)}
+                _write_private(directory / "hardware-plan.json", json.dumps(plan, indent=2) + "\n")
             self._write_log_record("cleanup", message=f"Copied the install log to /{LOG_DIRECTORY_IN_TARGET}/install.log in the new system")
         except Exception as exc:
             LOG.warning("Could not copy the install log into the new system: %s", exc)

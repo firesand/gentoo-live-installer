@@ -925,7 +925,8 @@ def _merge_warnings(existing: Any, extra: Iterable[Any]) -> list[dict[str, Any]]
 def handle_inspect(request: dict, channel: Channel) -> None:
     runner = SubprocessRunner()
     data = Discovery(runner).inspect().to_dict()
-    if "hardware" not in data and module_available("gentoo_installer.hardware"):
+    # Discovery probes the hardware itself; this is for an inspector that does not.
+    if "hardware" not in data and "hardware_error" not in data and module_available("gentoo_installer.hardware"):
         try:
             hardware = importlib.import_module("gentoo_installer.hardware")
             profile = hardware.probe(Path("/"), runner).to_dict()
@@ -1227,9 +1228,11 @@ def serve(
         LOG.info("gentoo-installerd stopped")
 
 
-def run_cli(manifest_path: Path, *, dry_run: bool, target_root: Path, state_dir: Path, cache_dir: Path, resume: bool) -> int:
+def run_cli(manifest_path: Path, *, dry_run: bool, target_root: Path, state_dir: Path, cache_dir: Path, resume: bool,
+            allow_unverified_disk: bool = False) -> int:
     manifest = InstallManifest.load(manifest_path)
-    installer = Installer(manifest, target_root=target_root, state_dir=state_dir, cache_dir=cache_dir, dry_run=dry_run, resume=resume, emit=lambda event: print(event.to_json(), flush=True))
+    installer = Installer(manifest, target_root=target_root, state_dir=state_dir, cache_dir=cache_dir, dry_run=dry_run, resume=resume,
+                          allow_unverified_disk=allow_unverified_disk, emit=lambda event: print(event.to_json(), flush=True))
     restore = install_cancel_signals(installer.cancel)
     try:
         return 0 if installer.run() else 1
@@ -1305,6 +1308,9 @@ def build_parser() -> argparse.ArgumentParser:
     mode.add_argument("--dry-run", action="store_true")
     mode.add_argument("--yes", action="store_true", help="Confirm destructive installation without interactive prompts")
     parser.add_argument("--resume", action="store_true")
+    parser.add_argument("--allow-unverified-disk", action="store_true",
+                        help="With --manifest: install even though the manifest does not pin the target disk by serial number, WWN or bus path. "
+                             "Not available to clients of the socket.")
     parser.add_argument("--log-file", type=Path, help="Also write the daemon log to this file (default: stderr only)")
     parser.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"], type=str.upper)
     parser.add_argument("--no-rescue", action="store_true", help="Do not register the rescue actions")
@@ -1327,9 +1333,10 @@ def main(argv: list[str] | None = None) -> int:
                     LOG.error("--manifest requires either --dry-run or explicit --yes")
                     return 2
                 LOG.info("gentoo-installerd %s manifest=%s dry_run=%s resume=%s state=%s target=%s pid=%d", __version__, args.manifest, args.dry_run, args.resume, args.state_dir, args.target_root, os.getpid())
-                return run_cli(args.manifest, dry_run=args.dry_run, target_root=Path(args.target_root), state_dir=Path(args.state_dir), cache_dir=Path(args.cache_dir), resume=args.resume)
-            if args.dry_run or args.yes:
-                LOG.error("--dry-run and --yes require --manifest")
+                return run_cli(args.manifest, dry_run=args.dry_run, target_root=Path(args.target_root), state_dir=Path(args.state_dir), cache_dir=Path(args.cache_dir),
+                               resume=args.resume, allow_unverified_disk=args.allow_unverified_disk)
+            if args.dry_run or args.yes or args.allow_unverified_disk:
+                LOG.error("--dry-run, --yes and --allow-unverified-disk require --manifest")
                 return 2
             LOG.info("gentoo-installerd %s socket=%s group=%s state=%s cache=%s target=%s pid=%d", __version__, args.socket, SOCKET_GROUP, args.state_dir, args.cache_dir, args.target_root, os.getpid())
             serve(args.socket, target_root=args.target_root, state_dir=args.state_dir, cache_dir=args.cache_dir, rescue=not args.no_rescue, options=args)

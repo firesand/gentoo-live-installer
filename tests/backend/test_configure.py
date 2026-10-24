@@ -7,6 +7,7 @@ from pathlib import Path
 
 from gentoo_installer.manifest import Partition
 from gentoo_installerd.configure import ConfigurationError, Configurer, ninja_opts_from_make_opts, render_fstab, render_hosts, render_make_conf, render_netifrc, render_package_use, render_systemd_network
+from gentoo_installerd.hwplan import plan as plan_hardware
 from gentoo_installerd.storage import LayoutEntry
 
 from tests.backend.helpers import FakeRunner, manifest
@@ -402,37 +403,61 @@ class PackageAndServiceTests(unittest.TestCase):
             Configurer(FakeRunner(), root).configure_portage(m)
             self.assertIn("media-libs/libwebp -tiff", (root / "etc/portage/package.use/installer").read_text())
 
-    def test_firmware_and_microcode_use_existing_atoms_and_narrow_licenses(self) -> None:
-        for firmware, microcode, expected_atoms, expected_licenses in (
-            (False, False, [], ""),
+    def test_firmware_and_microcode_come_from_the_hardware_plan_with_narrow_licenses(self) -> None:
+        # configure.py names no firmware or microcode package itself: the plan (here the generic one) decides.
+        for firmware, microcode, expected_atoms, expected_licenses, expected_use in (
+            (False, False, [], "", ""),
             (True, False, ["sys-kernel/linux-firmware"],
-             "sys-kernel/linux-firmware linux-fw-redistributable\n"),
-            (False, True, ["sys-kernel/linux-firmware", "sys-firmware/intel-microcode"],
-             "sys-kernel/linux-firmware linux-fw-redistributable\nsys-firmware/intel-microcode intel-ucode\n"),
-            (True, True, ["sys-kernel/linux-firmware", "sys-firmware/intel-microcode"],
-             "sys-kernel/linux-firmware linux-fw-redistributable\nsys-firmware/intel-microcode intel-ucode\n"),
+             "sys-kernel/linux-firmware linux-fw-redistributable\n", "sys-kernel/linux-firmware redistributable\n"),
+            (False, True, ["sys-firmware/intel-microcode", "sys-kernel/linux-firmware"],
+             "sys-firmware/intel-microcode intel-ucode\nsys-kernel/linux-firmware linux-fw-redistributable\n",
+             "sys-firmware/intel-microcode initramfs\nsys-kernel/linux-firmware initramfs redistributable\n"),
+            (True, True, ["sys-firmware/intel-microcode", "sys-kernel/linux-firmware"],
+             "sys-firmware/intel-microcode intel-ucode\nsys-kernel/linux-firmware linux-fw-redistributable\n",
+             "sys-firmware/intel-microcode initramfs\nsys-kernel/linux-firmware initramfs redistributable\n"),
         ):
             with self.subTest(firmware=firmware, microcode=microcode), tempfile.TemporaryDirectory() as temporary:
                 m = manifest()
                 m.options.firmware = firmware
                 m.options.microcode = microcode
-                m.portage.package_use = {
-                    "sys-kernel/linux-firmware": ["-initramfs", "-redistributable"],
-                    "sys-firmware/intel-microcode": ["-initramfs"],
-                }
+                plan = plan_hardware(m, None)
                 configurer = Configurer(FakeRunner(), temporary)
-                configurer.configure_portage(m)
-                self.assertEqual(configurer.early_boot_atoms(m), expected_atoms)
-                atoms = configurer.package_atoms(m)
+                configurer.configure_portage(m, plan)
+                self.assertEqual(configurer.early_boot_atoms(m, plan), expected_atoms)
+                atoms = configurer.package_atoms(m, plan)
                 self.assertEqual([atom for atom in atoms if atom in expected_atoms], expected_atoms)
                 self.assertNotIn("sys-firmware/amd-ucode", atoms)
                 root = Path(temporary)
-                self.assertEqual((root / "etc/portage/package.license/installer").read_text(), expected_licenses)
+                license_file = root / "etc/portage/package.license/installer-hardware"
+                self.assertEqual(license_file.read_text() if license_file.exists() else "", expected_licenses)
+                self.assertFalse((root / "etc/portage/package.license/installer").exists())  # nothing but the plan names a licence
                 self.assertIn("ACCEPT_LICENSE=@FREE", (root / "etc/portage/make.conf").read_text())
+                use = (root / "etc/portage/package.use/installer-hardware").read_text()
+                self.assertEqual("".join(line + "\n" for line in use.splitlines() if "pipewire" not in line), expected_use)
                 package_use = (root / "etc/portage/package.use/installer").read_text()
-                if microcode:
-                    self.assertIn("sys-kernel/linux-firmware initramfs redistributable", package_use)
-                    self.assertIn("sys-firmware/intel-microcode initramfs", package_use)
+                self.assertNotIn("linux-firmware", package_use)
+                self.assertNotIn("intel-microcode", package_use)
+
+    def test_without_a_plan_configure_decides_nothing_about_hardware(self) -> None:
+        m = manifest()
+        m.options.firmware = m.options.microcode = True
+        with tempfile.TemporaryDirectory() as temporary:
+            configurer = Configurer(FakeRunner(), temporary)
+            configurer.configure_portage(m)
+            self.assertEqual(configurer.early_boot_atoms(m), [])
+            self.assertFalse((Path(temporary) / "etc/portage/package.license").exists())
+            self.assertNotIn("firmware", "".join(configurer.package_atoms(m)))
+
+    def test_a_flag_the_user_set_explicitly_beats_the_plans_flag(self) -> None:
+        m = manifest()
+        m.options.firmware, m.options.microcode = False, True
+        m.portage.package_use = {"sys-kernel/linux-firmware": ["-initramfs"]}
+        plan = plan_hardware(m, None)
+        self.assertEqual(plan.package_use["sys-kernel/linux-firmware"], ["redistributable"])
+        self.assertTrue(any(issue.code == "hw.package_use_conflict" for issue in plan.warnings))
+        with tempfile.TemporaryDirectory() as temporary:
+            Configurer(FakeRunner(), temporary).configure_portage(m, plan)
+            self.assertIn("sys-kernel/linux-firmware -initramfs", (Path(temporary) / "etc/portage/package.use/installer").read_text())
 
 
 class BootloaderTests(unittest.TestCase):

@@ -594,6 +594,19 @@ def default_root(root: Path | str | None = None) -> Path:
     return Path(os.environ.get(ENV_ROOT) or "/")
 
 
+def fixture_now(root: Path | str) -> float | None:
+    """The moment a fixture tree was captured; None for the real machine or a tree without that record.
+
+    The RTC and clock checks only make sense relative to it, so replays pass it to ``probe(now=...)``.
+    """
+    if str(root) == "/":
+        return None
+    try:
+        return float(json.loads((Path(root) / ".capture.json").read_text())["now"])
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Pure parsers
 # ---------------------------------------------------------------------------
@@ -1557,12 +1570,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--now", type=float, help="pretend this is the current time (epoch seconds); defaults to the fixture's capture time")
     args = parser.parse_args(argv)
     root = default_root(Path(args.root) if args.root else None)
-    now = args.now
-    if now is None and str(root) != "/":
-        try:  # a fixture was captured at a fixed moment; the RTC and clock checks only make sense relative to it
-            now = float(json.loads((root / ".capture.json").read_text())["now"])
-        except (OSError, ValueError, KeyError):
-            now = None
+    now = args.now if args.now is not None else fixture_now(root)
     profile = probe(root, now=now)
     if args.json:
         print(json.dumps(profile.to_dict(redact=args.redact), indent=2, sort_keys=True))

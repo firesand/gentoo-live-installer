@@ -8,9 +8,11 @@ written to the target's ``make.conf`` and never appear in logs.
 from __future__ import annotations
 
 import email.utils
+import ssl
 import time
 import urllib.error
 import urllib.request
+from dataclasses import dataclass
 from typing import Callable
 from urllib.parse import SplitResult, urlsplit
 
@@ -90,3 +92,56 @@ def mirror_clock_skew(mirror: str, proxy: str = "", *, timeout: float = 10.0,
     if parsed is None:
         return None
     return before - parsed.timestamp()
+
+
+@dataclass(frozen=True)
+class ClockProbe:
+    """What the mirror's HTTP Date header says about this computer's clock."""
+
+    skew: float | None  # seconds this clock is ahead (+) of or behind (-) the mirror; None when unknown
+    tls_ok: bool | None  # False when the certificate check failed (a clock that is far off does that); None when unknown
+
+
+def _is_certificate_problem(error: BaseException) -> bool:
+    reason = getattr(error, "reason", error)
+    return isinstance(reason, ssl.SSLCertVerificationError) or isinstance(error, ssl.SSLCertVerificationError)
+
+
+def _unverified_opener(proxy: str) -> urllib.request.OpenerDirector:
+    """An opener that does not check the certificate. Only for reading a Date header; nothing it returns is trusted."""
+    context = ssl.create_default_context()
+    context.check_hostname = False
+    context.verify_mode = ssl.CERT_NONE
+    handlers: list[urllib.request.BaseHandler] = [urllib.request.HTTPSHandler(context=context)]
+    if proxy:
+        handlers.append(urllib.request.ProxyHandler({"http": proxy, "https": proxy}))
+    return urllib.request.build_opener(*handlers)
+
+
+def mirror_clock_probe(mirror: str, proxy: str = "", *, timeout: float = 10.0,
+                       now: Callable[[], float] = time.time) -> ClockProbe:
+    """Like mirror_clock_skew, and it still measures the clock when the certificate check fails.
+
+    A PC whose clock battery died (it starts in the year 2000, or the year the firmware was made)
+    cannot verify any HTTPS certificate, which is exactly when the clock has to be reported.
+    """
+    request = urllib.request.Request(mirror.rstrip("/") + "/", method="HEAD", headers={"User-Agent": "gentoo-live-installer/0.1"})
+    tls_ok = True
+    opener = build_opener(proxy)
+    while True:
+        try:
+            before = now()
+            with opener.open(request, timeout=timeout) as response:
+                header = response.headers.get("Date", "")
+            break
+        except (urllib.error.URLError, OSError, ValueError, TypeError) as error:
+            if tls_ok and _is_certificate_problem(error):
+                tls_ok = False  # measure again without the check; only the Date header is used
+                opener = _unverified_opener(proxy)
+                continue
+            return ClockProbe(None, None if tls_ok else False)
+    try:
+        parsed = email.utils.parsedate_to_datetime(header) if header else None
+    except (ValueError, TypeError):
+        parsed = None
+    return ClockProbe(None if parsed is None else before - parsed.timestamp(), tls_ok)

@@ -16,6 +16,7 @@ from gentoo_installerd.configure import (
     render_make_conf,
     render_package_use,
 )
+from gentoo_installerd.hwplan import plan as plan_hardware
 from gentoo_installerd.storage import LayoutEntry
 
 from tests.backend.target_helpers import FakePlan, ScriptedRunner, configurer, mark_installed, read, target_manifest
@@ -189,12 +190,28 @@ class PackageSetTests(unittest.TestCase):
     def test_everything_the_installer_used_to_install_is_still_installed(self) -> None:
         # The union of the new sets covers the previous single package list (CRITIC-2).
         _, _, kde = self.sets(system={"desktop": "kde"}, options={"kde_apps": "full"})
-        for atom in ("net-misc/networkmanager", "sys-kernel/linux-firmware", "sys-firmware/intel-microcode",
+        for atom in ("net-misc/networkmanager",
                      "kde-plasma/plasma-meta", "kde-apps/kde-apps-meta", "gui-apps/sddm", "x11-base/xorg-server",
-                     "sys-power/power-profiles-daemon", "gui-libs/display-manager-init", "media-video/pipewire",
+                     "gui-libs/display-manager-init", "media-video/pipewire",
                      "net-wireless/bluez", "net-wireless/blueman", "net-print/cups", "net-misc/chrony",
                      "sys-process/cronie", "app-shells/bash-completion", "app-admin/syslog-ng", "app-admin/sudo"):
             self.assertIn(atom, kde)
+
+    def test_firmware_microcode_and_power_management_are_the_hardware_plans_to_name(self) -> None:
+        # They used to be listed here for every machine; KDE even installed power-profiles-daemon, which blocks TLP.
+        _, _, kde = self.sets(system={"desktop": "kde"})
+        for atom in ("sys-kernel/linux-firmware", "sys-firmware/intel-microcode", "sys-power/power-profiles-daemon", "sys-power/tlp"):
+            self.assertNotIn(atom, kde)
+        with tempfile.TemporaryDirectory() as temporary:
+            c = configurer(temporary)
+            m = target_manifest(system={"desktop": "kde"})
+            generic = plan_hardware(m, None)
+            self.assertEqual([a for a in c.package_atoms(m, generic) if "firmware" in a or "microcode" in a],
+                             ["sys-firmware/intel-microcode", "sys-kernel/linux-firmware"])
+            laptop = plan_hardware(target_manifest(system={"desktop": "kde"}, hardware={"power": "tlp"}), None)
+            kde_with_tlp = c.package_atoms(m, laptop)
+            self.assertIn("sys-power/tlp", kde_with_tlp)
+            self.assertNotIn("sys-power/power-profiles-daemon", kde_with_tlp)  # tlp[ppd] blocks it
 
     def test_kde_applications_default_to_the_core_set(self) -> None:
         _, core, _ = self.sets(system={"desktop": "kde"})
@@ -249,7 +266,7 @@ class PackageSetTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             c = configurer(temporary)
             m = target_manifest(storage={"luks": True, "lvm": True, "luks_passphrase": "long-enough-passphrase"})
-            plan = FakePlan(early_atoms=["sys-firmware/sof-firmware"])
+            plan = FakePlan(early_atoms=["sys-kernel/linux-firmware", "sys-firmware/sof-firmware"])
             batch = c.kernel_stage_atoms(m, [LayoutEntry("/dev/mapper/gentoo-root", "/", "ext4")], plan)
             self.assertEqual(batch[:2], ["sys-fs/cryptsetup", "sys-fs/lvm2"])
             for atom in ("sys-kernel/linux-firmware", "sys-firmware/sof-firmware", "sys-fs/dosfstools"):
