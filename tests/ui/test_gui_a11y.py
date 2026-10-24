@@ -326,7 +326,7 @@ def test_welcome_offers_install_and_repair(make_window):
 
 def test_repair_without_the_repair_tools_offers_a_terminal_that_runs_the_text_tool(make_window, monkeypatch):
     window = make_window()
-    monkeypatch.delitem(sys.modules, "gentoo_installer.rescue_app", raising=False)
+    monkeypatch.setitem(sys.modules, "gentoo_installer.rescue_app", None)  # the repair window ships now: pretend this build does not contain it
     asked, started = [], []
     monkeypatch.setattr(QMessageBox, "question", lambda parent, title, text, *a, **k: (asked.append((title, text)), QMessageBox.StandardButton.Yes)[1])
     monkeypatch.setattr(app_module.QProcess, "startDetached", staticmethod(lambda program, arguments=[]: (started.append((program, arguments)), True)[1]))
@@ -338,7 +338,7 @@ def test_repair_without_the_repair_tools_offers_a_terminal_that_runs_the_text_to
 
 def test_repair_without_a_terminal_falls_back_to_the_message(make_window, monkeypatch):
     window = make_window()
-    monkeypatch.delitem(sys.modules, "gentoo_installer.rescue_app", raising=False)
+    monkeypatch.setitem(sys.modules, "gentoo_installer.rescue_app", None)  # the repair window ships now: pretend this build does not contain it
     shown, tried = [], []
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Yes)
     monkeypatch.setattr(QMessageBox, "information", lambda parent, title, text, *a, **k: shown.append((title, text)))
@@ -351,7 +351,7 @@ def test_repair_without_a_terminal_falls_back_to_the_message(make_window, monkey
 
 def test_declining_the_terminal_starts_nothing(make_window, monkeypatch):
     window = make_window()
-    monkeypatch.delitem(sys.modules, "gentoo_installer.rescue_app", raising=False)
+    monkeypatch.setitem(sys.modules, "gentoo_installer.rescue_app", None)  # the repair window ships now: pretend this build does not contain it
     started = []
     monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.No)
     monkeypatch.setattr(app_module.QProcess, "startDetached", staticmethod(lambda program, arguments=[]: started.append(program) or True))
@@ -508,7 +508,7 @@ def fake_main(monkeypatch):
 
 
 def test_main_repair_mode_without_the_repair_tools_offers_the_terminal_and_exits(fake_main, monkeypatch):
-    monkeypatch.delitem(sys.modules, "gentoo_installer.rescue_app", raising=False)
+    monkeypatch.setitem(sys.modules, "gentoo_installer.rescue_app", None)  # the repair window ships now: pretend this build does not contain it
     asked, started = [], []
     monkeypatch.setattr(QMessageBox, "question", lambda parent, title, text, *a, **k: (asked.append(text), QMessageBox.StandardButton.Yes)[1])
     monkeypatch.setattr(app_module.QProcess, "startDetached", staticmethod(lambda program, arguments=[]: (started.append((program, arguments)), True)[1]))
