@@ -64,7 +64,7 @@ def pick(widget: QComboBox, value: str) -> None:
 
 
 # Wave 5 fields whose control a later step adds; the owner of a control removes the name here (the test then keeps it covered).
-WAVE5_FIELDS_WITHOUT_CONTROL = {"nvidia_modules", "safe_graphics_entry", "nvidia_rtd3", "nvidia_extras", "nvidia_cuda_license_accepted",
+WAVE5_FIELDS_WITHOUT_CONTROL = {"nvidia_modules", "nvidia_rtd3", "nvidia_extras", "nvidia_cuda_license_accepted",
                                 "signed_modules", "devices", "battery_charge_limit", "lid_action", "vendor_workarounds"}
 
 

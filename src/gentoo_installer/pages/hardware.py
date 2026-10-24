@@ -197,6 +197,8 @@ def _choices(name: str, labels: dict[str, str]) -> tuple[tuple[str, str], ...]:
 SPECS: tuple[Spec, ...] = (
     Spec("nvk", "NVK Vulkan driver", "choice", _choices("nvk", {"auto": AUTO, "on": "On", "off": "Off"}), advanced=True, group="graphics",
          hint="NVK is the open Vulkan driver for NVIDIA cards. It needs the graphics library Mesa to be compiled, which takes 30 to 60 minutes."),
+    Spec("safe_graphics_entry", "Safe-graphics boot menu entry", "check", advanced=True, group="graphics",
+         hint="Adds a second start-up entry that boots without the NVIDIA drivers. Choose it if the screen stays black. Leave it on."),
     Spec("prime", "Two graphics cards", "choice", _choices("prime", {"auto": AUTO, "offload": "Install the switching helpers", "off": "Off"}), group="graphics",
          hint="On a laptop with an integrated and a separate card, a program can be started on the faster card when it needs it."),
     Spec("power", "Power management", "choice", _choices("power", {"auto": AUTO, "ppd": "power-profiles-daemon", "tlp": "TLP", "none": "None"}), group="power",
@@ -607,6 +609,7 @@ class HardwareTab(QWidget):
         vm = bool(profile.machine.hypervisor)
         relevant = {
             "nvk": nvidia_present and not chosen_nvidia,
+            "safe_graphics_entry": chosen_nvidia,
             "prime": bool(scalars.get("hybrid")),
             "power": mobile or unknown,
             "thermald": profile.cpu.vendor in ("intel", "") and (mobile or unknown),
