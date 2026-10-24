@@ -332,6 +332,14 @@ driver starts from the wizard's own defaults plus only what a person would type,
 like a user, and requires the final manifest to equal the expected one: firmware, partition table
 (when the scenario fixes it) and disk identity must be what the GUI detected. A BIOS machine
 whose wizard offers UEFI fails with `storage.firmware: the GUI chose 'uefi', expected 'bios'`.
+In detect mode the wizard also seeds some fields from the hardware report: the swap size from the
+memory, no Bluetooth without a radio, no microcode in a virtual machine, and the companions (a
+machine without the memory for PySide may not get HWMonux). The plan records these fields and does
+not assert them. The harness then takes the wizard's values over into the saved `manifest.json`, so
+that the probes judge what was really asked for; what the harness itself expected stays in
+`manifest-expected.json`, and `install.wizard_choices` in `result.json` lists every difference (a
+machine with enough memory, like the 12 GiB of the `defaults` job, is expected to keep both companions,
+and the list shows when it did not).
 The driver stops itself with status 2 when a page does not advance (`--navigation-timeout`) or the
 backend is silent (`--idle-timeout`), and retries a slow network (`--readiness-timeout`) but never
 an identity problem.
@@ -340,7 +348,8 @@ an identity problem.
 
 `build/vm/<scenario>-<time>-<id>/` holds `result.json` (verdict, probes, `advisory_findings`,
 `world_drift` with the counts and the packages, `luks_unlock`, `decoys`, `rescue`, `hardware`,
-`disk`, `install`, `boot_entry`, `fresh_nvram`, `boots`), `manifest.json`, the logs (`install.log`, `qemu-*.log`, `serial-*.log` with one pair per
+`disk`, `install`, `boot_entry`, `fresh_nvram`, `boots`), `manifest.json` (`manifest-expected.json`
+beside it when a detect-mode wizard chose other values), the logs (`install.log`, `qemu-*.log`, `serial-*.log` with one pair per
 boot: `serial-baseline.log`, `serial-final-uefi.log`, ...), `ssh-*-wait.log`, `verify-*.log`,
 `rescue-*.log` and the rescue audit logs, screenshots on failure (`failure-*.ppm`,
 `broken-boot.ppm`, `final-uefi.ppm`), `*-disk-guard.json`, `daemon-stderr.log`,

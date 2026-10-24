@@ -134,6 +134,35 @@ def test_everything_that_is_not_detected_is_still_compared_exactly():
     assert driver.compare_manifests(expected, actual, detected) == ["storage.swap_mib: expected 512, the wizard has 4096"]
 
 
+def test_fields_the_wizard_seeds_from_the_hardware_are_recorded_never_compared():
+    """The plan of a detect-mode run names them with None: a small machine may get other swap, no Bluetooth, no microcode and fewer companions."""
+    expected = expected_for("defaults")
+    recorded = {"storage.swap_mib": None, "options.bluetooth": None, "options.microcode": None, "options.install_hwmonux": None, "options.install_portagehub": None}
+    actual = json.loads(json.dumps(expected))
+    actual["storage"]["swap_mib"] = 8192
+    actual["options"].update(bluetooth=False, microcode=False, install_hwmonux=False, install_portagehub=False)
+    assert driver.compare_manifests(expected, actual, recorded) == []
+    assert len(driver.compare_manifests(expected, actual, {})) == 5  # without the plan every one of them is a difference
+    actual["system"]["desktop"] = "xfce"  # but nothing else may move
+    assert driver.compare_manifests(expected, actual, recorded) == ["system.desktop: expected 'kde', the wizard has 'xfce'"]
+
+
+def test_the_plan_the_harness_writes_names_exactly_the_fields_the_driver_may_not_compare(tmp_path):
+    runner = vm.ScenarioRunner.__new__(vm.ScenarioRunner)
+    runner.args = SimpleNamespace(gui_detect=None, memory=12288)
+    runner.scenario = vm.SCENARIO_MAP["defaults"]
+    runner.guard_report = None
+    manifest = vm.build_manifest(runner.scenario, PUBLIC_KEY)
+    plan = runner.gui_plan(manifest, vm.vm_guard.GuardSpec(disks=[], nonce="n"))
+    assert {path for path, value in plan["detected"].items() if value is None} == set(vm.WIZARD_SEEDED)
+    actual = manifest.to_dict(redact=False)
+    for path in vm.WIZARD_SEEDED:
+        section, _, key = path.partition(".")
+        actual[section][key] = False if isinstance(actual[section][key], bool) else 1024
+    actual["storage"]["firmware"], actual["storage"]["table"] = "uefi", "gpt"
+    assert driver.compare_manifests(manifest.to_dict(redact=False), actual, plan["detected"]) == []
+
+
 def test_serial_identities_tolerate_the_legacy_empty_kind():
     expected = expected_for()
     actual = json.loads(json.dumps(expected))

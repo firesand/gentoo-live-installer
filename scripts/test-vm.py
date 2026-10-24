@@ -299,6 +299,10 @@ ALL_SCENARIOS = tuple(name for name, scenario in SCENARIO_MAP.items() if scenari
 # Manifest fields the GUI determines from the machine it runs on. In --gui-detect mode the harness
 # leaves them at the wizard's defaults and asserts what the GUI chose.
 DETECTED_FIELDS = ("storage.device", "storage.device_id", "storage.device_id_kind", "storage.firmware", "storage.table")
+# Fields the wizard seeds from the hardware report (recommend.defaults_for) when the manifest still holds the default: the swap size from
+# the memory, no Bluetooth without a radio, no microcode in a virtual machine, and the companions, which a machine too small for PySide
+# may not get. In detect mode the plan records them without asserting them, and the probes judge what the wizard chose.
+WIZARD_SEEDED = ("storage.swap_mib", "options.bluetooth", "options.microcode", "options.install_hwmonux", "options.install_portagehub")
 
 
 @dataclass(frozen=True)
@@ -2063,9 +2067,9 @@ class ScenarioRunner:
             plan["detected"] = {"storage.device": storage.device, "storage.device_id": storage.device_id,
                                 "storage.device_id_kind": storage.device_id_kind, "storage.firmware": storage.firmware,
                                 "storage.table": table,
-                                # Seeded by the wizard from the hardware report (recommend.defaults_for): recorded,
-                                # not asserted; the target probes check what they lead to (no microcode in a VM).
-                                "storage.swap_mib": None, "options.bluetooth": None, "options.microcode": None}
+                                # Seeded by the wizard from the hardware report: recorded, not asserted (WIZARD_SEEDED);
+                                # the probes then judge what it chose (adopt_wizard_choices).
+                                **dict.fromkeys(WIZARD_SEEDED)}
         return plan
 
     def install(self, *, cancel_at_stage3: bool = False, reinstall: bool = False) -> dict | None:
@@ -2157,10 +2161,36 @@ class ScenarioRunner:
             )
             if code != 0 or not daemon_log.stat().st_size:
                 raise HarnessError(f"Could not retrieve the daemon log; see {daemon_log}")
+            if self.gui_detect_enabled() and not cancel_at_stage3:
+                self.adopt_wizard_choices()
         if not cancel_at_stage3:
             validate_install_outcome(result, log, gui=gui)
             self.installed = True
         return None
+
+    def adopt_wizard_choices(self) -> dict:
+        """Detect mode: make the saved manifest say what the wizard chose for the fields it seeds from the hardware report.
+
+        The plan only records those fields (WIZARD_SEEDED), so the harness's own values may differ from what was installed; the
+        probes read the saved manifest, and a system must be judged against what was really asked for. What the harness expected
+        stays in manifest-expected.json, and the differences go to result.json (install.wizard_choices).
+        """
+        detected = json.loads((self.run_dir / "gui-detected.json").read_text())
+        manifest_path = self.run_dir / "manifest.json"
+        manifest = InstallManifest.load(manifest_path)
+        changes: dict[str, dict[str, Any]] = {}
+        for dotted in WIZARD_SEEDED:
+            section, _, name = dotted.partition(".")
+            chosen = detected.get(dotted)
+            target = getattr(manifest, section)
+            if chosen is not None and chosen != getattr(target, name):
+                changes[dotted] = {"harness": getattr(target, name), "wizard": chosen}
+                setattr(target, name, chosen)
+        if changes:
+            manifest_path.replace(self.run_dir / "manifest-expected.json")
+            manifest.save(manifest_path, redact=False)
+        self.__dict__["wizard_choices"] = changes
+        return changes
 
     def collect_install_artifacts(self) -> dict:
         """Copy out of the live system what explains an install: the daemon's own stderr log and the hardware plan it made.
@@ -2802,7 +2832,7 @@ class ScenarioRunner:
 
     def install_summary(self) -> dict:
         return {"mode": self.install_mode(), "completed": self.install_completed(), "artifacts": self.__dict__.get("install_artifacts"),
-                "text_installer": self.__dict__.get("text_installer_checks")}
+                "text_installer": self.__dict__.get("text_installer_checks"), "wizard_choices": self.__dict__.get("wizard_choices")}
 
     def run(self) -> dict:
         result = {"scenario": self.scenario.name, "success": False, "run_dir": str(self.run_dir),

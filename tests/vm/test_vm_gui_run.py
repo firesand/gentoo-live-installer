@@ -55,8 +55,44 @@ def test_the_defaults_scenario_leaves_firmware_table_and_disk_to_the_gui(lab):
     assert plan["detected"] == {"storage.device": "/dev/vda", "storage.device_id": vm.TARGET_SERIAL, "storage.device_id_kind": "",
                                 "storage.firmware": "uefi", "storage.table": "gpt",
                                 # seeded from the hardware report: recorded, not asserted
-                                "storage.swap_mib": None, "options.bluetooth": None, "options.microcode": None}
+                                "storage.swap_mib": None, "options.bluetooth": None, "options.microcode": None,
+                                "options.install_hwmonux": None, "options.install_portagehub": None}
     assert json.loads((lab.run_dir() / "gui-detected.json").read_text()) == detected  # the GUI's own choices are kept as evidence
+
+
+def test_what_the_wizard_seeded_from_the_hardware_is_what_the_probes_judge(lab):
+    """In detect mode the swap, Bluetooth, microcode and the companions are the wizard's choice for this machine: recorded, and then checked as chosen."""
+    chosen = {"storage.device": "/dev/vda", "storage.swap_mib": 8192, "options.bluetooth": False, "options.microcode": False,
+              "options.install_hwmonux": False, "options.install_portagehub": True}
+    lab.rules = gui_rules(detected=chosen) + guest_rules(vm, "defaults", swap_mib=8192, companions="portagehub")
+    assert lab.run("--scenario", "defaults", "--install-mode", "gui", "--keep") == 0
+    run, result = lab.run_dir(), lab.result()
+    saved = json.loads((run / "manifest.json").read_text())
+    assert saved["storage"]["swap_mib"] == 8192 and saved["options"]["install_hwmonux"] is False and saved["options"]["install_portagehub"] is True
+    assert saved["options"]["bluetooth"] is False and saved["options"]["microcode"] is False
+    harness = json.loads((run / "manifest-expected.json").read_text())  # what the harness asked for stays on record
+    assert harness["storage"]["swap_mib"] == 4096 and harness["options"]["install_hwmonux"] is True and harness["options"]["microcode"] is True
+    assert result["companions"] == {"hwmonux": False, "portagehub": True}
+    names = {probe["name"] for probe in result["probes"]}
+    assert "disabled-hwmonux-absent" in names and "hwmonux" not in names and "portagehub" in names
+    assert result["install"]["wizard_choices"] == {
+        "storage.swap_mib": {"harness": 4096, "wizard": 8192}, "options.bluetooth": {"harness": True, "wizard": False},
+        "options.microcode": {"harness": True, "wizard": False}, "options.install_hwmonux": {"harness": True, "wizard": False}}
+
+
+def test_a_run_whose_wizard_chose_what_the_harness_expected_changes_nothing(lab):
+    chosen = {"storage.device": "/dev/vda", "storage.swap_mib": 4096, "options.install_hwmonux": True, "options.install_portagehub": True}
+    lab.rules = gui_rules(detected=chosen) + guest_rules(vm, "defaults", swap_mib=4096)
+    assert lab.run("--scenario", "defaults", "--install-mode", "gui", "--keep") == 0
+    run = lab.run_dir()
+    assert lab.result()["install"]["wizard_choices"] == {} and not (run / "manifest-expected.json").exists()
+    assert lab.result()["companions"] == {"hwmonux": True, "portagehub": True}
+
+
+def test_only_detect_mode_takes_over_what_the_wizard_chose(lab):
+    lab.rules = gui_rules(detected={"storage.swap_mib": 8192}) + guest_rules(vm, "openrc")
+    assert lab.run("--scenario", "openrc", "--install-mode", "gui", "--keep") == 0
+    assert json.loads((lab.run_dir() / "manifest.json").read_text())["storage"]["swap_mib"] == 512 and lab.result()["install"]["wizard_choices"] is None
 
 
 def test_detection_can_be_switched_per_run(lab):
