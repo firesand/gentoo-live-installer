@@ -48,25 +48,31 @@ class Matrix:
 # Every UEFI install also boots once more with an empty NVRAM (the removable fallback), and every job fails on advisory findings.
 UEFI = ("--fresh-nvram-check",)
 STRICT = ("--strict-probes",)
+# HWMonux pulls PySide, which has no binary package: it is compiled from source on every install, for an hour or more, and a
+# compile job needs more than a 4 GiB machine has (the first real runs had the compiler killed). Only the defaults job has the
+# memory for it (12 GiB, one build job, the guided swap), so every other install installs PortageHub alone (docs/TESTING.md).
+PORTAGEHUB = ("--companions", "portagehub")
 
 WAVE3 = Matrix("wave3", "Wave 3 acceptance: other hardware, other disks, other distributions", (
     MatrixEntry("defaults", "defaults", 12288, 4,
                 (*STRICT, *UEFI, "--install-mode", "gui", "--no-disk-serial", "--disk-size", "64", "--build-jobs", "1", "--swap-mib", "4096"), 150,
-                "the untouched wizard (KDE, OpenRC, binhost) on a virtio disk without a serial number, so the path identity is used; needs the GUI to offer it (known gap G3)"),
-    MatrixEntry("rescue-gentoo", "rescue-gentoo", 4096, 2, (*STRICT, *UEFI), 100,
+                "the untouched wizard (KDE, OpenRC, binhost) on a virtio disk without a serial number, so the path identity is used; "
+                "the only job that installs HWMonux (it compiles PySide)"),
+    MatrixEntry("rescue-gentoo", "rescue-gentoo", 4096, 2, (*STRICT, *UEFI, *PORTAGEHUB), 70,
                 "a minimal Gentoo installed, then broken three ways (menu file, initramfs, fstab) and repaired with gentoo-rescue"),
-    MatrixEntry("uefi-nvme-luks-openrc", "uefi-nvme-luks-openrc", 4096, 2, (*STRICT, *UEFI), 55,
+    MatrixEntry("uefi-nvme-luks-openrc", "uefi-nvme-luks-openrc", 4096, 2, (*STRICT, *UEFI, *PORTAGEHUB), 40,
                 "LUKS on OpenRC, NVMe, QXL display; swap must be a file inside the encrypted root"),
-    MatrixEntry("systemd", "systemd", 4096, 2, (*STRICT, *UEFI), 40, "re-acceptance: the guided erase sequence changed in Wave 1"),
-    MatrixEntry("openrc", "openrc", 4096, 2, (*STRICT, *UEFI), 40, "re-acceptance"),
-    MatrixEntry("uefi-luks", "uefi-luks", 4096, 2, (*STRICT, *UEFI), 50, "re-acceptance: LUKS on systemd, unlocked on the serial console"),
-    MatrixEntry("uefi-luks-lvm", "uefi-luks-lvm", 4096, 2, (*STRICT, *UEFI), 55,
+    MatrixEntry("systemd", "systemd", 4096, 2, (*STRICT, *UEFI, *PORTAGEHUB), 30, "re-acceptance: the guided erase sequence changed in Wave 1"),
+    MatrixEntry("openrc", "openrc", 4096, 2, (*STRICT, *UEFI, *PORTAGEHUB), 30, "re-acceptance"),
+    MatrixEntry("uefi-luks", "uefi-luks", 4096, 2, (*STRICT, *UEFI, *PORTAGEHUB), 35, "re-acceptance: LUKS on systemd, unlocked on the serial console"),
+    MatrixEntry("uefi-luks-lvm", "uefi-luks-lvm", 4096, 2, (*STRICT, *UEFI, *PORTAGEHUB), 40,
                 "LUKS with LVM inside on OpenRC: the container is gentoo-crypt, the root volume gentoo-root; never booted before"),
-    MatrixEntry("uefi-manual-two-disks", "uefi-manual-two-disks", 4096, 2, (*STRICT, *UEFI), 45,
+    MatrixEntry("uefi-manual-two-disks", "uefi-manual-two-disks", 4096, 2, (*STRICT, *UEFI, *PORTAGEHUB), 35,
                 "manual partitioning across two disks next to a decoy disk that must stay byte for byte as it was"),
-    MatrixEntry("bios", "bios", 4096, 2, STRICT, 40, "re-acceptance: SeaBIOS, MBR, static network configuration"),
-    MatrixEntry("bios-sata-minimal", "bios-sata-minimal", 4096, 2, STRICT, 40, "an old PC: SeaBIOS, SATA, Intel NIC, standard VGA"),
-    MatrixEntry("text-install", "text-install", 4096, 2, (*STRICT, *UEFI), 45, "the ISO's text entry and gentoo-installer-text with a device confirmation"),
+    MatrixEntry("bios", "bios", 4096, 2, (*STRICT, *PORTAGEHUB), 30, "re-acceptance: SeaBIOS, MBR, static network configuration, the boot flag of the disk"),
+    MatrixEntry("bios-sata-minimal", "bios-sata-minimal", 4096, 2, (*STRICT, *PORTAGEHUB), 30,
+                "an old PC: SeaBIOS, SATA, Intel NIC, standard VGA, the boot flag of the disk"),
+    MatrixEntry("text-install", "text-install", 4096, 2, (*STRICT, *UEFI, *PORTAGEHUB), 30, "the ISO's text entry and gentoo-installer-text with a device confirmation"),
     MatrixEntry("rescue-fedora", "rescue-fedora", 4096, 2, (), 30, "Fedora cloud image: repair, then UEFI and BIOS boot (one restart for the SELinux relabel)"),
     MatrixEntry("rescue-ubuntu", "rescue-ubuntu", 4096, 2, (), 30, "Ubuntu cloud image with a separate /boot partition"),
     MatrixEntry("rescue-debian", "rescue-debian", 4096, 2, (), 25, "Debian cloud image"),

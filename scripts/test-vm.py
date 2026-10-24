@@ -314,6 +314,19 @@ class InstallResult:
     events: list[dict]
 
 
+# HWMonux pulls PySide, which has no binary package. The first real runs (4096 MiB of memory, two build jobs, 512 MiB of swap) had
+# its compiler killed by the kernel; a desktop install gets 12288 MiB, one job and 4096 MiB of swap (docs/TESTING.md).
+PYSIDE_MEMORY_MIB = 8192
+
+
+def companion_memory_note(scenario: Scenario, args: argparse.Namespace) -> str:
+    """A warning for a run that installs HWMonux in a machine too small to compile PySide ('' when there is nothing to say)."""
+    if scenario.image or getattr(args, "companions", "both") != "both" or args.memory >= PYSIDE_MEMORY_MIB:
+        return ""
+    return (f"NOTE {scenario.name}: --companions both installs HWMonux, which compiles PySide from source; the first real runs with {args.memory} MiB "
+            "of memory had the compiler killed. Use --companions portagehub, or --memory 12288 --build-jobs 1 --swap-mib 4096.")
+
+
 def companion_selection(manifest: InstallManifest) -> dict[str, bool]:
     """Read companion choices from the exact install manifest used by the VM."""
     return {
@@ -657,6 +670,7 @@ def ssh_command(args: argparse.Namespace, known_hosts: Path, user: str, remote: 
     return [*ssh_base_arguments(args, known_hosts, user), "--", remote]
 
 
+SSH_LOST = 255  # ssh's own exit status: it never reached the command, or the connection died (a guest that thrashes under memory pressure)
 UNKNOWN_FIELDS_RE = re.compile(r"Unknown (\w+) fields?: ([\w, ]+)")
 
 
@@ -665,6 +679,7 @@ def parse_install_result(returncode: int, output: str) -> InstallResult:
     errors: list[str] = []
     stray: list[str] = []
     completed: dict | None = None
+    stage = ""
     for line in ANSI_RE.sub("", output).splitlines():
         try:
             event = json.loads(line)
@@ -679,8 +694,14 @@ def parse_install_result(returncode: int, output: str) -> InstallResult:
             errors.append(str(event.get("error") or event.get("message") or "Unknown backend error"))
         if event.get("type") == "completed":
             completed = event
+        if event.get("type") == "stage" and (event.get("data") or {}).get("status") == "running":
+            stage = str(event.get("stage") or "")
     if completed is None:
         reason = "Backend output has no completed event" + (f" (exit {returncode})" if returncode else "")
+        if returncode == SSH_LOST:  # ssh itself ended: the guest stopped answering, and the daemon's banner says nothing about why
+            return InstallResult(False, f"The SSH connection to the live system was lost (exit {SSH_LOST})" + (f" during the {stage} stage" if stage else "")
+                                 + f" after {len(events)} events. A guest that runs out of memory stops answering: read serial-live.log and qemu-live.log, "
+                                 "and give the machine more memory, more swap or fewer build jobs", events)
         if stray:  # the daemon refused to start: its message is the cause
             reason += f": {stray[-1][:300]}"
             unknown = UNKNOWN_FIELDS_RE.search(stray[-1])
@@ -3330,7 +3351,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--no-world-probe", action="store_true", help="Skip 'emerge -pvuDN @world' in the installed system (minutes on a desktop)")
     parser.add_argument("--world-timeout", type=positive_int, default=1800, help="Seconds the world probe may take (default: 1800)")
     parser.add_argument("--companions", choices=("both", "portagehub", "none"), default="both",
-                        help="Install HWMonux and PortageHub (both), only PortageHub, or neither")
+                        help="Install HWMonux and PortageHub (both), only PortageHub, or neither. HWMonux compiles PySide from source: "
+                             "with both, give the VM --memory 12288 --build-jobs 1 --swap-mib 4096 (the wave3 matrix does so for the defaults job only)")
     parser.add_argument("--gui-detect", action=argparse.BooleanOptionalAction, default=None,
                         help="GUI mode: leave firmware, partition table and disk to the GUI's own detection and assert what "
                              "it chose (default: on for the defaults scenario only)")
@@ -3561,6 +3583,10 @@ def _main(argv: Sequence[str] | None = None) -> int:
                 (*hardware_problems(scenario, args.install_mode), *rescue_problems(scenario, args))]
     if problems:
         parser.error("; ".join(problems))
+    for scenario in scenarios:
+        note = companion_memory_note(scenario, args)
+        if note:
+            print(note, file=sys.stderr, flush=True)
     try:
         firmware = preflight(args, scenarios)
         public_key = public_key_from_private(args.ssh_keygen, args.ssh_private_key)

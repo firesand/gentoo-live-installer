@@ -128,6 +128,31 @@ def test_companion_selection_option_defaults_to_existing_both(tmp_path, selectio
     assert vm.build_parser().parse_args(base).companions == expected
 
 
+@pytest.mark.parametrize(("scenario", "options", "warned"), [
+    ("openrc", {"companions": "both", "memory": 4096}, True),       # the first real runs: the compiler was killed
+    ("defaults", {"companions": "both", "memory": 4096}, True),
+    ("openrc", {"companions": "both", "memory": 12288}, False),     # the memory of a desktop install
+    ("openrc", {"companions": "portagehub", "memory": 4096}, False),
+    ("openrc", {"companions": "none", "memory": 2048}, False),
+    ("rescue-debian", {"companions": "both", "memory": 4096}, False),  # a cloud image installs nothing
+])
+def test_installing_hwmonux_on_a_small_machine_is_called_out_before_an_hour_of_compiling(scenario, options, warned):
+    note = vm.companion_memory_note(vm.SCENARIO_MAP[scenario], argparse.Namespace(**options))
+    assert bool(note) is warned
+    if warned:
+        assert "PySide" in note and "--companions portagehub" in note and "--memory 12288 --build-jobs 1 --swap-mib 4096" in note and f"{options['memory']} MiB" in note
+
+
+def test_the_note_reaches_the_person_who_started_the_run(tmp_path, capsys, monkeypatch):
+    iso = tmp_path / "installer.iso"
+    iso.write_bytes(b"iso")
+    monkeypatch.setattr(vm, "preflight", lambda args, scenarios: (_ for _ in ()).throw(vm.HarnessError("stop here")))
+    argv = ["--scenario", "bios", "--iso", str(iso), "--ssh-host", "127.0.0.1", "--ssh-port", "40222", "--ssh-private-key", str(iso)]
+    with pytest.raises(SystemExit):
+        vm.main(argv)
+    assert "NOTE bios: --companions both installs HWMonux" in capsys.readouterr().err
+
+
 def test_companion_selection_rejects_unknown_value(tmp_path):
     with pytest.raises(SystemExit):
         vm.build_parser().parse_args([

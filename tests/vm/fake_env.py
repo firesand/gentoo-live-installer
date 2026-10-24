@@ -131,10 +131,11 @@ def layout_output(vm, scenario_name: str) -> str:
 
 
 def guest_rules(vm, scenario_name: str, *, guard: str = "vm_disk_guard", install: list | None = None,
-                companions: bool = True, extra: list | None = None, guard_options: dict | bool = True,
+                companions: bool | str = True, extra: list | None = None, guard_options: dict | bool = True,
                 swap_mib: int = 512, firmware: str | None = None, sudo: bool = False, boot_flag: bool = True) -> list[dict]:
     """Rules for a guest that installs and boots successfully, in the order the harness needs them.
 
+    ``companions`` is True (both are installed and answer), "portagehub" (HWMonux is absent) or False (neither answers).
     ``sudo`` gives the test user a working sudo: the probes that need it answer instead of ending up as findings,
     so a ``--strict-probes`` run of a good guest can pass. ``boot_flag`` says whether the BIOS disk carries its boot flag.
     """
@@ -186,6 +187,8 @@ def guest_rules(vm, scenario_name: str, *, guard: str = "vm_disk_guard", install
         {"user": "^vmtest$", "match": r"^findmnt -rno TARGET,SOURCE", "stdout": layout_output(vm, scenario_name) if scenario.manual else ""},
         {"user": "^vmtest$", "match": r"^sh -c .* sh sys-firmware/intel-microcode", "stdout": package_database(plan)},
     ]
+    if companions == "portagehub":  # HWMonux is switched off: its absence is what the probe looks for
+        rules.append({"user": "^vmtest$", "match": r"app-misc.*glob.*hwmonux-", "stdout": "absent\n"})
     rules.append({"user": "^vmtest$", "match": r"/var/db/pkg/", "stdout": "plasma-meta\n"})
     guided = scenario_manifest(vm, scenario_name, firmware).storage
     if guided.firmware == "bios" and guided.mode == "erase":
@@ -197,10 +200,9 @@ def guest_rules(vm, scenario_name: str, *, guard: str = "vm_disk_guard", install
             {"user": "^vmtest$", "match": r"^sudo -S -p '' passwd -S root$", "stdout": f"root {'L' if locked else 'P'} 2026-10-24 0 99999 7 -1\n"},
         ]
     if companions:
-        rules += [
-            {"user": "^vmtest$", "match": r"^hwmonux --dump$", "stdout": "vm-host\nSensor Value Min Max\n"},
-            {"user": "^vmtest$", "match": r"^portagehub --self-test$", "stdout": "repos: 1\ncatalog: 2\nvdb: 3\n"},
-        ]
+        if companions != "portagehub":
+            rules.append({"user": "^vmtest$", "match": r"^hwmonux --dump$", "stdout": "vm-host\nSensor Value Min Max\n"})
+        rules.append({"user": "^vmtest$", "match": r"^portagehub --self-test$", "stdout": "repos: 1\ncatalog: 2\nvdb: 3\n"})
     rules.append({"user": "^vmtest$", "match": "nmcli", "stdout": STATIC_NETWORK + "\n"})
     return rules
 

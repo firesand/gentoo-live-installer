@@ -59,18 +59,26 @@ def matrix_rows() -> dict[str, list[str]]:
     rows = {}
     for line in section.splitlines():
         cells = [cell.strip() for cell in line.strip().strip("|").split("|")]
-        if line.startswith("| `") and len(cells) == 5:
+        if line.startswith("| `") and len(cells) == 6:
             rows[cells[0].strip("`")] = cells
     return rows
+
+
+def documented_companions(entry) -> str:
+    """The companions an entry installs, as the table writes them: '-' for a cloud image (nothing is installed)."""
+    if vm.SCENARIO_MAP[entry.scenario].image:
+        return "-"
+    return "PortageHub" if "portagehub" in entry.options else "HWMonux and PortageHub"
 
 
 @pytest.mark.parametrize("entry", vm_matrix.WAVE3.entries, ids=lambda entry: entry.name)
 def test_every_matrix_entry_is_in_the_table_with_the_sizing_the_matrix_really_uses(entry):
     rows = matrix_rows()
     assert entry.name in rows, f"docs/TESTING.md does not list the {entry.name} entry of the matrix"
-    _name, scenario, memory, cpus, minutes = rows[entry.name]
+    _name, scenario, companions, memory, cpus, minutes = rows[entry.name]
     assert f"`{entry.scenario}`" in scenario
     assert memory == f"{entry.memory_mib // 1024} GiB" and cpus == str(entry.cpus) and minutes == str(entry.minutes)
+    assert companions == documented_companions(entry), "the Companions column of the table must say what the entry's --companions option does"
 
 
 def test_the_documented_matrix_rules_are_the_ones_the_scheduler_applies():
@@ -81,3 +89,8 @@ def test_the_documented_matrix_rules_are_the_ones_the_scheduler_applies():
 def test_the_cloud_image_names_in_the_requirements_are_the_ones_the_harness_looks_for():
     for image in vm_rescue.IMAGES.values():
         assert image.filename in DOC, image.filename
+
+
+def test_the_memory_rule_and_the_choice_of_companions_are_written_down():
+    for words in ("PySide", "no binary package", "`--companions portagehub`", "6 GiB"):
+        assert words in DOC, words

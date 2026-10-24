@@ -27,6 +27,21 @@ def test_install_result_requires_zero_exit_and_success_event():
     assert vm.parse_install_result(0, "ordinary output").success is False
 
 
+def test_a_lost_connection_is_named_with_the_stage_the_installer_was_in():
+    """The first real systemd run: PySide made the 4 GiB guest thrash, SSH gave up (exit 255) and the only text left was the daemon's banner."""
+    output = "\n".join((
+        json.dumps({"type": "stage", "stage": "base", "data": {"status": "completed"}}),
+        json.dumps({"type": "stage", "stage": "desktop", "data": {"status": "running"}}),
+        json.dumps({"type": "log", "stage": "desktop", "message": "[44/107] /usr/bin/x86_64-pc-linux-gnu-g++ -DQT_CORE_LIB"}),
+        "2026-10-24 11:55:21,318 INFO gentoo_installerd.server: gentoo-installerd 0.1.0 manifest=/run/gentoo-installer-vm-manifest.json",
+    ))
+    result = vm.parse_install_result(255, output)
+    assert result.success is False and len(result.events) == 3
+    assert "SSH connection to the live system was lost (exit 255) during the desktop stage" in result.error
+    assert "out of memory" in result.error and "serial-live.log" in result.error and "INFO" not in result.error
+    assert vm.parse_install_result(255, "").error.startswith("The SSH connection to the live system was lost (exit 255)")
+
+
 def test_install_result_reports_backend_errors_and_ignores_non_json():
     output = "installer banner\n" + json.dumps({"type": "error", "error": "disk failed"}) + "\n" + completed(False)
     result = vm.parse_install_result(1, output)

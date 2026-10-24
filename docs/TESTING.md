@@ -110,7 +110,12 @@ python3 scripts/test-vm.py --scenario openrc --iso build/test-dist/<iso> \
 Memory rule: run one VM at a time (or let `--matrix` run two), leave 3 GiB of host memory free
 beyond `--memory`, and give desktop installs `--memory 12288 --build-jobs 1 --swap-mib 4096`.
 `--companions both|portagehub|none` chooses which companion apps the manifest installs (and which
-probes run). `--install-mode gui` drives the real graphical installer as the live user,
+probes run). **`both`, the default, installs HWMonux, which pulls PySide: there is no binary package
+for it, so it is compiled from source on every install, for an hour or more, and one compile job
+needs several GiB.** The first real runs (4 GiB of memory, 512 MiB of swap, two jobs) had the compiler
+killed by the kernel (and, once, a guest that thrashed until SSH gave up). Treat `--companions both`
+like a desktop install, or use `--companions portagehub` (a Rust build that a 4 GiB VM does; the probe
+`disabled-hwmonux-absent` then checks that HWMonux really is not there). `--install-mode gui` drives the real graphical installer as the live user,
 `--install-mode text` the console installer (below); `--check-resume` reruns the daemon with
 `--resume`; `--cancel-then-resume` (GUI mode) cancels at stage3 and resumes. `--keep` keeps the disk
 and the firmware variables after success (failed runs always keep them).
@@ -469,31 +474,43 @@ entries of the ISO; a missing input is a usage error (exit status 2), not a fail
 Every job gets `--strict-probes`; UEFI installs also get `--fresh-nvram-check`. Options of the
 caller (ISO, SSH key, timeouts, image directory) are passed to every job.
 
-| Entry | Scenario and options | RAM | CPUs | Minutes |
-|---|---|---|---|---|
-| `defaults` | `defaults`: KDE, UEFI, a virtio disk **without** a serial number (path identity), binhost; GUI install; `--disk-size 64 --build-jobs 1 --swap-mib 4096` | 12 GiB | 4 | 150 |
-| `rescue-gentoo` | `rescue-gentoo` | 4 GiB | 2 | 100 |
-| `uefi-nvme-luks-openrc` | `uefi-nvme-luks-openrc` | 4 GiB | 2 | 55 |
-| `systemd` | `systemd`: re-acceptance, the guided erase sequence changed in Wave 1 | 4 GiB | 2 | 40 |
-| `openrc` | `openrc`: re-acceptance | 4 GiB | 2 | 40 |
-| `uefi-luks` | `uefi-luks`: re-acceptance | 4 GiB | 2 | 50 |
-| `uefi-luks-lvm` | `uefi-luks-lvm`: LUKS with LVM inside, a combination that no VM has booted yet | 4 GiB | 2 | 55 |
-| `uefi-manual-two-disks` | `uefi-manual-two-disks` | 4 GiB | 2 | 45 |
-| `bios` | `bios`: re-acceptance | 4 GiB | 2 | 40 |
-| `bios-sata-minimal` | `bios-sata-minimal` | 4 GiB | 2 | 40 |
-| `text-install` | `text-install` | 4 GiB | 2 | 45 |
-| `rescue-fedora` | `rescue-fedora` | 4 GiB | 2 | 30 |
-| `rescue-ubuntu` | `rescue-ubuntu` | 4 GiB | 2 | 30 |
-| `rescue-debian` | `rescue-debian` | 4 GiB | 2 | 25 |
-| `rescue-arch` | `rescue-arch` | 4 GiB | 2 | 15 |
+| Entry | Scenario and options | Companions | RAM | CPUs | Minutes |
+|---|---|---|---|---|---|
+| `defaults` | `defaults`: KDE, UEFI, a virtio disk **without** a serial number (path identity), binhost; GUI install; `--disk-size 64 --build-jobs 1 --swap-mib 4096` | HWMonux and PortageHub | 12 GiB | 4 | 150 |
+| `rescue-gentoo` | `rescue-gentoo` | PortageHub | 4 GiB | 2 | 70 |
+| `uefi-nvme-luks-openrc` | `uefi-nvme-luks-openrc` | PortageHub | 4 GiB | 2 | 40 |
+| `systemd` | `systemd`: re-acceptance, the guided erase sequence changed in Wave 1 | PortageHub | 4 GiB | 2 | 30 |
+| `openrc` | `openrc`: re-acceptance | PortageHub | 4 GiB | 2 | 30 |
+| `uefi-luks` | `uefi-luks`: re-acceptance | PortageHub | 4 GiB | 2 | 35 |
+| `uefi-luks-lvm` | `uefi-luks-lvm`: LUKS with LVM inside, a combination that no VM has booted yet | PortageHub | 4 GiB | 2 | 40 |
+| `uefi-manual-two-disks` | `uefi-manual-two-disks` | PortageHub | 4 GiB | 2 | 35 |
+| `bios` | `bios`: re-acceptance; the boot flag of the disk is read | PortageHub | 4 GiB | 2 | 30 |
+| `bios-sata-minimal` | `bios-sata-minimal`; the boot flag of the disk is read | PortageHub | 4 GiB | 2 | 30 |
+| `text-install` | `text-install` | PortageHub | 4 GiB | 2 | 30 |
+| `rescue-fedora` | `rescue-fedora` | - | 4 GiB | 2 | 30 |
+| `rescue-ubuntu` | `rescue-ubuntu` | - | 4 GiB | 2 | 30 |
+| `rescue-debian` | `rescue-debian` | - | 4 GiB | 2 | 25 |
+| `rescue-arch` | `rescue-arch` | - | 4 GiB | 2 | 15 |
+
+**Companions.** Only the `defaults` entry installs HWMonux. It is the entry that has the memory for
+PySide (12 GiB, one build job, 4096 MiB of swap, which is also what the installer's guided defaults
+give a person), and its point is "the untouched wizard installs everything it offers". Every other
+install entry runs with `--companions portagehub`: HWMonux does not depend on the disk, the firmware
+or the network card that the entry is there to vary, and PySide would put an hour of compiling, and
+a memory limit that a 4 GiB VM does not meet, into every one of them. They still install PortageHub,
+and `disabled-hwmonux-absent` proves that the switched-off companion is not installed. The
+alternative, 6 GiB for every entry, would fit the budget (12 + 6 GiB of 24) but is still a guess for
+PySide's large compile jobs and keeps the hour in each job. The minutes are estimates of an install
+without PySide, from the stage times of the first real runs: about 10 minutes for the base system, a
+few more for PortageHub, and the boots and probes.
 
 The matrix needs an ISO built from the merged tree: `text-install` asks the boot menu for the
 text console entry, and the check before the first job stops the whole matrix with exit status 2
 when the menu has none (`--matrix-only` leaves such an entry out).
 
-The minutes are estimates for a machine with KVM. The `defaults` entry needs the wizard to offer a
-disk without a serial number (known gap G3 below); without that it fails at the disk page, which
-is what the entry is there to find out. 12 GiB + 4 GiB + the margin is the most that ever runs.
+The minutes are estimates for a machine with KVM. The first real `defaults` run stopped at the disk
+page because the driver did not tick the approval that the wizard asks for a disk without a serial
+number; the driver now ticks it, like a person. 12 GiB + 4 GiB + the margin is the most that ever runs.
 
 ```sh
 test-vm.py --list-matrix                                    # the table above, from the data
@@ -526,8 +543,7 @@ Read these before trusting, or blaming, a result.
 * **LUKS unlock over serial needs the installed system to honour `system.kernel_cmdline_extra`**
   (`configure.py` must put it on `/etc/kernel/cmdline` and `GRUB_CMDLINE_LINUX`). Until it does,
   `uefi-luks` and `openrc-luks` time out waiting for the prompt, with a message saying so.
-* **`serial-less` fails until the daemon accepts `device_id_kind=path`**, and the `defaults` entry
-  of the matrix until the GUI offers a path identity for such a disk (G3).
+* **`serial-less` fails until the daemon accepts `device_id_kind=path`.**
 * **`--gui-detect` on a BIOS machine fails until the wizard seeds the firmware from detection**
   (the unit test in `tests/vm/test_vm_gui_driver.py` is an expected failure that starts passing then).
 * **The hardware plan is read from `/var/lib/gentoo-installer/hardware-plan.json`** (the daemon's
@@ -561,6 +577,10 @@ Read these before trusting, or blaming, a result.
 * **`uefi-luks` and friends hang at the passphrase prompt**: read `serial-target.log` and
   `luks-unlock-receipt.json`; if the kernel never printed to ttyS0 the installed system ignored
   `system.kernel_cmdline_extra`.
+* **"The SSH connection to the live system was lost (exit 255) during the desktop stage"**: the guest
+  stopped answering (SSH waits 30 minutes of silence before it gives up). A guest that runs out of
+  memory thrashes instead of failing; the usual cause is a compile (PySide, for HWMonux). Read
+  `serial-live.log` and `qemu-live.log`, and see the memory rule under "Running a scenario".
 * **A matrix job was skipped for memory**: the note names the numbers; free memory or lower
   `--matrix-memory-budget` only if you know what else runs.
 

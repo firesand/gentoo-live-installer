@@ -304,6 +304,17 @@ def test_a_boot_flag_that_cannot_be_read_because_sudo_is_broken_is_a_finding(lab
     assert "cannot use sudo" in findings(lab)["boot-flag"]["error"]
 
 
+def test_an_install_with_portagehub_only_probes_portagehub_and_checks_that_hwmonux_is_absent(lab):
+    lab.rules = guest_rules(vm, "bios", companions="portagehub", sudo=True)
+    assert lab.run("--scenario", "bios", "--companions", "portagehub", "--strict-probes") == 0
+    result = lab.result()
+    names = {probe["name"] for probe in result["probes"]}
+    assert {"portagehub", "disabled-hwmonux-absent"} <= names and "hwmonux" not in names
+    assert result["companions"] == {"hwmonux": False, "portagehub": True}
+    manifest = json.loads((lab.run_dir() / "fake-guest" / "manifest.json").read_text())["options"]
+    assert (manifest["install_hwmonux"], manifest["install_portagehub"]) == (False, True)
+
+
 def test_a_bios_install_has_no_fallback_probe(lab):
     lab.rules = guest_rules(vm, "bios")
     assert lab.run("--scenario", "bios") == 0
