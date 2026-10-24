@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from typing import Callable, Mapping, Sequence
 
 from gentoo_installer import blockdev
+from gentoo_installer import layout as guided_layout
 from gentoo_installer.manifest import InstallManifest
 
 from .configure_base import ConfigurerBase
@@ -17,29 +18,19 @@ from .runner import Runner, RunnerError
 from .storage import LayoutEntry
 
 
-def render_fstab(layout: Sequence[LayoutEntry], uuids: Mapping[str, str], *, btrfs_discard: bool = False) -> str:
-    """The target's /etc/fstab.
+def render_fstab(layout: Sequence[LayoutEntry], uuids: Mapping[str, str], *, btrfs_discard: bool = False, atime: str = "noatime",
+                 tz_utc: bool = False, boot_noauto: bool = False, sources: Mapping[str, str] | None = None) -> str:
+    """The target's /etc/fstab (the text itself comes from gentoo_installer.layout.render_fstab_text, which the Review preview uses too).
 
-    An entry is named by ``LayoutEntry.source`` when it has one (a swap file inside the target),
-    else by UUID, else by its device path. ``LayoutEntry.options`` (Btrfs ``subvol=...``) is
-    appended to the default mount options. ``btrfs_discard`` adds asynchronous TRIM to every
-    Btrfs mount (mount options are per filesystem, so all subvolumes get the same).
+    An entry is named by ``LayoutEntry.source`` when it has one (a swap file inside the target), else by ``sources`` (a full name such as
+    ``LABEL=gentoo-root`` or ``PARTUUID=...``), else by UUID, else by its device path. ``LayoutEntry.options`` (Btrfs ``subvol=...``) is
+    appended to the default mount options. ``btrfs_discard`` adds asynchronous TRIM to every Btrfs mount (mount options are per
+    filesystem, so all subvolumes get the same). ``atime`` is the access-time option, ``tz_utc`` adds tz=UTC to the FAT options
+    (the hardware clock is UTC) and ``boot_noauto`` mounts /boot only on demand.
     """
-    lines = ["# <file system> <mount point> <type> <options> <dump> <pass>"]
-    for entry in sorted(layout, key=lambda item: (item.mountpoint != "/", item.mountpoint)):
-        uuid = uuids.get(entry.device, "")
-        source = entry.source or (f"UUID={uuid}" if uuid else entry.device)
-        if entry.filesystem == "swap":
-            lines.append(f"{source} none swap sw 0 0")
-        elif entry.mountpoint:
-            # fsck.btrfs is a stub that only prints a notice, so btrfs is never checked at boot.
-            pass_number = 0 if entry.filesystem == "btrfs" else 1 if entry.mountpoint == "/" else 2
-            options = "defaults,noatime" if entry.filesystem != "vfat" else "defaults,umask=0077"
-            extra = [entry.options] if entry.options else []
-            if btrfs_discard and entry.filesystem == "btrfs":
-                extra.append("discard=async")
-            lines.append(f"{source} {entry.mountpoint} {entry.filesystem} {','.join([options, *extra])} 0 {pass_number}")
-    return "\n".join(lines) + "\n"
+    named = {device: f"UUID={value}" for device, value in uuids.items() if value}
+    named.update(sources or {})
+    return guided_layout.render_fstab_text(layout, named, btrfs_discard=btrfs_discard, atime=atime, tz_utc=tz_utc, boot_noauto=boot_noauto)
 
 
 def root_stack_problems(manifest: InstallManifest, runner: Runner) -> list[str]:
@@ -218,6 +209,8 @@ class FstabMixin(ConfigurerBase):
             atoms.append("sys-fs/xfsprogs")
         if "btrfs" in filesystems:
             atoms.append("sys-fs/btrfs-progs")
+        if "f2fs" in filesystems:
+            atoms.append("sys-fs/f2fs-tools")
         return atoms
 
     def storage_tool_atoms(self, manifest: InstallManifest, stack: ExistingStack | None = None) -> list[str]:

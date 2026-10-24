@@ -25,6 +25,7 @@ that can be checked before the first command that writes. The order matters:
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import os
 import re
@@ -44,7 +45,7 @@ from .runner import Runner, RunnerError
 BIOS_BOOT_GUID = "21686148-6449-6e6f-744e-656564454649"
 ESP_GUID = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
 # Filesystems that may legitimately sit behind a declared type (ext4 mounts ext2/ext3).
-COMPATIBLE_FSTYPES = {"ext4": {"ext4", "ext3", "ext2"}, "xfs": {"xfs"}, "btrfs": {"btrfs"}, "vfat": {"vfat"}, "swap": {"swap"}}
+COMPATIBLE_FSTYPES = {"ext4": {"ext4", "ext3", "ext2"}, "xfs": {"xfs"}, "btrfs": {"btrfs"}, "f2fs": {"f2fs"}, "vfat": {"vfat"}, "swap": {"swap"}}
 # cryptsetup(8) RETURN CODES
 CRYPTSETUP_HINTS = {
     1: "invalid parameters",
@@ -55,6 +56,10 @@ CRYPTSETUP_HINTS = {
 }
 BTRFS_MOUNT_OPTIONS = "compress=zstd:3"
 MANUAL_TARGET_TYPES = frozenset({"part", "crypt", "lvm", "md", "raid0", "raid1", "raid4", "raid5", "raid6", "raid10", "dm", "mpath"})
+XFS_CONFIG_DIR = "/usr/share/xfsprogs/mkfs"
+# ext4 below this size gets the "small" profile (the Handbook: -T small keeps the inode tables from eating a small partition).
+SMALL_EXT4_BYTES = 8 * 1024**3
+STICKY_MOUNTS = frozenset({"/tmp", "/var/tmp"})
 SWAP_FILE = "/swapfile"
 BTRFS_SWAP_DIRECTORY = "/swap"
 MIN_BOOT_MIB = 256
@@ -108,6 +113,7 @@ class StorageManager:
         proc_root: Path | str = "/proc",
         dev_root: Path | str = "/dev",
         kill: Callable[[int, int], None] = os.kill,
+        xfs_config_dir: Path | str = XFS_CONFIG_DIR,
     ) -> None:
         self.runner = runner
         self.target_root = Path(target_root)
@@ -120,6 +126,7 @@ class StorageManager:
         self.proc_root = Path(proc_root)
         self.dev_root = Path(dev_root)
         self._kill = kill
+        self.xfs_config_dir = Path(xfs_config_dir)
         self.layout: list[LayoutEntry] = []
         self.owned_mounts: list[Path] = []
         self.owned_swaps: list[str] = []
@@ -136,8 +143,27 @@ class StorageManager:
 
     # ------------------------------------------------------------------ preparation
 
+    def memory_kib(self) -> int:
+        """MemTotal of this computer (0 when it cannot be read): the Handbook's swap sizes depend on it."""
+        try:
+            for line in (self.proc_root / "meminfo").read_text().splitlines():
+                if line.startswith("MemTotal:"):
+                    return int(line.split()[1])
+        except (OSError, ValueError, IndexError):
+            pass
+        return 0
+
+    def resolved(self, manifest: InstallManifest) -> InstallManifest:
+        """The manifest with the swap size worked out ("recommended" and "hibernate" follow the Handbook table for this computer's memory)."""
+        storage = guided_layout.resolve_swap(manifest.storage, self.memory_kib())
+        return manifest if storage is manifest.storage else dataclasses.replace(manifest, storage=storage)
+
     def prepare(self, manifest: InstallManifest, *, dry_run: bool = False) -> list[LayoutEntry]:
         self.target_path("/")
+        problem = guided_layout.swap_kind_problem(manifest.storage)
+        if problem:
+            raise StorageError(problem, "storage.layout")
+        manifest = self.resolved(manifest)
         self.manifest = manifest
         storage = manifest.storage
         self.notes = []
@@ -210,8 +236,15 @@ class StorageManager:
             raise StorageError(problem, "storage.raid")
         if storage.separate_home and storage.home_mib <= 0:
             raise StorageError("A separate home partition needs a positive size", "storage.layout")
+        if storage.fstab_ident == "partuuid" and storage.mode == "erase" and storage.table == "dos":
+            raise StorageError("Naming filesystems by partition UUID needs a GPT partition table; choose the filesystem UUID or the label", "storage.layout")
+        if storage.boot_noauto and not guided_layout.has_boot_partition(storage) and not any(p.mountpoint == "/boot" for p in storage.partitions):
+            raise StorageError("Mounting /boot only when needed (noauto) needs a /boot partition of its own", "storage.layout")
+        if storage.mode == "manual" and manifest.system.bootloader == "grub" and any(p.mountpoint == "/" and p.filesystem == "f2fs" for p in storage.partitions) \
+                and not any(p.mountpoint == "/boot" for p in storage.partitions):
+            raise StorageError("GRUB cannot reliably read an F2FS root: keep /boot on a separate ext4 partition, or choose another root filesystem", "storage.layout")
         if storage.mode == "erase" and storage.table == "dos":
-            count = 1 + int(storage.firmware == "uefi") + int(storage.swap_mib > 0) + int(storage.separate_home) + int(storage.luks)
+            count = 1 + int(storage.firmware == "uefi") + int(guided_layout.swap_partition_mib(storage) > 0) + int(storage.separate_home) + int(guided_layout.has_boot_partition(storage))
             if count > 4:
                 raise StorageError("DOS partition tables support at most four primary partitions; select GPT", "storage.layout")
         if storage.mode == "manual" and storage.luks and not any(p.mountpoint == "/boot" for p in storage.partitions):
@@ -400,8 +433,8 @@ class StorageManager:
         if row.mountpoint == "/boot" and node.size < MIN_BOOT_MIB * guided_layout.MIB:
             raise StorageError(f"{row.device} is too small for /boot ({guided_layout.human_size(node.size)}); at least {MIN_BOOT_MIB} MiB are needed for kernels and initramfs images", "storage.capacity")
         if row.mountpoint == "/":
-            if row.filesystem not in {"ext4", "xfs", "btrfs"}:
-                raise StorageError(f"The root filesystem {row.device} must be ext4, XFS or Btrfs, not {row.filesystem}", "storage.layout")
+            if row.filesystem not in {"ext4", "xfs", "btrfs", "f2fs"}:
+                raise StorageError(f"The root filesystem {row.device} must be ext4, XFS, Btrfs or F2FS, not {row.filesystem}", "storage.layout")
             minimum = guided_layout.minimum_root_mib(self.manifest) * guided_layout.MIB
             if node.size < minimum:
                 raise StorageError(
@@ -589,7 +622,7 @@ class StorageManager:
             self._new_partition(number, f"+{guided_layout.BIOS_BOOT_MIB}MiB", "EF02", "BIOS")
             number += 1
         boot_number = 0
-        if s.luks:
+        if guided_layout.has_boot_partition(s):
             boot = self._partition_device(disk, number)
             self._new_partition(number, f"+{guided_layout.BOOT_MIB}MiB", "8300", "boot")
             entries.append(LayoutEntry(boot, "/boot", "ext4"))
@@ -598,18 +631,18 @@ class StorageManager:
             number += 1
         swap_device = ""
         home_device = ""
-        if s.swap_mib and not guided_layout.swap_in_root(s):
+        if guided_layout.swap_partition_mib(s):
             swap_device = self._partition_device(disk, number)
-            self._new_partition(number, f"+{s.swap_mib}MiB", "8200", "swap")
+            self._new_partition(number, f"+{guided_layout.swap_partition_mib(s)}MiB", "8200", "swap")
             created.append(swap_device)
             number += 1
         if s.separate_home:
             home_device = self._partition_device(disk, number)
-            self._new_partition(number, f"+{s.home_mib}MiB", "8300", "home")
+            self._new_partition(number, f"+{s.home_mib}MiB", self._linux_type("home"), "home")
             created.append(home_device)
             number += 1
         root_device = self._partition_device(disk, number)
-        self._new_partition(number, "0", "8300", "root")
+        self._new_partition(number, "0", self._linux_type("root"), "root")
         created.append(root_device)
         self._run(("partprobe", disk))
         self._run(("udevadm", "settle"))
@@ -632,8 +665,19 @@ class StorageManager:
             entries.append(LayoutEntry(swap_device, "", "swap"))
         if home_device:
             entries.append(LayoutEntry(home_device, "/home", s.filesystem))
+        self._labels = self._guided_labels(entries) if s.fstab_ident == "label" else {}
         self._format(entries)
         return entries
+
+    @staticmethod
+    def _guided_labels(entries: Sequence[LayoutEntry]) -> dict[str, str]:
+        """Filesystem labels for a guided install whose fstab refers to labels (the first entry of a device decides: / before /home on Btrfs)."""
+        labels: dict[str, str] = {}
+        for entry in entries:
+            name = guided_layout.FSTAB_LABELS.get("swap" if entry.filesystem == "swap" else entry.mountpoint, "")
+            if name and entry.device not in labels:
+                labels[entry.device] = name
+        return labels
 
     def _mark_disk_bootable(self, disk: str, partition: int) -> None:
         """Legacy BIOS: flag the new disk the way BIOS firmware that insists on a bootable entry expects.
@@ -712,6 +756,20 @@ class StorageManager:
                 active.append(fields[0])
         return active
 
+    def _linux_type(self, role: str) -> str:
+        """GPT type code of the root ("root") or /home ("home") partition.
+
+        With systemd-boot, the EFI stub or a Unified Kernel Image the Handbook uses the Discoverable Partitions
+        codes (8304 Linux x86-64 root, 8302 /home); GRUB keeps the generic 8300. A partition that holds a LUKS or
+        LVM container is not a filesystem, so the root keeps 8300 then.
+        """
+        s = self.manifest.storage
+        system = self.manifest.system
+        discoverable = system.bootloader in {"systemd-boot", "efi-stub"} or system.uki
+        if not discoverable or (role == "root" and (s.luks or s.lvm)):
+            return "8300"
+        return "8304" if role == "root" else "8302"
+
     def _new_partition(self, number: int, size: str, typecode: str, name: str) -> None:
         s = self.manifest.storage
         if s.table == "gpt":
@@ -784,9 +842,10 @@ class StorageManager:
             done.add(entry.device)
             label = self._labels.get(entry.device, "")
             commands: dict[str, tuple[str, ...] | None] = {
-                "ext4": ("mkfs.ext4", "-F", *(("-L", label) if label else ()), entry.device),
-                "xfs": ("mkfs.xfs", "-f", *(("-L", label) if label else ()), entry.device),
+                "ext4": ("mkfs.ext4", "-F", *self._ext4_profile(entry.device), *(("-L", label) if label else ()), entry.device),
+                "xfs": ("mkfs.xfs", "-f", *self._xfs_options(), *(("-L", label) if label else ()), entry.device),
                 "btrfs": ("mkfs.btrfs", "-f", *(("-L", label) if label else ()), entry.device),
+                "f2fs": ("mkfs.f2fs", "-f", *(("-l", label) if label else ()), entry.device),
                 "vfat": ("mkfs.vfat", "-F", "32", *(("-S", "4096") if self._sector_size == 4096 else ()), *(("-n", label) if label else ()), entry.device),
                 "swap": ("mkswap", *(("-L", label) if label else ()), entry.device),
                 "none": None,
@@ -796,6 +855,32 @@ class StorageManager:
             command = commands[entry.filesystem]
             if command:
                 self._run(command)
+
+    def _device_bytes(self, device: str) -> int:
+        """Size of a block device in bytes (0 when it cannot be read)."""
+        try:
+            return int(self.runner.run(("blockdev", "--getsize64", device)).stdout.strip().splitlines()[0])
+        except (RunnerError, OSError, ValueError, IndexError):
+            return 0
+
+    def _ext4_profile(self, device: str) -> tuple[str, ...]:
+        """``-T small`` for an ext4 filesystem below 8 GiB (the Handbook's "small ext4 partitions"): fewer inodes, more room for files."""
+        size = self._device_bytes(device)
+        return ("-T", "small") if 0 < size < SMALL_EXT4_BYTES else ()
+
+    def _xfs_options(self) -> tuple[str, ...]:
+        """The newest mkfs.xfs configuration xfsprogs ships (lts_*.conf), when there is one: the Handbook's recommended defaults."""
+        try:
+            configs = [path for path in self.xfs_config_dir.glob("lts_*.conf") if path.is_file()]
+        except OSError:
+            return ()
+        if not configs:
+            return ()
+
+        def version(path: Path) -> tuple[int, ...]:
+            return tuple(int(part) for part in re.findall(r"\d+", path.stem))
+
+        return ("-c", f"options={max(configs, key=version)}")
 
     # ------------------------------------------------------------------ mounting
 
@@ -813,6 +898,8 @@ class StorageManager:
                 self._create_btrfs_subvolumes(entry, destination)
             self._run(self._mount_command(entry, destination))
             if not dry_run:
+                if os.path.normpath(entry.mountpoint) in STICKY_MOUNTS:
+                    os.chmod(destination, 0o1777)  # the Handbook: chmod 1777, or every user could delete the others' files
                 self.owned_mounts.append(destination)
                 if entry in roots:
                     # Before any other mount point is created inside it, while the root still shows only what it held.
@@ -847,9 +934,9 @@ class StorageManager:
         path = self.target_path(relative)
         if btrfs:
             self._run(("btrfs", "subvolume", "create", str(self.target_path(BTRFS_SWAP_DIRECTORY))))
-            self._run(("btrfs", "filesystem", "mkswapfile", "--size", f"{s.swap_mib}m", str(path)))
+            self._run(("btrfs", "filesystem", "mkswapfile", "--size", f"{guided_layout.disk_swap_mib(s)}m", str(path)))
         else:
-            self._run(("mkswap", "--file", "--size", f"{s.swap_mib}MiB", str(path)))
+            self._run(("mkswap", "--file", "--size", f"{guided_layout.disk_swap_mib(s)}MiB", str(path)))
         self._run(("swapon", str(path)))
         entry = LayoutEntry(str(path), "", "swap", True, source=relative)
         self.layout.append(entry)
@@ -1238,6 +1325,7 @@ class StorageManager:
 
     def describe(self, manifest: InstallManifest, disks: Sequence[Disk] | None = None) -> guided_layout.StoragePlan:
         """What this manifest will do to storage (see gentoo_installer.layout.plan_storage)."""
+        manifest = self.resolved(manifest)
         self.manifest = manifest
         return guided_layout.plan_storage(manifest, disks, btrfs_subvolumes=self.use_btrfs_subvolumes())
 

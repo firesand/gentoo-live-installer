@@ -113,7 +113,7 @@ class TestPreservedPartitions:
             make_manager(StatefulRunner(disks), tmp_path).prepare(manual(ESP_ROW, ROOT_ON_B, Partition("/dev/sdb2", "/boot", "ext4", format=True), additional_device_ids=["SER-B"]))
 
     def test_a_root_on_something_that_is_not_a_filesystem_we_install_to_is_refused(self, tmp_path):
-        with pytest.raises(StorageError, match="must be ext4, XFS or Btrfs"):
+        with pytest.raises(StorageError, match="must be ext4, XFS, Btrfs or F2FS"):
             make_manager(StatefulRunner(machine()), tmp_path).prepare(manual(ESP_ROW, Partition("/dev/sdb1", "/", "vfat", format=True), additional_device_ids=["SER-B"]))
 
 

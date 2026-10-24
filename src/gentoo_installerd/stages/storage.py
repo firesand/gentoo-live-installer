@@ -111,16 +111,30 @@ class StorageStages(PlanMixin):
         self._write_fstab()
         self.configurer.configure_privileges(self.manifest)
 
+    def _blkid(self, tag: str, device: str) -> str:
+        result = self.runner.run(("blkid", "-s", tag, "-o", "value", device))
+        return result.stdout.strip().splitlines()[0] if result.stdout.strip() else ""
+
     def _write_fstab(self) -> None:
+        storage = self.manifest.storage
         uuids: dict[str, str] = {}
+        sources: dict[str, str] = {}
+        tag = {"label": "LABEL", "partuuid": "PARTUUID"}.get(storage.fstab_ident, "")
         for entry in self.storage.layout:
             if entry.source or entry.device in uuids:
                 continue  # a swap file is named by its path, not by the UUID mkswap gave it; one lookup per device
-            result = self.runner.run(("blkid", "-s", "UUID", "-o", "value", entry.device))
-            if result.stdout.strip():
-                uuids[entry.device] = result.stdout.strip().splitlines()[0]
+            value = self._blkid("UUID", entry.device)
+            if value:
+                uuids[entry.device] = value
+            if tag:
+                # A volume without a label or a partition identifier (an LVM volume, an encrypted mapping) keeps the filesystem UUID.
+                found = self._blkid(tag, entry.device)
+                if found:
+                    sources[entry.device] = f"{tag}={found}"
         discard = bool(getattr(self._plan(), "scalars", {}).get("btrfs_discard_async"))
-        self.configurer.write("etc/fstab", render_fstab(self.storage.layout, uuids, btrfs_discard=discard))
+        text = render_fstab(self.storage.layout, uuids, btrfs_discard=discard, atime=storage.atime, tz_utc=not self.manifest.system.rtc_local,
+                            boot_noauto=storage.boot_noauto, sources=sources)
+        self.configurer.write("etc/fstab", text)
 
     def _verify_storage(self) -> bool:
         self.storage.restore(self.manifest, self.checkpoints.load_layout(), self.checkpoints.load_receipt())
