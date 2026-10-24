@@ -52,15 +52,18 @@ class FakeDaemon:
             threading.Thread(target=self._handle, args=(connection,), daemon=True).start()
 
     def _handle(self, connection: socket.socket) -> None:
-        with connection, connection.makefile("rwb") as stream:
-            line = stream.readline()
-            if not line:
-                return
-            request = json.loads(line)
-            self.requests.append(request)
-            for event in self.handler(request):
-                stream.write(json.dumps(event).encode() + b"\n")
-                stream.flush()
+        try:
+            with connection, connection.makefile("rwb") as stream:
+                line = stream.readline()
+                if not line:
+                    return
+                request = json.loads(line)
+                self.requests.append(request)
+                for event in self.handler(request):
+                    stream.write(json.dumps(event).encode() + b"\n")
+                    stream.flush()
+        except OSError:
+            pass  # the client left early (a worker stops reading after "completed")
 
     def close(self) -> None:
         self._stop = True

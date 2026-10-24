@@ -9,7 +9,7 @@ from PySide6.QtWidgets import QMessageBox
 from gentoo_installer.app import InstallerWindow, bounded_window_height
 from gentoo_installer.manifest import InstallManifest, Partition
 from gentoo_installerd.events import Event
-from gentoo_installer.system_info import DiskInfo, SystemInfo
+from gentoo_installer.system_info import DiskInfo, PartitionInfo, SystemInfo
 from tests.vm.helpers import PUBLIC_KEY, load_vm_module
 
 
@@ -30,7 +30,7 @@ def info():
 def window(qtbot, monkeypatch, info, tmp_path):
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path))
     monkeypatch.setattr("gentoo_installer.app.inspect_system", lambda: info)
-    widget = InstallerWindow(InstallManifest(), str(tmp_path / "backend.sock"))
+    widget = InstallerWindow(InstallManifest(), str(tmp_path / "backend.sock"), background_inspection=False)
     qtbot.addWidget(widget)
     widget.show()
     return widget
@@ -52,8 +52,8 @@ def populate(window):
     [
         (790, 772, 724),  # 800px XFCE desktop with its top panel.
         (700, 772, 700),  # Do not expand an intentionally smaller window.
-        (790, 680, 640),  # Preserve the supported minimum size.
-        (790, 600, 640),  # Minimum remains stable on very short screens.
+        (790, 680, 632),  # Leave room for the title bar and panel.
+        (790, 600, 560),  # The minimum stays at 560 on very short screens.
     ],
 )
 def test_initial_window_height_fits_available_desktop(requested, available, expected):
@@ -62,9 +62,10 @@ def test_initial_window_height_fits_available_desktop(requested, available, expe
 
 def test_window_keeps_resizable_minimum_and_clamps_to_screen(window):
     screen = window.screen()
-    assert window.minimumHeight() == 640
+    assert window.minimumHeight() == 560
+    assert window.minimumWidth() == 800
     assert window.maximumHeight() > window.minimumHeight()
-    assert window.height() <= max(640, screen.availableGeometry().height() - 48)
+    assert window.height() <= max(560, screen.availableGeometry().height() - 48)
 
 
 def test_every_page_constructs_and_choice_cards_do_not_recurse(window):
@@ -126,7 +127,9 @@ def test_default_gui_manifest_selects_kde_profile_for_amd64_openrc():
 def test_kernel_guidance_explains_automatic_kernel_dracut_requirement(window):
     guidance = window.system.kernel_guidance.text()
     assert "distribution kernels require Dracut" in guidance
-    assert "Manual kernel configuration" in guidance
+    assert "Manual kernel configuration" not in guidance
+    assert [window.system.kernel.itemData(i) for i in range(window.system.kernel.count())] == ["gentoo-kernel-bin", "gentoo-kernel"]
+    assert [window.system.initramfs.itemData(i) for i in range(window.system.initramfs.count())] == ["dracut"]
 
 
 def test_guided_choices_reach_a_valid_review(window):
@@ -168,7 +171,7 @@ def test_vm_harness_manifests_survive_real_wizard_roundtrip(qtbot, monkeypatch, 
     )
     monkeypatch.setattr("gentoo_installer.app.inspect_system", lambda: info)
     monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / scenario_name))
-    widget = InstallerWindow(manifest, str(tmp_path / "backend.sock"))
+    widget = InstallerWindow(manifest, str(tmp_path / "backend.sock"), background_inspection=False)
     qtbot.addWidget(widget)
     widget.show()
     started = []
@@ -186,6 +189,11 @@ def test_vm_harness_manifests_survive_real_wizard_roundtrip(qtbot, monkeypatch, 
 
 
 def test_manual_partition_rows_do_not_duplicate_on_navigation(window):
+    window.info.disks[0].partitions = [
+        PartitionInfo("/dev/sda1", 512 * 1024**2, "vfat", parttype="c12a7328-f81f-11d2-ba4b-00a0c93ec93b", parent="/dev/sda"),
+        PartitionInfo("/dev/sda2", 40 * 1024**3, "ext4", parent="/dev/sda"),
+    ]
+    window.apply_info(window.info)
     window.manifest.storage.device = "/dev/sda"
     window.manifest.storage.mode = "manual"
     window.manifest.storage.partitions = [
@@ -274,7 +282,7 @@ def test_close_persists_no_passwords(window):
 
 
 def test_close_requests_cancel_and_waits_for_worker_to_stop(window, monkeypatch, qtbot):
-    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.StandardButton.No)
+    monkeypatch.setattr(InstallerWindow, "_confirm_close_during_install", lambda self: True)
     calls = []
     window.progress.stop = lambda: calls.append("cancel")
     window.install_started = True
