@@ -179,7 +179,7 @@ def test_tools_for_selection_follow_the_daemon_rules():
     manifest.storage.luks = True
     manifest.storage.filesystem = "btrfs"
     manifest.system.bootloader = "efi-stub"
-    assert system_info.tools_for_selection(manifest) == ["cryptsetup", "efibootmgr", "mkfs.btrfs", "mkfs.vfat", "swapoff", "swapon"]
+    assert system_info.tools_for_selection(manifest) == ["blockdev", "cryptsetup", "efibootmgr", "mkfs.btrfs", "mkfs.vfat", "swapoff", "swapon"]
     manifest.storage.mode = "manual"
     manifest.storage.partitions = [Partition("/dev/sda1", "/", "xfs", format=True), Partition("/dev/sda2", "/home", "ext4", format=False)]
     assert "mkfs.xfs" in system_info.tools_for_selection(manifest)

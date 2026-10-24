@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Sequence
 
 from gentoo_installer import hardware_data as data
-from gentoo_installer import keyboard_data, recommend
+from gentoo_installer import keyboard_data, layout, recommend
 from gentoo_installer.hardware import DiskInfo, GpuInfo, HardwareProfile, gpu_label, is_hybrid, parent_disk_name
 from gentoo_installer.manifest import InstallManifest
 
@@ -667,7 +667,7 @@ class _Planner:
         total_kib = self.hw.memory.total_kib
         if not total_kib:
             return
-        swap_mib = _swap_mib(self.m, self.hw) or 0
+        swap_mib = (layout.effective_swap_mib(self.m.storage, self.hw.memory.total_kib) if self.m.storage.mode != "manual" else _swap_mib(self.m, self.hw)) or 0
         jobs = recommend.memory_heavy_jobs(total_kib, swap_mib)
         typed = self.m.portage.make_opts.strip()
         machine = recommend.make_opts_jobs(typed) if typed else recommend.recommend_jobs(self.hw.cpu.threads, self.hw.memory.available_kib, swap_mib)
@@ -988,7 +988,7 @@ def _memory_issues(m: InstallManifest, hw: HardwareProfile) -> list[Issue]:
 def _swap_mib(m: InstallManifest, hw: HardwareProfile) -> int | None:
     """MiB of swap the installation will have; None when a manual layout's swap is not a partition the probe lists (so it is not measured)."""
     if m.storage.mode != "manual":
-        return m.storage.swap_mib
+        return layout.effective_swap_partition_mib(m.storage, hw.memory.total_kib)  # follows swap_choice and swap_kind
     rows = [row for row in m.storage.partitions if row.filesystem == "swap"]
     if not rows:
         return 0
@@ -1101,7 +1101,7 @@ def _disk_issues(m: InstallManifest, hw: HardwareProfile, disk: DiskInfo) -> lis
     if not disk.serial and not disk.wwn and storage.device_id_kind != "path":
         out.append(Issue("hw.st_no_serial", "info", "This disk has no serial number or WWN. It must be identified by its bus connection, size and model, which you have to approve."))
     if storage.mode == "erase" and disk.size:
-        root_mib = disk.size // 1024**2 - (1024 if storage.firmware == "uefi" else 3) - (1024 if storage.luks else 0) - storage.swap_mib \
+        root_mib = disk.size // 1024**2 - (1024 if storage.firmware == "uefi" else 3) - (1024 if storage.luks else 0) - layout.effective_swap_mib(storage, hw.memory.total_kib) \
             - (storage.home_mib if storage.separate_home else 0)
         minimum, recommended = recommend.minimum_root_gib(m.system.desktop, m.portage.binhost)
         if root_mib < minimum * 1024:

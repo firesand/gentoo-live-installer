@@ -738,12 +738,13 @@ def tools_for_selection(manifest: Any) -> list[str]:
     needed: set[str] = set()
     if storage.firmware == "uefi":
         needed.add("mkfs.vfat")
-    if storage.filesystem in {"xfs", "btrfs"}:
+    if storage.filesystem in {"xfs", "btrfs", "f2fs"}:
         needed.add("mkfs." + storage.filesystem)
+    needed.add("blockdev")  # sizes the filesystems (mkfs -T small on a small disk)
     for partition in storage.partitions:
-        if partition.format and partition.filesystem in {"ext4", "xfs", "btrfs", "vfat"}:
+        if partition.format and partition.filesystem in {"ext4", "xfs", "btrfs", "vfat", "f2fs"}:
             needed.add("mkfs." + partition.filesystem)
-    if storage.swap_mib or any(p.filesystem == "swap" for p in storage.partitions):
+    if (storage.mode == "erase" and layout.effective_swap_mib(storage)) or any(p.filesystem == "swap" for p in storage.partitions):
         needed.update(("swapon", "swapoff"))
     if storage.luks:
         needed.add("cryptsetup")

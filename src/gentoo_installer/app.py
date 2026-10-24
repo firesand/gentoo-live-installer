@@ -448,7 +448,9 @@ class InstallerWindow(QMainWindow):
         page = self.pages[self.current]
         valid, message = page.validate_page()
         if not valid:
-            QMessageBox.warning(self, "Check this step", message)
+            inline = getattr(page, "show_inline_problem", None)  # a page may show a problem on itself instead of in a dialog
+            if not (callable(inline) and inline(message)):
+                QMessageBox.warning(self, "Check this step", message)
             return
         page.save_manifest()
         if self.current == REVIEW:

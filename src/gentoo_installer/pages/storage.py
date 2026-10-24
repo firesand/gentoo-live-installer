@@ -110,6 +110,9 @@ def holder_reasons(info: SystemInfo, devices: list[str]) -> list[str]:
     return list(dict.fromkeys(reasons))
 
 
+NO_DISK_CHOSEN = "Select the disk you want to use."
+
+
 class StoragePage(Page):
     rescanRequested = Signal()
 
@@ -943,6 +946,16 @@ class StoragePage(Page):
         storage.additional_device_ids = wanted
         self._extras_written = True
 
+    def show_inline_problem(self, message: str) -> bool:
+        """Show the "no disk chosen" problem as the hint on the page instead of a dialog (the window asks before it opens a message box)."""
+        if message != NO_DISK_CHOSEN:
+            return False
+        self.choose_hint.setProperty("muted", False)
+        self.choose_hint.setStyleSheet("font-weight: 600;")
+        self.choose_hint.show()
+        self.disk_group.setFocus()
+        return True
+
     def validate_page(self) -> tuple[bool, str]:
         self.save_manifest()
         storage = self.manifest.storage
@@ -951,7 +964,7 @@ class StoragePage(Page):
                 if self._swapped:
                     return False, SWAPPED_DISK.format(path=self._vanished)
                 return False, f"The disk you selected ({self._vanished}) is no longer present. Select a disk again."
-            return False, "Select the disk you want to use."
+            return False, NO_DISK_CHOSEN
         disk = self.selected_disk()
         if disk is None:
             return False, f"The selected disk {self.disk_group.value()} is no longer present. Press “Check again” on the readiness page and select a disk."
@@ -976,7 +989,7 @@ class StoragePage(Page):
         if storage.luks and self.passphrase.text() != self.passphrase_confirm.text():
             return False, "The LUKS passphrases do not match."
         if storage.mode == "erase":
-            problem = layout.swap_kind_problem(self._planned_storage())
+            problem = layout.swap_kind_problem(self._planned_storage(), self.manifest.hardware.hibernate)
             if problem:
                 return False, problem
             problems = layout.table_problems(storage, disk.size, disk.log_sec)

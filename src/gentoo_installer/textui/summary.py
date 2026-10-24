@@ -79,7 +79,8 @@ def settings_rows(manifest: InstallManifest, view: MachineView) -> list[tuple[st
     disk = layout.disk_description(entry.disk) if entry is not None else storage.device
     if storage.device_id_kind == "path":
         disk += " - recognised by its hardware path, size and model"
-    swap = f"{storage.swap_mib} MiB swap" if storage.swap_mib else "no swap"
+    swap_mib = layout.effective_swap_mib(storage, int(view.memory_gib * 1024 * 1024))
+    swap = f"{swap_mib} MiB swap" if swap_mib else "no swap"
     desktop = "no desktop (text mode)" if system.desktop == "minimal" else {"kde": "KDE Plasma", "gnome": "GNOME", "xfce": "Xfce"}.get(system.desktop, system.desktop)
     root = "root login turned off (use sudo)" if accounts.disable_root_login else "root has a password"
     return [

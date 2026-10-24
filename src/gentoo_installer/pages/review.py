@@ -22,6 +22,7 @@ from .. import diagnostics, layout
 from ..manifest import InstallManifest
 from ..system_info import DiskInfo, SystemInfo, tools_for_selection
 from ..widgets import Card, FlowLayout, Page, wrapped_label
+from .help import AdvancedSection
 from .hardware import CAPACITY_CODES, blocking_findings, hardware_plan, plan_lines
 from .system import FAMILY_DESKTOP_SUPPORT, FAMILY_LABELS, UNVERIFIED_FAMILIES, stage_family
 
@@ -152,6 +153,15 @@ def graphics_driver_text(manifest: InstallManifest, info: SystemInfo | None) -> 
     return "Open-source driver"
 
 
+def fstab_preview_text(manifest: InstallManifest) -> str:
+    """The read-only /etc/fstab preview (empty when it cannot be built)."""
+    try:
+        return layout.fstab_preview(manifest, btrfs_subvolumes=layout_features()[0])
+    except Exception:  # noqa: BLE001 - a preview only
+        LOG.exception("The fstab preview could not be built")
+        return ""
+
+
 def storage_plan_text(manifest: InstallManifest, info: SystemInfo | None) -> str:
     plan = storage_plan(manifest, info)
     return "\n".join(plan.lines()) if plan is not None else ""
@@ -239,6 +249,13 @@ class ReviewPage(Page):
         self.storage_plan.setAccessibleName("Storage plan")
         plan_card.content.addWidget(self.storage_plan)
         self.content.addWidget(plan_card)
+        self.fstab_section = AdvancedSection("review", "Show /etc/fstab (the disk mount table)")
+        self.fstab_text = wrapped_label("", selectable=True)
+        self.fstab_text.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+        self.fstab_text.setAccessibleName("fstab preview")
+        self.fstab_section.add_widget(wrapped_label("Read-only preview of the file that tells the system what to mount. The <...> parts are filled in with the real disk identifiers during installation.", muted=True))
+        self.fstab_section.add_widget(self.fstab_text)
+        self.content.addWidget(self.fstab_section)
         self.hardware_card = Card("Set-up for this computer", "Chosen from the hardware that was found. Change it on the Hardware tab of the Customization step.")
         self.hardware_plan = wrapped_label("", selectable=True)
         self.hardware_plan.setAccessibleName("Hardware set-up")
@@ -302,7 +319,10 @@ class ReviewPage(Page):
                 value = storage.encryption_summary()  # says what is and is not encrypted, not just "enabled"
             rich.append((name, value))
         if storage.mode == "erase":
-            rich.append(("Swap", f"{storage.swap_mib} MiB" if storage.swap_mib else "None"))
+            kib = int(self.info.memory_gib * 1024 * 1024) if self.info is not None else 0
+            swap = layout.effective_swap_mib(storage, kib)
+            rich.append(("Swap", (f"{swap} MiB " + ("swap file" if layout.swap_in_root(layout.resolve_swap(storage, kib)) else "swap partition")) if swap
+                         else "Compressed RAM (zram)" if storage.swap_kind == "zram" and storage.swap_choice != "none" else "None"))
         rich.append(("Installed for", "A portable disk (other computers)" if self.manifest.hardware.target == "portable" else "This computer"))
         rich.append(("Graphics driver", graphics_driver_text(self.manifest, self.info)))
         rich.append(("Region", f"{self.manifest.system.locale} · {self.manifest.system.timezone} · keyboard {self.manifest.system.keyboard_layout} (console {self.manifest.system.keymap})"))
@@ -313,6 +333,7 @@ class ReviewPage(Page):
         self.summary.resizeRowsToContents()
         self.warning.setText(disk_warning(self.manifest, self.info))
         self.storage_plan.setText(storage_plan_text(self.manifest, self.info))
+        self.fstab_text.setText(fstab_preview_text(self.manifest))
         hardware = self.info.hardware if self.info is not None else {}
         lines = plan_lines(hardware_plan(self.manifest, hardware)) if hardware else []
         self.hardware_plan.setText("\n".join("• " + line for line in lines))
@@ -328,6 +349,9 @@ class ReviewPage(Page):
         resumable = bool(daemon is not None and daemon.reachable and daemon.status.get("resumable") and not daemon.job_running)
         self.resume_check.setVisible(resumable)
         self.resume_check.setChecked(False)
+
+    def set_advanced(self, advanced: bool) -> None:
+        self.fstab_section.set_advanced(advanced)
 
     def resume_requested(self) -> bool:
         return self.resume_check.isVisibleTo(self) and self.resume_check.isChecked()

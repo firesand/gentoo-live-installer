@@ -366,3 +366,26 @@ def test_the_detected_swap_reaches_the_page_and_a_chosen_one_is_left_alone(make_
     page.swap.setValue(3)
     window.apply_info(with_memory(info_of(plain_disk()), 4))
     assert page.swap_mode.currentData() == "custom" and page.swap.value() == 3
+
+
+# --- review fixes: the inline hint and the fstab preview ---------------------------------------------------------------
+
+
+def test_continue_without_a_disk_shows_the_hint_and_no_dialog(make_window, monkeypatch):
+    window = make_window(info=info_of(plain_disk()))
+    window.current = window.pages.index(window.storage)
+    shown = []
+    monkeypatch.setattr("gentoo_installer.app.QMessageBox.warning", lambda *a, **k: shown.append(a))
+    window.next_page()
+    assert shown == [] and window.storage.choose_hint.isVisibleTo(window.storage)
+
+
+def test_the_review_page_shows_the_fstab_preview(make_window):
+    window = make_window(info=info_of(plain_disk()))
+    review = window.review
+    window.manifest.storage.device = "/dev/sda"
+    review.set_manifest(window.manifest) if hasattr(review, "set_manifest") else None
+    review.load_manifest()
+    text = review.fstab_text.text()
+    assert "/etc/fstab" in text or "UUID=" in text or "LABEL=" in text
+    assert "noatime" in text

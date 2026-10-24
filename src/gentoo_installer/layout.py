@@ -111,10 +111,27 @@ def swap_partition_mib(storage: Storage) -> int:
     return 0 if swap_in_root(storage) else disk_swap_mib(storage)
 
 
-def swap_kind_problem(storage: Storage) -> str:
-    """Why the swap settings cannot work ("" when they can)."""
+def effective_swap_mib(storage: Storage, total_kib: int = 0) -> int:
+    """MiB of swap on the disk the installation will really get (partition or file; 0 for none and zram).
+
+    The one place that follows swap_choice and swap_kind, for the pre-install checks, the Review page and the summaries.
+    Without the amount of memory (``total_kib`` 0) a "recommended" or "hibernate" choice keeps the stored size.
+    """
+    return disk_swap_mib(resolve_swap(storage, total_kib))
+
+
+def effective_swap_partition_mib(storage: Storage, total_kib: int = 0) -> int:
+    """MiB of the swap PARTITION the guided layout creates (what hibernation can resume from); 0 for a file, zram or none."""
+    return swap_partition_mib(resolve_swap(storage, total_kib))
+
+
+def swap_kind_problem(storage: Storage, hibernate: bool = False) -> str:
+    """Why the swap settings cannot work ("" when they can). ``hibernate`` is hardware.hibernate."""
     if storage.mode != "erase":
         return ""
+    if hibernate and (storage.swap_choice == "none" or storage.swap_kind in ("none", "zram", "file") or (storage.swap_kind == "auto" and storage.luks)):
+        return ("Hibernation needs a swap partition (as large as the memory) to resume from; a swap file, compressed RAM (zram) or no swap cannot do it. "
+                "Choose the swap partition, or turn hibernation off.")
     if storage.luks and storage.swap_kind == "partition" and disk_swap_mib(storage):
         return ("A swap partition would be stored without encryption. With an encrypted disk the swap is a file inside the encrypted root: "
                 "choose that, or turn swap off.")
