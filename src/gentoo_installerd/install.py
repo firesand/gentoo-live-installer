@@ -10,10 +10,11 @@ from typing import Callable
 
 from gentoo_installer.manifest import InstallManifest
 
-from .configure import Configurer
+from .configure import RECEIPT_PATH, Configurer, PackageInstallError, render_fstab
 from .events import Event, EventSink
 from .inspect import Discovery, Inspection
-from .runner import DryRunRunner, InstallCancelled, Runner, SubprocessRunner, redact_text
+from .proxy import proxy_environment
+from .runner import DryRunRunner, InstallCancelled, Runner, RunnerError, SubprocessRunner, redact_text
 from .stage3 import Stage3Manager
 from .storage import LayoutEntry, StorageManager
 
@@ -266,16 +267,45 @@ class Installer:
             self.checkpoints.save_layout(layout, self.storage.snapshot())
         self.emit("progress", "storage", "Storage layout prepared", data={"layout": [entry.__dict__ for entry in layout]})
 
+    # --- stage helpers -----------------------------------------------------------------
+
+    @property
+    def degraded(self) -> list[str]:
+        """Optional pieces that could not be installed; the installation still finishes."""
+        return self.__dict__.setdefault("_degraded", [])
+
+    def _plan(self) -> object | None:
+        """The hardware plan (gentoo_installerd.hwplan.HardwarePlan) that _preflight builds, if any."""
+        return getattr(self, "hardware_plan", None)
+
+    def _root_device(self) -> str:
+        return next(entry.device for entry in self.storage.layout if entry.mountpoint == "/")
+
+    def _uuid_of(self, device: str) -> str:
+        if self.dry_run or not device:
+            return ""
+        try:
+            return self.runner.run(("blkid", "-s", "UUID", "-o", "value", device)).stdout.strip().splitlines()[0]
+        except (RunnerError, IndexError):
+            return ""
+
     def _stage3(self) -> None:
         if self.dry_run:
             self.log("Would discover, signature-verify, hash-verify, download, and extract the selected official stage3")
             return
         self.target_root.mkdir(parents=True, exist_ok=True)
+        self.stage3.notify = self.log
+        extra: dict[str, object] = {"allowed_existing": [entry.mountpoint for entry in self.storage.layout if entry.mountpoint]}
+        if self.manifest.network.proxy:
+            extra["proxy"] = self.manifest.network.proxy
+        if self.manifest.portage.mirror_fallbacks:
+            extra["fallback_mirrors"] = tuple(self.manifest.portage.mirror_fallbacks)
         self.stage3.install(
             self.manifest.portage.mirror,
             self.manifest.system.stage_variant,
             self.target_root,
             lambda current, total: self.emit("progress", "stage3", "Downloading stage3", current * 100 / total if total else None, downloaded=current, total=total),
+            **extra,
         )
 
     def _mounts(self) -> None:
@@ -309,56 +339,74 @@ class Installer:
         self.runner.run(("mount", "--make-rprivate", str(self.configurer.path("run"))))
 
     def _repository(self) -> None:
+        self.configurer.notify = self.log
+        # make.conf first: emerge-webrsync reads GENTOO_MIRRORS from it, and a proxy has to be
+        # known before the first download.
+        self.configurer.configure_portage(self.manifest, self._plan())
+        environment = proxy_environment(self.manifest.network.proxy)
         if self.manifest.portage.rsync_mirror:
-            self.configurer.configure_portage(self.manifest)
-            self.configurer.chroot(("emaint", "sync", "--auto"))
+            self.configurer.chroot(("emaint", "sync", "--auto"), env=environment)
         else:
-            self.configurer.chroot(("emerge-webrsync",))
+            self.configurer.chroot(("emerge-webrsync",), env=environment)
 
     def _portage(self) -> None:
-        self.configurer.configure_portage(self.manifest)
-        self.configurer.chroot(("eselect", "profile", "set", self.manifest.system.profile))
+        self.configurer.notify = self.log
+        plan = self._plan()
+        self.configurer.configure_portage(self.manifest, plan)
+        self.configurer.chroot(("eselect", "profile", "set", self.manifest.effective_profile()))
+        self.configurer.configure_companion_overlay(self.manifest)
+        # Resolve everything the later stages will emerge now: an impossible combination of
+        # options fails here, in minutes and with the disk still reusable, not hours later.
+        required = [*self.configurer.kernel_stage_atoms(self.manifest, self.storage.layout, plan),
+                    *self.configurer.kernel_atoms(self.manifest), *self.configurer.essential_atoms(self.manifest, plan),
+                    *self.configurer.bootloader_atoms(self.manifest), *self.configurer.desktop_atoms(self.manifest, plan).required]
+        try:
+            self.configurer.pretend(self.manifest, list(dict.fromkeys(required)))
+        except PackageInstallError as exc:
+            raise InstallError(str(exc)) from exc
 
     def _kernel(self) -> None:
-        root = next(entry.device for entry in self.storage.layout if entry.mountpoint == "/")
-        self.configurer.configure_initramfs(self.manifest, root, self.storage._stack.get("luks_device"))
+        plan = self._plan()
+        self.configurer.notify = self.log
+        root = self._root_device()
+        self.configurer.configure_initramfs(self.manifest, root, self.storage._stack.get("luks_device"), plan)
         kernel = self.manifest.system.kernel
         if kernel == "manual":
+            # "Manual kernel" is a command-line option: the graphical installer cannot pause for it.
             if self.resume and self._verify_kernel():
                 self.log("Verified manually installed kernel and initramfs")
                 return
             raise InstallError(f"Manual kernel selected. After cleanup, remount the saved target filesystems at {self.target_root}, chroot into that directory, install the kernel and initramfs under /boot, then resume")
         # Dracut needs the target's storage utilities when it builds the image.
         # Installing them in the later packages stage would produce an unusable
-        # encrypted/LVM/RAID root image (or fail generation altogether).
-        storage_tools = []
-        if self.manifest.storage.luks:
-            storage_tools.append("sys-fs/cryptsetup")
-        if self.manifest.storage.lvm:
-            storage_tools.append("sys-fs/lvm2")
-        if self.manifest.storage.raid_level:
-            storage_tools.append("sys-fs/mdadm")
-        # Firmware packages also supply microcode and dracut configuration;
-        # they must exist before either the kernel post-install hook or our
-        # explicit initramfs generation runs. Later --noreplace skips them.
-        storage_tools.extend(self.configurer.early_boot_atoms(self.manifest))
-        if storage_tools:
-            self.configurer.chroot(("emerge", "--noreplace", *storage_tools))
+        # encrypted/LVM/RAID root image (or fail generation altogether). Firmware
+        # packages also supply microcode and dracut configuration, and the filesystem
+        # userland lets the installed system check its own partitions; later --noreplace skips them.
+        batch = self.configurer.kernel_stage_atoms(self.manifest, self.storage.layout, plan)
+        if batch:
+            self.configurer.emerge(self.manifest, ("--noreplace", *batch))
         if self.manifest.system.init == "systemd" and self.manifest.storage.luks:
             # systemd is already installed in its stage3, so --noreplace would
             # retain the build without systemd-cryptsetup in the initramfs.
-            self.configurer.chroot(("emerge", "--update", "--newuse", "--oneshot", "sys-apps/systemd"))
+            self.configurer.emerge(self.manifest, ("--update", "--newuse", "--oneshot", "sys-apps/systemd"))
             if not self.dry_run and not self.configurer.path("usr/lib/systemd/systemd-cryptsetup").is_file():
                 raise InstallError("systemd-cryptsetup is missing after enabling systemd[cryptsetup]")
-        self.configurer.chroot(("emerge", "--noreplace", "sys-kernel/installkernel", f"sys-kernel/{kernel}"))
+        self.configurer.emerge(self.manifest, ("--noreplace", "sys-kernel/installkernel", f"sys-kernel/{kernel}"))
+        # Files and out-of-tree drivers from the hardware plan must exist before the initramfs is built.
+        self.configurer.write_plan_files(plan)
+        driver_atoms = [str(atom) for atom in getattr(plan, "driver_atoms", None) or []]
+        if driver_atoms:
+            try:
+                self.configurer.emerge(self.manifest, ("--noreplace", *driver_atoms))
+            except RunnerError as exc:
+                self.degraded.append(f"Hardware drivers ({', '.join(driver_atoms)}) could not be installed: {str(exc)[-200:]}")
+                self.log("WARNING: " + self.degraded[-1])
         if self.manifest.system.initramfs == "dracut":
-            self.configurer.chroot(("emerge", "--noreplace", "sys-kernel/dracut"))
+            self.configurer.emerge(self.manifest, ("--noreplace", "sys-kernel/dracut"))
             self.configurer.chroot(("dracut", "--force", "--regenerate-all"))
-        elif self.manifest.system.initramfs == "genkernel":
-            self.configurer.chroot(("emerge", "--noreplace", "sys-kernel/genkernel"))
-            self.configurer.chroot(("genkernel", "all"))
 
     def _target(self) -> None:
+        self.configurer.notify = self.log
         self.configurer.configure_identity(self.manifest)
         self.configurer.configure_accounts(self.manifest)
         self.configurer.configure_network(self.manifest)
@@ -367,53 +415,82 @@ class Installer:
             result = self.runner.run(("blkid", "-s", "UUID", "-o", "value", entry.device))
             if result.stdout.strip():
                 uuids[entry.device] = result.stdout.strip().splitlines()[0]
-        from .configure import render_fstab
         self.configurer.write("etc/fstab", render_fstab(self.storage.layout, uuids))
-        if self.manifest.accounts.privilege == "sudo":
-            self.configurer.write("etc/sudoers.d/wheel", "%wheel ALL=(ALL:ALL) ALL\n", 0o440)
-        else:
-            self.configurer.write("etc/doas.conf", "permit persist :wheel\n", 0o600)
+        self.configurer.configure_privileges(self.manifest)
 
     def _base(self) -> None:
-        """Essential packages and services needed to boot and log in."""
-        self.configurer.install_packages(self.manifest)
-        self.configurer.configure_services(self.manifest)
-        if self.manifest.system.world_update:
-            self.configurer.chroot(("emerge", "--update", "--deep", "--newuse", "@world"))
+        """Essential packages and services: after this the system can be managed from a console."""
+        self.configurer.notify = self.log
+        try:
+            self.configurer.install_essential(self.manifest, self._plan())
+        except PackageInstallError as exc:
+            raise InstallError(str(exc)) from exc
+        self.configurer.configure_network_late(self.manifest)
+        self.configurer.configure_services(self.manifest, self._plan(), phase="base")
+
+    def _bootloader(self) -> None:
+        self.configurer.notify = self.log
+        self.configurer.emerge(self.manifest, ("--noreplace", *self.configurer.bootloader_atoms(self.manifest)))
+        root = self._root_device()
+        efi = next((entry.device for entry in self.storage.layout if entry.mountpoint in {"/efi", "/boot/efi"}), None)
+        self.configurer.configure_bootloader(self.manifest, root, efi, self._plan())
+        self.configurer.write_receipt(self.manifest, root, self.storage.layout, self.storage._stack.get("luks_device"), self._plan())
 
     def _desktop(self) -> None:
         """Desktop and optional packages, installed after the bootloader.
 
-        The package sets are not split yet: _base still installs everything.
+        The system is already bootable here, so a failure of an optional package is reported as a
+        warning (``degraded``); only a desktop environment that cannot be installed fails the stage,
+        flagged ``bootable`` so the front end can offer to reboot into the base system.
         """
-
-    def _bootloader(self) -> None:
-        systemd_package = "sys-apps/systemd" if self.manifest.system.init == "systemd" else "sys-apps/systemd-utils"
-        package = {"grub": "sys-boot/grub", "systemd-boot": systemd_package, "efi-stub": "sys-boot/efibootmgr"}[self.manifest.system.bootloader]
-        packages = [package]
-        if self.manifest.system.uki:
-            if systemd_package not in packages:
-                packages.append(systemd_package)
-        if self.manifest.system.secure_boot:
-            packages.append("app-crypt/sbsigntools")
-        self.configurer.chroot(("emerge", "--noreplace", *packages))
-        root = next(entry.device for entry in self.storage.layout if entry.mountpoint == "/")
-        efi = next((entry.device for entry in self.storage.layout if entry.mountpoint in {"/efi", "/boot/efi"}), None)
-        self.configurer.configure_bootloader(self.manifest, root, efi)
+        self.configurer.notify = self.log
+        plan = self._plan()
+        try:
+            result = self.configurer.install_desktop(self.manifest, plan)
+        except PackageInstallError as exc:
+            self.log(f"The base system is installed and bootable; only the desktop failed: {exc}")
+            error = InstallError(f"{exc} The base system is installed and bootable; reboot to use it or retry the desktop installation.")
+            error.bootable = True  # type: ignore[attr-defined]
+            raise error from exc
+        warnings = [*result.degraded, *self.configurer.configure_services(self.manifest, plan, phase="desktop")]
+        self.configurer.configure_desktop_session(self.manifest)
+        warnings.extend(self.configurer.run_plan_steps(plan))
+        if warnings:
+            self.degraded.extend(warnings)
+            for warning in warnings:
+                self.log("WARNING: " + warning)
+            self.emit("progress", "desktop", "Installed with warnings", degraded=warnings, bootable=True)
 
     def _validate(self) -> None:
-        efi = self.configurer.efi_mountpoint(self.manifest)
-        for path in ("etc/fstab", "etc/portage/make.conf", "etc/passwd"):
-            self.configurer.chroot(("test", "-s", f"/{path}"))
-        self.configurer.chroot(("getent", "passwd", self.manifest.accounts.username))
-        if self.manifest.system.uki:
-            self.configurer.chroot(("test", "-s", f"{efi}/EFI/Linux/gentoo.efi"))
-        if self.manifest.system.bootloader == "grub":
-            self.configurer.chroot(("test", "-s", "/boot/grub/grub.cfg"))
-        elif self.manifest.system.bootloader == "systemd-boot":
-            self.configurer.chroot(("test", "-s", f"{efi}/loader/entries/gentoo.conf"))
+        cfg = self.configurer
+        for path in ("etc/fstab", "etc/portage/make.conf"):
+            cfg.chroot(("test", "-s", f"/{path}"))
+        cfg.chroot(("getent", "passwd", self.manifest.accounts.username))
+        problems = cfg.verify_boot_setup(self.manifest, self._root_device(), root_uuid=self._uuid_of(self._root_device()))
+        modules = cfg.initramfs_modules()
+        if modules is not None:
+            for wanted, needed in (("crypt", self.manifest.storage.luks), ("lvm", self.manifest.storage.lvm)):
+                if needed and wanted not in modules:
+                    problems.append(f"The initramfs lacks the {wanted} module, so the root filesystem could not be opened at boot")
+        if problems:
+            raise InstallError("The installed system failed its final checks: " + "; ".join(problems))
+        self._keep_install_log()
         if self.manifest.system.desktop != "minimal":
             self.log("Desktop packages installed; graphical session will be available after reboot")
+        # Last: nothing after this point needs name resolution inside the target.
+        cfg.finalize_network(self.manifest)
+
+    def _keep_install_log(self) -> None:
+        """Leave the (already redacted) log and manifest on the new system for later troubleshooting."""
+        if self.dry_run:
+            return
+        for name in ("install.log", "manifest.json"):
+            source = self.state_dir / name
+            try:
+                if source.is_file():
+                    self.configurer.write_bytes(f"var/log/gentoo-installer/{name}", source.read_bytes(), 0o600)
+            except OSError as exc:
+                self.log(f"Could not keep {name} on the new system: {exc}")
 
     def _cleanup(self) -> None:
         if self._cleanup_done:
@@ -452,8 +529,13 @@ class Installer:
         efi = self.configurer.efi_mountpoint(self.manifest).lstrip("/")
         if self.manifest.system.uki and not self._target_file(f"{efi}/EFI/Linux/gentoo.efi"):
             return False
+        if not self._target_file(RECEIPT_PATH):
+            return False
         if self.manifest.system.bootloader == "efi-stub":
             return "Gentoo" in self.runner.run(("efibootmgr",)).stdout
+        if self.manifest.system.bootloader == "grub" and self.manifest.storage.firmware == "uefi" \
+                and not (self._target_file(f"{efi}/EFI/Gentoo/grubx64.efi") or self._target_file(f"{efi}/EFI/BOOT/BOOTX64.EFI")):
+            return False
         path = "boot/grub/grub.cfg" if self.manifest.system.bootloader == "grub" else f"{efi}/loader/entries/gentoo.conf"
         return self._target_file(path)
 

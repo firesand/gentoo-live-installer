@@ -54,7 +54,10 @@ def test_bounded_compiler_resources_survive_saved_manifest(tmp_path):
     reloaded = InstallManifest.load(saved)
     assert reloaded.storage.swap_mib == 4096
     assert reloaded.portage.make_opts == "-j1"
-    assert "NINJAOPTS=-j1\n" in render_make_conf(reloaded)
+    # ninja-utils.eclass derives Ninja's -j/-l from MAKEOPTS when NINJAOPTS is unset, so only MAKEOPTS is persisted.
+    rendered = render_make_conf(reloaded)
+    assert "MAKEOPTS=-j1\n" in rendered
+    assert "NINJAOPTS" not in rendered
     assert vm.companion_selection(reloaded) == {"hwmonux": True, "portagehub": True}
 
 
