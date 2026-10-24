@@ -339,3 +339,23 @@ def test_a_truncated_kernel_image_is_an_error_with_the_kernel_reinstall_as_the_f
     errors = [f for f in info["findings"] if f["severity"] == "error"]
     assert [(f["id"], f["actions"]) for f in errors] == [("D01", ["boot.kernel"])] and "incomplete" in errors[0]["title"]
     assert info["recommended"] == ["boot.kernel"]
+
+
+@pytest.mark.parametrize("family", ["arch", "opensuse"])
+def test_a_system_without_automatic_repairs_still_gets_a_read_write_terminal(lab_factory, family: str) -> None:
+    """Arch and openSUSE are detected and diagnosed; the way to repair them in this version is the system's own tools in a terminal inside it."""
+    lab, tree = uefi_gentoo_lab(lab_factory, family, esp_mount="/efi")
+    manager, sid, info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    assert {a["id"]: a for a in info["actions"]}["session.enter_write"]["available"] is True
+    plan, result, _ = plan_and_run(manager, sid, "session.enter_write")
+    assert result["outcome"] == "success" and manager.session(sid).mode == "rw"
+    started = []
+    manager.shell_spawn = lambda argv, **kwargs: started.append(argv) or __import__("subprocess").Popen(["/bin/true"], **kwargs)
+    shell = manager.shell_for(manager.session(sid))
+    argv, meta = shell.prepare({"session_id": sid, "confirm": True, "typed": "nvme0n1p5", "phrase": "I HAVE A BACKUP", "writable": True})
+    inner = argv[argv.index("--command") + 1]
+    assert meta["mode"] == "chroot-rw" and "rescue-chroot --userspec=0:0 --groups=" in inner and "READ-WRITE" in meta["banner"]
+    with pytest.raises(RescueError) as err:  # only the terminal: no automatic repair is planned for these systems
+        manager.plan({"session_id": sid, "action_id": "boot.config"})
+    assert err.value.short == "unsupported_action"
+    unmount(manager, sid)
