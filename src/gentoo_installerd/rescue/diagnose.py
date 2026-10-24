@@ -62,11 +62,11 @@ def diagnose(view: SessionView, *, hardware_changed: bool = False, efi_state: ef
                                 [f"device: {failed.get('device', 'not mounted')}"], ["fs.check"]))
     mounted_boot = view.is_mounted("/boot") or not any(f["mountpoint"] == "/boot" for f in session.failed_mounts)
     images = [kernel for kernel in boot.kernels if kernel.image]
-    if not images and not boot.uki and mounted_boot and view.family != "generic":
+    if not images and not boot.uki and mounted_boot:
         findings.append(Finding("D01", "error", "No kernel was found", "There is no kernel image in /boot, so nothing can be started.",
                                 [f"/boot lists: {', '.join(view.listdir('/boot')[:8]) or 'nothing'}", f"installed module trees: {', '.join(k.version for k in boot.kernels) or 'none'}"], ["boot.kernel"]))
     for kernel in images:
-        if not kernel.initramfs and boot.uses_initramfs and view.family in {"gentoo", "debian", "fedora", "arch", "suse"}:
+        if not kernel.initramfs and boot.uses_initramfs:
             findings.append(Finding("D02", "error", f"Kernel {kernel.version} has no initramfs", "The system uses an initramfs, but none exists for this kernel; it cannot mount its root file system.",
                                     [f"kernel: {kernel.image}"], ["boot.initramfs"], kernel.version))
         elif kernel.initramfs_truncated:
@@ -106,13 +106,10 @@ def _loader_findings(view: SessionView, boot: Any, esp: Any) -> list[Finding]:
             if kernels_present and "menuentry" not in text and "blscfg" not in text and "configfile" not in text:
                 found.append(Finding("D05", "error", "The boot menu lists no system", f"{boot.grub_cfg} contains no menu entry.", [boot.grub_cfg], ["boot.config"]))
             found.extend(_uuid_findings(view, boot.grub_cfg, text))
-    uses_bls = view.family == "fedora" and (not boot.grub_cfg or "blscfg" in view.read(boot.grub_cfg, 1 << 20))
-    if uses_bls and kernels_present and not boot.bls_entries:
-        found.append(Finding("D05", "error", "There are no boot entries", "/boot/loader/entries is empty although kernels are installed, so the boot menu has nothing to show.", ["/boot/loader/entries: empty"], ["boot.config"]))
     if boot.bls_entries and kernels_present:
         for name in boot.bls_entries:
             found.extend(_uuid_findings(view, f"/boot/loader/entries/{name}", view.read(f"/boot/loader/entries/{name}", 8192)))
-    if not loaders and not boot.uki and view.family != "generic":
+    if not loaders and not boot.uki:
         found.append(Finding("D05", "error", "No boot loader was found", "Neither GRUB, systemd-boot nor another loader has files on this system.", [], ["boot.bootloader"]))
     if len(loaders) > 1:
         found.append(Finding("D22", "info", "More than one boot loader is installed", f"Found: {', '.join(sorted(loaders))}. The firmware's boot order decides which one starts.", [], []))
@@ -236,16 +233,7 @@ def _misc_findings(view: SessionView, boot: Any) -> list[Finding]:
 
 
 def _pending_package_work(view: SessionView) -> list[str]:
-    evidence: list[str] = []
-    if view.family == "debian":
-        half = view.dpkg_half_configured()
-        if half:
-            evidence.append("half-configured: " + ", ".join(half[:6]))
-    elif view.family == "arch" and view.exists("/var/lib/pacman/db.lck"):
-        evidence.append("/var/lib/pacman/db.lck exists")
-    elif view.family == "gentoo" and view.portage_resume_pending():
-        evidence.append("Portage has an unfinished merge list (emerge --resume)")
-    return evidence
+    return ["Portage has an unfinished merge list (emerge --resume)"] if view.portage_resume_pending() else []
 
 
 def recommended_actions(findings: list[Finding]) -> list[str]:

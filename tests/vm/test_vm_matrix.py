@@ -16,7 +16,7 @@ from tests.vm.helpers import load_vm_module
 vm = load_vm_module()
 
 EXPECTED = ["defaults", "rescue-gentoo", "uefi-nvme-luks-openrc", "systemd", "openrc", "uefi-luks", "uefi-luks-lvm", "uefi-manual-two-disks", "bios",
-            "bios-sata-minimal", "text-install", "rescue-fedora", "rescue-ubuntu", "rescue-debian", "rescue-arch"]
+            "bios-sata-minimal", "text-install"]
 
 
 # --- the data -----------------------------------------------------------------------------------------------------
@@ -24,10 +24,11 @@ EXPECTED = ["defaults", "rescue-gentoo", "uefi-nvme-luks-openrc", "systemd", "op
 def test_wave3_has_every_scenario_the_plan_names_and_each_exactly_once():
     wave3 = vm_matrix.MATRICES["wave3"]
     assert [entry.name for entry in wave3.entries] == EXPECTED and len({entry.name for entry in wave3.entries}) == len(wave3.entries)
-    wanted = {"defaults", "bios-sata-minimal", "uefi-nvme-luks-openrc", "uefi-manual-two-disks", "openrc", "systemd", "uefi-luks", "uefi-luks-lvm", "bios",
-              "rescue-debian", "rescue-ubuntu", "rescue-fedora", "rescue-arch", "rescue-gentoo"}
+    wanted = {"defaults", "bios-sata-minimal", "uefi-nvme-luks-openrc", "uefi-manual-two-disks", "openrc", "systemd", "uefi-luks", "uefi-luks-lvm", "bios", "rescue-gentoo"}
     assert wanted <= {entry.scenario for entry in wave3.entries}
     assert all(entry.scenario in vm.SCENARIO_MAP for entry in wave3.entries)
+    assert not [entry.name for entry in wave3.entries if entry.name.startswith("rescue-") and entry.name != "rescue-gentoo"]  # only Gentoo is repaired: no cloud image of another distribution
+    assert "distributions" not in wave3.title
 
 
 def test_every_entry_documents_its_memory_and_cpus_and_the_biggest_job_is_the_desktop():
@@ -47,7 +48,7 @@ def parsed(entry):
 
 def test_only_the_job_with_the_memory_for_pyside_installs_hwmonux():
     """HWMonux pulls PySide, which has no binary package: it is compiled on every install, for an hour, and a 4 GiB VM with two jobs gets the compiler killed (the first real runs)."""
-    installing = [entry for entry in vm_matrix.WAVE3.entries if not vm.SCENARIO_MAP[entry.scenario].image]
+    installing = list(vm_matrix.WAVE3.entries)
     with_hwmonux = [entry for entry in installing if parsed(entry).companions == "both"]
     assert [entry.name for entry in with_hwmonux] == ["defaults"]
     defaults = with_hwmonux[0]
@@ -66,7 +67,7 @@ def test_the_callers_companions_reach_only_the_job_that_does_not_name_its_own():
         shared = vm_matrix.passthrough_arguments(args)
         assert ["--companions", caller or "both"] in [shared[i:i + 2] for i in range(len(shared))]
         chosen = {entry.name: vm.build_parser().parse_args(vm_matrix.job_argv(entry, port=40222, shared=[*shared, "--ssh-host", "127.0.0.1"])).companions
-                  for entry in vm_matrix.WAVE3.entries if not vm.SCENARIO_MAP[entry.scenario].image}
+                  for entry in vm_matrix.WAVE3.entries}
         assert chosen["defaults"] == defaults_gets
         assert {name: value for name, value in chosen.items() if name != "defaults"} == {name: "portagehub" for name in chosen if name != "defaults"}
 
@@ -85,7 +86,7 @@ def test_the_two_disk_and_the_luks_jobs_get_the_extra_checks():
     by_name = {entry.name: entry for entry in vm_matrix.WAVE3.entries}
     assert "--fresh-nvram-check" in by_name["uefi-nvme-luks-openrc"].options and "--fresh-nvram-check" in by_name["openrc"].options
     assert "--fresh-nvram-check" not in by_name["bios"].options and "--fresh-nvram-check" not in by_name["bios-sata-minimal"].options
-    assert all("--strict-probes" in entry.options for entry in vm_matrix.WAVE3.entries if not entry.name.startswith("rescue-") or entry.name == "rescue-gentoo")
+    assert all("--strict-probes" in entry.options for entry in vm_matrix.WAVE3.entries)
 
 
 @pytest.mark.parametrize("entry", vm_matrix.WAVE3.entries, ids=lambda entry: entry.name)
@@ -106,7 +107,7 @@ def test_a_job_command_line_has_the_callers_options_first_so_the_entry_decides_t
 
 def test_selecting_entries_keeps_the_matrix_order_and_rejects_unknown_names():
     wave3 = vm_matrix.WAVE3
-    assert [entry.name for entry in vm_matrix.select_entries(wave3, ["rescue-arch", "bios"])] == ["bios", "rescue-arch"]
+    assert [entry.name for entry in vm_matrix.select_entries(wave3, ["text-install", "bios"])] == ["bios", "text-install"]
     assert len(vm_matrix.select_entries(wave3, [])) == len(wave3.entries)
     with pytest.raises(ValueError, match="no entry nope"):
         vm_matrix.select_entries(wave3, ["bios", "nope"])
@@ -114,9 +115,9 @@ def test_selecting_entries_keeps_the_matrix_order_and_rejects_unknown_names():
 
 def test_the_callers_paths_keys_and_timeouts_are_passed_to_every_child():
     args = vm.build_parser().parse_args(["--matrix", "wave3", "--iso", "a.iso", "--ssh-host", "127.0.0.1", "--ssh-port", "40222", "--ssh-private-key", "k",
-                                         "--login-timeout", "900", "--rescue-images", "/images"])
+                                         "--broken-timeout", "900"])
     shared = vm_matrix.passthrough_arguments(args)
-    for pair in (["--iso", "a.iso"], ["--ssh-host", "127.0.0.1"], ["--login-timeout", "900"], ["--rescue-images", "/images"], ["--boot-timeout", "900"]):
+    for pair in (["--iso", "a.iso"], ["--ssh-host", "127.0.0.1"], ["--broken-timeout", "900"], ["--boot-timeout", "900"]):
         assert any(shared[i:i + 2] == pair for i in range(len(shared))), pair
     assert "--ssh-port" not in shared and "--scenario" not in shared and "--memory" not in shared
 
@@ -414,7 +415,7 @@ def test_a_port_the_second_job_would_need_that_is_taken_is_reported_before_anyth
 
 
 @pytest.mark.slow
-def test_a_matrix_that_needs_an_image_or_a_menu_entry_that_is_not_there_stops_before_the_first_job(tmp_path, monkeypatch, capsys):
+def test_a_matrix_that_needs_a_menu_entry_that_is_not_there_stops_before_the_first_job(tmp_path, monkeypatch, capsys):
     from tests.vm.fake_env import Lab as FakeLab
     from tests.vm.iso_fixture import write_iso
 
@@ -430,9 +431,6 @@ def test_a_matrix_that_needs_an_image_or_a_menu_entry_that_is_not_there_stops_be
         assert raised.value.code == 2
         return capsys.readouterr().err
 
-    empty = tmp_path / "no-images"
-    empty.mkdir()
-    assert "debian-13-genericcloud-amd64.qcow2 was not found in" in run("--matrix-only", "rescue-debian", "--rescue-images", str(empty))
     write_iso(lab.iso, {"/boot/grub/grub.cfg": b"menuentry 'Desktop' {\n\tlinux /boot/gentoo cdroot\n}\n", "/boot/gentoo": b"k"})
     message = run("--matrix-only", "text-install")
     assert "the boot menu of" in message and "no boot menu entry matches 'text'" in message

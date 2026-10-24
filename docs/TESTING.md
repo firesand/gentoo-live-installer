@@ -3,8 +3,8 @@
 This page is for people who change the installer or who want to prove that it works on a machine
 that is not the author's. It covers the unit tests, the quality gate, and the QEMU harness that
 installs Gentoo into disposable virtual machines (different disks, firmware, network cards,
-laptop identities), that boots other distributions' cloud images, and that can break an installed
-system on purpose to test the rescue tools.
+laptop identities), and that can break an installed Gentoo on purpose to test the repair tool
+(which repairs Gentoo only).
 
 Nothing described here is a claim that a given scenario has passed: a scenario is listed as
 validated only after a real QEMU run recorded under `build/vm/`, and `--all` runs only those. The
@@ -16,8 +16,7 @@ Wave 3 matrix (below) is the list of runs that still have to be made on real QEM
 |---|---|
 | The Python tests | Python 3.13 or newer, `PySide6`, `pytest`, `pytest-qt`. From the repository root: `python3 -m venv --system-site-packages .venv && .venv/bin/pip install -e '.[dev]'`. |
 | `scripts/test.sh`, `scripts/check.sh` | Run them from any directory; they change into the repository root. `cargo` (with `clippy`), `mypy` and `pkgcheck` are used when installed. Nothing needs the network (`--offline` for cargo). |
-| The VM harness | `qemu-system-x86_64`, `qemu-img`, `ssh`, `ssh-keygen`, OVMF for UEFI scenarios (`/usr/share/edk2/OvmfX64`, `/usr/share/OVMF`, ...) and a **test ISO** (below). Without `/dev/kvm` QEMU falls back to software emulation: raise `--gui-timeout`, `--boot-timeout` and `--login-timeout`. |
-| The rescue scenarios on cloud images | The four official images in `build/rescue-images/` (or the directory `--rescue-images` / `$GENTOO_RESCUE_IMAGES` names): `debian-13-genericcloud-amd64.qcow2`, `noble-server-cloudimg-amd64.img`, `Fedora-Cloud-Base-Generic-44-1.7.x86_64.qcow2`, `Arch-Linux-x86_64-cloudimg.qcow2`. They are only ever backing files of overlays: the harness never writes to them and checks afterwards that it did not. A newer file of the same family is found by its name pattern when there is exactly one. The harness never downloads anything. |
+| The VM harness | `qemu-system-x86_64`, `qemu-img`, `ssh`, `ssh-keygen`, OVMF for UEFI scenarios (`/usr/share/edk2/OvmfX64`, `/usr/share/OVMF`, ...) and a **test ISO** (below). Without `/dev/kvm` QEMU falls back to software emulation: raise `--gui-timeout` and `--boot-timeout`. |
 | Building the ISO | A rootful Docker daemon, an x86_64 host and 30 GiB free; see the README and `scripts/build-iso.sh --check`. |
 
 The harness never writes to a host block device: every disk is a regular file below `build/vm/`
@@ -28,13 +27,12 @@ small ISO 9660 reader of the harness (`scripts/vm_iso.py`); `xorriso` is not nee
 
 1. **Unit and fixture tests** (`tests/`): pure logic, fixture trees, offscreen Qt. Fast.
 2. **The fake lab** (`tests/vm/test_vm_runner.py`, `test_vm_scenarios.py`, `test_vm_rescue.py`,
-   `test_vm_rescue_images.py`, `test_vm_install_paths.py`, `test_vm_matrix.py`,
+   `test_vm_install_paths.py`, `test_vm_matrix.py`,
    `test_vm_gui_run.py`): the harness's whole control flow (processes, sockets, SSH, timeouts,
    signals, result files) runs for real against stand-ins for `qemu-system-x86_64`, `qemu-img`,
    `ssh` and `ssh-keygen` in `tests/vm/fakes/`. A JSON rule table plays the guest
-   (`tests/vm/fake_env.py`, and `tests/vm/fake_rescue.py` for the live system's `gentoo-rescue` and
-   the consoles of cloud images); the fake QEMU can print different console text per boot and
-   restart by itself. These tests are marked `slow` (about a second per scenario).
+   (`tests/vm/fake_env.py`, and `tests/vm/fake_rescue.py` for the live system's `gentoo-rescue`); the
+   fake QEMU can print different console text per boot and restart by itself. These tests are marked `slow` (about a second per scenario).
    `tests/vm/test_vm_rescue_driver.py` runs the harness's rescue driver against the real
    `gentoo-rescue` command line on the rescue tests' laboratory (a fake kernel and fake tools), and
    `tests/vm/test_vm_probes.py` checks the probes against the receipt and the hardware plan that the
@@ -159,10 +157,6 @@ them and even when the harness is killed with SIGKILL (the kernel sends QEMU SIG
 | `uefi-luks-lvm` | guided LUKS with LVM inside on OpenRC: the container is `gentoo-crypt` (`rd.luks.name=<uuid>=gentoo-crypt`), the root logical volume `gentoo-root` (`rd.lvm.lv=gentoo/root`); dracut unlocks and activates both. Never booted before the Wave 3 matrix |
 | `uefi-manual-two-disks` | a manual layout across two disks (ESP and root on the first, swap and `/home` on the second) next to a third disk that must stay byte for byte as it was |
 | `text-install` | the console installer: the ISO's text entry, then `gentoo-installer-text` with a device confirmation |
-| `rescue-debian` | Debian 13 cloud image: menu file deleted, repaired from the live ISO, booted with UEFI and BIOS |
-| `rescue-ubuntu` | Ubuntu 24.04 cloud image: the initramfs on the separate `/boot` partition deleted and rebuilt |
-| `rescue-fedora` | Fedora cloud image (btrfs with a boot subvolume, BLS, SELinux): `/boot/grub2/grub.cfg` deleted and repaired; the first boot relabels and restarts |
-| `rescue-arch` | Arch cloud image: detected and diagnosed, every repair refused by design, the disk byte for byte unchanged |
 | `rescue-gentoo` | a minimal Gentoo installed first, then broken and repaired three times (menu file, initramfs, fstab) |
 
 The validated four set `hardware.guest_tools=none`, explicit build jobs and no microcode so that
@@ -352,11 +346,11 @@ an identity problem.
 
 `build/vm/<scenario>-<time>-<id>/` holds `result.json` (verdict, probes, `advisory_findings`,
 `world_drift` with the counts and the packages, `luks_unlock`, `decoys`, `rescue`, `hardware`,
-`disk`, `install`, `boot_entry`, `fresh_nvram`, `boots`), `manifest.json` (`manifest-expected.json`
+`disk`, `install`, `boot_entry`, `fresh_nvram`), `manifest.json` (`manifest-expected.json`
 beside it when a detect-mode wizard chose other values), the logs (`install.log`, `qemu-*.log`, `serial-*.log` with one pair per
-boot: `serial-baseline.log`, `serial-final-uefi.log`, ...), `ssh-*-wait.log`, `verify-*.log`,
+boot: `serial-live.log`, `serial-target.log`, ...), `ssh-*-wait.log`, `verify-*.log`,
 `rescue-*.log` and the rescue audit logs, screenshots on failure (`failure-*.ppm`,
-`broken-boot.ppm`, `final-uefi.ppm`), `*-disk-guard.json`, `daemon-stderr.log`,
+`broken-boot.ppm`), `*-disk-guard.json`, `daemon-stderr.log`,
 `hardware-plan.json`, and the event streams as `events.jsonl`, `resume-events.jsonl` and
 `cancel-events.jsonl` (the result files hold a summary only, so they stay small). Failed runs keep
 the disk and `OVMF_VARS.fd`; so does `--keep`, and so does every rescue run. A matrix run adds
@@ -365,8 +359,12 @@ the disk and `OVMF_VARS.fd`; so does `--keep`, and so does every rescue run. A m
 ## Testing the rescue tools
 
 `gentoo-rescue` and the rescue GUI are separate components; the harness provides the broken
-system and judges the result. Two kinds of system are broken: a Gentoo the harness installs
-itself, and the cloud images of other distributions.
+system and judges the result. The system that is broken is a Gentoo that the harness installs
+itself (or a kept disk of one, `--target-image`). The tool repairs Gentoo only, so there is no
+scenario for another distribution: a disk that holds one is listed by a scan as "Not a Gentoo
+system - this repair tool only supports Gentoo" and refused by `mount` (exit status 7), which
+`tests/rescue/test_gentoo_only.py` and the driver test in `tests/vm/test_vm_rescue_driver.py` check
+against the real command line.
 
 ### What the harness does with `gentoo-rescue`
 
@@ -375,10 +373,10 @@ command at a time, as root over SSH, and keeps every command's output in `rescue
 
 | Step | Command | Required |
 |---|---|---|
-| find | `gentoo-rescue --json scan` | exit 0; exactly one system of the expected distribution on the guarded disk; the live medium is not offered |
+| find | `gentoo-rescue --json scan` | exit 0; exactly one Gentoo on the guarded disk; the live medium is not offered |
 | mount | `gentoo-rescue --json mount <id> --yes` | exit 0; a session that is mounted read-only |
 | diagnose | `gentoo-rescue --json diagnose <session>` | the damage shows: `D05` for a deleted menu file, `D02`/`D03` for a missing initramfs, `D07` for a wrong fstab |
-| plan | `gentoo-rescue --json plan <session> repair.recommended` | no failed precondition; a command that repairs the damage (`update-grub`, `grub2-mkconfig`, `update-initramfs`, `dracut`, a write of `/etc/fstab`) |
+| plan | `gentoo-rescue --json plan <session> repair.recommended` | no failed precondition; a command that repairs the damage (`grub-mkconfig`, `grub-install`, `dracut`, a write of `/etc/fstab`) |
 | run | `gentoo-rescue --json run <session> repair.recommended --confirm-plan <digest> [--typed <device name>] [--i-have-a-backup]` | exit 0, outcome `success`, every post-check ok; exactly the plan that was shown, with the confirmation its risk asks for |
 | check | a read of the mounted result | at least one boot menu file, and none of `/boot/grub*/grub.cfg`, `/boot/loader/entries/*.conf`, the ESP's `grub.cfg`, `/etc/kernel/cmdline`, `/etc/default/grub` contains `root=live:`, `rd.live.`, `CDLABEL=` or `cdroot` |
 | audit, unmount | `gentoo-rescue --json audit <session> --text`, `... unmount <session>` | no mounts left; afterwards nothing under `/mnt/rescue`, no session state, no read-only partition of the disk, no `rescue-*` mapping |
@@ -410,7 +408,7 @@ replaces the root device in `/etc/fstab` (`UUID=`, `LABEL=` or `PARTUUID=`) with
 `UUID=00000000-dead-beef-0000-000000000000`. It works on files of a mounted root only: nothing is
 formatted, repartitioned or wiped; a separate `/boot` that the system's own fstab names is mounted
 too (a partition of the disk, or a btrfs subvolume of the root file system with `-o subvol=NAME`:
-Fedora keeps its kernel, initramfs, `grub2/grub.cfg` and boot entries in the subvolume `boot`, not in
+a layout can keep the kernel, initramfs, `grub.cfg` and boot entries in a subvolume `boot`, not in
 the `/boot` directory of the subvolume `root`), and a system inside a btrfs subvolume is found.
 LUKS, LVM and RAID roots are
 reported as unsupported. The damage must be *real*: the installed disk has `--broken-timeout`
@@ -421,71 +419,24 @@ kept (`broken-boot.ppm`, `broken-boot-serial.txt`). `rescue-gentoo` is `--rescue
 grub-cfg,initramfs,fstab-uuid --rescue-repair` on a UEFI OpenRC install; `result.json` has the
 evidence of every round under `rescue.cycles`.
 
-`--target-image` accepts any qcow2 or raw image, including another distribution's, provided
+`--target-image` accepts any qcow2 or raw image of a Gentoo, provided
 you supply the manifest its probes need (`--target-manifest`, default `manifest.json` beside the
 image) and the image has an ext4, XFS or Btrfs root that the breaker can mount. It does not install
 anything; the repair and everything after it run in the live system, and the base image's size,
 modification time and the checksum of its first MiB are checked afterwards.
-
-### Other distributions: `rescue-debian`, `rescue-ubuntu`, `rescue-fedora`, `rescue-arch`
-
-The images have no user, no key and no password, so there is no SSH to the system under test: the
-serial console is the witness (all four print to `ttyS0`). A scenario does this:
-
-1. creates an overlay (`qemu-img create -f qcow2 -b <image> -F qcow2`) in the run directory and
-   attaches it as the only disk with the disposable serial, so the disk guard accepts it;
-2. **baseline boot** (UEFI, empty NVRAM, `--baseline-boot`, off with `--no-baseline-boot`): the
-   untouched image must show a login prompt (`<name> login:`) within `--login-timeout` (default
-   600 s: cloud-init runs without a datasource). Otherwise a later failure would prove nothing
-   about the repair; the time it needed scales the next wait;
-3. boots the live ISO and damages the system with the file-level damage that suits it:
-
-   | Image | Layout | Damage | Repaired by |
-   |---|---|---|---|
-   | `rescue-debian` | ext4 root, BIOS boot, ESP | `grub-cfg` | `update-grub` |
-   | `rescue-ubuntu` | ext4 root, BIOS boot, ESP, **a separate `/boot` partition** with the kernel, initramfs and `grub.cfg` | `initramfs` | `update-initramfs` |
-   | `rescue-fedora` | BIOS boot, ESP (its `grub.cfg` is a stub), one btrfs file system with the subvolumes `root`, **`boot`**, `home` and `var` (`/boot` is the subvolume `boot`), BLS entries, SELinux | `grub-cfg` (`/boot/grub2/grub.cfg` in the subvolume `boot`) | `grub2-mkconfig` |
-   | `rescue-arch` | BIOS boot, ESP, btrfs root | none | refused by design |
-
-   `--rescue-break` chooses another damage for an image;
-4. boots the damaged overlay alone: the console must show a message that it cannot come up
-   (kernel panic, emergency mode, a GRUB prompt) or stay without a login prompt for
-   `--broken-timeout` seconds (longer when the baseline needed more than a third of that);
-   a screenshot (`broken-boot.ppm`) and the console end (`broken-boot-serial.txt`) are kept;
-5. boots the live ISO again and repairs with the steps above;
-6. boots the repaired overlay alone with every firmware the image supports (`--final-boots`, default
-   `uefi,bios`) and requires a login prompt each time. **UEFI starts with an empty NVRAM** (only
-   the fallback path `EFI/BOOT/BOOTX64.EFI` can boot it) **unless the plan touched the firmware's
-   boot entries** (`needs.uefi_nvram`, or an `efibootmgr`, `grub-install` without `--no-nvram` or
-   `bootctl` step): then it starts with the variables the live session left, entries and all. A
-   machine that restarts itself before the prompt is started again, at most twice (QEMU runs with
-   `-no-reboot`): Fedora relabels the files after a repair and then reboots. If the kernel prints its
-   command line, it must carry nothing of the live medium;
-7. checks that the base image is unchanged.
-
-`rescue-arch` is different: nothing is broken or repaired. The system must be found and mounted
-read-only, identified as Arch (family `arch`), diagnosed, offered **no** repair in `actions`, and
-`plan` for `repair.recommended`, `boot.config` and `boot.bootloader` and `run` must be refused
-with exit status 7 (`rescue.unsupported_action`). The disk is hashed before and after in the live
-system and must be byte for byte the same.
-
-Failures say which boot and which firmware: for example `final-uefi (UEFI): the machine cannot
-start (grub rescue>); see serial-final-uefi.log, final-uefi.ppm and final-uefi-serial.txt`.
-`result.json` keeps the evidence of every step under `rescue` and of every boot under `boots`.
 
 ## The Wave 3 matrix
 
 `test-vm.py --matrix wave3` runs the acceptance matrix: one child `test-vm.py` per entry, each
 with its own SSH port (counted up from `--ssh-port`, or from 40222 when none is named, one per
 running job), its own signal handling and its own QEMU. **At most two VMs run at the same time**,
-in the order of the table below (the long installs first, the short checks of the cloud images
-last), and a job starts only when the memory of all running VMs plus its own stays within
+in the order of the table below (the long installs first), and a job starts only when the memory of all running VMs plus its own stays within
 `--matrix-memory-budget` (default 24576 MiB) and the host has that much `MemAvailable` plus 3 GiB.
 A job that cannot ever fit is skipped with the reason. Before the first job starts, the matrix
-checks what the last one needs: the SSH ports of all slots, the cloud images and the boot menu
+checks what the last one needs: the SSH ports of all slots and the boot menu
 entries of the ISO; a missing input is a usage error (exit status 2), not a failure hours later.
 Every job gets `--strict-probes`; UEFI installs also get `--fresh-nvram-check`. Options of the
-caller (ISO, SSH key, timeouts, image directory) are passed to every job.
+caller (ISO, SSH key, timeouts) are passed to every job.
 
 | Entry | Scenario and options | Companions | RAM | CPUs | Minutes |
 |---|---|---|---|---|---|
@@ -500,10 +451,6 @@ caller (ISO, SSH key, timeouts, image directory) are passed to every job.
 | `bios` | `bios`: re-acceptance; the boot flag of the disk is read | PortageHub | 4 GiB | 2 | 30 |
 | `bios-sata-minimal` | `bios-sata-minimal`; the boot flag of the disk is read | PortageHub | 4 GiB | 2 | 30 |
 | `text-install` | `text-install` | PortageHub | 4 GiB | 2 | 30 |
-| `rescue-fedora` | `rescue-fedora` | - | 4 GiB | 2 | 30 |
-| `rescue-ubuntu` | `rescue-ubuntu` | - | 4 GiB | 2 | 30 |
-| `rescue-debian` | `rescue-debian` | - | 4 GiB | 2 | 25 |
-| `rescue-arch` | `rescue-arch` | - | 4 GiB | 2 | 15 |
 
 **Companions.** Only the `defaults` entry installs HWMonux. It is the entry that has the memory for
 PySide (12 GiB, one build job, 4096 MiB of swap, which is also what the installer's guided defaults
@@ -530,7 +477,7 @@ number; the driver now ticks it, like a person. 12 GiB + 4 GiB + the margin is t
 test-vm.py --list-matrix                                    # the table above, from the data
 test-vm.py --matrix wave3 --iso build/test-dist/<iso> --ssh-host 127.0.0.1 --ssh-port 40222 \
   --ssh-private-key "$testkey"                              # all of it
-test-vm.py --matrix wave3 --matrix-only rescue-debian,rescue-arch ...     # a part of it
+test-vm.py --matrix wave3 --matrix-only rescue-gentoo,bios ...             # a part of it
 test-vm.py --matrix wave3 --matrix-parallel 1 ...                          # one at a time
 ```
 
@@ -554,8 +501,7 @@ Read these before trusting, or blaming, a result.
   guests confirm what the harness assumes and the fake lab cannot know: that `-smbios file=`
   replaces QEMU's own enclosure record (the `dmi` probe of `laptop-smbios` checks `chassis_type`),
   that USB with 4096-byte sectors works, that `-kernel`/`-initrd` boots an ISO entry under OVMF and
-  SeaBIOS, how long each cloud image takes to print its login prompt without a cloud-init datasource,
-  that ACPI power-off shuts the images down, that Fedora restarts once for the relabel, and the exact
+  SeaBIOS, and the exact
   output of `gentoo-rescue` and `gentoo-installer-text` on the live ISO of the same tree (the
   harness is tested against the rescue tool's laboratory, not against a live ISO). QEMU's IDE/SATA
   disks are 512-byte only, so `--disk-bus sata --sector-size 4096` is refused.
@@ -568,9 +514,6 @@ Read these before trusting, or blaming, a result.
 * **The hardware plan is read from `/var/lib/gentoo-installer/hardware-plan.json`** (the daemon's
   state directory), from the `plan` key of the record the daemon writes there. A missing file, or one
   without a plan, is a finding; with `--strict-probes` (the matrix) it fails the run.
-* **The cloud images are not Gentoo systems:** the harness cannot log in, so it cannot look at their
-  `/proc/cmdline`; the kernel's own command line shows up on the console only when its log level
-  allows it. The live arguments are therefore also searched in the boot files from the live side.
 * **`holders` (an active LVM or md stack on the target) and `uefi-luks-all` are not scenarios yet:**
   the first needs a consent box the manifest cannot carry, the second a settled layout. LUKS, LVM and
   RAID roots cannot be broken yet.
@@ -585,8 +528,6 @@ Read these before trusting, or blaming, a result.
 * **"UNIX socket path ... is too long"**: handled; QEMU starts in the run directory and uses bare
   socket names when the absolute path would exceed 107 bytes.
 * **The XFCE session takes too long** (no KVM): `--gui-timeout 600 --boot-timeout 1800`.
-* **A cloud image never shows a login prompt**: read `serial-baseline.log`; without KVM raise
-  `--login-timeout`. A run that fails at the baseline boot says so before anything was broken.
 * **A scenario fails with `Unknown ... fields`**: the ISO is older than the harness; rebuild the
   test ISO from the same tree.
 * **`--boot-entry` says no entry matches**: `--list-boot-entries --iso FILE` shows the titles the
@@ -613,6 +554,6 @@ automated, the generators should accept `luks-unlock-receipt.json` instead of th
 
 The harness is `scripts/test-vm.py` plus small modules next to it: `scripts/vm_guard.py` (the disk
 guard), `scripts/vm_hw.py` (the machine shape), `scripts/vm_guest.py` (programs run in the live system),
-`scripts/vm_probes.py` (what the probes accept), `scripts/vm_rescue.py` (the images and the rescue
-driver), `scripts/vm_iso.py` (the ISO's boot menu) and `scripts/vm_matrix.py` (the matrix and its
+`scripts/vm_probes.py` (what the probes accept), `scripts/vm_rescue.py` (the rescue driver and the
+checks around it), `scripts/vm_iso.py` (the ISO's boot menu) and `scripts/vm_matrix.py` (the matrix and its
 scheduler).

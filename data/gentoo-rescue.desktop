@@ -1,11 +1,11 @@
 [Desktop Entry]
 Type=Application
-Name=Repair an Existing System
-GenericName=System Repair
-Comment=Find, mount and repair a Linux system that no longer starts
+Name=Repair a Gentoo System
+GenericName=Gentoo Repair
+Comment=Repair a Gentoo system that does not start
 Exec=gentoo-installer --mode repair
 Icon=system-run
 Terminal=false
 Categories=System;Filesystem;
-Keywords=repair;rescue;boot;grub;fstab;chroot;initramfs;fix;
+Keywords=gentoo;repair;rescue;boot;grub;fstab;chroot;initramfs;fix;
 StartupNotify=true

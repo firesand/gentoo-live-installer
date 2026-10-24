@@ -31,7 +31,7 @@ ACTION_GROUPS: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
      ("efi.add", "efi.delete", "efi.order", "efi.next")),
     ("filesystem", "File system check", "Looks for errors in the file system. A check changes nothing.", ("fs.check",)),
     ("accounts", "Passwords and accounts", "Set a new password or unlock an account that cannot log in.", ("acct.password", "acct.unlock")),
-    ("packages", "Software packages", "Finish what the package manager was doing when the computer stopped.", ("pkg.finish",)),
+    ("packages", "Software packages", "Finish what Portage was doing when the computer stopped.", ("pkg.finish",)),
     ("advanced", "Advanced", "Switch between looking only and being allowed to change files.", ("session.enter_write", "session.leave_write")),
 )
 RECOMMENDED_ACTION = "repair.recommended"
@@ -53,12 +53,23 @@ def error_details(data: dict[str, Any]) -> dict[str, Any]:
 
 # ---- systems found by the scan ---------------------------------------------------------------------------------------------------
 def os_name(info: dict[str, Any]) -> str:
-    """'Debian GNU/Linux 12 (bookworm)', or 'Gentoo Linux' for a rolling release; the version is added when the name lacks one."""
+    """'Gentoo Linux' (a rolling release), or the name another system gives itself, such as 'Debian GNU/Linux 12 (bookworm)'; the version is added when the name lacks one."""
     name = str(info.get("pretty_name") or info.get("name") or info.get("id") or "Linux")
     version = str(info.get("version_id") or "")
     if version and version not in name and not any(char.isdigit() for char in name):
         name = f"{name} {version}"
     return name
+
+
+def split_candidates(found: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """(the systems that can be opened, the other systems that are only named).
+
+    An engine that says nothing about support opens every system, as it always did. A snapshot of a system that is not Gentoo adds nothing to the
+    list of the other systems: the system itself is named already.
+    """
+    openable = [item for item in found if item.get("supported", True) is not False]
+    others = [item for item in found if item.get("supported", True) is False and item.get("kind") != "snapshot"]
+    return openable, others
 
 
 def parent_disk(devices: list[dict[str, Any]], path: str) -> dict[str, Any] | None:
@@ -100,6 +111,7 @@ class SystemRow:
     snapshot: bool = False
     encrypted: bool = False
     device: str = ""
+    supported: bool = True  # False: not a Gentoo system, listed but never opened
 
 
 def describe_system(candidate: dict[str, Any], devices: list[dict[str, Any]]) -> SystemRow:
@@ -133,7 +145,7 @@ def describe_system(candidate: dict[str, Any], devices: list[dict[str, Any]]) ->
         facts.append("Snapshot (read-only history)")
     return SystemRow(
         id=str(candidate.get("id", "")), title=os_name(os_info), lines=[", ".join(where), " · ".join(facts)],
-        warnings=[str(item) for item in candidate.get("warnings", [])], snapshot=snapshot, encrypted="luks" in kinds, device=device,
+        warnings=[str(item) for item in candidate.get("warnings", [])], snapshot=snapshot, encrypted="luks" in kinds, device=device, supported=candidate.get("supported", True) is not False,
     )
 
 
@@ -403,7 +415,7 @@ def secrets_ready(plan: dict[str, Any], values: dict[str, tuple[str, str]]) -> b
 
 
 # Steps that only prepare the system (switch it to read-write, mount virtual file systems) are shown in a quieter style.
-PREPARATION_GROUPS = frozenset({"enter-write", "leave-write", "virtual", "guard", "policy", "generic"})
+PREPARATION_GROUPS = frozenset({"enter-write", "leave-write", "virtual", "guard"})
 SMOKE_STEP = "smoke"  # the check that the system can run its own programs
 
 

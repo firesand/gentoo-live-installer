@@ -150,12 +150,12 @@ def start_repair_terminal() -> bool:
 
 def offer_terminal_repair(parent: QWidget | None) -> bool:
     """The graphical repair window is missing: offer the terminal version. True when a terminal was started."""
-    answer = QMessageBox.question(parent, "Repair an existing system", REPAIR_TERMINAL_TEXT)
+    answer = QMessageBox.question(parent, "Repair a Gentoo system", REPAIR_TERMINAL_TEXT)
     if answer != QMessageBox.StandardButton.Yes:
         return False
     if start_repair_terminal():
         return True
-    QMessageBox.information(parent, "Repair an existing system", REPAIR_MISSING)
+    QMessageBox.information(parent, "Repair a Gentoo system", REPAIR_MISSING)
     return False
 
 
@@ -725,7 +725,7 @@ class InstallerWindow(QMainWindow):
             "Install over the existing system?",
             f"{root.device} is kept as it is (it is not formatted), but the new system is installed into it. If it already holds a Linux system, "
             "its /etc, its accounts and its boot files are replaced. A copy of /etc and of the SSH keys is saved in /root first.\n\n"
-            "To repair that system instead, cancel and choose “Repair an existing system” on the first page.\n\n"
+            "To repair a Gentoo system that is on it instead, cancel and choose “Repair a Gentoo system” on the first page.\n\n"
             "Install over it?",
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Cancel,
@@ -793,7 +793,7 @@ class InstallerWindow(QMainWindow):
             window = create_repair_window(self.socket_path)
         except Exception as exc:  # noqa: BLE001 - show it instead of closing the installer
             LOG.exception("Repair window failed")
-            QMessageBox.critical(self, "Repair an existing system", f"The repair tools could not be started: {exc}")
+            QMessageBox.critical(self, "Repair a Gentoo system", f"The repair tools could not be started: {exc}")
             return
         if window is None:
             offer_terminal_repair(self)
@@ -1008,7 +1008,7 @@ def main(argv: list[str] | None = None) -> int:
             repair = create_repair_window(args.socket)
         except Exception as exc:  # noqa: BLE001
             LOG.exception("Repair window failed")
-            QMessageBox.critical(None, "Repair an existing system", f"The repair tools could not be started: {exc}")
+            QMessageBox.critical(None, "Repair a Gentoo system", f"The repair tools could not be started: {exc}")
             return 1
         if repair is None:
             offer_terminal_repair(None)

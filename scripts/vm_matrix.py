@@ -53,7 +53,7 @@ STRICT = ("--strict-probes",)
 # memory for it (12 GiB, one build job, the guided swap), so every other install installs PortageHub alone (docs/TESTING.md).
 PORTAGEHUB = ("--companions", "portagehub")
 
-WAVE3 = Matrix("wave3", "Wave 3 acceptance: other hardware, other disks, other distributions", (
+WAVE3 = Matrix("wave3", "Wave 3 acceptance: other hardware, other disks, a Gentoo that is broken and repaired", (
     MatrixEntry("defaults", "defaults", 12288, 4,
                 (*STRICT, *UEFI, "--install-mode", "gui", "--no-disk-serial", "--disk-size", "64", "--build-jobs", "1", "--swap-mib", "4096"), 150,
                 "the untouched wizard (KDE, OpenRC, binhost) on a virtio disk without a serial number, so the path identity is used; "
@@ -73,10 +73,6 @@ WAVE3 = Matrix("wave3", "Wave 3 acceptance: other hardware, other disks, other d
     MatrixEntry("bios-sata-minimal", "bios-sata-minimal", 4096, 2, (*STRICT, *PORTAGEHUB), 30,
                 "an old PC: SeaBIOS, SATA, Intel NIC, standard VGA, the boot flag of the disk"),
     MatrixEntry("text-install", "text-install", 4096, 2, (*STRICT, *UEFI, *PORTAGEHUB), 30, "the ISO's text entry and gentoo-installer-text with a device confirmation"),
-    MatrixEntry("rescue-fedora", "rescue-fedora", 4096, 2, (), 30, "Fedora cloud image: repair, then UEFI and BIOS boot (one restart for the SELinux relabel)"),
-    MatrixEntry("rescue-ubuntu", "rescue-ubuntu", 4096, 2, (), 30, "Ubuntu cloud image with a separate /boot partition"),
-    MatrixEntry("rescue-debian", "rescue-debian", 4096, 2, (), 25, "Debian cloud image"),
-    MatrixEntry("rescue-arch", "rescue-arch", 4096, 2, (), 15, "Arch cloud image: detection and diagnosis only, every repair refused"),
 ))
 MATRICES: dict[str, Matrix] = {WAVE3.name: WAVE3}
 
@@ -86,7 +82,7 @@ PASSTHROUGH_VALUES = (
     ("--install-timeout", "install_timeout"), ("--shutdown-timeout", "shutdown_timeout"), ("--command-timeout", "command_timeout"),
     ("--gui-timeout", "gui_timeout"), ("--luks-timeout", "luks_timeout"), ("--luks-unlock", "luks_unlock"), ("--companions", "companions"),
     ("--qemu-binary", "qemu_binary"), ("--qemu-img", "qemu_img"), ("--ssh-binary", "ssh_binary"), ("--ssh-keygen", "ssh_keygen"),
-    ("--rescue-images", "rescue_images"), ("--rescue-timeout", "rescue_timeout"), ("--broken-timeout", "broken_timeout"), ("--login-timeout", "login_timeout"),
+    ("--rescue-timeout", "rescue_timeout"), ("--broken-timeout", "broken_timeout"),
     ("--world-timeout", "world_timeout"), ("--rescue-transport", "rescue_transport"),
 )
 

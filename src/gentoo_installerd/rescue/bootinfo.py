@@ -12,14 +12,12 @@ from .paths import RootFS
 MIN_INITRAMFS_BYTES = 1 << 20  # anything smaller is an interrupted write
 MIN_KERNEL_BYTES = 512 << 10  # a bootable x86 kernel image is never this small
 KERNEL_IMAGE_PREFIXES = ("vmlinuz-", "vmlinux-", "kernel-")
-NOT_AN_IMAGE_SUFFIXES = (".old", ".bak", ".sig", ".hmac", ".sha256", ".md5", ".txt", ".orig", ".dpkg-old")
+NOT_AN_IMAGE_SUFFIXES = (".old", ".bak", ".sig", ".hmac", ".sha256", ".md5", ".txt", ".orig")
 GENKERNEL_RE = re.compile(r"^genkernel-[^-]+-(.+)$")  # kernel-genkernel-x86_64-6.6.30-gentoo is the image of release 6.6.30-gentoo
-RESCUE_RE = re.compile(r"^0-rescue-[0-9a-f]{32}$")  # Fedora and RHEL keep a generic rescue kernel that has no module tree of its own
 INITRAMFS_PATTERNS = ("initramfs-{v}.img", "initrd.img-{v}", "initrd-{v}", "initramfs-{v}", "initrd-{v}.img", "initramfs-{v}.gz")
 BOOT_TOOLS = (
-    "grub-install", "grub2-install", "update-grub", "grub-mkconfig", "grub2-mkconfig", "bootctl", "kernel-install", "dracut", "mkinitcpio", "update-initramfs", "genkernel",
-    "mkinitfs", "mkinitrd", "dnf", "yum", "apt-get", "pacman", "zypper", "emerge", "efibootmgr", "chpasswd", "passwd", "usermod", "journalctl", "kernelstub", "refind-install",
-    "shim-install", "update-bootloader", "eselect", "lsinitrd", "grubby", "sbctl", "ukify", "uefi-mkconfig", "revdep-rebuild", "rpm", "dpkg-query",
+    "grub-install", "grub-mkconfig", "bootctl", "kernel-install", "dracut", "genkernel", "emerge", "efibootmgr", "chpasswd", "passwd", "usermod", "journalctl", "refind-install",
+    "eselect", "lsinitrd", "sbctl", "ukify", "uefi-mkconfig", "revdep-rebuild",
 )
 CMDLINE_FILES = ("/etc/kernel/cmdline", "/usr/lib/kernel/cmdline", "/etc/cmdline", "/etc/default/grub", "/etc/kernel/uki.conf")
 
@@ -32,7 +30,6 @@ class KernelInfo:
     initramfs: str = ""
     initramfs_size: int = 0
     modules: bool = False
-    pkgbase: str = ""
 
     @property
     def initramfs_truncated(self) -> bool:
@@ -41,10 +38,6 @@ class KernelInfo:
     @property
     def image_truncated(self) -> bool:
         return bool(self.image) and self.image_size < MIN_KERNEL_BYTES
-
-    @property
-    def is_rescue(self) -> bool:
-        return bool(RESCUE_RE.match(self.version))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -71,7 +64,7 @@ class BootInfo:
 
     @property
     def uses_initramfs(self) -> bool:
-        return any(kernel.initramfs for kernel in self.kernels) or any(tool in self.tools for tool in ("dracut", "mkinitcpio", "update-initramfs", "genkernel", "mkinitfs", "mkinitrd"))
+        return any(kernel.initramfs for kernel in self.kernels) or any(tool in self.tools for tool in ("dracut", "genkernel"))
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -88,19 +81,18 @@ def _size(fs: RootFS, path: str) -> int:
         return 0
 
 
-def _module_versions(fs: RootFS) -> dict[str, str]:
-    """kernel release -> pkgbase ('' when the distribution does not record one)."""
-    result: dict[str, str] = {}
+def _module_versions(fs: RootFS) -> list[str]:
+    """The kernel releases that have a module tree."""
+    result: list[str] = []
     for base in ("/usr/lib/modules", "/lib/modules"):
         for version in fs.listdir_or(base):
-            if fs.is_dir(f"{base}/{version}"):
-                result.setdefault(version, fs.read_text_or(f"{base}/{version}/pkgbase", "", 256).strip())
+            if fs.is_dir(f"{base}/{version}") and version not in result:
+                result.append(version)
     return result
 
 
-def _find_initramfs(fs: RootFS, version: str, pkgbase: str, boot_names: set[str], aliases: tuple[str, ...] = ()) -> str:
-    keys = [version, *aliases] + ([pkgbase] if pkgbase else [])
-    for key in keys:
+def _find_initramfs(version: str, boot_names: set[str], aliases: tuple[str, ...] = ()) -> str:
+    for key in (version, *aliases):
         for pattern in INITRAMFS_PATTERNS:
             name = pattern.format(v=key)
             if name in boot_names:
@@ -109,18 +101,13 @@ def _find_initramfs(fs: RootFS, version: str, pkgbase: str, boot_names: set[str]
 
 
 def natural_key(version: str) -> tuple[tuple[int, int, str], ...]:
-    """Orders versions by number, not by text: 6.1.0-9 comes before 6.1.0-10, and Ubuntu's 6.8.0-99 before 6.8.0-100."""
+    """Orders versions by number, not by text: 6.9.12-gentoo comes before 6.10.3-gentoo."""
     return tuple((0, int(chunk), "") if chunk[0] in "0123456789" else (1, 0, chunk) for chunk in re.findall(r"[0-9]+|[^0-9]+", version))
 
 
 def lacks_module_tree(kernel: KernelInfo, kernels: list[KernelInfo]) -> bool:
-    """A kernel without its module tree while another one has one (finding D04); the generic rescue kernel of Fedora and RHEL never has one."""
-    return not kernel.modules and any(other.modules for other in kernels) and kernel.version != "linux" and not kernel.is_rescue
-
-
-def damaged_kernels(kernels: list[KernelInfo]) -> list[str]:
-    """The versions that findings D01 and D04 report: an incomplete kernel image, or no module tree."""
-    return [kernel.version for kernel in kernels if kernel.image and (kernel.image_truncated or lacks_module_tree(kernel, kernels))]
+    """A kernel without its module tree while another one has one (finding D04)."""
+    return not kernel.modules and any(other.modules for other in kernels)
 
 
 def collect_kernels(fs: RootFS) -> list[KernelInfo]:
@@ -135,23 +122,19 @@ def collect_kernels(fs: RootFS) -> list[KernelInfo]:
                     continue  # kernel-backup and kernel-configs are directories that tools keep in /boot, not kernels
                 suffix = name[len(prefix):]
                 version = suffix
-                pkgbase = ""
                 genkernel = GENKERNEL_RE.match(suffix) if prefix == "kernel-" else None
                 if genkernel:
                     version = genkernel.group(1)
                     aliases[version] = (*aliases.get(version, ()), suffix)
-                for release, base in versions.items():  # Arch names the image after the package base, not the release
-                    if base and base == suffix:
-                        version, pkgbase = release, base
-                info = found.setdefault(version, KernelInfo(version, pkgbase=pkgbase))
+                info = found.setdefault(version, KernelInfo(version))
                 info.image, info.image_size = f"/boot/{name}", _size(fs, f"/boot/{name}")
-    for release, base in versions.items():
-        found.setdefault(release, KernelInfo(release, pkgbase=base))
+    for release in versions:
+        found.setdefault(release, KernelInfo(release))
         found[release].modules = fs.exists(f"/usr/lib/modules/{release}/modules.dep") or fs.exists(f"/lib/modules/{release}/modules.dep")
         if not found[release].image and fs.exists(f"/usr/lib/modules/{release}/vmlinuz") and not boot_names:
             found[release].image = f"/usr/lib/modules/{release}/vmlinuz"
     for info in found.values():
-        info.initramfs = _find_initramfs(fs, info.version, info.pkgbase, boot_names, aliases.get(info.version, ()))
+        info.initramfs = _find_initramfs(info.version, boot_names, aliases.get(info.version, ()))
         info.initramfs_size = _size(fs, info.initramfs) if info.initramfs else 0
     return sorted(found.values(), key=lambda item: natural_key(item.version))
 
@@ -181,13 +164,11 @@ def collect_boot(fs: RootFS, esp: RootFS | None = None) -> BootInfo:
         loaders.append("extlinux")
     if fs.is_file("/etc/lilo.conf"):
         loaders.append("lilo")
-    boot_loader_conf = fs.is_file("/boot/loader/loader.conf")  # ESP mounted at /boot (Arch, Pop!_OS)
+    boot_loader_conf = fs.is_file("/boot/loader/loader.conf")  # the ESP is mounted at /boot
     if boot_loader_conf:
         loaders.append("systemd-boot")
     for tree in ([esp] if esp is not None else []):
         _scan_esp(tree, info, loaders)
-    if "kernelstub" in info.tools and "systemd-boot" not in loaders and not info.grub_cfg:
-        loaders.append("systemd-boot")
     info.loaders = list(dict.fromkeys(loaders))
     info.loader = _guess_active(info)
     return info

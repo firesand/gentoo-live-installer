@@ -35,7 +35,7 @@ def test_the_older_file_spelling_still_works() -> None:
 @pytest.mark.parametrize("tail,expected", [
     ("\\EFI\\arch\\vmlinuz-linux.efiroot=UUID=1111 rw initrd=\\initramfs-linux.img", "\\EFI\\arch\\vmlinuz-linux.efi"),   # printable optional data (a unified kernel image or EFI stub entry)
     ("\\EFI\\Linux\\arch-linux.efi", "\\EFI\\Linux\\arch-linux.efi"),
-    ("\\EFI\\fedora\\shimx64.EFI00004e4f", "\\EFI\\fedora\\shimx64.EFI"),
+    ("\\EFI\\Gentoo\\grubx64.EFI00004e4f", "\\EFI\\Gentoo\\grubx64.EFI"),
     ("\\EFI\\my.efi.d\\grubx64.efi0000", "\\EFI\\my.efi.d\\grubx64.efi"),                                            # a directory whose name contains .efi
     ("\\vmlinuz", "\\vmlinuz"),                                                                                    # not a .efi file: kept as printed
 ])

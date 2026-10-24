@@ -54,27 +54,23 @@ def test_a_disk_list_that_names_a_missing_disk_is_shown_as_a_difference_and_fixe
 
 
 # ---- the kernel ---------------------------------------------------------------------------------------------------------------------------
-def test_the_kernel_to_reinstall_is_the_damaged_one_and_can_be_changed(qtbot, rescue_lab_factory, daemon_factory, repair_kit) -> None:
-    """Debian keeps two kernels (6.1.0-9, 6.1.0-10). The plan targets the one that lost its modules; the options let the person choose the other."""
-    import shutil
-
-    lab, tree = uefi_gentoo_lab(rescue_lab_factory, family="debian", kernels=["6.1.0-9-amd64", "6.1.0-10-amd64"], esp_mount="/boot/efi")
-    shutil.rmtree(tree / "usr/lib/modules/6.1.0-10-amd64")
+def test_the_kernel_package_to_reinstall_is_the_newest_one_and_can_be_changed(qtbot, rescue_lab_factory, daemon_factory, repair_kit) -> None:
+    """Two distribution kernels are installed (6.9.12 and 6.10.1). The plan reinstalls the newest; the options let the person name the other."""
+    lab, _tree = uefi_gentoo_lab(rescue_lab_factory, kernels=["6.9.12-gentoo-dist", "6.10.1-gentoo-dist"])
     window = repair_kit.open(daemon_factory(lab).path)
     open_system(qtbot, window)
     request_action(qtbot, window, "boot.kernel")
     page = window.plan_page
-    assert "linux-image-6.1.0-10-amd64" in page.commands_text.toPlainText() and "linux-image-6.1.0-9-amd64" not in page.commands_text.toPlainText()
+    assert "--config =sys-kernel/gentoo-kernel-6.10.1" in page.commands_text.toPlainText() and "6.9.12" not in page.commands_text.toPlainText()
     assert page.options_button.isVisibleTo(page)
     page.options_button.click()
     form = page._form
-    assert list(form.kernel_boxes) == ["6.1.0-9-amd64", "6.1.0-10-amd64"]  # oldest first, by number
-    assert any("damaged kernel, or the newest" in label.text() for label in form.findChildren(type(page.summary)))
-    form.kernel_boxes["6.1.0-9-amd64"].setChecked(True)
+    assert set(form.fields) == {"package", "mode"} and not form.kernel_boxes  # a package and a method: no list of kernels to tick
+    form.fields["package"].setText("sys-kernel/gentoo-kernel-6.9.12")
     page.continue_button.click()
     qtbot.waitUntil(lambda: page.state == "review", timeout=20000)
-    assert page.plan["params"]["kernels"] == ["6.1.0-9-amd64"]
-    assert "linux-image-6.1.0-9-amd64" in page.commands_text.toPlainText() and "linux-image-6.1.0-10-amd64" not in page.commands_text.toPlainText()
+    assert page.plan["params"]["package"] == "sys-kernel/gentoo-kernel-6.9.12"
+    assert "--config =sys-kernel/gentoo-kernel-6.9.12" in page.commands_text.toPlainText() and "6.10.1" not in page.commands_text.toPlainText()
 
 
 # ---- a moved disk ---------------------------------------------------------------------------------------------------------------------
@@ -122,9 +118,10 @@ JOURNAL_LINES = "Oct 24 08:00:00 host kernel: first problem\nOct 24 08:00:01 hos
 
 
 def journald_machine(rescue_lab_factory, daemon_factory):
-    """Debian 13, Fedora and modern Ubuntu keep no text logs at all: everything is in the binary journal."""
-    lab, tree = uefi_gentoo_lab(rescue_lab_factory, family="debian", esp_mount="/boot/efi")
-    (tree / "var/log/syslog").unlink()
+    """A systemd Gentoo without a syslog daemon keeps no text logs: everything is in the binary journal (and Portage's own log is gone)."""
+    lab, tree = uefi_gentoo_lab(rescue_lab_factory, init="systemd")
+    (tree / "var/log/messages").unlink()
+    (tree / "var/log/emerge.log").unlink()
     fr.put(tree, "var/log/journal/0123456789abcdef0123456789abcdef/system.journal", "binary")
     fr.put(tree, "usr/bin/journalctl", "#!/bin/sh\n", mode=0o755)
     lab.system.chroot_effects["journalctl"] = lambda system, root, command, extra: (0, JOURNAL_LINES)
@@ -236,7 +233,7 @@ def test_a_terminal_that_can_change_files_also_needs_the_backup_phrase(qtbot, ge
 def test_a_terminal_for_a_look_only_session_is_a_shell_of_the_live_system(qtbot, gentoo_machine, repair_kit) -> None:
     daemon, _lab, _tree = gentoo_machine
     window = repair_kit.open(daemon.path)
-    qtbot.waitUntil(lambda: len(window.find_page.candidates) == 2 and not window.find_page._busy, timeout=20000)
+    qtbot.waitUntil(lambda: len(window.find_page.candidates) == 1 and not window.find_page._busy, timeout=20000)
     window.find_page.group.set_value(next(c["id"] for c in window.find_page.candidates if c["device"] == "/dev/nvme0n1p5"))
     window.find_page.continue_button.click()
     qtbot.waitUntil(lambda: window.mount_page.open_button.isEnabled(), timeout=20000)
@@ -334,7 +331,7 @@ def test_the_record_can_be_saved_to_a_file_before_the_system_is_closed(qtbot, ge
     qtbot.waitUntil(lambda: page.notice.isVisibleTo(page) and "was saved" in page.notice.text.text(), timeout=5000)
 
 
-def test_a_second_system_can_be_repaired_after_the_first_was_closed(qtbot, gentoo_machine, repair_kit) -> None:
+def test_a_system_can_be_opened_again_after_it_was_closed(qtbot, gentoo_machine, repair_kit) -> None:
     daemon, lab, _tree = gentoo_machine
     window = repair_kit.open(daemon.path)
     open_system(qtbot, window)
@@ -343,9 +340,10 @@ def test_a_second_system_can_be_repaired_after_the_first_was_closed(qtbot, gento
     qtbot.waitUntil(lambda: window.finish_page.state == "done", timeout=20000)
     window.finish_page.again_button.click()
     assert window.stack.currentIndex() == FIND and window.system is None
-    qtbot.waitUntil(lambda: len(window.find_page.candidates) == 2 and not window.find_page._busy, timeout=20000)
-    open_system(qtbot, window, "/dev/sdb1")
-    assert window.system.title.startswith("Debian")
+    qtbot.waitUntil(lambda: len(window.find_page.candidates) == 1 and not window.find_page._busy, timeout=20000)
+    assert [item["device"] for item in window.find_page.others] == ["/dev/sdb1"]  # the Debian is still only named
+    open_system(qtbot, window, "/dev/nvme0n1p5")
+    assert window.system.title.startswith("Gentoo")
 
 
 # ---- read-only and read-write ---------------------------------------------------------------------------------------------------------

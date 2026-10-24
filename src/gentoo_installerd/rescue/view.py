@@ -1,17 +1,14 @@
 """SessionView: the one door adapters and diagnosis use to look at a mounted system (review R1, R9).
 
 It never hands out a ``Path`` of the target. Every read goes through ``RootFS`` (dir_fd walks with chroot semantics) and
-nothing here runs a program from the target; package databases are read as files.
+nothing here runs a program from the target; Portage's state is read as files.
 """
 
 from __future__ import annotations
 
 import json
 import re
-import sqlite3
-import tempfile
 from dataclasses import dataclass, field
-from pathlib import Path
 from typing import Any, Callable
 
 from . import cmdline as cmdline_mod
@@ -101,13 +98,9 @@ class SessionView:
         return self.facts.arch
 
     @property
-    def immutable(self) -> str:
-        return self.facts.immutable
-
-    @property
     def can_run_programs(self) -> bool:
-        """Programs of the system can run here: x86 family, not an image-based system, executable mount."""
-        return self.arch in {"x86_64", "i386", ""} and not self.immutable and self._session.allow_write
+        """Programs of the system can run here: x86 family, executable mount."""
+        return self.arch in {"x86_64", "i386", ""} and self._session.allow_write
 
     @property
     def graph(self) -> DeviceGraph:
@@ -249,95 +242,7 @@ class SessionView:
         with self._fs() as fs:
             return cmdline_mod.installkernel_guard(fs, use)
 
-    def grub_binary_mentions(self, name: str, needle: bytes) -> bool:
-        """Whether a program of the system contains a string, to learn which options it knows without running it."""
-        path = self.which(name)
-        if not path:
-            return False
-        with self._fs() as fs:
-            try:
-                return needle in fs.read_bytes(path, 4 << 20)
-            except (OSError, RescueError):
-                return False
-
-    # ---- package databases, read as files (review R9: no target program is run to query them) ---------------------------------------
-    def installed_packages(self) -> dict[str, str]:
-        """name -> version for the packages this view can list without running anything."""
-        def make() -> dict[str, str]:
-            family = self.family
-            if family == "gentoo":
-                return self._portage_packages()
-            if family == "debian":
-                return self._dpkg_packages()
-            if family == "arch":
-                return self._pacman_packages()
-            return {}
-
-        return self._cached("packages", make)
-
-    def _portage_packages(self) -> dict[str, str]:
-        found: dict[str, str] = {}
-        for category in self.listdir("/var/db/pkg"):
-            for entry in self.listdir(f"/var/db/pkg/{category}"):
-                match = re.match(r"^(.+?)-(\d[\w.]*(?:_[a-z]+\d*)*(?:-r\d+)?)$", entry)
-                if match:
-                    found[f"{category}/{match.group(1)}"] = match.group(2)
-        return found
-
-    def _dpkg_packages(self) -> dict[str, str]:
-        found: dict[str, str] = {}
-        for block in self.read("/var/lib/dpkg/status", 16 << 20).split("\n\n"):
-            fields = dict(re.findall(r"^([A-Za-z-]+): (.*)$", block, re.M))
-            if fields.get("Package") and "install ok installed" in fields.get("Status", ""):
-                found[fields["Package"]] = fields.get("Version", "")
-        return found
-
-    def _pacman_packages(self) -> dict[str, str]:
-        found: dict[str, str] = {}
-        for entry in self.listdir("/var/lib/pacman/local"):
-            match = re.match(r"^(.+)-([^-]+-[^-]+)$", entry)
-            if match:
-                found[match.group(1)] = match.group(2)
-        return found
-
-    def dpkg_half_configured(self) -> list[str]:
-        names = []
-        for block in self.read("/var/lib/dpkg/status", 16 << 20).split("\n\n"):
-            fields = dict(re.findall(r"^([A-Za-z-]+): (.*)$", block, re.M))
-            status = fields.get("Status", "")
-            if fields.get("Package") and status and not status.endswith("installed") and not status.endswith("not-installed") and not status.endswith("config-files"):
-                names.append(fields["Package"])
-        return names
-
-    def rpm_names(self) -> set[str] | None:
-        """Installed rpm package names from rpmdb.sqlite (Fedora 33+, RHEL 9+); None when the database is not readable here."""
-        data = self._rpmdb_blobs()
-        if data is None:
-            return None
-        return {name for name in (_rpm_header_name(blob) for blob in data) if name}
-
-    def _rpmdb_blobs(self) -> list[bytes] | None:
-        for path in ("/var/lib/rpm/rpmdb.sqlite", "/usr/lib/sysimage/rpm/rpmdb.sqlite"):
-            if not self.is_file(path):
-                continue
-            payload = None
-            with self._fs() as fs:
-                try:
-                    payload = fs.read_bytes(path, 256 << 20)
-                except (OSError, RescueError):
-                    continue
-            if not payload:
-                continue
-            with tempfile.TemporaryDirectory(prefix="rescue-rpmdb-") as scratch:
-                copy = Path(scratch) / "rpmdb.sqlite"
-                copy.write_bytes(payload)
-                try:
-                    with sqlite3.connect(f"file:{copy}?mode=ro", uri=True) as db:
-                        return [row[0] for row in db.execute("SELECT blob FROM Packages")]
-                except sqlite3.DatabaseError:
-                    return None
-        return None
-
+    # ---- Portage, read as files (review R9: no target program is run to query it) -------------------------------------------------------
     def portage_resume_pending(self) -> bool:
         text = self.read("/var/cache/edb/mtimedb", 4 << 20)
         try:
@@ -369,24 +274,3 @@ class SessionView:
             state = "empty" if hashed == "" and parts[0] in shadow else "locked" if hashed[:1] in {"!", "*"} else "set" if hashed else "unknown"
             users.append({"name": parts[0], "uid": uid, "home": parts[5], "shell": shell, "password": state})
         return users
-
-
-_RPM_TAG_NAME = 1000
-
-
-def _rpm_header_name(blob: bytes) -> str:
-    """The NAME tag of an rpm header blob (index count, data length, 16-byte index entries, data store)."""
-    if len(blob) < 8:
-        return ""
-    count = int.from_bytes(blob[0:4], "big")
-    size = int.from_bytes(blob[4:8], "big")
-    store = 8 + 16 * count
-    if count > 4096 or store + size > len(blob):
-        return ""
-    for index in range(count):
-        entry = blob[8 + 16 * index: 8 + 16 * (index + 1)]
-        tag, kind, offset = (int.from_bytes(entry[0:4], "big"), int.from_bytes(entry[4:8], "big"), int.from_bytes(entry[8:12], "big"))
-        if tag == _RPM_TAG_NAME and kind in (6, 9):
-            end = blob.find(b"\x00", store + offset)
-            return blob[store + offset:end].decode("utf-8", "replace") if end > 0 else ""
-    return ""

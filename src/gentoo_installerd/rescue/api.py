@@ -32,8 +32,8 @@ ACTIONS = (
     "rescue.scan", "rescue.unlock", "rescue.activate", "rescue.mount", "rescue.session", "rescue.events", "rescue.query", "rescue.plan", "rescue.run", "rescue.cancel",
     "rescue.shell", "rescue.unmount", "rescue.audit", "rescue.recover",
 )
-FAMILIES = ("gentoo", "debian", "fedora", "arch", "suse", "generic")
-REPAIR_FAMILIES = ("gentoo", "debian", "fedora")
+FAMILIES = ("gentoo",)  # the systems this tool opens; anything else is listed by a scan as "Not a Gentoo system" and refused
+REPAIR_FAMILIES = ("gentoo",)
 LIVE_MARKERS = ("/run/initramfs/live", "/run/live/medium")
 
 

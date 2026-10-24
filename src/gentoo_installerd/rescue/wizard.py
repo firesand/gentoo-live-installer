@@ -31,7 +31,7 @@ def _namespace(session: str, action: str, **extra: Any) -> argparse.Namespace:
 
 def run_wizard(ctx: Context, args: argparse.Namespace) -> int:
     console = ctx.console
-    console.say("Gentoo Live rescue: nothing is changed until you confirm a repair.")
+    console.say("Repair a Gentoo system that does not start: nothing is changed until you confirm a repair.")
     session = ""
     try:
         while True:

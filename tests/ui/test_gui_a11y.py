@@ -10,7 +10,7 @@ import pytest
 from PySide6.QtCore import QEvent, Qt
 from PySide6.QtGui import QAccessible, QAccessibleActionInterface, QColor, QShortcut
 from PySide6.QtTest import QTest
-from PySide6.QtWidgets import QApplication, QComboBox, QMainWindow, QMessageBox
+from PySide6.QtWidgets import QApplication, QComboBox, QLabel, QMainWindow, QMessageBox
 
 from gentoo_installer import app as app_module
 from gentoo_installer import keyboard, theme
@@ -316,12 +316,21 @@ def test_reboot_tries_elogind_first(make_window, monkeypatch):
 def test_welcome_offers_install_and_repair(make_window):
     window = make_window()
     assert window.welcome.install_button.text() == "Install Gentoo"
-    assert window.welcome.repair_button.text() == "Repair an existing system"
+    assert window.welcome.repair_button.text() == "Repair a Gentoo system"
     window.welcome.install_button.click()
     assert window.current == 1
     window._show_page(0)
     window.next.click()  # the Continue button keeps working on the first page
     assert window.current == 1
+
+
+def test_welcome_says_that_the_repair_is_for_a_gentoo_system_that_does_not_start(make_window):
+    window = make_window()
+    texts = " ".join(label.text() for label in window.welcome.findChildren(QLabel))
+    assert "Repair a Gentoo system that does not start" in texts  # the card says it
+    assert "Other Linux distributions are not supported" in texts
+    assert "repair a Gentoo system that no longer starts" in texts  # and the line under the title
+    assert "existing system" not in texts and "repair a Linux system" not in texts
 
 
 def test_repair_without_the_repair_tools_offers_a_terminal_that_runs_the_text_tool(make_window, monkeypatch):
@@ -331,7 +340,7 @@ def test_repair_without_the_repair_tools_offers_a_terminal_that_runs_the_text_to
     monkeypatch.setattr(QMessageBox, "question", lambda parent, title, text, *a, **k: (asked.append((title, text)), QMessageBox.StandardButton.Yes)[1])
     monkeypatch.setattr(app_module.QProcess, "startDetached", staticmethod(lambda program, arguments=[]: (started.append((program, arguments)), True)[1]))
     window.welcome.repair_button.click()
-    assert asked[0][0] == "Repair an existing system" and "sudo gentoo-rescue" in asked[0][1]
+    assert asked[0][0] == "Repair a Gentoo system" and "sudo gentoo-rescue" in asked[0][1]
     assert started == [("xfce4-terminal", ["-e", "sudo gentoo-rescue"])]
     assert window.isVisible()
 
@@ -345,7 +354,7 @@ def test_repair_without_a_terminal_falls_back_to_the_message(make_window, monkey
     monkeypatch.setattr(app_module.QProcess, "startDetached", staticmethod(lambda program, arguments=[]: (tried.append(program), False)[1]))
     window.welcome.repair_button.click()
     assert tried == ["xfce4-terminal", "xterm"]
-    assert shown[0][0] == "Repair an existing system" and "'gentoo-rescue'" in shown[0][1] and "sudo gentoo-rescue" in shown[0][1]
+    assert shown[0][0] == "Repair a Gentoo system" and "'gentoo-rescue'" in shown[0][1] and "sudo gentoo-rescue" in shown[0][1]
     assert window.isVisible()
 
 

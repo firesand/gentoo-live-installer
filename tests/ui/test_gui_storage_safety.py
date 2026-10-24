@@ -311,7 +311,7 @@ def test_a_kept_root_asks_before_the_new_system_is_installed_into_it(kept_root, 
     shown = ask(monkeypatch, {"Install over the existing system?": QMessageBox.StandardButton.Yes})
     window.start_installation()
     assert [title for title, _ in shown] == ["Install over the existing system?"]
-    assert "/dev/nvme0n1p3" in shown[0][1] and "Repair an existing system" in shown[0][1] and "/etc" in shown[0][1]
+    assert "/dev/nvme0n1p3" in shown[0][1] and "Repair a Gentoo system" in shown[0][1] and "/etc" in shown[0][1]
     assert window.manifest.storage.overwrite_existing_system is True
     assert workers.instances and window.install_started
 

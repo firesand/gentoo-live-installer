@@ -198,9 +198,8 @@ class Scenario:
     install_mode: str = ""           # "" = --install-mode (cli by default); cli | gui | text (gentoo-installer-text)
     boot_entry: str = ""             # the ISO menu entry to boot the live system with ("" = the default entry)
     extra_roles: tuple[str, ...] = ()   # what each extra disk is: "data" (the install writes to it) or "decoy" (must survive); default all decoys
-    image: str = ""                  # key of vm_rescue.IMAGES: boot that distribution's cloud image instead of installing Gentoo
     breaks: tuple[str, ...] = ()     # damage (vm_rescue.BREAK_MODES), each repaired before the next
-    repair: str = ""                 # "" | "cli": repair with gentoo-rescue | "refuse": the tool must refuse and write nothing
+    repair: str = ""                 # "" | "cli": repair with gentoo-rescue
 
     @property
     def hostname(self) -> str:
@@ -281,15 +280,7 @@ SCENARIO_MAP = {
                                       note="manual layout across two disks (ESP and root on one, swap and /home on the other) next to a third disk that must survive"),
     "text-install": Scenario("text-install", "openrc", "uefi", install_mode="text", boot_entry="text", in_all=False,
                              note="the console installer: the ISO's text entry, then gentoo-installer-text with a device confirmation"),
-    # Rescue runs on official cloud images (never written: each run uses an overlay) and on a Gentoo installed first.
-    "rescue-debian": Scenario("rescue-debian", "", "uefi", image="debian", breaks=("grub-cfg",), repair="cli", in_all=False,
-                              note="Debian 13 cloud image: menu file deleted, repaired from the live ISO, booted with UEFI and BIOS"),
-    "rescue-ubuntu": Scenario("rescue-ubuntu", "", "uefi", image="ubuntu", breaks=("initramfs",), repair="cli", in_all=False,
-                              note="Ubuntu 24.04 cloud image: initramfs on the separate /boot partition deleted and rebuilt"),
-    "rescue-fedora": Scenario("rescue-fedora", "", "uefi", image="fedora", breaks=("grub-cfg",), repair="cli", in_all=False,
-                              note="Fedora cloud image (btrfs with a boot subvolume, BLS, SELinux): /boot/grub2/grub.cfg deleted and repaired; the first boot relabels and restarts"),
-    "rescue-arch": Scenario("rescue-arch", "", "uefi", image="arch", repair="refuse", in_all=False,
-                            note="Arch cloud image: detected and diagnosed, every repair refused by design, the disk byte for byte unchanged"),
+    # A rescue run: a Gentoo is installed first, then broken and repaired.
     "rescue-gentoo": Scenario("rescue-gentoo", "openrc", "uefi", breaks=("grub-cfg", "initramfs", "fstab-uuid"), repair="cli", in_all=False,
                               note="a minimal Gentoo installed first, then broken and repaired three times (menu file, initramfs, fstab)"),
 }
@@ -325,7 +316,7 @@ PYSIDE_MEMORY_MIB = 8192
 
 def companion_memory_note(scenario: Scenario, args: argparse.Namespace) -> str:
     """A warning for a run that installs HWMonux in a machine too small to compile PySide ('' when there is nothing to say)."""
-    if scenario.image or getattr(args, "companions", "both") != "both" or args.memory >= PYSIDE_MEMORY_MIB:
+    if getattr(args, "companions", "both") != "both" or args.memory >= PYSIDE_MEMORY_MIB:
         return ""
     return (f"NOTE {scenario.name}: --companions both installs HWMonux, which compiles PySide from source; the first real runs with {args.memory} MiB "
             "of memory had the compiler killed. Use --companions portagehub, or --memory 12288 --build-jobs 1 --swap-mib 4096.")
@@ -723,12 +714,6 @@ def parse_install_result(returncode: int, output: str) -> InstallResult:
         success = False
         errors.append("Backend reported success but not a bootable system (completed.data.bootable is false)")
     return InstallResult(returncode == 0 and success, "; ".join(dict.fromkeys(errors)), events)
-
-
-def int_option(args: argparse.Namespace, name: str, default: int) -> int:
-    """An integer option of the command line, or ``default`` for runners built without it (unit tests, tools)."""
-    value = getattr(args, name, None)
-    return value if isinstance(value, int) else default
 
 
 def completed_data(events: Sequence[Mapping[str, Any]]) -> dict:
@@ -1243,8 +1228,6 @@ BROKEN_BOOT_MARKERS = ("grub>", "grub rescue>", "error: file", "error: unknown f
                        "VFS: Unable to mount root", "Entering emergency mode", "UEFI Interactive Shell",
                        "No bootable device", "Boot failed")
 RESCUE_BREAKS = ("none", "grub-cfg", "initramfs", "fstab-uuid")
-# Repairs a system the tool only diagnoses must not offer (rescue/actions.py): all of them write.
-WRITE_ACTIONS = ("repair.recommended", "boot.bootloader", "boot.config", "boot.initramfs", "boot.kernel", "fstab.fix", "pkg.finish")
 
 
 def parse_cmdline_probe(returncode: int, output: str, manifest: InstallManifest) -> ProbeResult:
@@ -2457,7 +2440,7 @@ class ScenarioRunner:
                 pass
         guest.cleanup()
 
-    def attach_image(self, path: str | Path, *, option: str = "--target-image") -> Path:
+    def attach_image(self, path: str | Path) -> Path:
         """Use an existing disk image as the target through a copy-on-write overlay: the image itself is never written.
 
         Records what the base image looked like (size, modification time, checksum of its first MiB) so that
@@ -2465,10 +2448,10 @@ class ScenarioRunner:
         """
         image = Path(path)
         if image.is_symlink() or not image.is_file() or image.suffix.lower() not in {".qcow2", ".img", ".raw"}:
-            raise HarnessError(f"{option} must name a regular .qcow2, .img or .raw file: {image}")
+            raise HarnessError(f"--target-image must name a regular .qcow2, .img or .raw file: {image}")
         image = image.resolve()
         if self.run_dir in image.parents or any(char in str(image) for char in (",", "\n", "\r", "\x00")):
-            raise HarnessError(f"{option} must be outside the run directory and have no commas in its path")
+            raise HarnessError(f"--target-image must be outside the run directory and have no commas in its path")
         info_log = self.run_dir / "qemu-img-info.log"
         if run_logged((self.args.qemu_img, "info", "--output=json", str(image)), info_log, self.args.command_timeout) != 0:
             raise HarnessError(f"qemu-img could not read {image}; see {info_log}")
@@ -2478,7 +2461,7 @@ class ScenarioRunner:
         except (ValueError, KeyError, TypeError) as exc:
             raise HarnessError(f"qemu-img info returned no usable format and size for {image}: {exc}") from None
         if image_format not in {"qcow2", "raw"}:
-            raise HarnessError(f"{option} has format {image_format}; only qcow2 and raw images are supported")
+            raise HarnessError(f"--target-image has format {image_format}; only qcow2 and raw images are supported")
         code = run_logged((self.args.qemu_img, "create", "-f", "qcow2", "-b", str(image), "-F", image_format, str(self.disk)),
                           self.run_dir / "qemu-img.log", self.args.command_timeout)
         if code != 0:
@@ -2544,109 +2527,6 @@ class ScenarioRunner:
         target.cleanup()
         return evidence
 
-    # --- machines that can only be watched: cloud images have no user, no key and no password ----------------------------
-
-    def record_boot(self, evidence: dict) -> dict:
-        self.__dict__.setdefault("boots", []).append(evidence)
-        return evidence
-
-    def watch_boot(self, vm: VMProcess, deadline: float) -> tuple[str, str]:
-        """Watch the serial console of a starting machine until it shows a login prompt, cannot come up, stops, or the time is out.
-
-        Returns the verdict of vm_rescue.classify_boot ('login', 'fatal:<text>', 'rebooted', 'exited' or 'waiting') and the console text.
-        """
-        while True:
-            exited = vm.process is not None and vm.process.poll() is not None
-            if exited:
-                time.sleep(0.5)  # the reader thread may still hold the last lines
-            text = vm.serial.snapshot() if vm.serial is not None else ""
-            code = vm.process.returncode if exited and vm.process is not None else None
-            state = vm_rescue.classify_boot(text, exited=exited, exit_code=code)
-            if state != "waiting" or time.monotonic() >= deadline:
-                return state, text
-            time.sleep(0.5)
-
-    def capture_boot_evidence(self, vm: VMProcess, name: str, text: str) -> dict:
-        """A screenshot of the machine and the end of its serial console, kept next to the logs."""
-        evidence: dict = {}
-        try:
-            evidence["screenshot"] = vm.screendump(self.run_dir / f"{name}.ppm").name
-        except (OSError, RuntimeError, ValueError) as exc:
-            evidence["screenshot_error"] = str(exc)
-        excerpt = "\n".join(vm_rescue.clean_serial(text).splitlines()[-40:])
-        (self.run_dir / f"{name}-serial.txt").write_text(excerpt + "\n")
-        evidence["serial_excerpt"] = f"{name}-serial.txt"
-        evidence["markers"] = vm_rescue.evidence_markers(text)
-        return evidence
-
-    def boot_to_login(self, label: str, *, firmware: str | None = None, nvram: str = "keep", timeout: int | None = None, restarts: int = 2) -> dict:
-        """Boot the disk alone and wait for a login prompt on the serial console; power the machine off afterwards.
-
-        A machine that restarts itself before the prompt (the SELinux relabel of Fedora ends with a reboot, and QEMU runs with
-        -no-reboot) is started again, at most ``restarts`` times, with the NVRAM it left, and gets the whole time again. The
-        evidence is recorded in result.json whether the boot works or not.
-        """
-        limit = timeout or int_option(self.args, "login_timeout", 600)
-        started = time.monotonic()
-        evidence = self.record_boot({"label": label, "firmware": firmware or self.scenario.firmware, "nvram": nvram, "restarts": 0})
-        name = label
-        while True:
-            vm = self.launch(name, live=False, firmware=firmware, nvram=nvram if evidence["restarts"] == 0 else "keep")
-            state, text = self.watch_boot(vm, time.monotonic() + limit)  # every start gets the whole time: the relabel of Fedora is a boot of its own
-            evidence["serial_log"] = vm.serial_log.name
-            if state == "rebooted" and evidence["restarts"] < restarts:
-                evidence["restarts"] += 1
-                vm.cleanup()
-                name = f"{label}-{evidence['restarts'] + 1}"
-                continue
-            break
-        evidence["seconds"] = round(time.monotonic() - started, 1)
-        evidence["state"] = state
-        cmdline = vm_rescue.kernel_command_line(text)
-        if cmdline:
-            evidence["kernel_command_line"] = cmdline
-        evidence["firmware_boot_choices"] = vm_probes.firmware_boot_choices(text)
-        if evidence["firmware_boot_choices"]:  # recorded, not assumed: did the firmware start the image through EFI/BOOT/BOOTX64.EFI?
-            evidence["started_through_fallback"] = vm_probes.booted_through_fallback(text)
-        if state == "login":
-            evidence["prompt"] = vm_rescue.login_prompt(text)
-            leaked = vm_rescue.live_arguments(cmdline)
-            if leaked:
-                evidence.update(self.capture_boot_evidence(vm, label, text))
-                vm.cleanup()
-                raise HarnessError(f"{label}: the kernel of the repaired system was started with arguments of the live medium ({', '.join(leaked)})")
-            self.stop_vm(vm, getattr(self.args, "shutdown_timeout", 120))
-            return evidence
-        evidence.update(self.capture_boot_evidence(vm, label, text))
-        vm.cleanup()
-        why = {"waiting": f"no login prompt within {limit}s", "exited": "QEMU stopped before a login prompt",
-               "rebooted": f"the machine restarted {evidence['restarts'] + 1} times without reaching a login prompt"}.get(state, f"the machine cannot start ({state.partition(':')[2]})")
-        kept = [name for name in (vm.serial_log.name, evidence.get("screenshot"), evidence.get("serial_excerpt")) if name]  # a machine that stopped has no screen to photograph
-        raise HarnessError(f"{label} ({evidence['firmware'].upper()}): {why}; see {', '.join(kept[:-1])} and {kept[-1]}")
-
-    def prove_unbootable(self, mode: str, details: dict, *, reference_seconds: float = 0.0) -> dict:
-        """The damage must be real: the machine, which reached a login prompt before, does not reach one now.
-
-        There is no SSH to a cloud image, so the serial console is the witness: either a message that says it cannot come up
-        (kernel panic, emergency mode, a GRUB prompt) or silence for ``--broken-timeout`` seconds, longer when the
-        undamaged image needed more than a third of that time. The fstab damage does not always stop a boot: findmnt proves it.
-        """
-        if mode == "fstab-uuid":
-            if details.get("findmnt_exit", 0) == 0:
-                raise HarnessError("findmnt --verify accepts the damaged fstab: the break did not take effect")
-            return {"proof": "findmnt --verify", "exit": details["findmnt_exit"], "output": details.get("findmnt_output", "")}
-        timeout = max(getattr(self.args, "broken_timeout", 120), int(reference_seconds * 3))
-        started = time.monotonic()
-        vm = self.launch("broken", live=False, nvram="fresh")
-        state, text = self.watch_boot(vm, started + timeout)
-        evidence: dict = {"state": state, "waited": round(time.monotonic() - started, 1), "timeout": timeout}
-        evidence.update(self.capture_boot_evidence(vm, "broken-boot", text))
-        vm.cleanup()
-        if state == "login":
-            raise HarnessError(f"The system still boots after breaking {mode} (it showed '{vm_rescue.login_prompt(text)}'): a repair test on it would prove nothing")
-        evidence["proof"] = f"the machine reports that it cannot start ({state.partition(':')[2]})" if state.startswith("fatal:") else f"no login prompt within {timeout}s"
-        return evidence
-
     def rescue_runner(self) -> Callable[[str, str, int], tuple[int, str]]:
         """run() for the rescue driver: a command in the live system as root, its output, in a log file of its own."""
         def run(command: str, log_name: str, timeout: int) -> tuple[int, str]:
@@ -2667,10 +2547,6 @@ class ScenarioRunner:
     def cli_repair_wanted(self) -> bool:
         return not getattr(self.args, "rescue_command", None) and (bool(getattr(self.args, "rescue_repair", False)) or self.scenario.repair == "cli")
 
-    def expected_os(self) -> str:
-        """The os-release ID the rescue tool must report for the system under test."""
-        return vm_rescue.IMAGES[self.scenario.image].os_id if self.scenario.image else "gentoo"
-
     def repair_with_cli(self, mode: str, *, disk: str | None = None, evidence: dict | None = None) -> dict:
         """Repair the system on the guarded disk with the gentoo-rescue command line, as a person would, and check the result.
 
@@ -2683,7 +2559,7 @@ class ScenarioRunner:
         action = getattr(self.args, "rescue_action", None) or "repair.recommended"
         driver = self.rescue_driver(mode)
         evidence = evidence if evidence is not None else {}
-        evidence.update({"tool": "gentoo-rescue", "action": action, "transport": driver.transport, "disk": disk, "expected_os": self.expected_os()})
+        evidence.update({"tool": "gentoo-rescue", "action": action, "transport": driver.transport, "disk": disk, "expected_os": "gentoo"})
         failure: BaseException | None = None
         session = ""
         try:
@@ -2849,8 +2725,6 @@ class ScenarioRunner:
             if getattr(self.args, "target_image", None):
                 return self.run_on_existing_image(result, mode, command)
             self.prepare_boot_entry(result)
-            if self.scenario.image:
-                return self.run_cloud_image(result)
             if getattr(self.args, "live_only", False):
                 return self.run_live_smoke(result)
             self.create_disks()
@@ -2943,128 +2817,6 @@ class ScenarioRunner:
         result["success"] = True
         return result
 
-    # --- a distribution's own image: Debian, Ubuntu, Fedora, Arch -----------------------------------------------------
-
-    def rescue_images_dir(self) -> Path:
-        return rescue_images_directory(self.args)
-
-    def final_boot_modes(self, image: vm_rescue.RescueImage) -> list[str]:
-        chosen = getattr(self.args, "final_boots", None)
-        return chosen.split(",") if chosen else list(image.final_boots)
-
-    def final_boots(self, image: vm_rescue.RescueImage, touches_nvram: bool) -> list[dict]:
-        """Boot the repaired image alone, once per firmware mode, and require a login prompt each time.
-
-        UEFI starts with an empty NVRAM (so only the fallback path EFI/BOOT/BOOTX64.EFI can boot it) unless the repair
-        changed the firmware's boot entries: then it must start with the variables the repair left, entries and all.
-        """
-        boots = []
-        for firmware in self.final_boot_modes(image):
-            nvram = "keep" if firmware == "uefi" and touches_nvram else "fresh"
-            boots.append(self.boot_to_login(f"final-{firmware}", firmware=firmware, nvram=nvram))
-        return boots
-
-    def base_image_status(self, rescue: dict, *, strict: bool) -> None:
-        if "_base_image" not in self.__dict__:
-            return
-        try:
-            rescue["base_image_unchanged"] = self.check_base_image_untouched()
-        except HarnessError as exc:
-            rescue["base_image_unchanged"] = False
-            rescue["base_image_error"] = str(exc)
-            if strict:
-                raise
-
-    def run_cloud_image(self, result: dict) -> dict:
-        """Break a distribution's cloud image from the live ISO, repair it with gentoo-rescue, and boot it to a login prompt.
-
-        The image is only a backing file: every run works on an overlay. The image has no user and no key, so the serial
-        console is how the harness sees the machine: first the untouched image must reach a login prompt (otherwise a later
-        failure would prove nothing about the repair), then the damaged one must not, then the repaired one must, with each
-        firmware the image supports.
-        """
-        image = vm_rescue.IMAGES[self.scenario.image]
-        path = vm_rescue.resolve_image(self.rescue_images_dir(), image, error=HarnessError)
-        modes = self.break_modes() if image.repairable else []
-        rescue: dict = {"scenario": self.scenario.name, "image": image.title, "file": str(path), "os_id": image.os_id, "family": image.family,
-                        "break": modes[0] if modes else "none", "tool": "gentoo-rescue", "disk": str(self.disk), "layout": image.layout}
-        result["rescue"] = rescue
-        try:
-            self.attach_image(path, option="the rescue image")
-            rescue["base_image"] = dict(self.__dict__["_base_fingerprint"])
-            reference = 0.0
-            if image.repairable and getattr(self.args, "baseline_boot", True):
-                rescue["baseline"] = self.boot_to_login("baseline", nvram="fresh")
-                reference = float(rescue["baseline"]["seconds"])
-            live = self.boot_live()
-            self.run_guard("guest-disk-guard.log", blank=False)
-            if not image.repairable:
-                rescue["diagnosis_only"] = self.diagnose_only(image)
-                self.power_off_live(live)
-            else:
-                mode = modes[0]
-                rescue["details"] = self.break_installed_system(mode)
-                self.power_off_live(live)
-                rescue["broken"] = self.prove_unbootable(mode, rescue["details"], reference_seconds=reference)
-                live = self.boot_live()
-                rescue["repair"] = {}
-                self.repair_with_cli(mode, evidence=rescue["repair"])
-                self.power_off_live(live)
-                rescue["final_boots"] = self.final_boots(image, bool(rescue["repair"].get("touches_nvram")))
-        except BaseException:
-            self.base_image_status(rescue, strict=False)
-            raise
-        self.base_image_status(rescue, strict=True)
-        result["success"] = True
-        return result
-
-    def diagnose_only(self, image: vm_rescue.RescueImage) -> dict:
-        """A system the tool must not repair: it is found, mounted read-only and diagnosed, every repair is refused, and the disk is left as it was."""
-        disk = (self.guard_report or {})["target"]
-        evidence: dict = {"disk": disk["path"]}
-        before = self.guest_tool("disk-hash", {"path": disk["path"], "size": disk["size"]}, "disk-hash-before.log")
-        evidence["sha256_before"] = before["sha256"]
-        driver = self.rescue_driver("none")
-        scan = driver.scan()
-        system = driver.choose(scan, disk=disk["path"], os_id=image.os_id)
-        evidence["system"] = {"id": system["id"], "device": system["device"], "os": (system.get("os") or {}).get("pretty_name"), "fstype": system.get("fstype"),
-                              "rootflags": system.get("rootflags", "")}
-        mounted = driver.mount(system)
-        session = str(mounted["session_id"])
-        evidence["family"] = mounted.get("family")
-        failure: BaseException | None = None
-        try:
-            if mounted.get("family") != image.family:
-                raise HarnessError(f"The rescue tool put the {image.title} image in the family {mounted.get('family')!r}, not {image.family!r}")
-            evidence["diagnosis"] = [{"id": item.get("id"), "severity": item.get("severity"), "title": item.get("title")}
-                                     for item in driver.diagnose(session).get("findings", [])]
-            offered = {item["id"]: item for item in driver.actions(session)}
-            writes = [name for name in WRITE_ACTIONS if offered.get(name, {}).get("available")]
-            evidence["actions_offered"] = writes
-            if writes:
-                raise HarnessError(f"The rescue tool offers repairs for a system it must only diagnose: {', '.join(writes)}")
-            evidence["refusals"] = [driver.refusal(session, action) for action in ("repair.recommended", "boot.config", "boot.bootloader")]
-            evidence["refusals"].append(driver.refused_run(session, "repair.recommended"))
-        except BaseException as exc:
-            failure = exc
-        try:
-            driver.unmount(session)
-        except HarnessError as exc:
-            failure = failure or exc
-        evidence["commands"] = list(driver.commands)
-        if failure is not None:
-            raise failure
-        code, log = self.ssh(self.args.ssh_user, vm_rescue.cleanup_command(disk["path"]), "rescue-cleanup.log", self.args.command_timeout)
-        left = vm_rescue.cleanup_problems(code, log.read_text(errors="replace"))
-        if left:
-            raise HarnessError("The diagnosis left things behind in the live system: " + "; ".join(left))
-        after = self.guest_tool("disk-hash", {"path": disk["path"], "size": disk["size"]}, "disk-hash-after.log")
-        evidence["sha256_after"] = after["sha256"]
-        if after["sha256"] != before["sha256"]:
-            raise HarnessError(f"The disk of the {image.title} image changed during a diagnosis that must not write anything")
-        evidence["unchanged"] = True
-        return evidence
-
     def finish_run(self, result: dict) -> None:
         saved_manifest_path = self.run_dir / "manifest.json"
         if saved_manifest_path.is_file():
@@ -3087,8 +2839,6 @@ class ScenarioRunner:
             (self.run_dir / name).unlink(missing_ok=True)
         for pid_file in self.run_dir.glob("qemu-*.pid"):
             pid_file.unlink(missing_ok=True)
-        if self.__dict__.get("boots"):
-            result["boots"] = self.__dict__["boots"]
         keep = self.args.keep or bool(result.get("rescue"))  # a rescue run exists to leave a disk behind
         if result["success"] and not keep:
             for path in [self.run_dir / "OVMF_VARS.fd", self.run_dir / "OVMF_VARS.live.fd", self.disk,
@@ -3166,20 +2916,9 @@ def check_port(host: str, port: int) -> None:
         raise HarnessError(f"SSH forward endpoint {host}:{port} is unavailable: {exc}") from exc
 
 
-def rescue_images_directory(args: argparse.Namespace) -> Path:
-    """Where the distribution cloud images are: --rescue-images, $GENTOO_RESCUE_IMAGES, else build/rescue-images."""
-    chosen = getattr(args, "rescue_images", None) or os.environ.get("GENTOO_RESCUE_IMAGES")
-    return Path(chosen) if chosen else PROJECT_ROOT / "build" / "rescue-images"
-
-
-def needs_uefi(scenario: Scenario, args: argparse.Namespace) -> bool:
-    """Whether a run of this scenario starts any machine with UEFI firmware (a repaired image may boot with both)."""
-    if scenario.firmware == "uefi":
-        return True
-    if scenario.image and vm_rescue.IMAGES[scenario.image].repairable:
-        chosen = getattr(args, "final_boots", None)
-        return "uefi" in (chosen.split(",") if chosen else vm_rescue.IMAGES[scenario.image].final_boots)
-    return False
+def needs_uefi(scenario: Scenario) -> bool:
+    """Whether a run of this scenario starts a machine with UEFI firmware."""
+    return scenario.firmware == "uefi"
 
 
 def preflight(args: argparse.Namespace, scenarios: Sequence[Scenario]) -> OvmfFirmware | None:
@@ -3205,7 +2944,7 @@ def preflight(args: argparse.Namespace, scenarios: Sequence[Scenario]) -> OvmfFi
         raise HarnessError(f"--ovmf-vars-file does not exist: {template}")
     secure = any(scenario.hardware.secure_boot for scenario in scenarios)
     firmware = detect_ovmf(secure=True) if secure else detect_ovmf()
-    if any(needs_uefi(scenario, args) for scenario in scenarios) and firmware is None:
+    if any(needs_uefi(scenario) for scenario in scenarios) and firmware is None:
         raise HarnessError("The Secure Boot build of OVMF was not found (OVMF_CODE.secboot.fd)" if secure else
                            "OVMF was not found; UEFI scenarios cannot run (the bios scenario does not need OVMF)")
     return firmware
@@ -3226,13 +2965,6 @@ def break_sequence(value: str) -> str:
     modes = [part.strip() for part in value.split(",") if part.strip()]
     if not modes or ("none" in modes and len(modes) > 1) or any(mode not in RESCUE_BREAKS for mode in modes):
         raise argparse.ArgumentTypeError(f"use none or a comma separated list of {', '.join(RESCUE_BREAKS[1:])}")
-    return ",".join(modes)
-
-
-def final_boot_list(value: str) -> str:
-    modes = [part.strip() for part in value.split(",") if part.strip()]
-    if not modes or any(mode not in {"uefi", "bios"} for mode in modes):
-        raise argparse.ArgumentTypeError("use uefi, bios, or uefi,bios")
     return ",".join(modes)
 
 
@@ -3268,8 +3000,8 @@ def rescue_problems(scenario: Scenario, args: argparse.Namespace) -> list[str]:
     """Rescue combinations that cannot work with this scenario."""
     problems = []
     mode = getattr(args, "install_mode", None) or scenario.install_mode or "cli"
-    if args.target_image is not None and (scenario.decoy or scenario.reinstall or scenario.expect_refusal or scenario.image):
-        problems.append("--target-image cannot be combined with a decoy, reinstall, refusal or image scenario")
+    if args.target_image is not None and (scenario.decoy or scenario.reinstall or scenario.expect_refusal):
+        problems.append("--target-image cannot be combined with a decoy, reinstall or refusal scenario")
     if args.target_image is not None and mode == "gui":
         problems.append("--target-image does not install, so --install-mode gui has nothing to drive")
     breaks = [part for part in (getattr(args, "rescue_break", "none") or "none").split(",") if part != "none"] or list(scenario.breaks)
@@ -3277,10 +3009,6 @@ def rescue_problems(scenario: Scenario, args: argparse.Namespace) -> list[str]:
         problems.append("--target-image takes one --rescue-break at a time")
     if scenario.luks and (breaks or getattr(args, "rescue_command", None) or getattr(args, "rescue_repair", False)):
         problems.append("rescue runs support unencrypted installs only")
-    if scenario.image and mode != "cli" and getattr(args, "install_mode", None):
-        problems.append("a cloud image is not installed: leave --install-mode out")
-    if getattr(args, "rescue_command", None) and scenario.repair == "refuse":
-        problems.append("this image is only diagnosed: there is no repair to run")
     return [f"{scenario.name}: {problem}" for problem in problems]
 
 
@@ -3310,7 +3038,6 @@ def list_scenarios() -> str:
                                     "fresh NVRAM on the target boot" if hw.ovmf_vars == "fresh-on-target" else "",
                                     f"{scenario.install_mode} installer" if scenario.install_mode else "",
                                     f"boot entry {scenario.boot_entry}" if scenario.boot_entry else "",
-                                    f"image {scenario.image}" if scenario.image else "",
                                     f"breaks {','.join(scenario.breaks)}" if scenario.breaks else "") if text]
         lines.append(f"{name:<22} {scenario.init or '-':<8} {scenario.firmware:<5} {'yes' if scenario.in_all else 'no':<9} "
                      f"{shape}{'; ' + ', '.join(extras) if extras else ''}{' - ' + scenario.note if scenario.note else ''}")
@@ -3406,14 +3133,6 @@ def build_parser() -> argparse.ArgumentParser:
                         help="The gentoo-rescue action --rescue-repair plans and runs (default: repair.recommended)")
     rescue.add_argument("--rescue-transport", choices=("auto", "daemon", "local"), default=None,
                         help="How gentoo-rescue reaches its engine: the installer daemon when it answers (auto, the default), the daemon only, or in-process")
-    rescue.add_argument("--rescue-images", type=Path, metavar="DIR",
-                        help="Where the distribution cloud images are (default: build/rescue-images, or $GENTOO_RESCUE_IMAGES); they are only read")
-    rescue.add_argument("--login-timeout", type=positive_int, default=600,
-                        help="Seconds a cloud image may take to show a login prompt on the serial console (default: 600; raise it without KVM)")
-    rescue.add_argument("--baseline-boot", action=argparse.BooleanOptionalAction, default=True,
-                        help="Boot the untouched cloud image first and require a login prompt, so a later failure is the damage and not the image (default: on)")
-    rescue.add_argument("--final-boots", metavar="uefi,bios", type=final_boot_list,
-                        help="The firmware modes the repaired image must boot in, in this order (default: the image's own list)")
     rescue.add_argument("--rescue-command", metavar="COMMAND",
                         help="Run this as root in the live system to repair it ({device} is the target disk), then boot the "
                              "disk again and verify it")
@@ -3422,7 +3141,7 @@ def build_parser() -> argparse.ArgumentParser:
     rescue.add_argument("--rescue-timeout", type=positive_int, default=1800,
                         help="Seconds the rescue command may run (default: 1800)")
     rescue.add_argument("--target-image", type=Path, metavar="PATH",
-                        help="Use an existing qcow2/raw image (a kept run's disk.qcow2, or another distribution's) instead of "
+                        help="Use an existing qcow2/raw image (a kept run's disk.qcow2, or a Gentoo installed another way) instead of "
                              "installing; it is only read, changes go to an overlay")
     rescue.add_argument("--target-manifest", type=Path, metavar="PATH",
                         help="Manifest the --target-image was installed with (default: manifest.json beside it)")
@@ -3485,11 +3204,7 @@ def failure_logs(run_dir: Path) -> list[Path]:
 
 
 def matrix_inputs_exist(args: argparse.Namespace, scenarios: Sequence[Scenario]) -> None:
-    """What the last job of a matrix needs must be there before the first one starts: the images, and the boot menu entries."""
-    directory = rescue_images_directory(args)
-    for scenario in scenarios:
-        if scenario.image:
-            vm_rescue.resolve_image(directory, vm_rescue.IMAGES[scenario.image], error=HarnessError)
+    """What the last job of a matrix needs must be there before the first one starts: the boot menu entries."""
     queries = sorted({scenario.boot_entry for scenario in scenarios if scenario.boot_entry} | ({args.boot_entry} if args.boot_entry else set()))
     if queries:
         try:
@@ -3596,7 +3311,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
         parser.error("--live-expect only applies to --live-only")
     chosen = SCENARIO_MAP[args.scenario] if args.scenario else None
     rescuing = (args.rescue_break != "none" or args.rescue_command or args.target_image or args.rescue_repair
-                or (chosen is not None and (chosen.breaks or chosen.image)))
+                or (chosen is not None and chosen.breaks))
     if args.rescue_repair and args.rescue_break == "none" and not args.target_image and not (chosen and chosen.breaks):
         parser.error("--rescue-repair repairs something that was broken: add --rescue-break, or use a rescue-* scenario")
     if rescuing:
@@ -3620,9 +3335,7 @@ def _main(argv: Sequence[str] | None = None) -> int:
     try:
         firmware = preflight(args, scenarios)
         public_key = public_key_from_private(args.ssh_keygen, args.ssh_private_key)
-        installable = next((scenario for scenario in scenarios if not scenario.image), None)
-        if installable is not None:
-            build_manifest(installable, public_key, args.companions, build_jobs=args.build_jobs, swap_mib=args.swap_mib)
+        build_manifest(scenarios[0], public_key, args.companions, build_jobs=args.build_jobs, swap_mib=args.swap_mib)
     except HarnessError as exc:
         parser.exit(2, f"test-vm.py: error: {exc}\n")
     failures = 0

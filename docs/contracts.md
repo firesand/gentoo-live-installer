@@ -341,6 +341,10 @@ about hardware. Its public API only grows:
   start-up unless `--no-rescue` is given.
 * `rescue.cli:main` is the `gentoo-rescue` console script. It talks to the daemon
   socket, or with `--local` runs as root without the daemon.
+* The tool repairs Gentoo only. `rescue.osrelease.NOT_GENTOO` ("Not a Gentoo system - this repair
+  tool only supports Gentoo") is the one sentence for every other system: a scan lists it
+  (`supported: false`), `RescueManager.plan_mount` refuses to mount it (`unsupported_system`),
+  and `Adapter.write_refusal` refuses every repair of it. Clients never branch on the wording.
 * Paths taken from a target system are never resolved with `pathlib` or `os.path`
   string logic. They are resolved component by component with `dir_fd` and
   `O_NOFOLLOW`, or with `openat2(RESOLVE_IN_ROOT)`, and mount points are re-checked

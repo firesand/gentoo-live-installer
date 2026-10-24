@@ -271,3 +271,16 @@ def test_the_backup_phrase_is_the_one_the_engine_asks_for() -> None:
 
 def test_every_risk_has_a_title_and_a_sentence() -> None:
     assert set(messages.RISK_TITLES) == set(RISKS) == set(messages.RISK_TEXTS)
+
+
+def test_only_gentoo_systems_can_be_opened_and_the_others_are_named_once():
+    found = [
+        {"id": "c1", "device": "/dev/sda2", "kind": "root", "supported": True, "os": {"id": "gentoo"}},
+        {"id": "c2", "device": "/dev/sda2", "kind": "snapshot", "supported": True, "os": {"id": "gentoo"}},
+        {"id": "c3", "device": "/dev/sdb2", "kind": "root", "supported": False, "os": {"id": "ubuntu"}},
+        {"id": "c4", "device": "/dev/sdb2", "kind": "snapshot", "supported": False, "os": {"id": "ubuntu"}},  # history of a system that is named already
+        {"id": "c5", "device": "/dev/sdc1", "kind": "root", "os": {"id": "gentoo"}},  # an engine that does not say anything about support opens it as before
+    ]
+    openable, others = model.split_candidates(found)
+    assert [item["id"] for item in openable] == ["c1", "c2", "c5"] and [item["id"] for item in others] == ["c3"]
+    assert model.describe_system(found[2], []).supported is False and model.describe_system(found[0], []).supported is True and model.describe_system(found[4], []).supported is True

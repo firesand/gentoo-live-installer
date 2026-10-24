@@ -184,7 +184,7 @@ set its directories). It registers only on the live medium (`/run/initramfs/live
 (`install.busy` / `rescue.busy_install`). Rescue events carry their own `seq` per
 operation; `rescue.events {job_id|session_id, after_seq}` re-attaches.
 
-Payload changes since the first release (all additive; a client that ignores them keeps working):
+Payload changes since the first release (additive, except for the removals named in the last item; a client that ignores unknown keys keeps working):
 
 * `rescue.plan` / `rescue.mount` mount plan: `unresolved[]` entries can have `status: "unstable"`
   and a `device` key: a boot or system mount that fstab names by a kernel name (`/dev/sdb1`,
@@ -198,8 +198,14 @@ Payload changes since the first release (all additive; a client that ignores the
   `unmount_existing` is gone; an old client's key is ignored without an error.
 * `rescue.session` orphan rows of `state: "unknown"` (mounts below a session directory that has
   no saved state) have a `path`.
-* The repair action `boot.kernel` has a `kernels` list parameter. It is published in
-  `actions.list` only for systems whose adapter selects kernels (Debian and Ubuntu).
+* The repair tool supports Gentoo only: the `rescue` entry of `capabilities` is `{api, root, families: ["gentoo"], repairs: ["gentoo"], actions}`.
+  Every entry of `rescue.scan`'s `candidates` has `supported` (bool). A system that is not Gentoo has
+  `supported: false`, its `os` (the name it gives itself) and `warnings: ["Not a Gentoo system - this
+  repair tool only supports Gentoo"]`, and nothing else worth reading. `rescue.mount` refuses it, by
+  its candidate id or by its device, with the error `unsupported_system` (the CLI exits with status
+  7) before anything is mounted. The `immutable` key of a candidate and of a session, and the `kernels`
+  list parameter of `boot.kernel` (it selected Debian kernels), are gone; the scan has a hint
+  `no_gentoo` when it found systems and none of them is Gentoo.
 
 ## Server-side registry (for modules such as rescue and hardware)
 

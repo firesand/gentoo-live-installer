@@ -64,7 +64,7 @@ def test_every_page_fits_a_small_screen(qtbot, gentoo_machine, repair_kit, size)
     daemon, lab, tree = gentoo_machine
     (tree / "boot/grub/grub.cfg").unlink()
     window = repair_kit.open(daemon.path, width=size[0], height=size[1])
-    qtbot.waitUntil(lambda: len(window.find_page.candidates) == 2 and not window.find_page._busy, timeout=20000)
+    qtbot.waitUntil(lambda: len(window.find_page.candidates) == 1 and not window.find_page._busy, timeout=20000)
     fits(window)
     window.find_page.disks.button.setChecked(True)
     fits(window)
@@ -107,7 +107,7 @@ def test_the_buttons_of_every_page_have_unique_mnemonics_and_the_page_names_a_st
     daemon, _lab, tree = gentoo_machine
     (tree / "boot/grub/grub.cfg").unlink()
     window = repair_kit.open(daemon.path)
-    qtbot.waitUntil(lambda: len(window.find_page.candidates) == 2 and not window.find_page._busy, timeout=20000)
+    qtbot.waitUntil(lambda: len(window.find_page.candidates) == 1 and not window.find_page._busy, timeout=20000)
     seen: list[tuple[str, list[str]]] = []
 
     def check() -> None:
@@ -129,16 +129,30 @@ def test_the_buttons_of_every_page_have_unique_mnemonics_and_the_page_names_a_st
     assert all(not duplicates for _name, duplicates in seen), seen
 
 
-def test_the_first_focus_of_each_page_is_the_main_thing_to_do(qtbot, gentoo_machine, repair_kit) -> None:
-    daemon, _lab, _tree = gentoo_machine
-    window = repair_kit.open(daemon.path)
+def test_with_several_gentoo_systems_nothing_is_chosen_for_the_person(qtbot, rescue_lab_factory, daemon_factory, repair_kit) -> None:
+    from tests.rescue import fakeroot as fr
+    from tests.rescue import lsblk_fixtures as lf
+
+    lab = rescue_lab_factory(lf.multiboot_three())
+    lab.add_tree("/dev/nvme0n1p2", "gentoo", firmware="uefi")
+    lab.add_tree("/dev/nvme0n1p3", "gentoo", firmware="uefi", root_uuid=fr.HOME_UUID)
+    window = repair_kit.open(daemon_factory(lab).path)
     window.activateWindow()
     qtbot.waitUntil(lambda: len(window.find_page.candidates) == 2 and not window.find_page._busy, timeout=20000)
     window.find_page.focus_first()
     assert window.focusWidget() is window.find_page.scan_button  # nothing is chosen yet: the person is not pushed towards a system
-    window.find_page.group.set_value(system_card(window, "/dev/nvme0n1p5"))
+    window.find_page.group.set_value(system_card(window, "/dev/nvme0n1p3"))
     window.find_page.focus_first()
     assert window.focusWidget() is window.find_page.group.cards[window.find_page.group.value()]
+
+
+def test_the_first_focus_of_each_page_is_the_main_thing_to_do(qtbot, gentoo_machine, repair_kit) -> None:
+    daemon, _lab, _tree = gentoo_machine
+    window = repair_kit.open(daemon.path)
+    window.activateWindow()
+    qtbot.waitUntil(lambda: len(window.find_page.candidates) == 1 and not window.find_page._busy, timeout=20000)
+    window.find_page.focus_first()
+    assert window.focusWidget() is window.find_page.group.cards[window.find_page.group.value()]  # the one Gentoo is chosen already: the focus is on it
     open_system(qtbot, window)
     window.diagnose_page.focus_first()
     assert window.focusWidget() is window.diagnose_page.logs_button  # nothing to fix: the way on is to look at the logs
@@ -147,12 +161,13 @@ def test_the_first_focus_of_each_page_is_the_main_thing_to_do(qtbot, gentoo_mach
 def test_the_steps_of_the_sidebar_follow_the_page_and_the_header_names_it(qtbot, gentoo_machine, repair_kit) -> None:
     daemon, _lab, _tree = gentoo_machine
     window = repair_kit.open(daemon.path)
-    qtbot.waitUntil(lambda: len(window.find_page.candidates) == 2 and not window.find_page._busy, timeout=20000)
+    qtbot.waitUntil(lambda: len(window.find_page.candidates) == 1 and not window.find_page._busy, timeout=20000)
 
     def current_step() -> int:
         return [index for index, button in enumerate(window.step_buttons) if button.property("current")][0]
 
-    assert current_step() == 0 and window.header_title.text() == "Find the system to repair"
+    assert current_step() == 0 and window.header_title.text() == "Find the Gentoo system to repair"
+    assert window.header_subtitle.text().startswith("Repair a Gentoo system that does not start") and window.windowTitle() == "Repair a Gentoo system"
     open_system(qtbot, window)
     assert current_step() == 2 and window.header_title.text() == "What is wrong"
     request_action(qtbot, window, "boot.config")
@@ -216,7 +231,7 @@ def test_unlocked_disks_without_an_open_system_are_released_too(qtbot, rescue_la
 def test_nothing_is_asked_when_nothing_is_open(qtbot, gentoo_machine, repair_kit, monkeypatch) -> None:
     daemon, _lab, _tree = gentoo_machine
     window = repair_kit.open(daemon.path)
-    qtbot.waitUntil(lambda: len(window.find_page.candidates) == 2 and not window.find_page._busy, timeout=20000)
+    qtbot.waitUntil(lambda: len(window.find_page.candidates) == 1 and not window.find_page._busy, timeout=20000)
     monkeypatch.setattr(window, "ask_close_choice", lambda what: pytest.fail("nothing is open, nothing should be asked"))
     window.close()
     qtbot.waitUntil(lambda: gone(window), timeout=10000)

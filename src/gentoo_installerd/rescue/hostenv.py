@@ -134,7 +134,7 @@ def check_network(connect: Callable[[tuple[str, int]], bool] = default_connect, 
         except OSError:
             return False
 
-    dns = (resolve or lookup)("deb.debian.org")
+    dns = (resolve or lookup)("distfiles.gentoo.org")  # where a kernel re-merge downloads from
     return {"ip": route, "dns": dns}
 
 

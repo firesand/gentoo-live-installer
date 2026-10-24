@@ -1,4 +1,4 @@
-"""The graphical repair tool: find a Linux system that does not start, open it safely, see what is wrong and repair it.
+"""The graphical repair tool: repair a Gentoo system that does not start. Find it, open it safely, see what is wrong and repair it.
 
 ``RescueWindow(socket_path)`` is a top-level window that talks to the installer daemon's ``rescue.*`` actions (docs/protocol.md) and
 deletes itself when it is closed. The installer window opens it from the Welcome page and comes back when it is gone;
@@ -56,8 +56,8 @@ class RescueWindow(QMainWindow):
         self._close_after_run = False  # the window was closed during a run: it closes when the run has stopped
         self._close_after_release = False  # the window was closed with a system open: it closes when everything is released
         self._force = False
-        self.setWindowTitle("Repair an existing system")
-        self.setAccessibleName("Repair an existing system")
+        self.setWindowTitle("Repair a Gentoo system")
+        self.setAccessibleName("Repair a Gentoo system")
         self.setMinimumSize(MIN_WIDTH, MIN_HEIGHT)
         self.resize(*DEFAULT_SIZE)
 
@@ -460,7 +460,7 @@ def main(argv: list[str] | None = None) -> int:
     """``python -m gentoo_installer.rescue_app``: the repair tool on its own (the installer starts it with ``--mode repair``)."""
     from .theme import apply_theme
 
-    parser = argparse.ArgumentParser(description="Graphical repair tool for Linux systems that do not start")
+    parser = argparse.ArgumentParser(description="Repair a Gentoo system that does not start (graphical tool)")
     parser.add_argument("--socket", default=os.environ.get("GENTOO_INSTALLER_SOCKET", DEFAULT_SOCKET))
     args = parser.parse_args(argv)
     app = QApplication(sys.argv[:1])

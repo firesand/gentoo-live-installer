@@ -1,26 +1,20 @@
-"""Distribution adapters; Arch, openSUSE and the generic adapter detect and diagnose only (writes are refused with a reason)."""
+"""The Gentoo adapter: the one place that knows how this tool reinstalls a boot loader, rebuilds an initramfs and reinstalls a kernel.
+
+The tool repairs Gentoo only. ``detect_adapter`` therefore always answers with the Gentoo adapter, whose ``write_refusal`` turns every repair of a
+system that is not Gentoo down (the engine does not open such a system at all; this is the second lock).
+"""
 
 from __future__ import annotations
 
 from ..view import SessionView
 from .base import Adapter
-from .debian import DebianAdapter
-from .fedora import FedoraAdapter
 from .gentoo import GentooAdapter
 
-
-class ReadOnlyAdapter(Adapter):
-    """Detection and read-only diagnosis only: the distributions without a tested repair path."""
-
-    def __init__(self, family: str = "generic") -> None:
-        self.family = family  # type: ignore[misc]
-
-
-_ADAPTERS: dict[str, Adapter] = {"gentoo": GentooAdapter(), "debian": DebianAdapter(), "fedora": FedoraAdapter()}
+_GENTOO = GentooAdapter()
 
 
 def detect_adapter(view: SessionView) -> Adapter:
-    return _ADAPTERS.get(view.family) or ReadOnlyAdapter(view.family)
+    return _GENTOO
 
 
-__all__ = ["Adapter", "DebianAdapter", "FedoraAdapter", "GentooAdapter", "ReadOnlyAdapter", "detect_adapter"]
+__all__ = ["Adapter", "GentooAdapter", "detect_adapter"]

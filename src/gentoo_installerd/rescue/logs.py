@@ -21,8 +21,7 @@ from .runner import RescueRunner
 from .view import SessionView
 
 CATALOGUE = (
-    "messages", "syslog", "kern.log", "dmesg", "boot.log", "boot", "rc.log", "emerge.log", "pacman.log", "dpkg.log", "apt/history.log", "apt/term.log", "dnf.log", "dnf.rpm.log",
-    "dnf.librepo.log", "yum.log", "zypp/history", "Xorg.0.log", "auth.log", "secure", "daemon.log", "cloud-init.log", "portage/elog/summary.log", "user.log", "errors.log",
+    "messages", "syslog", "kern.log", "dmesg", "boot.log", "boot", "rc.log", "emerge.log", "Xorg.0.log", "auth.log", "daemon.log", "portage/elog/summary.log", "user.log", "errors.log",
 )
 DENIED_NAMES = re.compile(r"(?:^|/)(?:shadow|gshadow|passwd|btmp|wtmp|lastlog|faillog|.*_key|.*\.key|.*\.pem)(?:$|[.-])")
 ROTATED_RE = re.compile(r"^(?P<base>.+?)(?:[.-](?:\d+|\d{8}))?(?:\.(?:gz|xz|bz2|zst))?$")

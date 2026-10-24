@@ -1,4 +1,4 @@
-"""What /boot looks like on different distributions: which files are kernels and which initramfs belongs to which, and what must not be mistaken for a kernel."""
+"""What /boot looks like: which files are kernels and which initramfs belongs to which, and what must not be mistaken for a kernel."""
 
 from __future__ import annotations
 
@@ -49,43 +49,24 @@ def test_genkernel_names_belong_to_the_release_of_their_module_tree(tmp_path: Pa
 
 
 @pytest.mark.parametrize("files,modules,expected", [
-    # Debian and Ubuntu: unversioned links and .old copies are not kernels of their own
-    ({"boot/vmlinuz-6.8.0-31-generic": 14 * MiB, "boot/initrd.img-6.8.0-31-generic": 60 * MiB, "boot/vmlinuz.old": 14 * MiB, "boot/initrd.img.old": 60 * MiB, "boot/vmlinuz": 14 * MiB,
-      "boot/vmlinuz-6.8.0-31-generic.hmac": 100},
-     ("6.8.0-31-generic",), {"6.8.0-31-generic": ("/boot/vmlinuz-6.8.0-31-generic", "/boot/initrd.img-6.8.0-31-generic", True)}),
-    # Fedora and RHEL: a rescue kernel next to the installed ones
-    ({"boot/vmlinuz-6.8.5-300.fc40.x86_64": 14 * MiB, "boot/initramfs-6.8.5-300.fc40.x86_64.img": 40 * MiB, "boot/.vmlinuz-6.8.5-300.fc40.x86_64.hmac": 100,
-      "boot/vmlinuz-0-rescue-0123456789abcdef0123456789abcdef": 14 * MiB, "boot/initramfs-0-rescue-0123456789abcdef0123456789abcdef.img": 90 * MiB},
-     ("6.8.5-300.fc40.x86_64",), {"6.8.5-300.fc40.x86_64": ("/boot/vmlinuz-6.8.5-300.fc40.x86_64", "/boot/initramfs-6.8.5-300.fc40.x86_64.img", True),
-                                  "0-rescue-0123456789abcdef0123456789abcdef": ("/boot/vmlinuz-0-rescue-0123456789abcdef0123456789abcdef", "/boot/initramfs-0-rescue-0123456789abcdef0123456789abcdef.img", False)}),
-    # openSUSE: initrd-<release>
-    ({"boot/vmlinuz-6.8.5-1-default": 13 * MiB, "boot/initrd-6.8.5-1-default": 40 * MiB, "boot/vmlinuz": 13 * MiB}, ("6.8.5-1-default",),
-     {"6.8.5-1-default": ("/boot/vmlinuz-6.8.5-1-default", "/boot/initrd-6.8.5-1-default", True)}),
-    # Alpine: the flavor is the version
-    ({"boot/vmlinuz-lts": 9 * MiB, "boot/initramfs-lts": 10 * MiB, "boot/System.map-lts": MiB}, (), {"lts": ("/boot/vmlinuz-lts", "/boot/initramfs-lts", False)}),
-    # Void
-    ({"boot/vmlinuz-6.6.30_1": 11 * MiB, "boot/initramfs-6.6.30_1.img": 12 * MiB}, ("6.6.30_1",), {"6.6.30_1": ("/boot/vmlinuz-6.6.30_1", "/boot/initramfs-6.6.30_1.img", True)}),
+    # unversioned links, .old copies and checksum files are not kernels of their own
+    ({"boot/vmlinuz-6.8.0-31-gentoo": 14 * MiB, "boot/initramfs-6.8.0-31-gentoo.img": 60 * MiB, "boot/vmlinuz.old": 14 * MiB, "boot/initramfs.img.old": 60 * MiB, "boot/vmlinuz": 14 * MiB,
+      "boot/vmlinuz-6.8.0-31-gentoo.hmac": 100},
+     ("6.8.0-31-gentoo",), {"6.8.0-31-gentoo": ("/boot/vmlinuz-6.8.0-31-gentoo", "/boot/initramfs-6.8.0-31-gentoo.img", True)}),
+    # an initramfs named initrd-<release>
+    ({"boot/vmlinuz-6.8.5-gentoo": 13 * MiB, "boot/initrd-6.8.5-gentoo": 40 * MiB, "boot/vmlinuz": 13 * MiB}, ("6.8.5-gentoo",),
+     {"6.8.5-gentoo": ("/boot/vmlinuz-6.8.5-gentoo", "/boot/initrd-6.8.5-gentoo", True)}),
     # a module tree whose kernel was removed is listed without an image
-    ({"boot/vmlinuz-6.8.0-31-generic": 14 * MiB}, ("6.8.0-31-generic", "6.5.0-old"), {"6.8.0-31-generic": ("/boot/vmlinuz-6.8.0-31-generic", "", True), "6.5.0-old": ("", "", True)}),
+    ({"boot/vmlinuz-6.8.0-31-gentoo": 14 * MiB}, ("6.8.0-31-gentoo", "6.5.0-old"), {"6.8.0-31-gentoo": ("/boot/vmlinuz-6.8.0-31-gentoo", "", True), "6.5.0-old": ("", "", True)}),
 ])
-def test_boot_layouts_of_the_big_distributions(tmp_path: Path, files, modules, expected) -> None:
+def test_boot_layouts(tmp_path: Path, files, modules, expected) -> None:
     assert kernels_of(layout(tmp_path, files, modules)) == expected
 
 
-def test_arch_images_are_named_after_the_package_base_not_the_release(tmp_path: Path) -> None:
-    root = layout(tmp_path, {"boot/vmlinuz-linux": 12 * MiB, "boot/initramfs-linux.img": 20 * MiB, "boot/initramfs-linux-fallback.img": 80 * MiB, "boot/vmlinuz-linux-lts": 12 * MiB,
-                             "boot/initramfs-linux-lts.img": 20 * MiB}, modules=("6.8.5-arch1-1", "6.6.30-1-lts"))
-    fr.put(root, "usr/lib/modules/6.8.5-arch1-1/pkgbase", "linux\n")
-    fr.put(root, "usr/lib/modules/6.6.30-1-lts/pkgbase", "linux-lts\n")
-    assert kernels_of(root) == {"6.8.5-arch1-1": ("/boot/vmlinuz-linux", "/boot/initramfs-linux.img", True), "6.6.30-1-lts": ("/boot/vmlinuz-linux-lts", "/boot/initramfs-linux-lts.img", True)}
-
-
 @pytest.mark.parametrize("versions,expected", [
-    (["6.1.0-9-amd64", "6.1.0-10-amd64", "6.1.0-2-amd64"], ["6.1.0-2-amd64", "6.1.0-9-amd64", "6.1.0-10-amd64"]),  # Debian crosses a digit width
-    (["6.8.0-100-generic", "6.8.0-99-generic", "6.8.0-101-generic"], ["6.8.0-99-generic", "6.8.0-100-generic", "6.8.0-101-generic"]),  # so does Ubuntu's ABI number
-    (["6.11.4-300.fc41.x86_64", "6.9.12-200.fc40.x86_64"], ["6.9.12-200.fc40.x86_64", "6.11.4-300.fc41.x86_64"]),
+    (["6.9.12-gentoo", "6.10.3-gentoo", "6.2.1-gentoo"], ["6.2.1-gentoo", "6.9.12-gentoo", "6.10.3-gentoo"]),  # the numbers cross a digit width
     (["7.3.0-cachyos-dist", "7.2.11-cachyos-dist", "7.10.0-cachyos-dist"], ["7.2.11-cachyos-dist", "7.3.0-cachyos-dist", "7.10.0-cachyos-dist"]),
-    (["6.1.0-9-amd64", "0-rescue-0123456789abcdef0123456789abcdef", "6.1.0-9-rt-amd64"], ["0-rescue-0123456789abcdef0123456789abcdef", "6.1.0-9-amd64", "6.1.0-9-rt-amd64"]),
+    (["6.18.57-gentoo-dist", "6.18.57-gentoo-dist-bin", "6.18.9-gentoo-dist"], ["6.18.9-gentoo-dist", "6.18.57-gentoo-dist", "6.18.57-gentoo-dist-bin"]),
 ])
 def test_kernels_are_listed_oldest_first_by_number_not_by_text(tmp_path: Path, versions: list[str], expected: list[str]) -> None:
     root = layout(tmp_path, {f"boot/vmlinuz-{version}": 14 * MiB for version in versions})

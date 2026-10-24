@@ -17,7 +17,7 @@ UUID = "aaaa1111bbbb2222cccc333344445555"  # as the scan names the array: hex di
 def raid_lab(factory, **spec):
     lab = factory(lambda s: lf.md_raid1_under_lvm() if s.md["x"].assembled else lf.md_raid1_unassembled())
     lab.system.md["x"] = MdSpec("aaaa1111:bbbb2222:cccc3333:44445555", ["/dev/sdb1", "/dev/sdc1"], name="host:data", device="/dev/md127", **spec)
-    lab.add_tree("/dev/mapper/vgdata-data", "debian")
+    lab.add_tree("/dev/mapper/vgdata-data", "gentoo")
     return lab
 
 
@@ -33,7 +33,7 @@ def test_an_array_that_is_not_assembled_is_assembled_on_request_and_the_system_i
     assert not lab.system.commands_with("mdadm", "--assemble")  # nothing happens before the answer
     page.confirm.confirm_button.click()
     qtbot.waitUntil(lambda: len(page.candidates) == 1 and not page._busy, timeout=30000)
-    assert page.candidates[0]["os"]["id"] == "debian" and "RAID array" in page.group.cards[page.candidates[0]["id"]].description_label.text()
+    assert page.candidates[0]["os"]["id"] == "gentoo" and "RAID array" in page.group.cards[page.candidates[0]["id"]].description_label.text()
     assert window.storage_opened and lab.system.commands_with("mdadm", "--assemble")[0][:4] == ("mdadm", "--assemble", "--scan", "--readonly")  # assembled read-only
 
 

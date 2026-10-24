@@ -7,7 +7,6 @@ import pytest
 
 import vm_hw
 import vm_matrix
-import vm_rescue
 from tests.vm.helpers import load_vm_module
 
 vm = load_vm_module()
@@ -65,9 +64,7 @@ def matrix_rows() -> dict[str, list[str]]:
 
 
 def documented_companions(entry) -> str:
-    """The companions an entry installs, as the table writes them: '-' for a cloud image (nothing is installed)."""
-    if vm.SCENARIO_MAP[entry.scenario].image:
-        return "-"
+    """The companions an entry installs, as the table writes them."""
     return "PortageHub" if "portagehub" in entry.options else "HWMonux and PortageHub"
 
 
@@ -86,9 +83,10 @@ def test_the_documented_matrix_rules_are_the_ones_the_scheduler_applies():
     assert f"default {vm_matrix.DEFAULT_BUDGET_MIB} MiB" in DOC and f"plus {vm_matrix.MARGIN_MIB // 1024} GiB" in DOC
 
 
-def test_the_cloud_image_names_in_the_requirements_are_the_ones_the_harness_looks_for():
-    for image in vm_rescue.IMAGES.values():
-        assert image.filename in DOC, image.filename
+def test_the_documentation_does_not_ask_for_cloud_images_of_other_distributions():
+    """Only Gentoo is repaired: there is no scenario that boots another distribution's image, so the requirements do not list one."""
+    for word in ("cloud image", "cloudimg", "genericcloud", "--rescue-images", "GENTOO_RESCUE_IMAGES", "rescue-debian", "rescue-ubuntu", "rescue-fedora", "rescue-arch"):
+        assert word not in DOC, word
 
 
 def test_the_memory_rule_and_the_choice_of_companions_are_written_down():

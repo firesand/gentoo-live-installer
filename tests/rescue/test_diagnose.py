@@ -19,7 +19,7 @@ def lab_for(lab_factory, family: str = "gentoo", lsblk: str | None = None, root:
     opts.setdefault("firmware", "uefi")
     tree = lab.add_tree(root, family, **opts)
     if esp:
-        lab.system.attach("/dev/nvme0n1p1", fr.esp_tree(lab.tmp / "trees" / "esp", family, shim=family in {"debian", "ubuntu"}))
+        lab.system.attach("/dev/nvme0n1p1", fr.esp_tree(lab.tmp / "trees" / "esp", family))
     return lab, tree
 
 
@@ -42,10 +42,9 @@ def test_healthy_gentoo_has_no_errors(lab_factory) -> None:
     assert severities(findings, "error") == [], [f.to_dict() for f in findings]
 
 
-@pytest.mark.parametrize("family,kwargs", [("debian", {}), ("ubuntu", {}), ("fedora", {"btrfs": True}), ("arch", {"esp_mount": "/efi"})])
-def test_healthy_systems_of_other_families_are_quiet(lab_factory, family: str, kwargs: dict) -> None:
-    lab, _ = lab_for(lab_factory, family, **kwargs)
-    # the fakes mount their ESP below /boot/efi or /boot; give them the right directory
+@pytest.mark.parametrize("kwargs", [{"init": "systemd"}, {"esp_mount": "/boot/efi"}, {"kernels": ["6.12.4-gentoo-dist", "6.18.57-gentoo-dist-bin"]}])
+def test_healthy_variants_of_a_gentoo_are_quiet(lab_factory, kwargs: dict) -> None:
+    lab, _ = lab_for(lab_factory, **kwargs)
     findings = findings_of(lab)
     assert "D01" not in ids(findings) and "D02" not in ids(findings) and "D03" not in ids(findings) and "D04" not in ids(findings), [f.to_dict() for f in findings]
 
@@ -83,13 +82,6 @@ def test_d05_missing_empty_and_menuless_grub_cfg(lab_factory) -> None:
     lab3, tree3 = lab_for(lab_factory)
     (tree3 / "boot/grub/grub.cfg").write_text("set default=0\n" * 20)
     assert any("lists no system" in f.title for f in findings_of(lab3) if f.id == "D05")
-
-
-def test_d05_fedora_without_boot_entries(lab_factory) -> None:
-    lab, tree = lab_for(lab_factory, "fedora", btrfs=True, grub_cfg=False)
-    import shutil
-    shutil.rmtree(tree / "boot/loader")
-    assert any(f.id == "D05" and "no boot entries" in f.title.lower() for f in findings_of(lab))
 
 
 def test_d05_no_loader_at_all(lab_factory) -> None:
@@ -174,7 +166,7 @@ def test_d09_gpt_disk_without_bios_boot_partition(lab_factory) -> None:
     d09 = [f for f in findings if f.id == "D09"]
     assert d09 and "never repartitions" in d09[0].detail and d09[0].actions == []
     cloud = lab_factory(lf.debian_cloud(), name="cloud")
-    t = cloud.add_tree("/dev/vda1", "debian", firmware="bios")
+    t = cloud.add_tree("/dev/vda1", "gentoo", firmware="bios")
     (t / "boot/grub/i386-pc").mkdir(parents=True)
     assert "D09" not in ids(findings_of(cloud, "/dev/vda1"))
 
@@ -208,21 +200,17 @@ def test_d12_degraded_view_d14_accounts_d18_pending_work(lab_factory) -> None:
     (tree / "etc/passwd").write_text("")
     session, view = lab.mounted_view("/dev/nvme0n1p5")
     assert "D14" in ids(diagnose(view))
-    deb, _ = lab_for(lab_factory, "debian", half_configured=True)
-    assert [f.evidence for f in findings_of(deb) if f.id == "D18"] == [["half-configured: grub-efi-amd64"]]
-    arch, atree = lab_for(lab_factory, "arch")
-    (atree / "var/lib/pacman").mkdir(parents=True, exist_ok=True)
-    (atree / "var/lib/pacman/db.lck").write_text("")
-    assert any(f.id == "D18" and "db.lck" in f.evidence[0] for f in findings_of(arch))
+    quiet, _ = lab_for(lab_factory)
+    assert "D18" not in ids(findings_of(quiet))
     gentoo, gtree = lab_for(lab_factory)
     (gtree / "var/cache/edb").mkdir(parents=True, exist_ok=True)
     (gtree / "var/cache/edb/mtimedb").write_text(json.dumps({"resume": {"mergelist": [["ebuild", "/", "dev-lang/python-3.14", "merge"]]}}))
-    assert any(f.id == "D18" for f in findings_of(gentoo))
+    assert [f.evidence for f in findings_of(gentoo) if f.id == "D18"] == [["Portage has an unfinished merge list (emerge --resume)"]]
 
 
 def test_d17_cloned_root_uuid(lab_factory) -> None:
     lab = lab_factory(lf.cloned_uuids())
-    lab.add_tree("/dev/sda1", "alpine")
+    lab.add_tree("/dev/sda1", "gentoo")
     session, view = lab.mounted_view("/dev/sda1")
     assert "D17" in ids(diagnose(view))
 
@@ -252,18 +240,18 @@ def test_efi_parser_and_case_insensitive_fat_lookup() -> None:
     text = (
         "BootNext: 0003\nBootCurrent: 0001\nTimeout: 1 seconds\nBootOrder: 0001,0000,0003\n"
         "Boot0000* Windows Boot Manager\tHD(1,GPT,aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee,0x800,0x32000)/File(\\EFI\\Microsoft\\Boot\\bootmgfw.efi)WINDOWS.........x...B.C.D.O.B.J.E.C.T.=.{9dea862c}\n"
-        "Boot0001* debian\tHD(1,GPT,aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee,0x800,0x100000)/File(\\EFI\\debian\\shimx64.efi)\n"
+        "Boot0001* Gentoo\tHD(1,GPT,aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee,0x800,0x100000)/File(\\EFI\\Gentoo\\grubx64.efi)\n"
         "Boot0003  UEFI: PXE IPv4 Intel(R) Ethernet\tPciRoot(0x0)/Pci(0x1c,0x0)/Pci(0x0,0x0)/MAC(001122334455,1)/IPv4(0.0.0.00.0.0.0,0,0)..BO\n"
     )
     state = efi.parse_efibootmgr(text)
     assert state.current == "0001" and state.next == "0003" and state.order == ["0001", "0000", "0003"] and state.timeout == "1 seconds"
-    assert [(e.number, e.active, e.label) for e in state.entries] == [("0000", True, "Windows Boot Manager"), ("0001", True, "debian"), ("0003", False, "UEFI: PXE IPv4 Intel(R) Ethernet")]
-    assert state.entry("0001").loader == "\\EFI\\debian\\shimx64.efi" and state.entry("0001").partuuid == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" and state.entry("0001").partition == 1
+    assert [(e.number, e.active, e.label) for e in state.entries] == [("0000", True, "Windows Boot Manager"), ("0001", True, "Gentoo"), ("0003", False, "UEFI: PXE IPv4 Intel(R) Ethernet")]
+    assert state.entry("0001").loader == "\\EFI\\Gentoo\\grubx64.efi" and state.entry("0001").partuuid == "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee" and state.entry("0001").partition == 1
     assert state.entry("0000").loader == "\\EFI\\Microsoft\\Boot\\bootmgfw.efi"
     assert state.entry("0003").loader == "" and state.entry("0003").partuuid == ""
-    listing = {"/boot/efi": ["EFI"], "/boot/efi/EFI": ["Debian", "BOOT"], "/boot/efi/EFI/Debian": ["SHIMX64.EFI"]}
-    assert efi.esp_file_exists("\\EFI\\debian\\shimx64.efi", lambda path: listing.get(path, []), "/boot/efi")
-    assert not efi.esp_file_exists("\\EFI\\debian\\grubx64.efi", lambda path: listing.get(path, []), "/boot/efi")
+    listing = {"/efi": ["EFI"], "/efi/EFI": ["Gentoo", "BOOT"], "/efi/EFI/Gentoo": ["GRUBX64.EFI"]}
+    assert efi.esp_file_exists("\\EFI\\gentoo\\grubx64.efi", lambda path: listing.get(path, []), "/efi")
+    assert not efi.esp_file_exists("\\EFI\\gentoo\\shimx64.efi", lambda path: listing.get(path, []), "/efi")
     bad = efi.parse_efibootmgr("EFI variables are not supported on this system.\n", 2)
     assert bad.usable is False and "not supported" in bad.error
     assert efi.sanitize_label("Gentoo; rm -rf /") == "Gentoo rm -rf" and efi.sanitize_label("a;b") == "ab"

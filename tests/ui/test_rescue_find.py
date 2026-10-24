@@ -5,9 +5,11 @@ from __future__ import annotations
 import json
 
 import pytest
+from PySide6.QtWidgets import QLabel
 
 from gentoo_installer.rescue_app import DIAGNOSE, FIND
 from gentoo_installer.rescue_ui import messages
+from gentoo_installerd.rescue.osrelease import NOT_GENTOO
 from tests.rescue import fakeroot as fr
 from tests.rescue import lsblk_fixtures as lf
 from tests.rescue.flow import uefi_gentoo_lab
@@ -36,7 +38,7 @@ def test_a_computer_with_only_windows_says_why_nothing_was_found(qtbot, rescue_l
     scanned(qtbot, window, 0)
     page = window.find_page
     assert not page.systems_card.isVisibleTo(page) and page.empty_card.isVisibleTo(page) and not page.continue_button.isEnabled()
-    assert page.empty_card.findChild(object, "cardTitle").text() == messages.NOTHING_FOUND_TITLE
+    assert page.empty_card.findChild(object, "cardTitle").text() == messages.NOTHING_FOUND_TITLE == "No Gentoo system was found" and not page.others_card.isVisibleTo(page)
     assert "Only Windows-style volumes were found" in page.hints.text()
     assert page.disks.isVisibleTo(page) and "/dev/sda" in page.disks_text.text() and "ntfs" in page.disks_text.text()
     assert not lab.system.mounted_targets() and not lab.system.commands_named("mount")  # ntfs is listed, never opened
@@ -59,28 +61,58 @@ def test_the_live_stick_is_never_offered_and_the_page_says_it_is_hidden(qtbot, r
 def test_several_systems_are_listed_and_a_disk_that_cannot_be_read_is_reported(qtbot, rescue_lab_factory, daemon_factory, repair_kit) -> None:
     lab = rescue_lab_factory(lf.multiboot_three())
     lab.add_tree("/dev/nvme0n1p2", "gentoo", firmware="uefi")
-    lab.add_tree("/dev/nvme0n1p3", "debian", firmware="uefi")  # the btrfs partition has nothing attached: opening it fails
+    lab.add_tree("/dev/nvme0n1p3", "gentoo", firmware="uefi", root_uuid=fr.HOME_UUID)  # the btrfs partition has nothing attached: opening it fails
     window = repair_kit.open(daemon_factory(lab).path)
     scanned(qtbot, window, 2)
     page = window.find_page
-    assert [page.group.cards[item["id"]].title_label.text() for item in sorted(page.candidates, key=lambda c: c["device"])][0] == "Gentoo Linux"
+    assert [page.group.cards[item["id"]].title_label.text() for item in sorted(page.candidates, key=lambda c: c["device"])] == ["Gentoo Linux", "Gentoo Linux"]
     assert page.group.value() == "" and not page.continue_button.isEnabled()  # with a choice, nothing is chosen for the person
     assert "/dev/nvme0n1p4" in page.hints.text()  # the disk that could not be read is mentioned, the scan went on
     page.group.set_value(system_card(window, "/dev/nvme0n1p3"))
     assert page.continue_button.isEnabled()
 
 
+def test_a_system_that_is_not_gentoo_is_listed_by_name_with_the_plain_reason_and_cannot_be_chosen(qtbot, gentoo_machine_for_find, repair_kit) -> None:
+    daemon, _lab = gentoo_machine_for_find  # Gentoo on the NVMe disk, a Debian on the second disk
+    window = repair_kit.open(daemon.path)
+    scanned(qtbot, window, 1)
+    page = window.find_page
+    assert [item["device"] for item in page.candidates] == ["/dev/nvme0n1p5"] and [item["device"] for item in page.others] == ["/dev/sdb1"]
+    assert page.others_card.isVisibleTo(page) and messages.NOT_GENTOO_TEXT == NOT_GENTOO and NOT_GENTOO in plain(" ".join(label.text() for label in page.others_card.findChildren(QLabel)))
+    other = page.findChild(object, "rescueOther:/dev/sdb1")
+    assert other is not None and "Debian GNU/Linux 13 (trixie)" in plain(other.text()) and "/dev/sdb1" in plain(other.text())
+    assert len(page.group.cards) == 1 and page.group.value() != page.others[0]["id"]  # no card to choose it with
+    assert page.systems_card.isVisibleTo(page) and not page.empty_card.isVisibleTo(page)
+    page.group.set_value(system_card(window, "/dev/nvme0n1p5"))
+    assert page.continue_button.isEnabled() and page.selected_candidate()["device"] == "/dev/nvme0n1p5"
+
+
+def test_when_no_system_is_gentoo_the_page_says_so_and_still_lists_what_it_found(qtbot, rescue_lab_factory, daemon_factory, repair_kit) -> None:
+    lab = rescue_lab_factory(lf.plain_sata_mbr(), uefi=False)
+    lab.add_tree("/dev/sda1", "ubuntu")
+    window = repair_kit.open(daemon_factory(lab).path)
+    scanned(qtbot, window, 0)
+    page = window.find_page
+    assert not page.systems_card.isVisibleTo(page) and page.empty_card.isVisibleTo(page) and not page.continue_button.isEnabled()
+    assert page.empty_title.text() == messages.NOTHING_FOUND_TITLE
+    reasons = page.empty_text.text().splitlines()
+    assert reasons[0] == messages.NOTHING_FOUND_INTRO.strip() and "not Gentoo" in reasons[1] and "encrypted" in reasons[2]  # the usual reasons stay; the first is that a system was found, but it is not Gentoo
+    assert page.others_card.isVisibleTo(page) and "Ubuntu 24.04.1 LTS" in plain(page.findChild(object, "rescueOther:/dev/sda1").text())
+    assert "The systems listed are other Linux distributions" not in page.hints.text()  # the engine's hint for this case (no_gentoo) says what the two cards above already say
+    assert not lab.system.mounted_targets()
+
+
 def test_scanning_again_keeps_the_choice_and_changes_nothing(qtbot, gentoo_machine_for_find, repair_kit) -> None:
     daemon, _lab = gentoo_machine_for_find
     window = repair_kit.open(daemon.path)
-    scanned(qtbot, window, 2)
+    scanned(qtbot, window, 1)
     page = window.find_page
-    chosen = system_card(window, "/dev/sdb1")
+    chosen = system_card(window, "/dev/nvme0n1p5")
     page.group.set_value(chosen)
     page.scan_button.click()
     assert not page.scan_button.isEnabled() and not page.continue_button.isEnabled()  # nothing to press while the disks are read
-    scanned(qtbot, window, 2)
-    assert page.group.value() == chosen and page.continue_button.isEnabled()
+    scanned(qtbot, window, 1)
+    assert page.group.value() == chosen and page.continue_button.isEnabled() and page.others_card.isVisibleTo(page)
 
 
 @pytest.fixture
@@ -122,7 +154,7 @@ def test_an_optional_data_volume_is_opened_only_when_asked_for(qtbot, rescue_lab
     """An old BIOS computer with SATA disks: the root and a separate /home."""
     lab = rescue_lab_factory(lf.plain_sata_mbr(), uefi=False)
     lab.add_tree("/dev/sda1", "gentoo", firmware="bios", fstab=fr.fstab_text(esp=None, home=fr.HOME_UUID))
-    lab.add_tree("/dev/sda6", "debian")
+    lab.add_plain_tree("/dev/sda6", {"you/notes.txt": "files"})  # a data volume: no system on it
     window = repair_kit.open(daemon_factory(lab).path)
     scanned(qtbot, window)
     page = window.find_page
@@ -148,7 +180,7 @@ def test_look_only_opens_a_system_that_cannot_be_changed(qtbot, rescue_lab_facto
     lab, _tree = uefi_gentoo_lab(rescue_lab_factory)
     daemon = daemon_factory(lab)
     window = repair_kit.open(daemon.path)
-    scanned(qtbot, window, 2)
+    scanned(qtbot, window, 1)
     window.find_page.group.set_value(system_card(window, "/dev/nvme0n1p5"))
     window.find_page.continue_button.click()
     mount = window.mount_page
@@ -171,7 +203,7 @@ def test_look_only_opens_a_system_that_cannot_be_changed(qtbot, rescue_lab_facto
 def test_a_missing_file_list_suggests_the_boot_partition_and_it_can_be_added(qtbot, rescue_lab_factory, daemon_factory, repair_kit) -> None:
     lab, _tree = uefi_gentoo_lab(rescue_lab_factory, fstab="")  # the system has an empty /etc/fstab
     window = repair_kit.open(daemon_factory(lab).path)
-    scanned(qtbot, window, 2)
+    scanned(qtbot, window, 1)
     window.find_page.group.set_value(system_card(window, "/dev/nvme0n1p5"))
     window.find_page.continue_button.click()
     mount = window.mount_page
@@ -196,7 +228,7 @@ def test_a_kernel_name_that_is_another_disk_here_is_offered_and_opened_only_when
     fstab = f"UUID={fr.ROOT_UUID}\t/\text4\tnoatime\t0 1\n/dev/sdb1\t/boot\text4\tnoatime\t0 2\n"
     lab, _tree = uefi_gentoo_lab(rescue_lab_factory, fstab=fstab)
     window = repair_kit.open(daemon_factory(lab).path)
-    scanned(qtbot, window, 2)
+    scanned(qtbot, window, 1)
     window.find_page.group.set_value(system_card(window, "/dev/nvme0n1p5"))
     window.find_page.continue_button.click()
     mount = window.mount_page
@@ -217,7 +249,7 @@ def test_a_kernel_name_that_is_another_disk_here_is_offered_and_opened_only_when
 def test_back_from_the_mount_page_returns_to_the_list_without_opening_anything(qtbot, gentoo_machine_for_find, repair_kit) -> None:
     daemon, lab = gentoo_machine_for_find
     window = repair_kit.open(daemon.path)
-    scanned(qtbot, window, 2)
+    scanned(qtbot, window, 1)
     window.find_page.group.set_value(system_card(window, "/dev/nvme0n1p5"))
     window.find_page.continue_button.click()
     qtbot.waitUntil(lambda: window.mount_page.open_button.isEnabled(), timeout=20000)

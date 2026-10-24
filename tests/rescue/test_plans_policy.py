@@ -1,6 +1,6 @@
 """Property test over every plan the engine can make: whatever the system and the parameters, a plan only contains commands the policies allow.
 
-The plans are built (never run) for each supported family in a read-only and in a read-write session. A plan that cannot be made for a system (for example
+The plans are built (never run) for several Gentoo systems (OpenRC and systemd, the ESP at /efi and at /boot/efi, GRUB and systemd-boot) in a read-only and in a read-write session. A plan that cannot be made for a system (for example
 a boot loader plan for a system without an EFI partition) is simply not there; what is checked is everything that is.
 """
 
@@ -19,10 +19,14 @@ from . import fakeroot as fr
 from .fakes import DESTRUCTIVE
 from .flow import mount_through_the_manager, plan_and_run, uefi_gentoo_lab, unmount
 
-FAMILIES = [("gentoo", {"esp_mount": "/efi"}), ("debian", {"esp_mount": "/boot/efi"}), ("ubuntu", {"esp_mount": "/boot/efi"}), ("fedora", {"esp_mount": "/boot/efi"}), ("rhel", {"esp_mount": "/boot/efi"})]
+SYSTEMS = [
+    pytest.param({"esp_mount": "/efi"}, id="openrc-grub-efi"),
+    pytest.param({"esp_mount": "/boot/efi", "init": "systemd"}, id="systemd-grub-boot-efi"),
+    pytest.param({"esp_mount": "/efi", "installkernel_use": "dracut systemd-boot\n", "bootctl": True}, id="openrc-systemd-boot"),
+]
 VARIANTS: dict[str, list[dict]] = {
-    "boot.bootloader": [{}, {"removable": "yes"}, {"removable": "no"}, {"firmware": "bios"}, {"firmware": "uefi", "id": "rescued"}, {"loader": "systemd-boot"}, {"method": "packages"}],
-    "boot.config": [{}], "boot.initramfs": [{}, {"generic": True}], "boot.kernel": [{}], "boot.esp_fallback": [{}],
+    "boot.bootloader": [{}, {"removable": "yes"}, {"removable": "no"}, {"firmware": "bios"}, {"firmware": "uefi", "id": "rescued"}, {"loader": "systemd-boot"}],
+    "boot.config": [{}], "boot.initramfs": [{}, {"generic": True}], "boot.kernel": [{}, {"mode": "remerge"}], "boot.esp_fallback": [{}],
     "efi.add": [{}, {"label": "My Linux; rm -rf /", "make_default": False}], "efi.delete": [{"bootnum": "0001"}], "efi.order": [{"order": ["0001"]}], "efi.next": [{"bootnum": "0001"}],
     "fstab.fix": [{}], "fs.check": [{}, {"mode": "repair"}, {"mode": "repair_force"}], "acct.password": [{"username": "user"}, {"username": "root", "expire": True}],
     "acct.unlock": [{"username": "user"}], "pkg.finish": [{}], "repair.recommended": [{}], "session.enter_write": [{}], "session.leave_write": [{}],
@@ -33,7 +37,7 @@ SAFE_ARGV = lambda argv: argv and all(isinstance(arg, str) and arg and not any(c
 def unhealthy(lab, tree):
     """Make every kind of repair applicable: no menu, an incomplete initramfs, a dead fstab entry, a firmware entry for a file that is gone."""
     (tree / "boot/grub/grub.cfg").unlink(missing_ok=True)
-    initramfs = next((tree / "boot").glob("initramfs-*"), None) or next((tree / "boot").glob("initrd.img-*"), None)
+    initramfs = next((tree / "boot").glob("initramfs-*"), None)
     if initramfs is not None:
         initramfs.write_bytes(b"")
     lab.system.nvram.update({"usable": True, "entries": {"0001": {"label": "Old", "loader": "\\EFI\\gone\\grubx64.efi", "active": True, "partuuid": "11111111-2222-3333-4444-555555555555", "part": 1,
@@ -41,8 +45,8 @@ def unhealthy(lab, tree):
     (tree / "etc/fstab").write_text((tree / "etc/fstab").read_text() + f"UUID={fr.DEAD_UUID}\t/home\text4\tnoatime\t0 2\n")
 
 
-def collect(lab_factory, family: str, options: dict, *, writable: bool):
-    lab, tree = uefi_gentoo_lab(lab_factory, family, **options)
+def collect(lab_factory, options: dict, *, writable: bool):
+    lab, tree = uefi_gentoo_lab(lab_factory, **options)
     unhealthy(lab, tree)
     manager, sid, _info = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
     if writable:
@@ -59,14 +63,14 @@ def collect(lab_factory, family: str, options: dict, *, writable: bool):
     return lab, manager, sid, session, plans
 
 
-@pytest.mark.parametrize("family,options", FAMILIES)
+@pytest.mark.parametrize("options", SYSTEMS)
 @pytest.mark.parametrize("writable", [False, True])
-def test_every_step_of_every_plan_passes_the_policies(lab_factory, family: str, options: dict, writable: bool) -> None:
-    lab, manager, sid, session, plans = collect(lab_factory, family, options, writable=writable)
+def test_every_step_of_every_plan_passes_the_policies(lab_factory, options: dict, writable: bool) -> None:
+    lab, manager, sid, session, plans = collect(lab_factory, options, writable=writable)
     assert len(plans) >= (8 if not writable else 10), [item[0] for item in plans]  # the property is not satisfied by an empty set
     for action, params, public, plan in plans:
         for step in [*plan.steps, *plan.cleanup]:
-            where = f"{family} {action} {params} {step.id}"
+            where = f"{options} {action} {params} {step.id}"
             if step.scope == "host":
                 assert SAFE_ARGV(step.argv), where
                 assert not step.argv[0].rsplit("/", 1)[-1].startswith(DESTRUCTIVE), where
@@ -89,22 +93,22 @@ def test_every_step_of_every_plan_passes_the_policies(lab_factory, family: str, 
     unmount(manager, sid)
 
 
-@pytest.mark.parametrize("family,options", FAMILIES[:3])
-def test_a_plan_is_the_same_plan_when_it_is_made_again(lab_factory, family: str, options: dict) -> None:
+@pytest.mark.parametrize("options", SYSTEMS)
+def test_a_plan_is_the_same_plan_when_it_is_made_again(lab_factory, options: dict) -> None:
     """Separate gentoo-rescue commands rely on it: the digest the user confirmed is the digest of the plan made when it runs."""
-    lab, manager, sid, session, plans = collect(lab_factory, family, options, writable=False)
+    lab, manager, sid, session, plans = collect(lab_factory, options, writable=False)
     for action, params, public, _plan in plans:
         again = manager.plan({"session_id": sid, "action_id": action, "params": params})
-        assert again["digest"] == public["digest"], (family, action, params)
+        assert again["digest"] == public["digest"], (options, action, params)
         assert again["plan_id"] != public["plan_id"]
     unmount(manager, sid)
 
 
-@pytest.mark.parametrize("family,options", FAMILIES[:3])
-def test_risk_and_confirmation_follow_what_a_plan_can_change(lab_factory, family: str, options: dict) -> None:
-    lab, manager, sid, session, plans = collect(lab_factory, family, options, writable=False)
+@pytest.mark.parametrize("options", SYSTEMS)
+def test_risk_and_confirmation_follow_what_a_plan_can_change(lab_factory, options: dict) -> None:
+    lab, manager, sid, session, plans = collect(lab_factory, options, writable=False)
     for action, params, public, plan in plans:
-        writes_boot = any(step.scope in {"host", "chroot"} and step.argv and step.argv[0] in {"grub-install", "grub2-install", "bootctl", "dnf", "yum", "apt-get", "chpasswd"}
+        writes_boot = any(step.scope in {"host", "chroot"} and step.argv and step.argv[0] in {"grub-install", "bootctl", "emerge", "chpasswd"}
                           for step in plan.steps)
         confirm = public["confirm"]
         assert confirm["risk"] == public["risk"] and confirm["required"] is True
@@ -120,7 +124,7 @@ def test_risk_and_confirmation_follow_what_a_plan_can_change(lab_factory, family
 
 
 def test_a_plan_never_carries_a_secret(lab_factory) -> None:
-    lab, manager, sid, session, plans = collect(lab_factory, "gentoo", {"esp_mount": "/efi"}, writable=False)
+    lab, manager, sid, session, plans = collect(lab_factory, {"esp_mount": "/efi"}, writable=False)
     passwords = [item for item in plans if item[0] == "acct.password"]
     assert passwords
     for _action, _params, public, plan in passwords:

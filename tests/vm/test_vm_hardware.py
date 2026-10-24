@@ -294,7 +294,7 @@ def test_all_still_runs_exactly_the_four_validated_scenarios():
     assert set(vm.SCENARIOS) == set(vm.SCENARIO_MAP) and len(vm.SCENARIOS) > 8
 
 
-@pytest.mark.parametrize("name", sorted(name for name, scenario in vm.SCENARIO_MAP.items() if not scenario.image))
+@pytest.mark.parametrize("name", sorted(vm.SCENARIO_MAP))
 def test_every_scenario_is_a_valid_machine_and_a_valid_manifest(name):
     scenario = vm.SCENARIO_MAP[name]
     assert scenario.hardware.problems() == [] and vm.hardware_problems(scenario, "cli") == []
@@ -308,14 +308,13 @@ def test_every_scenario_is_a_valid_machine_and_a_valid_manifest(name):
         assert manifest.hardware.target == scenario.hw_target and manifest.hardware.guest_tools == scenario.guest_tools
 
 
-@pytest.mark.parametrize("name", sorted(name for name, scenario in vm.SCENARIO_MAP.items() if scenario.image))
-def test_image_scenarios_are_valid_machines_that_boot_a_known_image_and_install_nothing(name):
-    scenario = vm.SCENARIO_MAP[name]
-    assert scenario.hardware.problems() == [] and vm.hardware_problems(scenario, "cli") == []
-    assert scenario.image in vm.vm_rescue.IMAGES and not scenario.in_all and scenario.repair in {"cli", "refuse"}
+def test_the_only_rescue_scenario_installs_a_gentoo_first_and_breaks_it_three_ways():
+    """Only Gentoo is repaired, so there is no scenario that boots another distribution's image."""
+    scenario = vm.SCENARIO_MAP["rescue-gentoo"]
+    assert scenario.repair == "cli" and not scenario.in_all and scenario.breaks == ("grub-cfg", "initramfs", "fstab-uuid")
     assert all(mode in vm.vm_rescue.BREAK_MODES for mode in scenario.breaks)
-    assert (scenario.repair == "refuse") == (not vm.vm_rescue.IMAGES[scenario.image].repairable)
-    assert scenario.firmware == "uefi" and not scenario.luks and not scenario.manual
+    assert sorted(name for name in vm.SCENARIO_MAP if name.startswith("rescue-")) == ["rescue-gentoo"]
+    assert not hasattr(scenario, "image") and not hasattr(vm.vm_rescue, "IMAGES")
 
 
 def test_the_validated_scenarios_stay_free_of_hypervisor_tooling_and_fixed_by_hand():

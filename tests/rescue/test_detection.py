@@ -103,10 +103,10 @@ def test_root_on_an_assembled_raid_is_found_through_the_array(lab_factory) -> No
 def test_a_portable_installation_is_offered_and_the_live_stick_is_hidden(lab_factory) -> None:
     lab = lab_factory(lf.usb_installed_root())
     lab.system.live_mounts.append(("/dev/sdc1", "/run/initramfs/live"))
-    lab.add_tree("/dev/sdb2", "debian", firmware="uefi", esp_mount="/boot/efi")
-    lab.system.attach("/dev/sdb1", fr.esp_tree(lab.tmp / "trees" / "esp", "debian"))
+    lab.add_tree("/dev/sdb2", "gentoo", firmware="uefi", esp_mount="/boot/efi")
+    lab.system.attach("/dev/sdb1", fr.esp_tree(lab.tmp / "trees" / "esp", "gentoo"))
     result = run_scan(lab)
-    assert list(by_device(result)) == ["/dev/sdb2"] and by_device(result)["/dev/sdb2"]["os"]["id"] == "debian"
+    assert list(by_device(result)) == ["/dev/sdb2"] and by_device(result)["/dev/sdb2"]["os"]["id"] == "gentoo"
     assert sorted(result.live_medium) == ["/dev/sdc", "/dev/sdc1", "/dev/sdc2"]
     assert {hint["id"] for hint in result.hints} == {"external_disks"}
     assert not [argv for argv in lab.system.commands if "/dev/sdc" in " ".join(argv) and argv[0] in {"mount", "blockdev"}]  # the live medium is never touched, not even for a probe
@@ -119,34 +119,34 @@ def test_a_portable_installation_is_offered_and_the_live_stick_is_hidden(lab_fac
 
 # ---- three systems on one disk --------------------------------------------------------------------------------------------------------------
 def multiboot_lab(lab_factory, tmp_path: Path):
+    """Two Gentoo systems (one on ext4 with the ESP at /efi, one on btrfs with it at /boot/efi) and a Debian between them, all sharing one ESP."""
     lab = lab_factory(lf.multiboot_three())
     lab.add_tree("/dev/nvme0n1p2", "gentoo", firmware="uefi", esp_mount="/efi", root_uuid=fr.ROOT_UUID)
     lab.add_tree("/dev/nvme0n1p3", "debian", firmware="uefi", root_uuid=fr.HOME_UUID)
-    top = tmp_path / "fedora-top"
-    fr.make_root(top, "fedora", firmware="uefi", btrfs=True, root_uuid=fr.BOOT_UUID)
+    top = tmp_path / "gentoo-top"
+    fr.make_root(top, "gentoo", firmware="uefi", esp_mount="/boot/efi", root_fs="btrfs", root_uuid=fr.BOOT_UUID)
     lab.system.attach("/dev/nvme0n1p4", top)
     lab.system.subvolumes["/dev/nvme0n1p4"] = {5: ""}
     lab.system.btrfs_text["/dev/nvme0n1p4"] = ""
     lab.system.btrfs_default["/dev/nvme0n1p4"] = "ID 5 (FS_TREE)"
     esp = fr.esp_tree(lab.tmp / "trees" / "esp", "gentoo")
     fr.esp_tree(esp, "debian")
-    fr.esp_tree(esp, "fedora", shim=True)
     lab.system.attach("/dev/nvme0n1p1", esp)
     return lab
 
 
-def test_every_system_of_a_multiboot_machine_is_listed_with_its_own_family(lab_factory, tmp_path: Path) -> None:
+def test_every_system_of_a_multiboot_machine_is_listed_and_only_the_gentoo_ones_can_be_opened(lab_factory, tmp_path: Path) -> None:
     lab = multiboot_lab(lab_factory, tmp_path)
     result = run_scan(lab)
     found = by_device(result)
-    assert {device: (item["os"]["id"], item["fstype"]) for device, item in found.items()} == {
-        "/dev/nvme0n1p2": ("gentoo", "ext4"), "/dev/nvme0n1p3": ("debian", "ext4"), "/dev/nvme0n1p4": ("fedora", "btrfs")}
+    assert {device: (item["os"]["id"], item["fstype"], item["supported"]) for device, item in found.items()} == {
+        "/dev/nvme0n1p2": ("gentoo", "ext4", True), "/dev/nvme0n1p3": ("debian", "ext4", False), "/dev/nvme0n1p4": ("gentoo", "btrfs", True)}
     assert len({item["id"] for item in result.candidates}) == 3  # stable, distinct ids
     assert {item["init"] for item in result.candidates} == {"openrc", "systemd"}
     assert {hint["id"] for hint in result.hints} == set()
 
 
-@pytest.mark.parametrize("device,esp_mountpoint", [("/dev/nvme0n1p2", "/efi"), ("/dev/nvme0n1p3", "/boot/efi"), ("/dev/nvme0n1p4", "/boot/efi")])
+@pytest.mark.parametrize("device,esp_mountpoint", [("/dev/nvme0n1p2", "/efi"), ("/dev/nvme0n1p4", "/boot/efi")])
 def test_each_system_of_a_multiboot_machine_mounts_the_shared_esp_where_its_own_fstab_says(lab_factory, tmp_path: Path, device: str, esp_mountpoint: str) -> None:
     lab = multiboot_lab(lab_factory, tmp_path)
     manager, sid, info = mount_through_the_manager(lab, candidate_device=device)
