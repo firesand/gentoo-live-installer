@@ -28,12 +28,16 @@
   "grub": {
     "kernel": "/boot/gentoo",
     "initrd": "/boot/gentoo.igz",
-    "min_entries": 8,
-    "required_arguments": ["nox", "dokeymap", "nomodeset", "rd.live.ram=1", "dospeakup", "console=ttyS0,115200n8", "acpi=off", "rd.debug"],
+    "min_entries": 12,
+    "required_arguments": ["nox", "dokeymap", "nomodeset", "rd.live.ram=1", "dospeakup", "console=ttyS0,115200n8", "acpi=off", "rd.debug", "gentoo.autostart=rescue", "gentoo.autostart=installer-text"],
     "required_argument_groups": [
       "nox dokeymap",
+      "nox dokeymap gentoo.autostart=rescue",
+      "nox dokeymap gentoo.autostart=installer-text",
       "nomodeset pcie_aspm=off nvme_core.default_ps_max_latency_us=0 usbcore.autosuspend=-1"
     ],
+    "autostart_values": ["rescue", "installer-text"],
+    "required_titles": ["Repair a system (text console)", "Install in text mode"],
     "forbidden_titles": ["safe graphics"]
   },
   "initramfs": {

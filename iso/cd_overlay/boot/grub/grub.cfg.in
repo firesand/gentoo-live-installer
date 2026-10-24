@@ -12,6 +12,12 @@
 #      root=live:CDLABEL=<volume label> rd.live.dir=/ rd.live.squashimg=image.squashfs cdroot
 #  * "dokeymap" is only for the text console entries. It makes the initramfs wait ten
 #    seconds for a keymap choice, so the default entries must not carry it.
+#  * "nox" keeps the display manager away (gui-libs/display-manager-init and livecd-tools
+#    honour it), so a text console entry works on a GPU the live kernel cannot drive.
+#  * gentoo.autostart=rescue and gentoo.autostart=installer-text are read by
+#    /etc/profile.d/20-gentoo-autostart.sh (iso/root_overlay): the first login on tty1 then
+#    starts "sudo gentoo-rescue" or "sudo gentoo-installer-text" once. The kernel ignores
+#    a parameter with a dot. Only the two text entries below carry them.
 #  * No "safe graphics" entry: the live kernel has no generic framebuffer DRM driver
 #    (simpledrm or efidrm), so nomodeset cannot give a working desktop. Entries that need
 #    nomodeset say that they are text-only.
@@ -44,7 +50,19 @@ menuentry 'Desktop in RAM (needs 6 GiB RAM, the USB stick can be removed)' --cla
 	initrd /boot/gentoo.igz
 }
 
-menuentry 'Text console only (repair, headless, asks for a keyboard layout)' --class gnu-linux --class os {
+menuentry 'Repair a system (text console)' --class gnu-linux --class os {
+	search --no-floppy --set=root -l @VOLID@
+	linux /boot/gentoo @BOOTARGS@ root=live:CDLABEL=@VOLID@ rd.live.dir=/ rd.live.squashimg=image.squashfs cdroot nox dokeymap gentoo.autostart=rescue
+	initrd /boot/gentoo.igz
+}
+
+menuentry 'Install in text mode' --class gnu-linux --class os {
+	search --no-floppy --set=root -l @VOLID@
+	linux /boot/gentoo @BOOTARGS@ root=live:CDLABEL=@VOLID@ rd.live.dir=/ rd.live.squashimg=image.squashfs cdroot nox dokeymap gentoo.autostart=installer-text
+	initrd /boot/gentoo.igz
+}
+
+menuentry 'Text console only (a shell, asks for a keyboard layout)' --class gnu-linux --class os {
 	search --no-floppy --set=root -l @VOLID@
 	linux /boot/gentoo @BOOTARGS@ root=live:CDLABEL=@VOLID@ rd.live.dir=/ rd.live.squashimg=image.squashfs cdroot nox dokeymap
 	initrd /boot/gentoo.igz
