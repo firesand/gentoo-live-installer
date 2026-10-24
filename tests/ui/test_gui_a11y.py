@@ -130,7 +130,7 @@ def test_return_in_a_field_presses_continue_and_alt_arrows_are_shortcuts(make_wi
 
 def test_the_first_focus_is_a_field_or_the_primary_action(make_window):
     window = make_window()
-    assert window.welcome.focusWidget() is window.welcome.install_button
+    assert window.welcome.focusWidget() is window.welcome.keyboard_button
     window._show_page(5)
     assert window.accounts.focusWidget() is window.accounts.hostname
     window._show_page(2)
@@ -313,23 +313,27 @@ def test_reboot_tries_elogind_first(make_window, monkeypatch):
 # --- Welcome: two primary choices and the keyboard --------------------------------------------------------------------------
 
 
-def test_welcome_offers_install_and_repair(make_window):
+def test_welcome_has_exactly_one_forward_action(make_window):
+    from PySide6.QtWidgets import QPushButton
+
     window = make_window()
-    assert window.welcome.install_button.text() == "Install Gentoo"
+    assert not hasattr(window.welcome, "install_button")
     assert window.welcome.repair_button.text() == "Repair a Gentoo system"
-    window.welcome.install_button.click()
+    assert not hasattr(window.welcome, "installRequested")
+    assert window.next.text() == "&Continue" and window.next.isVisible()
+    window.next.click()  # the footer Continue is the only way forward
     assert window.current == 1
-    window._show_page(0)
-    window.next.click()  # the Continue button keeps working on the first page
-    assert window.current == 1
+    captions = [button.text() for button in window.welcome.findChildren(QPushButton)]
+    assert "Install Gentoo" not in captions
 
 
 def test_welcome_says_that_the_repair_is_for_a_gentoo_system_that_does_not_start(make_window):
     window = make_window()
     texts = " ".join(label.text() for label in window.welcome.findChildren(QLabel))
-    assert "Repair a Gentoo system that does not start" in texts  # the card says it
-    assert "Other Linux distributions are not supported" in texts
+    assert "Fix a Gentoo system that will not boot" in texts  # the card says it
+    assert "works on Gentoo systems only" in texts
     assert "repair a Gentoo system that no longer starts" in texts  # and the line under the title
+    assert "about 1 hour with binary packages" in texts and "erases only the disk you choose" in texts
     assert "existing system" not in texts and "repair a Linux system" not in texts
 
 

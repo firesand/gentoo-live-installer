@@ -51,10 +51,9 @@ def test_a_missing_service_blocks_continue_with_instructions(make_window, monkey
     valid, text = window.readiness.validate_page()
     assert not valid and needle in text
     window._show_page(1)
-    shown = []
-    monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, text, *a, **k: shown.append(text))
     window.next.click()
-    assert window.current == 1 and needle in shown[0]
+    assert window.current == 1 and needle in window.readiness.problem_label.text()  # inline, no dialog (CORE-09)
+    assert window.step_buttons[1].property("problem") is True
 
 
 def test_the_service_log_tail_is_shown_when_it_can_be_read(make_window, tmp_path, monkeypatch):
@@ -312,11 +311,9 @@ def test_a_late_error_navigates_to_the_page_that_owns_it(make_window, monkeypatc
         return result
 
     monkeypatch.setattr(InstallManifest, "validate_sections", sections)
-    shown = []
-    monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, text, *a, **k: shown.append((title, text)))
     window.accounts.validate_page = lambda: (True, "")  # this page's own sections are fine
     window.next.click()
-    assert shown == [("Installation settings", "Late storage problem")]
+    assert window.storage.problem_label.text() == "Late storage problem"
     assert window.current == 2
 
 

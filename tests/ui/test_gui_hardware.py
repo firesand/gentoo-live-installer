@@ -336,11 +336,9 @@ def test_hardware_problems_found_late_lead_back_to_the_hardware_tab(make_window,
     window = make_window(manifest=manifest, info=info)
     window.manifest.accounts.password = window.manifest.accounts.root_password = "long-password"
     window._show_page(5)
-    shown = []
-    monkeypatch.setattr(QMessageBox, "warning", lambda parent, title, text, *a, **k: shown.append((title, text)))
     window.accounts.validate_page = lambda: (True, "")
     window.next.click()
-    assert shown and shown[0][0] == "Installation settings" and "Hibernation" in shown[0][1]
+    assert "Hibernation" in window.customize.problem_label.text()
     assert window.current == 4 and window.customize.tabs.currentWidget() is window.customize.hardware
 
 

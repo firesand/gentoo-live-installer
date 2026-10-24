@@ -264,10 +264,10 @@ class InstallerWindow(QMainWindow):
         for page in self.pages:
             self.stack.addWidget(page)
             page.advanceRequested.connect(self._advance_requested)
+            page.problemChanged.connect(lambda shown, target=page: self._mark_problem(target, shown))
         self.welcome.tryLiveRequested.connect(self.close)
         self.welcome.applicationRequested.connect(self.launch_application)
         self.welcome.handbookRequested.connect(self.open_handbook)
-        self.welcome.installRequested.connect(lambda: self._show_page(READINESS))
         self.welcome.repairRequested.connect(self.open_repair)
         self.welcome.importRequested.connect(self.import_settings)
         self.welcome.keyboardChanged.connect(self._keyboard_changed)
@@ -344,6 +344,7 @@ class InstallerWindow(QMainWindow):
             button = QPushButton(f"{index + 1}   {name}")
             button.setObjectName("stepButton")
             button.setProperty("current", False)
+            button.setProperty("problem", False)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.clicked.connect(lambda _=False, target=index: self.go_to(target))
             layout.addWidget(button)
@@ -416,6 +417,19 @@ class InstallerWindow(QMainWindow):
         self._update_navigation()
         self.pages[index].focus_first()
 
+    def _mark_problem(self, page: QWidget, shown: bool) -> None:
+        """CORE-09: a red dot on the sidebar step whose page shows a problem."""
+        if page not in self.pages:
+            return
+        index = self.pages.index(page)
+        button = self.step_buttons[index]
+        name = STEPS[index][0]
+        button.setProperty("problem", shown)
+        button.setText(f"{index + 1}   {name}" + ("   ●" if shown else ""))
+        button.setAccessibleName(f"{name}: needs attention" if shown else name)
+        button.style().unpolish(button)
+        button.style().polish(button)
+
     def _update_navigation(self) -> None:
         index = self.current
         locked = self.install_started or self._install_succeeded
@@ -448,8 +462,9 @@ class InstallerWindow(QMainWindow):
         page = self.pages[self.current]
         valid, message = page.validate_page()
         if not valid:
-            QMessageBox.warning(self, "Check this step", message)
+            page.show_problem(message)  # inline, beside the step; the sidebar marks it (CORE-09)
             return
+        page.show_problem("")
         page.save_manifest()
         if self.current == REVIEW:
             self.start_installation()
@@ -459,13 +474,13 @@ class InstallerWindow(QMainWindow):
                 earlier.save_manifest()
             section, error = self._first_section_error()
             if error:
-                QMessageBox.warning(self, "Installation settings", error)
                 owner = self._page_for_section(section)
                 if owner != self.current:
                     self._show_page(owner)
                     reveal = getattr(self.pages[owner], "reveal_section", None)
                     if callable(reveal):
                         reveal(section)
+                self.pages[owner].show_problem(error)
                 return
         self._show_page(self.current + 1)
 
@@ -672,7 +687,7 @@ class InstallerWindow(QMainWindow):
             return
         problems = blocking_problems(self.manifest, self.info)
         if problems:
-            QMessageBox.warning(self, "Cannot start", problems[0][1])
+            self.pages[self._page_for_section(problems[0][0])].show_problem(problems[0][1])
             return
         resume = self.review.resume_requested() and self.current == REVIEW
         if not resume and storage.mode == "erase":

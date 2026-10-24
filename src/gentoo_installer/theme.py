@@ -36,6 +36,7 @@ BADGE_COLORS = {
     },
 }
 FONT_FAMILY = "'Fira Sans', 'Noto Sans', 'DejaVu Sans', sans-serif"  # the live image ships media-fonts/fira-sans
+PROBLEM_TEXT, PROBLEM_BG, PROBLEM_BORDER = "#8d2636", "#fff1f2", "#f0c5cb"  # inline problem messages (light scheme)
 DARK = False  # set by apply_theme from the colour scheme
 
 
@@ -55,9 +56,10 @@ def status_color(status: str) -> str:
 
 
 def apply_theme(app: QApplication) -> None:
-    global TEXT, MUTED, SURFACE, BACKGROUND, BORDER, DARK
+    global TEXT, MUTED, SURFACE, BACKGROUND, BORDER, DARK, PROBLEM_TEXT, PROBLEM_BG, PROBLEM_BORDER
     if app.styleHints().colorScheme() == Qt.ColorScheme.Dark:
         DARK = True
+        PROBLEM_TEXT, PROBLEM_BG, PROBLEM_BORDER = "#ffc9d0", "#4a2530", "#8d3a4b"
         TEXT = "#ece9f2"
         MUTED = "#aaa4b5"
         SURFACE = "#292631"
@@ -91,12 +93,14 @@ def apply_theme(app: QApplication) -> None:
         QPushButton#stepButton[current=true] {{ background: {SIDEBAR_CURRENT}; color: white; font-weight: 600; }}
         QPushButton#stepButton:disabled {{ color: {SIDEBAR_DISABLED}; }}
         QPushButton#stepButton[current=true]:disabled {{ color: white; background: {SIDEBAR_CURRENT}; }}
+        QPushButton#stepButton[problem=true] {{ color: #ffb3bb; }}
         QPushButton#stepButton:focus {{ border: 2px solid {ACCENT}; padding: 8px 10px; }}
         QFrame#contentHeader {{ background: {BACKGROUND}; border-bottom: 1px solid {BORDER}; }}
         QFrame#banner {{ background: {SURFACE}; border: 1px solid {ACCENT}; border-radius: 10px; }}
         QFrame#bannerError {{ background: {SURFACE}; border: 1px solid #c33d50; border-radius: 10px; }}
         QLabel#pageTitle {{ font-size: 25px; font-weight: 700; }}
         QLabel#pageSubtitle, QLabel[muted=true] {{ color: {MUTED}; }}
+        QLabel#problemLabel {{ color: {PROBLEM_TEXT}; background: {PROBLEM_BG}; border: 1px solid {PROBLEM_BORDER}; border-radius: 9px; padding: 12px 14px; font-weight: 600; }}
         QLabel#sectionTitle {{ font-size: 17px; font-weight: 650; }}
         QLabel#heroTitle {{ font-size: 32px; font-weight: 750; }}
         QLabel#heroText {{ font-size: 16px; color: {MUTED}; }}
