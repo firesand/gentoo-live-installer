@@ -46,6 +46,9 @@ class Card(QFrame):
             self.content.addWidget(label)
 
 
+RADIO_ON, RADIO_OFF = "◉", "○"
+
+
 class ChoiceCard(Card):
     """One option of a ChoiceGroup. Behaves as a radio button for keyboard and
     assistive technology: it is checkable, has a focus ring, and the arrow keys
@@ -62,13 +65,19 @@ class ChoiceCard(Card):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._checked = False
         row = QHBoxLayout()
+        self.mark = QLabel(RADIO_OFF)  # a filled radio mark says "chosen" without relying on the border colour alone
+        self.mark.setObjectName("cardMark")
+        self.mark.setProperty("selected", False)
+        self.mark.setAccessibleName("")
+        row.addWidget(self.mark, 0, Qt.AlignmentFlag.AlignTop)
         self.title_label = QLabel(title)
         self.title_label.setObjectName("cardTitle")
         self.title_label.setWordWrap(True)
         row.addWidget(self.title_label, 1)
         if recommended:
             badge = QLabel("Recommended")
-            badge.setStyleSheet(f"color: {theme.ACCENT_DARK}; background: #eee9ff; border-radius: 7px; padding: 3px 7px; font-size: 11px;")
+            text, fill = theme.badge_colors("Recommended")
+            badge.setStyleSheet(f"color: {text}; background: {fill}; border: 1px solid {theme.badge_outline('Recommended')}; border-radius: 7px; padding: 2px 7px; font-size: 11px;")
             row.addWidget(badge)
         self.content.addLayout(row)
         self.description_label = QLabel(description)
@@ -86,8 +95,11 @@ class ChoiceCard(Card):
             return
         self._checked = checked
         self.setProperty("selected", checked)
-        self.style().unpolish(self)
-        self.style().polish(self)
+        self.mark.setText(RADIO_ON if checked else RADIO_OFF)
+        self.mark.setProperty("selected", checked)
+        for widget in (self, self.mark):
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
         QAccessible.updateAccessibility(_state_change_event(self))
         self.toggled.emit(checked)
 
@@ -112,6 +124,9 @@ class ChoiceCard(Card):
             event.accept()
             return
         super().keyPressEvent(event)
+
+
+SelectableCard = ChoiceCard  # the shared card style of STOR and BOOT: filled radio mark, 2 px accent border when chosen
 
 
 def _state_change_event(card: ChoiceCard) -> QAccessibleStateChangeEvent:

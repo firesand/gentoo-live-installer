@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -41,6 +42,7 @@ from .pages.storage import StoragePage
 from .pages.system import SystemPage
 from .pages.welcome import WelcomePage
 from .system_info import SystemInfo, inspect_system
+from . import theme
 from .theme import apply_theme
 from .widgets import Banner
 
@@ -215,6 +217,7 @@ class InstallerWindow(QMainWindow):
         self.background_inspection = background_inspection
         self.settings = QSettings("GentooLive", "Installer")
         self.current = 0
+        self.rail = False  # the sidebar is a numbered rail in a narrow window
         self.install_started = False
         self._install_succeeded = False
         self._close_after_worker = False
@@ -329,7 +332,8 @@ class InstallerWindow(QMainWindow):
     def _sidebar(self) -> QFrame:
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(230)
+        self.sidebar = sidebar
+        sidebar.setFixedWidth(theme.SIDEBAR_WIDTH)
         layout = QVBoxLayout(sidebar)
         layout.setContentsMargins(20, 24, 20, 20)
         layout.setSpacing(4)
@@ -341,6 +345,7 @@ class InstallerWindow(QMainWindow):
         brand_row.addWidget(mark)
         brand = QLabel("Gentoo\nInstaller")
         brand.setObjectName("brand")
+        self.brand_label = brand
         brand_row.addWidget(brand)
         brand_row.addStretch()
         layout.addLayout(brand_row)
@@ -349,6 +354,8 @@ class InstallerWindow(QMainWindow):
         for index, (name, _) in enumerate(STEPS):
             button = QPushButton(f"{index + 1}   {name}")
             button.setObjectName("stepButton")
+            button.setToolTip(f"{name}: {STEPS[index][1]}")
+            button.setAccessibleName(name)
             button.setProperty("current", False)
             button.setProperty("problem", False)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -358,10 +365,13 @@ class InstallerWindow(QMainWindow):
         layout.addStretch()
         help_label = QLabel("Based on the official\nAMD64 Gentoo Handbook")
         help_label.setWordWrap(True)
+        self.help_label = help_label
         layout.addWidget(help_label)
         handbook = QPushButton("Handbook  ↗")
         handbook.setObjectName("stepButton")
+        handbook.setAccessibleName("Open the Handbook")
         handbook.clicked.connect(self.open_handbook)
+        self.handbook_button = handbook
         layout.addWidget(handbook)
         return sidebar
 
@@ -369,16 +379,19 @@ class InstallerWindow(QMainWindow):
         header = QFrame()
         header.setObjectName("contentHeader")
         layout = QHBoxLayout(header)
-        layout.setContentsMargins(32, 20, 32, 18)
-        titles = QVBoxLayout()
+        layout.setContentsMargins(32, 14, 32, 12)
+        # One line: the title, then the subtitle in the muted colour; a subtitle that does not fit is cut off, never wrapped.
+        titles = QHBoxLayout()
+        titles.setSpacing(14)
         self.header_title = QLabel()
         self.header_title.setObjectName("pageTitle")
         titles.addWidget(self.header_title)
         self.header_subtitle = QLabel()
         self.header_subtitle.setObjectName("pageSubtitle")
-        titles.addWidget(self.header_subtitle)
-        layout.addLayout(titles)
-        layout.addStretch()
+        self.header_subtitle.setMinimumWidth(0)
+        self.header_subtitle.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        titles.addWidget(self.header_subtitle, 1)
+        layout.addLayout(titles, 1)
         mode_label = QLabel("&Detail level")
         mode_label.setProperty("muted", True)
         layout.addWidget(mode_label)
@@ -423,6 +436,35 @@ class InstallerWindow(QMainWindow):
         self._update_navigation()
         self.pages[index].focus_first()
 
+    def _step_text(self, index: int) -> str:
+        """The sidebar caption of a step: number and name, or only the number in the narrow rail; a red dot marks a problem."""
+        marked = bool(self.step_buttons[index].property("problem"))
+        if self.rail:
+            return f"{index + 1}" + ("●" if marked else "")
+        return f"{index + 1}   {STEPS[index][0]}" + ("   ●" if marked else "")
+
+    def _apply_rail(self, rail: bool) -> None:
+        """Below 1100 px the sidebar is a numbered rail (under 80 px wide) so the page keeps the width."""
+        if rail == self.rail:
+            return
+        self.rail = rail
+        self.sidebar.setFixedWidth(theme.RAIL_WIDTH if rail else theme.SIDEBAR_WIDTH)
+        self.brand_label.setVisible(not rail)
+        self.help_label.setVisible(not rail)
+        self.handbook_button.setText("↗" if rail else "Handbook  ↗")
+        for index, button in enumerate(self.step_buttons):
+            button.setProperty("rail", rail)
+            button.setText(self._step_text(index))
+            button.style().unpolish(button)
+            button.style().polish(button)
+        self.handbook_button.setProperty("rail", rail)
+        self.handbook_button.style().unpolish(self.handbook_button)
+        self.handbook_button.style().polish(self.handbook_button)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._apply_rail(self.width() < theme.RAIL_BELOW)
+
     def _mark_problem(self, page: QWidget, shown: bool) -> None:
         """CORE-09: a red dot on the sidebar step whose page shows a problem."""
         if page not in self.pages:
@@ -431,7 +473,7 @@ class InstallerWindow(QMainWindow):
         button = self.step_buttons[index]
         name = STEPS[index][0]
         button.setProperty("problem", shown)
-        button.setText(f"{index + 1}   {name}" + ("   ●" if shown else ""))
+        button.setText(self._step_text(index))
         button.setAccessibleName(f"{name}: needs attention" if shown else name)
         button.style().unpolish(button)
         button.style().polish(button)
