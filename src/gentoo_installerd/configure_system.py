@@ -223,8 +223,10 @@ class SystemMixin(ConfigurerBase):
         if system.console_font and system.init == "openrc":
             desktop.append(("consolefont", "boot", True))
         if system.desktop != "minimal":
-            manager = {"kde": "sddm", "gnome": "gdm", "xfce": "lightdm"}[system.desktop]
-            desktop.append(("display-manager" if system.init == "openrc" else manager, "default", True))
+            openrc_name, unit = desktops.display_manager(system.desktop)
+            desktop.append(("display-manager" if system.init == "openrc" else unit, "default", True))
+            for name, runlevel in desktops.services(system.desktop, system.init):
+                desktop.append((name, runlevel, True))
         for item in [*_plan_list(plan, "services"), *_plan_list(plan, "optional_services")]:
             name, runlevel = (item, "default") if isinstance(item, str) else (item[0], item[1])
             if (str(name), str(runlevel), True) not in desktop:
@@ -249,7 +251,7 @@ class SystemMixin(ConfigurerBase):
         system = manifest.system
         warnings: list[str] = []
         if phase in {"all", "desktop"} and system.desktop != "minimal":
-            manager = {"kde": "sddm", "gnome": "gdm", "xfce": "lightdm"}[system.desktop]
+            manager = desktops.display_manager(system.desktop)[0]
             if system.init == "openrc" and self.service_installed("display-manager", "openrc"):
                 self.write("etc/conf.d/display-manager", f'DISPLAYMANAGER="{manager}"\n')
         for name, runlevel, optional in self.service_specs(manifest, plan, phase):

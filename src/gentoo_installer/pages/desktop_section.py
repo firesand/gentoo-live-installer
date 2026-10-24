@@ -5,26 +5,16 @@ from __future__ import annotations
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
 
+from .. import desktops
 from ..manifest import System
 from ..widgets import ChoiceGroup, wrapped_label
 
-# Stage3 families and what the installer can build on each. KDE Plasma needs
-# the desktop USE flags that only the Standard and Desktop profiles enable
-# (plasma-meta has unmet USE dependencies on No-multilib and Hardened); GNOME
-# and Xfce are unverified there. Minimal always works.
-FAMILY_PREFIX = {"standard": "amd64", "desktop": "amd64-desktop", "nomultilib": "amd64-nomultilib", "hardened": "amd64-hardened"}
-FAMILY_LABELS = {"standard": "Standard", "desktop": "Desktop", "nomultilib": "No multilib", "hardened": "Hardened"}
-FAMILY_DESKTOP_SUPPORT = {
-    "standard": {"kde", "gnome", "xfce"},
-    "desktop": {"kde", "gnome", "xfce"},
-    "nomultilib": {"gnome", "xfce"},
-    "hardened": {"gnome", "xfce"},
-}
-UNVERIFIED_FAMILIES = {"nomultilib", "hardened"}
-KDE_NEEDS_DESKTOP_STAGE = (
-    "KDE Plasma needs a Standard or Desktop stage3: the Hardened and No-multilib profiles do not enable the desktop USE flags Plasma requires, "
-    "so the package step would fail after your disk was erased. Choose a Standard stage3 or the Minimal system."
-)
+# Stage3 families and what the installer can build on each come from the desktop registry (desktops.py).
+FAMILY_PREFIX = desktops.FAMILY_PREFIX
+FAMILY_LABELS = desktops.FAMILY_LABELS
+FAMILY_DESKTOP_SUPPORT = desktops.family_desktop_support()
+UNVERIFIED_FAMILIES = set(desktops.UNVERIFIED_FAMILIES)
+KDE_NEEDS_DESKTOP_STAGE = desktops.KDE_NEEDS_DESKTOP_STAGE
 
 
 def stage_family(stage_variant: str) -> str:
@@ -39,10 +29,7 @@ def stage_family(stage_variant: str) -> str:
 
 def desktop_problem(stage_variant: str, desktop: str) -> str:
     """Why this desktop cannot be installed on this stage3 ('' when it can)."""
-    if desktop in {"kde", "gnome", "xfce"} and desktop not in FAMILY_DESKTOP_SUPPORT[stage_family(stage_variant)]:
-        return KDE_NEEDS_DESKTOP_STAGE if desktop == "kde" else (
-            f"{desktop.upper()} is not available on this stage3: choose a Standard or Desktop stage3 or the Minimal system.")
-    return ""
+    return desktops.family_problem(desktop, stage_family(stage_variant))
 
 
 class DesktopSection(QWidget):
