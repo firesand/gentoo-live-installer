@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import time
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from gentoo_installer import hardware
@@ -30,7 +31,10 @@ if TYPE_CHECKING:
 LOG = logging.getLogger(__name__)
 
 FEATURE = "hardware.v1"
-ACTIONS = ("sync_time", "set_time")
+ACTIONS = ("sync_time", "set_time", "reboot_firmware")
+# The UEFI variable that asks the firmware to open its setup screen at the next start (OsIndications, bit 0).
+OS_INDICATIONS_PATH = Path("/sys/firmware/efi/efivars/OsIndications-8be4df61-93ca-11d2-aa0d-00e098032b8c")
+REBOOT_COMMANDS: tuple[tuple[str, ...], ...] = (("loginctl", "reboot"), ("systemctl", "reboot"), ("reboot",))
 COMMAND_TIMEOUT_SECONDS = 60.0
 # After a sync the clock counts as right when it is within this many seconds of the network's time.
 SYNCED_WITHIN_SECONDS = 5.0
@@ -52,9 +56,15 @@ def read_clock() -> hardware.ClockInfo:
     return hardware.probe().clock
 
 
+def read_firmware() -> hardware.FirmwareInfo:
+    """What the probe knows about the firmware (UEFI or BIOS, and whether it can be asked to open its setup screen)."""
+    return hardware.probe().firmware
+
+
 def register(registry: ActionRegistry) -> None:
     registry.register_action("sync_time", handle_sync_time, feature=FEATURE)
     registry.register_action("set_time", handle_set_time, feature=FEATURE)
+    registry.register_action("reboot_firmware", handle_reboot_firmware, feature=FEATURE)
 
 
 # ------------------------------------------------------------------------------------------ the actions
@@ -106,6 +116,42 @@ def handle_set_time(request: dict, channel: Channel) -> None:
         _reply(channel, True, f"The clock was set to {shown} UTC, but it could not be saved to the hardware clock, so it will be wrong again after a restart.")
         return
     _reply(channel, True, f"The clock was set to {shown} UTC and saved to the hardware clock.")
+
+
+def handle_reboot_firmware(request: dict, channel: Channel) -> None:
+    """Restart the PC into its firmware settings (the fix offered next to a Secure Boot or RAID finding)."""
+    _refuse_while_busy(channel)
+    if not read_firmware().can_reboot_to_firmware:
+        _reply(channel, False, "This computer cannot be told to open its firmware settings from here. Restart it and press the firmware key "
+                               "(often F2, F10, Del or Esc) while it starts.")
+        return
+    try:
+        _ask_for_firmware_setup()
+    except OSError as exc:
+        LOG.warning("Could not set OsIndications: %s", exc)
+        _reply(channel, False, "The firmware did not accept the request. Restart the computer and press the firmware key (often F2, F10, Del or Esc) while it starts.")
+        return
+    runner = make_runner()
+    for argv in REBOOT_COMMANDS:
+        try:
+            runner.run(argv, timeout=COMMAND_TIMEOUT_SECONDS, capture=False)
+        except RunnerError:
+            continue
+        _reply(channel, True, "The computer is restarting into its firmware settings.")
+        return
+    _reply(channel, False, "The firmware settings are requested for the next start, but the restart command failed. Restart the computer yourself.")
+
+
+def _ask_for_firmware_setup() -> None:
+    """Set bit 0 of OsIndications, keeping the other bits (the variable is NV+BS+RT, attributes 7)."""
+    bits = 0
+    try:
+        current = OS_INDICATIONS_PATH.read_bytes()
+        if len(current) >= 5:
+            bits = int.from_bytes(current[4:12], "little")
+    except FileNotFoundError:
+        pass
+    OS_INDICATIONS_PATH.write_bytes(bytes([7, 0, 0, 0]) + (bits | 1).to_bytes(8, "little"))
 
 
 # ----------------------------------------------------------------------------------------------- helpers
