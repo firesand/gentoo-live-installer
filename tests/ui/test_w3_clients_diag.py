@@ -10,7 +10,7 @@ import threading
 from pathlib import Path
 
 import pytest
-from PySide6.QtCore import QObject, Signal
+from PySide6.QtCore import QObject
 
 from gentoo_installer import diagnostics, system_info
 from gentoo_installer.backend import BackendWorker

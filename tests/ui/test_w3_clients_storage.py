@@ -3,15 +3,13 @@ and a different disk under the same name is not silently taken for the one the u
 
 from __future__ import annotations
 
-import pytest
 from PySide6.QtWidgets import QMessageBox
 
 from gentoo_installer.manifest import InstallManifest, Partition
 from gentoo_installer.pages import progress as progress_module
 from gentoo_installer.system_info import DiskInfo, PartitionInfo
-from tests.ui.conftest import sample_info
 from tests.ui.test_gui_recovery import FakeWorker
-from tests.ui.test_gui_storage_safety import GIB, ask, busy_laptop, data_disk, info_of, laptop, select
+from tests.ui.test_gui_storage_safety import GIB, ask, data_disk, info_of, laptop, select
 
 OVERWRITE = "Install over the existing system?"
 
