@@ -281,6 +281,31 @@ the base image's size and modification time are checked afterwards.
 Rescue runs always keep the disk. For UEFI images pass the kept `OVMF_VARS.fd` with
 `--ovmf-vars-file` to keep the boot entries, or omit it to boot with empty NVRAM.
 
+## Known gaps
+
+Read these before trusting, or blaming, a result.
+
+* **Nothing outside the original four scenarios has run on real QEMU.** The new scenarios, the
+  hardware options, `--live-only` and the rescue flow are tested as argument lists and against the
+  fake lab. Each needs a first real run, which is also where QEMU confirms the less common device
+  options (for example that `-smbios file=` replaces QEMU's own enclosure record: the `dmi` probe
+  of `laptop-smbios` checks `chassis_type`, and USB with 4096-byte sectors). QEMU's IDE/SATA disks
+  are 512-byte only, so `--disk-bus sata --sector-size 4096` is refused.
+* **LUKS unlock over serial needs the installed system to honour `system.kernel_cmdline_extra`**
+  (`configure.py` must put it on `/etc/kernel/cmdline` and `GRUB_CMDLINE_LINUX`). Until it does,
+  `uefi-luks` and `openrc-luks` time out waiting for the prompt, with a message saying so, and
+  `--all` still ends with a failure at `uefi-luks`, as before.
+* **`serial-less` fails until the daemon accepts `device_id_kind=path`.** Today
+  `StorageManager` refuses a disk without serial or WWN even though the GUI offers it.
+* **`--gui-detect` on a BIOS machine fails until the wizard seeds the firmware from detection**
+  (the unit test in `tests/vm/test_vm_gui_driver.py` is an expected failure that starts passing then).
+* **`holders` (an active LVM or md stack on the target) and `uefi-luks-all` are not scenarios yet:**
+  the first needs a consent box the manifest cannot carry, the second a settled layout.
+* **`scripts/check.sh --full` is red on pkgcheck** because of real findings in the overlay
+  (`app-misc/hwmonux`: unknown USE flag `nvidia`, `liquidctl[python_targets_python3_14]` not
+  solvable). The mypy and clippy baselines describe the tree they were written from: run
+  `scripts/check.sh --update-baseline` after merging other work and review the diff.
+
 ## Troubleshooting
 
 * **A QEMU process is left over after a crash**: `python3 scripts/test-vm.py --cleanup-stale`.

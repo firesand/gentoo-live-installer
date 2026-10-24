@@ -53,6 +53,8 @@ class VMHardware:
         if not self.disk_serial and self.disk_bus != "virtio":
             found.append(f"A disk without a serial number is only supported on the virtio bus (QEMU gives {self.disk_bus} disks one "
                          "of its own, and NVMe requires one)")
+        if self.sector_size == 4096 and self.disk_bus == "sata":
+            found.append("QEMU's IDE/SATA disks only have 512-byte logical sectors: use --disk-bus nvme, virtio, scsi or usb for 4096")
         if self.removable and self.disk_bus != "usb":
             found.append("A removable disk needs --disk-bus usb")
         if self.cpu and not CPU_RE.fullmatch(self.cpu):

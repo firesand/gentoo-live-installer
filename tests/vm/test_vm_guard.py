@@ -181,6 +181,23 @@ def make_sysfs(root: Path, kname: str, vendor: str, dmi: bytes | None = None) ->
         (entry / "raw").write_bytes(dmi)
 
 
+def test_the_pci_vendor_of_a_sata_disk_is_the_controller_not_the_scsi_inquiry_string(tmp_path):
+    """sda's sysfs path runs through a SCSI device whose 'vendor' file says 'ATA     ': only a 0x.... id is a PCI vendor."""
+    sysfs = tmp_path / "sys"
+    pci = sysfs / "devices" / "pci0000:00" / "0000:00:1f.2"
+    scsi = pci / "ata1" / "host0" / "target0:0:0" / "0:0:0:0"
+    block = scsi / "block" / "sda"
+    block.mkdir(parents=True)
+    (pci / "vendor").write_text("0x8086\n")
+    (scsi / "vendor").write_text("ATA     \n")
+    (sysfs / "class" / "block").mkdir(parents=True)
+    (sysfs / "class" / "block" / "sda").symlink_to(block)
+    (block / "device").symlink_to(scsi)
+    assert vm_guard._pci_vendor(str(sysfs), "sda") == "0x8086"
+    (pci / "vendor").unlink()  # no PCI ancestor with an id at all: unknown, not 'ATA'
+    assert vm_guard._pci_vendor(str(sysfs), "sda") == ""
+
+
 def test_collect_reads_lsblk_sysfs_dmi_and_by_path(tmp_path):
     expectation = spec(extra=0)
     devices = guard_fixtures.lsblk_tree(expectation)

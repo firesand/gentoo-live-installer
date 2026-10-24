@@ -25,13 +25,14 @@ GOLDEN = {
 
 
 @pytest.fixture
-def paths(tmp_path, monkeypatch):
-    root = tmp_path / "build" / "vm"
+def paths(sock_dir, monkeypatch):
+    """A run directory short enough for its sockets to appear by absolute path in the command line."""
+    root = sock_dir / "build" / "vm"
     run = root / "run"
     run.mkdir(parents=True)
-    iso = tmp_path / "installer.iso"
+    iso = sock_dir / "installer.iso"
     iso.write_bytes(b"iso")
-    code, variables = tmp_path / "code.fd", tmp_path / "vars.fd"
+    code, variables = sock_dir / "code.fd", sock_dir / "vars.fd"
     code.write_bytes(b"c")
     variables.write_bytes(b"v")
     monkeypatch.setattr(vm, "VM_ROOT", root)
@@ -75,14 +76,19 @@ def test_every_disk_bus_attaches_the_target_with_its_serial(paths, bus, expected
     assert f"file={paths['disk']},if=none,id=target,format=qcow2" in args_after(argv, "-drive")
 
 
-def test_4kn_sectors_reach_every_bus(paths):
-    for bus in vm_hw.DISK_BUSES:
+def test_4kn_sectors_reach_every_bus_that_supports_them(paths):
+    for bus in (bus for bus in vm_hw.DISK_BUSES if bus != "sata"):
         argv = command(paths, hardware=vm_hw.VMHardware(disk_bus=bus, sector_size=4096))
         joined = " ".join(argv)
         assert "logical_block_size=4096,physical_block_size=4096" in joined, bus
     nvme = args_after(command(paths, hardware=vm_hw.VMHardware(disk_bus="nvme", sector_size=4096)), "-device")
     assert "nvme-ns,drive=target,bus=nvme0,nsid=1,logical_block_size=4096,physical_block_size=4096" in nvme
     assert "nvme,id=nvme0,serial=GENTOO-VM-DISPOSABLE" in nvme
+
+
+def test_4kn_sata_is_refused_because_qemu_cannot_create_it(paths):
+    with pytest.raises(vm.HarnessError, match="only have 512-byte logical sectors"):
+        command(paths, hardware=vm_hw.VMHardware(disk_bus="sata", sector_size=4096))
 
 
 def test_a_disk_without_serial_leaves_the_property_out(paths):

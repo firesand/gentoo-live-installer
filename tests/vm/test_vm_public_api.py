@@ -74,14 +74,14 @@ def test_a_runner_can_be_built_from_a_bare_namespace_like_boot_normal_smoke_does
     assert runner.vms == [] and runner.logs == []
 
 
-def test_the_command_line_the_smoke_tools_check_is_unchanged(tmp_path, monkeypatch):
+def test_the_command_line_the_smoke_tools_check_is_unchanged(sock_dir, monkeypatch):
     """boot-normal-smoke.py matches drive strings; watch-r19-openrc-safety.py wants the absolute QMP socket in the argv."""
-    root = tmp_path / "build" / "vm"
+    root = sock_dir / "build" / "vm"
     run = root / "run"
     run.mkdir(parents=True)
-    iso = tmp_path / "installer.iso"
+    iso = sock_dir / "installer.iso"
     iso.write_bytes(b"iso")
-    code, variables = tmp_path / "code.fd", tmp_path / "vars.fd"
+    code, variables = sock_dir / "code.fd", sock_dir / "vars.fd"
     code.write_bytes(b"c")
     variables.write_bytes(b"v")
     monkeypatch.setattr(vm, "VM_ROOT", root)

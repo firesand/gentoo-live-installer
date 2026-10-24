@@ -23,6 +23,7 @@ from __future__ import annotations
 import glob
 import json
 import os
+import re
 import subprocess
 import sys
 from dataclasses import asdict, dataclass, field
@@ -270,9 +271,12 @@ def _pci_vendor(sysfs: str, kname: str) -> str:
         candidate = os.path.join(directory, "vendor")
         if os.path.isfile(candidate):
             try:
-                return _read(candidate)
+                value = _read(candidate)
             except OSError:
                 return ""
+            # A SCSI device on the way up has a 'vendor' too: the INQUIRY string ("ATA     ", "QEMU    "), not an id.
+            if re.fullmatch(r"0x[0-9a-fA-F]{4}", value):
+                return value
         directory = os.path.dirname(directory)
     return ""
 

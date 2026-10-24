@@ -67,11 +67,11 @@ def test_qemu_command_uses_relative_sockets_for_deep_run_directories(tmp_path, m
     assert "path=serial.sock," in joined and "unix:qmp.sock," in joined
 
 
-def test_qemu_command_keeps_absolute_sockets_when_they_fit(tmp_path, monkeypatch):
-    root = tmp_path / "build" / "vm"
+def test_qemu_command_keeps_absolute_sockets_when_they_fit(sock_dir, monkeypatch):
+    root = sock_dir / "build" / "vm"
     run = root / "run"
     run.mkdir(parents=True)
-    iso = tmp_path / "installer.iso"
+    iso = sock_dir / "installer.iso"
     iso.write_bytes(b"iso")
     monkeypatch.setattr(vm, "VM_ROOT", root)
     command = vm.qemu_command(vm.SCENARIO_MAP["bios"], iso=iso, disk=run / "disk.qcow2", run_dir=run, live=True,
