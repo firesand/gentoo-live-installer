@@ -205,6 +205,7 @@ class ActionRegistry:
         self._features: dict[str, None] = {}
         self._hooks: list[Callable[[], None]] = []
         self._status_providers: dict[str, Callable[[], Any]] = {}
+        self._capability_providers: dict[str, Callable[[], Any]] = {}
         self.install_manager: InstallManager | None = None
         self.options: Any = None  # the parsed command line, for plugins that have flags of their own
         if builtins:
@@ -274,25 +275,37 @@ class ActionRegistry:
         with self._lock:
             self._status_providers[key] = provider
 
-    def status_extensions(self) -> dict[str, Any]:
+    def add_capability_provider(self, key: str, provider: Callable[[], Any]) -> None:
+        """Add ``key: provider()`` to the ``capabilities`` reply (what the rescue module can repair, for one)."""
         with self._lock:
-            providers = dict(self._status_providers)
+            self._capability_providers[key] = provider
+
+    @staticmethod
+    def _collect(providers: dict[str, Callable[[], Any]], what: str) -> dict[str, Any]:
         result: dict[str, Any] = {}
         for key, provider in providers.items():
             try:
                 value = provider()
             except Exception:
-                LOG.exception("Status provider %r failed", key)
+                LOG.exception("%s provider %r failed", what, key)
                 continue
             if value is not None:
                 result[key] = value
         return result
 
+    def status_extensions(self) -> dict[str, Any]:
+        with self._lock:
+            providers = dict(self._status_providers)
+        return self._collect(providers, "Status")
+
     def capabilities(self) -> dict[str, Any]:
         features = self.features()
         if module_available("gentoo_installer.hardware") and "hardware.v1" not in features:
             features.append("hardware.v1")
+        with self._lock:
+            providers = dict(self._capability_providers)
         return {
+            **self._collect(providers, "Capability"),
             "protocol": PROTOCOL_VERSION,
             "version": __version__,
             "features": features,
@@ -347,10 +360,13 @@ def load_plugins(registry: ActionRegistry, *, rescue: bool = True) -> list[str]:
         if not callable(register):
             continue
         try:
-            register(registry)
+            api = register(registry)
         except Exception:
             LOG.exception("Optional module %s failed to register its actions", module_name)
             continue
+        # A module that hands back an object with capabilities() (rescue does) shows up in the capabilities reply under its package name.
+        if callable(getattr(api, "capabilities", None)):
+            registry.add_capability_provider(module_name.split(".")[1], api.capabilities)
         loaded.append(module_name)
     return loaded
 

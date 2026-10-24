@@ -676,6 +676,10 @@ class Installer:
             self.log(f"Hardware setup: {line}")
         for note in plan.notes if plan is not None else []:
             self.log(f"Hardware note: {note}")
+        # Decisions that surprise (a driver that was asked for but does not fit this PC) are part of the result, not only of the log.
+        for issue in plan.warnings if plan is not None else []:
+            if issue.severity in ("warning", "error") and issue.message not in self.warnings:
+                self.warnings.append(issue.message)
         # The probe's full result went to the client with the inspect reply; the event keeps the summary.
         found = self.inspection.to_dict()
         found.pop("hardware", None)

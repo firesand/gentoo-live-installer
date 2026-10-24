@@ -29,3 +29,24 @@ def test_a_machine_that_was_probed_and_has_no_nvidia_card_still_gets_the_error()
     chosen = manifest(hardware={"gpu_driver": "nvidia", "nvidia_license_accepted": True})
     machine = profile(gpus=(gpu("amd", "gcn3+", boot=True),))
     assert "hw.nvidia_no_gpu" in {issue.code for issue in hwplan.validate_plan(chosen, machine)}
+
+
+@pytest.mark.parametrize("device", ["/dev/md0", "/dev/md127", "/dev/loop0", "/dev/nbd1"])
+def test_an_array_or_a_disk_image_is_not_reported_as_a_missing_disk(device):
+    # lsblk lists them, the probe deliberately does not: the install target of a RAID or a disk image must pass preflight
+    chosen = manifest(storage={"device": device, "mode": "manual", "firmware": "bios", "partitions": [__import__("gentoo_installer.manifest", fromlist=["Partition"]).Partition(device, "/", "ext4")]})
+    assert "hw.st_disk_missing" not in {issue.code for issue in hwplan.validate_plan(chosen, profile())}
+
+
+def test_a_name_that_is_simply_not_there_still_is():
+    assert "hw.st_disk_missing" in {issue.code for issue in hwplan.validate_plan(manifest(storage={"device": "/dev/sdz"}), profile())}
+
+
+@pytest.mark.parametrize("desktop", ["minimal", "xfce", "gnome", "kde"])
+@pytest.mark.parametrize("binhost", [True, False])
+def test_the_planner_and_the_storage_stage_use_the_same_root_sizes(desktop, binhost):
+    # The planner blocks in preflight and the storage stage refuses later: they must never disagree about how big is big enough.
+    from gentoo_installer import layout, recommend
+
+    chosen = manifest(system={"desktop": desktop}, portage={"binhost": binhost})
+    assert recommend.minimum_root_gib(desktop, binhost) == (layout.minimum_root_mib(chosen) // 1024, layout.recommended_root_mib(chosen) // 1024)

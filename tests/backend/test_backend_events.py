@@ -142,6 +142,30 @@ class TestCompletedEvent:
         assert completed(events).data["degraded"] == ["sof-firmware could not be installed"]
 
 
+class TestPlanWarningsInTheResult:
+    def test_a_driver_that_was_asked_for_but_does_not_fit_is_part_of_the_result(self, tmp_path):
+        from gentoo_installerd.inspect import Inspection
+        from tests.hardware.helpers import fixture_dict
+
+        m = manifest()
+        m.hardware.gpu_driver, m.hardware.nvidia_license_accepted = "nvidia", True
+        inspection = Inspection("x86_64", 8 * 2**30, True, True, {}, [], hardware=fixture_dict("amd-laptop-sof"))
+
+        class Static:
+            def inspect(self):
+                return inspection
+
+        events: list = []
+        inst = Installer(m, runner=DryRunRunner(), target_root=tmp_path / "t", state_dir=tmp_path / "s", dry_run=True, inspector=Static(), emit=events.append)
+        assert inst.run()
+        warnings = completed(events).data["warnings"]
+        assert len(warnings) == 1 and warnings[0].startswith("The proprietary NVIDIA driver was not installed because it does not fit this PC")
+
+    def test_a_machine_with_nothing_to_report_has_no_warnings(self, tmp_path):
+        inst, events = installer(tmp_path)
+        assert inst.run() and completed(events).data["warnings"] == []
+
+
 class TestCleanupSecrets:
     def test_staged_signing_keys_are_removed_when_the_job_is_cleaned_up(self, tmp_path):
         calls: list[str] = []

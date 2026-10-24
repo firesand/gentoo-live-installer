@@ -165,6 +165,31 @@ class PluginTests(unittest.TestCase):
         self.assertEqual(load_plugins(registry, rescue=True), ["gentoo_installerd.rescue.api"])
         self.assertIn("rescue.v1", registry.features())
 
+    def test_what_a_plugin_can_do_is_shown_in_the_capabilities_reply(self) -> None:
+        class Api:
+            def capabilities(self):
+                return {"api": 1, "families": ["gentoo", "debian"]}
+
+        registry = ActionRegistry()
+        self.install_module("gentoo_installerd.rescue.api", register=lambda reg: Api())
+        self.install_module("gentoo_installerd.rescue")
+        with patch.dict(sys.modules, {"gentoo_installerd.hwactions": None}):
+            load_plugins(registry)
+        capabilities = registry.capabilities()
+        self.assertEqual(capabilities["rescue"], {"api": 1, "families": ["gentoo", "debian"]})
+        self.assertEqual(capabilities["protocol"], 1)  # a provider can never replace the daemon's own keys
+
+    def test_a_capability_provider_that_fails_is_contained_and_silent_ones_leave_no_key(self) -> None:
+        registry = ActionRegistry()
+        registry.add_capability_provider("broken", lambda: 1 / 0)
+        registry.add_capability_provider("absent", lambda: None)
+        registry.add_capability_provider("protocol", lambda: "hijacked")
+        with self.assertLogs("gentoo_installerd.server", level="ERROR"):
+            capabilities = registry.capabilities()
+        self.assertNotIn("broken", capabilities)
+        self.assertNotIn("absent", capabilities)
+        self.assertEqual(capabilities["protocol"], 1)
+
     def test_a_broken_plugin_is_logged_and_does_not_stop_the_daemon(self) -> None:
         registry = ActionRegistry()
         self.install_module("gentoo_installerd.hwactions", register=lambda reg: 1 / 0)

@@ -880,8 +880,8 @@ def _memory_issues(m: InstallManifest, hw: HardwareProfile) -> list[Issue]:
         out.append(Issue("hw.memory_tight", "info", f"This PC has {gib:.1f} GiB of memory. {m.system.desktop.upper()} will feel slow; Xfce needs less."))
     if m.hardware.hibernate:
         if m.storage.luks:
-            out.append(Issue("hw.hibernate_luks", "error", "Hibernation would write memory, including encryption keys, into an unencrypted swap partition. "
-                             "Turn hibernation off or install without disk encryption."))
+            out.append(Issue("hw.hibernate_luks", "error", "Hibernation is not available on an encrypted install: its swap is a file inside the encrypted root, "
+                             "and the installer does not set up resuming from it. Turn hibernation off or install without disk encryption."))
         needed = recommend.nominal_ram_gib(hw.memory.total_kib) * 1024 if hw.memory.total_kib else 0
         if needed and m.storage.swap_mib < needed:
             out.append(Issue("hw.hibernate_swap_small", "error", f"Hibernation needs a swap partition of at least {needed} MiB (the size of memory); it is {m.storage.swap_mib} MiB."))
@@ -922,7 +922,8 @@ def _target_disk_issues(m: InstallManifest, hw: HardwareProfile) -> list[Issue]:
     disk = next((d for d in hw.disks if d.path == m.storage.device), None)
     if disk is not None:
         return _disk_issues(m, hw, disk)
-    if hw.disks and re.fullmatch(r"/dev/[A-Za-z0-9._-]+", m.storage.device):
+    # The probe lists real disks only: an assembled RAID array (/dev/md0) or a loop device (a disk image) is not "missing".
+    if hw.disks and re.fullmatch(r"/dev/[A-Za-z0-9._-]+", m.storage.device) and not data.IGNORED_DISK_RE.match(m.storage.device.rsplit("/", 1)[-1]):
         hidden = not any(d.installable for d in hw.disks)
         return [Issue("hw.st_disk_missing", "error", f"{m.storage.device} was not found on this PC. "
                       + ("Only the installer's own medium is visible: the internal disk may be hidden by the storage mode in the firmware settings."
