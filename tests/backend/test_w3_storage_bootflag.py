@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 
 from gentoo_installer.manifest import Partition
-from gentoo_installerd.storage import StorageError
+from gentoo_installerd.storage import StorageError, StorageManager
 
 from tests.backend.test_storage_identity import erase, machine, manual, vda
 from tests.backend.test_storage_support import BIOS_BOOT, ESP, FakeDisk, GiB, MiB, StatefulRunner, commands_text, make_manager
@@ -121,7 +121,8 @@ class TestManualBios:
         pmbr = ("parted", "--script", "/dev/sda", "disk_set", "pmbr_boot", "on")
         assert pmbr in runner.commands
         assert runner.disks["/dev/sda"].pmbr_boot is True
-        assert runner.commands[runner.commands.index(pmbr) + 1] == ("udevadm", "settle")
+        at = runner.commands.index(pmbr)
+        assert runner.commands[at + 1 : at + 3] == [("partprobe", "/dev/sda"), ("udevadm", "settle")]
 
     def test_a_gpt_disk_that_carries_an_efi_partition_is_left_alone(self, tmp_path):
         # a dual-boot disk: some EFI firmware ignores a disk whose protective MBR is active
@@ -179,3 +180,26 @@ class TestManualBios:
             make_manager(runner, tmp_path).prepare(manual(Partition("/dev/sda2", "/", "ext4", format=True), Partition("/dev/sdz9", "/data", "ext4", format=True), firmware="bios"))
         assert runner.disks["/dev/sda"].pmbr_boot is False
         assert not any(c[0] == "parted" for c in runner.commands)
+
+
+class TestReadingParted:
+    """The active partitions come from `parted --script --machine DISK print` (parted 3.7: flags are the last field, joined by ", ")."""
+
+    LISTING = (
+        "BYT;\n"
+        "/dev/sda:976773168s:scsi:512:512:msdos:ATA Samsung SSD 860:;\n"
+        "1:2048s:1050623s:1048576s:ntfs::boot;\n"
+        "2:1050624s:400000000s:398949377s:ntfs::;\n"
+        "3:400000001s:600000000s:200000000s:ext4::lba;\n"
+    )
+
+    def test_the_partition_with_the_boot_flag_is_found(self):
+        assert StorageManager._active_partitions(self.LISTING) == ["1"]
+
+    def test_several_flags_and_several_active_partitions(self):
+        listing = self.LISTING.replace("ntfs::;", "ntfs::lba, boot;")
+        assert StorageManager._active_partitions(listing) == ["1", "2"]
+
+    def test_the_disk_line_and_a_disk_without_the_flag_give_nothing(self):
+        assert StorageManager._active_partitions(self.LISTING.replace("::boot;", "::;")) == []
+        assert StorageManager._active_partitions("") == []

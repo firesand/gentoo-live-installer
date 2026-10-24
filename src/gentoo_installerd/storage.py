@@ -660,6 +660,7 @@ class StorageManager:
         s = self.manifest.storage
         if s.firmware != "bios":
             return
+        command: tuple[str, ...]
         try:
             disk = find_disk(disks, s.device)
             if disk.type not in {"disk", "loop"}:
@@ -681,6 +682,7 @@ class StorageManager:
             else:
                 return
             self.runner.run(command)
+            self.runner.run(("partprobe", s.device))
             self.runner.run(("udevadm", "settle"))
             self.notes.append(done)
         except (RunnerError, OSError, ValueError) as exc:

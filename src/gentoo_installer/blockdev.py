@@ -327,6 +327,11 @@ class FilesystemPool:
         label = POOL_FILESYSTEMS.get(self.fstype, self.fstype)
         return f"{label} {self.uuid} (members here: {', '.join(self.inside)}; also on {', '.join(self.outside)})"
 
+    def reason(self) -> str:
+        """One line for a disk card: why this disk is not free to erase (the wording of the other 'is part of ...' reasons)."""
+        label = POOL_FILESYSTEMS.get(self.fstype, self.fstype)
+        return f"{', '.join(self.inside)} is part of a {label} that also uses {', '.join(self.outside)}"
+
 
 def filesystem_pools(roots: Sequence[BlockDevice], nodes: Sequence[BlockDevice]) -> list[FilesystemPool]:
     """The multi-device filesystems (Btrfs, ZFS, bcachefs) that have a member inside ``nodes`` and another outside.

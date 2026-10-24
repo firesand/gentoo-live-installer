@@ -562,6 +562,7 @@ class Stage3Manager:
     def extract(self, archive: Path, target_root: Path) -> None:
         root = target_root.resolve()
         root.mkdir(parents=True, exist_ok=True)
+
         def checked(member: tarfile.TarInfo, _path: str) -> tarfile.TarInfo | None:
             self._check_cancel()  # unpacking takes minutes on a slow disk: Cancel is looked at between members
             return self._checked_member(member, root)

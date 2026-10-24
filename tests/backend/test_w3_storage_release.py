@@ -203,6 +203,11 @@ class TestFilesystemPoolsInTheSharedBlockDeviceCode:
         assert [(p.fstype, p.uuid, p.inside, p.outside) for p in pools] == [("btrfs", FSID, ("/dev/vda2",), ("/dev/vdb1",))]
         assert pools[0].spans_other_disks and "Btrfs" in pools[0].describe() and "/dev/vdb1" in pools[0].describe()
 
+    def test_the_reason_for_a_disk_card_reads_like_the_other_member_reasons(self):
+        roots = self.roots()
+        [pool] = blockdev.filesystem_pools(roots, [blockdev.find(roots, "/dev/vda")])
+        assert pool.reason() == "/dev/vda2 is part of a Btrfs filesystem that also uses /dev/vdb1"
+
     def test_the_other_disk_asked_about_itself_finds_the_first(self):
         roots = self.roots()
         pools = blockdev.filesystem_pools(roots, [blockdev.find(roots, "/dev/vdb")])
