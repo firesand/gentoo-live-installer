@@ -168,7 +168,7 @@ class PolicyContext:
 
     @property
     def mdadm_conf(self) -> str:
-        return f"{self.state_dir}/sessions/{self.session_id}.mdadm.conf"
+        return f"{self.state_dir}/sessions/{self.session_id or 'pool'}.mdadm.conf"
 
 
 def _fail(message: str, argv: Sequence[str]) -> SafetyViolation:
@@ -601,7 +601,7 @@ class HostPolicy:
             return "inspect"
         if mode == "--assemble":
             expected = ["--scan", "--readonly", f"--config={self.ctx.mdadm_conf}"]
-            if not self.ctx.session_id or sorted(rest) != sorted(expected) and sorted(rest) != sorted(expected + ["--run"]):
+            if sorted(rest) != sorted(expected) and sorted(rest) != sorted(expected + ["--run"]):
                 raise _fail("mdadm --assemble must use the session's private config, read-only", argv)
             return "device"
         if mode == "--readwrite" and len(rest) == 1:
@@ -629,6 +629,10 @@ class HostPolicy:
                 raise _fail("btrfs subvolume queries need a mounted path", argv)
             return "inspect"
         if sub == "filesystem" and rest[1:2] == ["show"]:
+            return "inspect"
+        if sub == "property" and rest[1:4] == ["get", "-ts", rest[-2]] and rest[-1] == "ro" and len(rest) == 5:
+            if not (self._dir_in_probe(rest[3]) or (self.ctx.session_root and (rest[3] == self.ctx.session_root or rest[3].startswith(self.ctx.session_root + "/")))):
+                raise _fail("btrfs property queries need a mounted path", argv)
             return "inspect"
         if sub == "check":
             device = rest[-1]

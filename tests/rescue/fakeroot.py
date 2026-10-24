@@ -307,7 +307,7 @@ def _fedora_like(root: Path, opts: dict[str, Any], key: str) -> None:
         (root / "etc/selinux/targeted").mkdir(parents=True, exist_ok=True)
     put(root, "var/lib/rpm/rpmdb.sqlite", "")
     put(root, "etc/passwd", "root:x:0:0:root:/root:/bin/bash\nuser:x:1000:1000::/home/user:/bin/bash\n")
-    put(root, "etc/shadow", "root:!locked::0:99999:7:::\nuser:$y$j9T$x:19000:0:99999:7:::\n", mode=0o000)
+    put(root, "etc/shadow", "root:!locked::0:99999:7:::\nuser:$y$j9T$x:19000:0:99999:7:::\n", mode=0o600)
     put(root, "etc/login.defs", "UID_MIN 1000\n")
     _fstab_and_crypttab(root, opts, "/boot/efi", root_fs="btrfs" if opts.get("btrfs") else "ext4")
     put(root, "var/log/dnf.log", "2024-10-24 dnf start\n")

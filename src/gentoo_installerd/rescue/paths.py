@@ -128,6 +128,23 @@ class RootFS:
         self._force_openat2 = use_openat2 is True
         self._fd = os.open(self.root, O_PATH | O_DIRECTORY | O_CLOEXEC)
 
+    @classmethod
+    def _anchored(cls, fd: int, root: str, parent: RootFS) -> RootFS:
+        child = cls.__new__(cls)
+        child.root = root
+        child.writable = parent.writable
+        child.max_links = parent.max_links
+        child._use_openat2 = parent._use_openat2
+        child._force_openat2 = parent._force_openat2
+        child._fd = fd
+        return child
+
+    def sub(self, path: str) -> RootFS:
+        """A RootFS whose root is a directory of this one (resolved in-root, anchored by fd, not by path)."""
+        canonical = self.resolve(path)
+        fd = self.open_fd(path, O_PATH | O_DIRECTORY)
+        return self._anchored(fd, self.root if canonical == "/" else self.root + canonical, self)
+
     # ---- lifecycle -------------------------------------------------------
     def close(self) -> None:
         if self._fd >= 0:
