@@ -186,6 +186,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("manifest", type=Path, help="The expected manifest (the harness writes it as manifest.json)")
     parser.add_argument("--output", type=Path, default=Path("/tmp/gentoo-vm-gui"))
     parser.add_argument("--plan", type=Path, help="The harness's plan: guard, detect mode, overrides, expected detections")
+    parser.add_argument("--socket", default="/run/gentoo-installer/server.sock",
+                        help="The installer daemon's socket (tests point this at a fake daemon)")
     parser.add_argument("--cancel-at-stage3", action="store_true",
                         help="Click the real GUI cancel button when the backend starts stage3")
     parser.add_argument("--readiness-timeout", type=int, default=60,
@@ -239,7 +241,7 @@ def main(argv: list[str] | None = None) -> int:
     except ValueError as exc:
         raise SystemExit(f"Refusing GUI automation: {exc}")
     args.output.mkdir(mode=0o700, parents=True, exist_ok=True)
-    app = QApplication(["gentoo-installer-vm-test"])
+    app = QApplication.instance() or QApplication(["gentoo-installer-vm-test"])
     apply_theme(app)
 
     def save_screenshot(path: Path) -> None:
@@ -251,6 +253,12 @@ def main(argv: list[str] | None = None) -> int:
         app.exit(status)
 
     watchdog = Watchdog(lambda message: fail(message, WATCHDOG_STATUS))
+    closed = [False]
+
+    def later(milliseconds: int, callback: Callable[[], None]) -> None:
+        """QTimer.singleShot that does nothing once this run is over (a test runs the driver in-process)."""
+        QTimer.singleShot(milliseconds, lambda: None if closed[0] else callback())
+
     original_worker_init = BackendWorker.__init__
     cancel_state = {"requested": False, "storage_completed": False, "stage3_started": 0}
 
@@ -280,7 +288,7 @@ def main(argv: list[str] | None = None) -> int:
         worker.eventReceived.connect(observer.on_event)
 
     BackendWorker.__init__ = observed_worker_init
-    window = InstallerWindow(initial, "/run/gentoo-installer/server.sock")
+    window = InstallerWindow(initial, args.socket)
     window.show()
     outcome: list[bool] = []
 
@@ -293,12 +301,12 @@ def main(argv: list[str] | None = None) -> int:
                           "storage_completed": cancel_state["storage_completed"],
                           "stage3_started": cancel_state["stage3_started"],
                           "reboot_enabled": not window.progress.reboot.isHidden()}), flush=True)
-        QTimer.singleShot(100, save_and_exit)
+        later(100, save_and_exit)
 
     def save_and_exit() -> None:
         worker = window.progress.worker
         if worker is not None and worker.isRunning():
-            QTimer.singleShot(100, save_and_exit)
+            later(100, save_and_exit)
             return
         try:
             save_screenshot(args.output / "result.png")
@@ -351,7 +359,7 @@ def main(argv: list[str] | None = None) -> int:
             if transient:
                 if time.monotonic() < deadline:
                     window.refresh_readiness()
-                    QTimer.singleShot(2000, check)
+                    later(2000, check)
                     return
                 fail("Live readiness scan still reports " + "; ".join(transient) +
                      f" after {args.readiness_timeout}s: {readiness_text()}")
@@ -389,7 +397,7 @@ def main(argv: list[str] | None = None) -> int:
                 return
             print(json.dumps({"type": "gui_navigation", "pages": list(range(7)), "manifest_matches": True,
                               "target": device, "device_id": device_id, "detect": detect, "detected": chosen}), flush=True)
-            QTimer.singleShot(100, confirm)
+            later(100, confirm)
             watchdog.arm(args.navigation_timeout, "the backend did not start")
             window.next.click()
             worker = window.progress.worker
@@ -399,24 +407,29 @@ def main(argv: list[str] | None = None) -> int:
         current = window.current
         if detect and current == 2:
             select_disk()  # the storage page has loaded its defaults by now: choose like a user
-        QTimer.singleShot(100, fail_modal)
+        later(100, fail_modal)
         watchdog.arm(args.navigation_timeout, f"page {current} did not advance")
         window.next.click()
         if window.current != current + 1:
             # A validation dialog is handled by fail_modal; if navigation
             # stopped without one, fail closed instead of bypassing a page.
-            QTimer.singleShot(150, lambda: navigation_stalled(current))
+            later(150, lambda: navigation_stalled(current))
             return
         watchdog.stop()
-        QTimer.singleShot(100, navigate_next)
+        later(100, navigate_next)
 
     def navigation_stalled(previous: int) -> None:
         if window.current == previous:
             fail(f"Continue did not advance from page {previous}")
 
     window.progress.finished.connect(finish)
-    QTimer.singleShot(200, start)
-    return app.exec()
+    later(200, start)
+    try:
+        return app.exec()
+    finally:  # leave the process as it was (a test runs this in-process)
+        closed[0] = True
+        watchdog.stop()
+        BackendWorker.__init__ = original_worker_init
 
 
 if __name__ == "__main__":
