@@ -55,6 +55,15 @@ def test_documented_test_iso_name_matches_the_builder(pins: dict[str, str]) -> N
     assert pins["ISO_VOLID"].replace("_AMD64", "_TESTKEY") in README.read_text()
 
 
+def test_no_document_suggests_a_test_iso_in_or_below_dist() -> None:
+    """build-iso.sh refuses a test-key ISO in dist/ and in every directory below it, so no example may suggest one."""
+    for document in (README, USER_GUIDE, ISO_DOC, ROOT / "docs/TESTING.md"):
+        text = document.read_text()
+        for value in re.findall(r"ISO_DIST_DIR=(\S+)", text):
+            assert not re.match(r"[\"']?(\./)?dist(/|[\"']?$)", value), f"{document.name} builds a test ISO into {value}"
+        assert "dist/test-only" not in text, f"{document.name} still names dist/test-only"
+
+
 def test_documentation_does_not_promise_what_the_kernel_cannot_do() -> None:
     for document in (README, USER_GUIDE, ISO_DOC):
         text = document.read_text()

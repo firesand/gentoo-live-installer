@@ -90,8 +90,11 @@ describes the build). A production ISO has no SSH access, so the harness would o
 install -d -m 0700 build/vm-control
 testkey="build/vm-control/iso-test-$(date +%s)"
 ssh-keygen -q -t ed25519 -N '' -f "$testkey"
-GENTOO_TEST_SSH_PUBLIC_KEY="$(cat "$testkey.pub")" ISO_DIST_DIR=dist/test-only JOBS=2 ./scripts/build-iso.sh
+GENTOO_TEST_SSH_PUBLIC_KEY="$(cat "$testkey.pub")" ISO_DIST_DIR=build/test-dist JOBS=2 ./scripts/build-iso.sh
 ```
+
+`ISO_DIST_DIR` must be a directory outside `dist/`, not `dist/` and not a directory inside it: `build-iso.sh`
+refuses both, because a release is taken from `dist/` as a whole and an ISO with a root login must never be in it.
 
 If `GENTOO_TEST_SSH_PUBLIC_KEY` is exported in your shell, `build-iso.sh` forwards it silently:
 unset it before a normal build. The test ISO must be built from the same tree as the harness.
@@ -100,7 +103,7 @@ unset it before a normal build. The test ISO must be built from the same tree as
 
 ```sh
 python3 scripts/test-vm.py --list-scenarios
-python3 scripts/test-vm.py --scenario openrc --iso dist/test-only/<iso> \
+python3 scripts/test-vm.py --scenario openrc --iso build/test-dist/<iso> \
   --ssh-host 127.0.0.1 --ssh-port 40222 --ssh-private-key "$testkey"
 ```
 
@@ -485,7 +488,7 @@ is what the entry is there to find out. 12 GiB + 4 GiB + the margin is the most 
 
 ```sh
 test-vm.py --list-matrix                                    # the table above, from the data
-test-vm.py --matrix wave3 --iso dist/test-only/<iso> --ssh-host 127.0.0.1 --ssh-port 40222 \
+test-vm.py --matrix wave3 --iso build/test-dist/<iso> --ssh-host 127.0.0.1 --ssh-port 40222 \
   --ssh-private-key "$testkey"                              # all of it
 test-vm.py --matrix wave3 --matrix-only rescue-debian,rescue-arch ...     # a part of it
 test-vm.py --matrix wave3 --matrix-parallel 1 ...                          # one at a time

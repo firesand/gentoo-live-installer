@@ -78,14 +78,14 @@ Tests that check packages against a Gentoo tree need `ISO_TREE=<path to the pinn
 
 ### Test ISO and VM checks
 
-The VM harness logs into the live system over SSH, so it needs an image with a temporary root key. Such an image is named and labelled `...-TESTKEY` (volume `GENTOO_INSTALLER_TESTKEY`), shows a "TEST BUILD" banner, and is refused in `dist/`:
+The VM harness logs into the live system over SSH, so it needs an image with a temporary root key. Such an image is named and labelled `...-TESTKEY` (volume `GENTOO_INSTALLER_TESTKEY`), shows a "TEST BUILD" banner, and is refused in `dist/` and in any directory below it (a release is taken from `dist/` as a whole):
 
 ```sh
 install -d -m 0700 build/vm-control
 testkey="build/vm-control/iso-test-$(date +%s)"
 ssh-keygen -q -t ed25519 -N '' -f "$testkey"
-ISO_DIST_DIR=dist/test-only JOBS=2 ./scripts/build-iso.sh --test-key-file "$testkey.pub"
-python3 scripts/test-vm.py --scenario openrc --iso dist/test-only/gentoo-installer-amd64-20261018T124555Z-TESTKEY.iso \
+ISO_DIST_DIR=build/test-dist JOBS=2 ./scripts/build-iso.sh --test-key-file "$testkey.pub"
+python3 scripts/test-vm.py --scenario openrc --iso build/test-dist/gentoo-installer-amd64-20261018T124555Z-TESTKEY.iso \
   --ssh-host 127.0.0.1 --ssh-port 40222 --ssh-private-key "$testkey"
 ```
 

@@ -48,8 +48,10 @@ ISO_LOG_DIR, BUILD_MEMORY (default 8g), BUILD_MIN_FREE_GIB (default 45), ISO_SEC
   --stage1-only        Build the stage1 archive and its receipt, no ISO.
   --test-key-file FILE Build a TEST ISO with the ssh public key in FILE as a temporary root
                        login (for scripts/test-vm.py). Its file name and volume label end in
-                       TESTKEY, and ISO_DIST_DIR must be set to a directory of your own.
-                       The environment variable GENTOO_TEST_SSH_PUBLIC_KEY does the same.
+                       TESTKEY, and ISO_DIST_DIR must be set to a directory of your own that is
+                       outside dist/ (not dist/ itself, not a directory below it), for example
+                       build/test-dist. The environment variable GENTOO_TEST_SSH_PUBLIC_KEY does
+                       the same.
   --sign-key KEYID     After a release build, sign the .sha512 and .manifest.json files
                        with your OpenPGP key (16 or 40 hex digits) on the host; the key
                        never enters the container. Refused together with --test-key-file.
@@ -174,11 +176,14 @@ if [[ -n ${TEST_KEY} ]]; then
 	[[ ${TEST_KEY} =~ ^ssh-[a-z0-9-]+\ [A-Za-z0-9+/=]+(\ [^[:cntrl:]]*)?$ ]] \
 		|| die "the test key must be one OpenSSH public key line (ssh-ed25519 AAAA... comment)"
 	# A test image has a login that anybody with the key can use: it must never land in the
-	# directory a release is taken from.
+	# directory a release is taken from, nor in any directory below it (a tar, rsync or upload
+	# of dist/ takes the subdirectories along).
 	[[ -n ${ISO_DIST_DIR:-} ]] \
-		|| die "a test-key ISO must not use the default dist/: set ISO_DIST_DIR to a directory of its own (for example dist/test-only)"
-	[[ $(realpath -m -- "${ISO_DIST_DIR}") != "$(realpath -m -- "${ROOT}/dist")" ]] \
-		|| die "a test-key ISO must not be written to dist/, which is where releases go; choose another ISO_DIST_DIR"
+		|| die "a test-key ISO must not use the default dist/: set ISO_DIST_DIR to a directory of its own outside dist/ (for example build/test-dist)"
+	test_dist=$(realpath -m -- "${ISO_DIST_DIR}")
+	release_dist=$(realpath -m -- "${ROOT}/dist")
+	[[ ${test_dist}/ != "${release_dist}/"* ]] \
+		|| die "a test-key ISO must not be written to dist/ or any directory below it, which is where releases go; choose another ISO_DIST_DIR (for example build/test-dist)"
 	ISO_FLAVOR=testkey
 else
 	ISO_FLAVOR=release

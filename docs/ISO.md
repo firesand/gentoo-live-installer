@@ -41,7 +41,7 @@ Catalyst 4.2 facts the design relies on (checked in `catalyst/targets/livecd_sta
 | `--reuse none` | Always build everything. Use it for releases when in doubt. |
 | `--stage2-only`, `--reuse stage1` | Run only stage2; fails unless the receipt matches. |
 | `--stage1-only` | Build stage1 and its receipt, no ISO. |
-| `--test-key-file FILE` | Build a **TESTKEY** image with this OpenSSH public key as root login. Requires `ISO_DIST_DIR`, never `dist/`. `GENTOO_TEST_SSH_PUBLIC_KEY` does the same. |
+| `--test-key-file FILE` | Build a **TESTKEY** image with this OpenSSH public key as root login. Requires `ISO_DIST_DIR`, outside `dist/` (`dist/` itself and every directory below it are refused; for example `build/test-dist`). `GENTOO_TEST_SSH_PUBLIC_KEY` does the same. |
 | `--verify ISO [--flavor release\|testkey]` | Run `scripts/verify-iso.py` on an existing ISO. |
 | `--sign-key KEYID` | After a successful release build, write detached, armoured OpenPGP signatures `<iso>.sha512.asc` and `<iso>.manifest.json.asc` with your key (16 or 40 hex digits) and check them. This runs on the host after the container has exited, so the key never enters Docker; the checksum file names the ISO hash, so it covers the ISO. Refused for a test-key build. |
 | `--clean`, `--clean-packages` | Remove chroots, `*.partial` files and stage1 archives beyond `ISO_KEEP_STAGE1` (default 2); the second also empties `catalyst/packages`. |
