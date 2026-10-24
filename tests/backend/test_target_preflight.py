@@ -169,6 +169,16 @@ class WorldDriftTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             self.assertEqual(configurer(temporary, runner).world_drift(target_manifest()), [])
 
+    def test_source_installs_skip_the_drift_check(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            runner = ScriptedRunner()
+            installer = Installer(target_manifest(system={"desktop": "minimal"}, portage={"binhost": False},
+                                                  options={"pipewire": False, "bluetooth": False, "printing": False}),
+                                  runner=runner, target_root=Path(temporary, "t"), state_dir=Path(temporary, "s"), dry_run=True,
+                                  inspector=FakeInspector(), emit=lambda event: None)
+            installer._desktop()
+            self.assertFalse(any("--newuse" in command for command in runner.commands))
+
     def test_the_desktop_stage_logs_the_drift_without_failing(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             runner = ScriptedRunner()

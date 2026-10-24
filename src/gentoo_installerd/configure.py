@@ -1768,7 +1768,7 @@ class Configurer:
         if system.bootloader != "grub" or system.uki:
             self.install_esp_sync_hook(manifest, fallback_copy=fallback_written)
         if system.secure_boot:
-            self._sign_boot_images(manifest, efi_mountpoint)
+            self._sign_boot_images(manifest, efi_mountpoint, sign_fallback_copy=fallback_written)
 
     def install_esp_sync_hook(self, manifest: InstallManifest, fallback_copy: bool = False) -> None:
         """Make kernel updates reach the EFI system partition (systemd-boot, EFI stub, UKI)."""
@@ -1826,14 +1826,14 @@ class Configurer:
         except OSError:
             pass
 
-    def _sign_boot_images(self, manifest: InstallManifest, efi_mountpoint: str) -> None:
+    def _sign_boot_images(self, manifest: InstallManifest, efi_mountpoint: str, *, sign_fallback_copy: bool = False) -> None:
         system = manifest.system
         images: list[str] = []
         if system.uki:
             images.append(f"{efi_mountpoint}/EFI/Linux/gentoo.efi")
         if system.bootloader == "systemd-boot":
             images.extend((f"{efi_mountpoint}/EFI/systemd/systemd-bootx64.efi", f"{efi_mountpoint}/EFI/BOOT/BOOTX64.EFI"))
-        elif system.uki and self.removable_fallback_wanted(manifest):
+        elif sign_fallback_copy:  # the copy of the UKI that was put on the removable-media path
             images.append(f"{efi_mountpoint}/EFI/BOOT/BOOTX64.EFI")
         if self.dry_run:
             key, certificate = f"{self.secret_chroot_dir}/signing.key", f"{self.secret_chroot_dir}/signing.crt"

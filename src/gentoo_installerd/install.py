@@ -480,7 +480,9 @@ class Installer:
         warnings = [*result.degraded, *self.configurer.configure_services(self.manifest, plan, phase="desktop")]
         self.configurer.configure_desktop_session(self.manifest)
         warnings.extend(self.configurer.run_plan_steps(plan))
-        drift = self.configurer.world_drift(self.manifest)
+        # Only binary packages can leave the installed USE flags different from make.conf, so source
+        # installs skip the (minutes-long) check.
+        drift = self.configurer.world_drift(self.manifest) if self.manifest.portage.binhost else []
         if drift:
             # Visible in install.log; the next @world update will rebuild these with the configured USE.
             self.log(f"NOTE: {len(drift)} installed package(s) differ from the configured USE flags: {', '.join(drift[:12])}"

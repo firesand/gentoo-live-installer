@@ -276,6 +276,27 @@ class SecureBootTests(unittest.TestCase):
         self.assertEqual(signed, ["/efi/EFI/Linux/gentoo.efi", "/efi/EFI/systemd/systemd-bootx64.efi", "/efi/EFI/BOOT/BOOTX64.EFI"])
         self.assertEqual(sum("sbverify" in command for command in runner.commands), 3)
 
+    def test_the_fallback_copy_of_an_efi_stub_uki_is_signed_too(self) -> None:
+        for mode in ("erase", "manual"):  # a shared ESP only gets the copy when none exists, and it must still be signed
+            with self.subTest(mode=mode):
+                m = target_manifest(storage={"mode": mode}, system={"bootloader": "efi-stub", "uki": True, "secure_boot": True,
+                                                                     "secure_boot_key": str(self.key), "secure_boot_certificate": str(self.cert)})
+                if mode == "manual":
+                    from gentoo_installer.manifest import Partition
+
+                    m.storage.partitions = [Partition("/dev/sda3", "/", "ext4"), Partition("/dev/sda1", "/efi", "vfat")]
+                (self.root / "efi/EFI/Linux/gentoo.efi").write_bytes(b"uki")
+                (self.root / "efi/EFI/BOOT").mkdir(parents=True, exist_ok=True)
+                (self.root / "efi/EFI/BOOT/BOOTX64.EFI").unlink(missing_ok=True)
+                runner = SigningRunner(self.secrets)
+                runner.respond("openssl x509 -noout -pubkey", "PUBKEY")
+                runner.respond("openssl pkey -pubout", "PUBKEY")
+                runner.respond("lsblk --noheadings --output PARTN", "1\n")
+                runner.respond("lsblk --noheadings --output PKNAME", "sda\n")
+                self.configure(runner).configure_bootloader(m, "/dev/sda3", "/dev/sda1")
+                signed = [command[command.index("--output") + 1].removesuffix(".signed") for command in runner.commands if "sbsign" in command]
+                self.assertEqual(signed, ["/efi/EFI/Linux/gentoo.efi", "/efi/EFI/BOOT/BOOTX64.EFI"])
+
     def test_cancelling_during_signing_still_removes_the_key(self) -> None:
         runner = SigningRunner(self.secrets, cancel_on_sign=True)
         runner.respond("openssl x509 -noout -pubkey", "PUBKEY")
