@@ -54,7 +54,6 @@ seconds.
     Old firmware                  no ACPI and no APIC (very old computers)
     IOMMU off                     for boards that hang with DMA remapping
     Text console in RAM           as above, copied to memory (needs 4 GiB)
-    Accessibility                 speech output (speakup)
   Memtest86+                      tests the memory (shown when the disc has
                                   it)
   UEFI firmware settings          opens the firmware setup (UEFI only)
@@ -163,3 +162,4 @@ installerd.log.
 
 This disc is for 64-bit x86 computers only. It does not run on Apple Silicon
 Macs, Windows-on-ARM laptops or Raspberry Pi boards.
+It has no screen reader, speech output or braille support.

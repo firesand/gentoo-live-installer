@@ -64,6 +64,17 @@ def test_no_document_suggests_a_test_iso_in_or_below_dist() -> None:
         assert "dist/test-only" not in text, f"{document.name} still names dist/test-only"
 
 
+def test_no_document_offers_speech_output_the_disc_does_not_have() -> None:
+    """The disc has no speech synthesizer, screen reader or braille software. A document may say so, but must not offer them."""
+    for document in (README, USER_GUIDE, ISO_DOC, ROOT / "iso/README-live.txt"):
+        text = document.read_text()
+        assert document == ISO_DOC or "dospeakup" not in text, document.name
+        assert not re.search(r"(?im)^\s*(\|\s*)?accessibility\b", text), f"{document.name} lists an Accessibility boot entry"
+        for line in text.splitlines():
+            if re.search(r"speech|speak|screen reader|braille", line, re.I):
+                assert re.search(r"\b(no|not|cannot|without)\b", line, re.I), f"{document.name} offers speech output: {line.strip()}"
+
+
 def test_documentation_does_not_promise_what_the_kernel_cannot_do() -> None:
     for document in (README, USER_GUIDE, ISO_DOC):
         text = document.read_text()

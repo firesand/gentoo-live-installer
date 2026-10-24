@@ -89,7 +89,7 @@ Open the one-time boot menu (table above). Choose the stick. The disc's own menu
 | **Repair a system (text console)** | No desktop. Starts the repair tool by itself. Use it to fix a system that does not start. It works with any graphics chip. It asks for a keyboard layout first. |
 | **Install in text mode** | No desktop. Starts the text installer by itself. Use it when the desktop does not appear, or on a small or old machine. It asks for a keyboard layout first. |
 | Text console only | No desktop and no tool: a shell for experts and headless machines. Asks for a keyboard layout first. |
-| More options | Verbose boot, compatibility mode, serial console, old firmware, IOMMU off, text console in RAM (4 GiB), accessibility (speech). |
+| More options | Verbose boot, compatibility mode, serial console, old firmware, IOMMU off, text console in RAM (4 GiB). |
 | Memtest86+ | Tests the memory. |
 | UEFI firmware settings | Opens the firmware setup (UEFI only). |
 | Continue with the next boot device | Leaves the disc and starts what is on the PC's disk (UEFI only). |
@@ -374,4 +374,5 @@ The disc is read-only and its files are gone at power off. Save reports to a sec
 * Run on hardware released after the image was made if the kernel has no driver for it. Wi-Fi, graphics and sound chips of the newest generation are the usual cases.
 * Repair or install ZFS roots, or read BitLocker volumes (Windows).
 * Repair Arch, openSUSE and other systems automatically (section 9). It can look at them and open a shell.
+* Read the screen aloud or show it in braille: the disc has no screen reader, no speech output and no braille software.
 * Replace a backup. Repairs and installations can destroy data. Read what the tool shows before you confirm.

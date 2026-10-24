@@ -75,9 +75,35 @@ def test_troubleshooting_entries(entries) -> None:
     assert any("console=ttyS0,115200n8" in l.split() and "nox" in l.split() for l in lines)
     assert any({"nomodeset", "pcie_aspm=off", "nvme_core.default_ps_max_latency_us=0", "usbcore.autosuspend=-1"} <= set(l.split()) for l in lines)
     assert any({"acpi=off", "noapic"} <= set(l.split()) for l in lines)
-    assert any("dospeakup" in l.split() for l in lines)
     assert any({"ignore_loglevel", "loglevel=7", "rd.debug"} <= set(l.split()) for l in lines)
     assert any({"intel_iommu=off", "amd_iommu=off"} <= set(l.split()) for l in lines)
+
+
+# Every word a menu entry hands to the kernel is read by something: the kernel, dracut, livecd-tools or this project. A word that
+# nobody reads is a promise the disc cannot keep: Catalyst's stock "accessibility" entry passed dospeakup, which livecd-tools 2.x
+# no longer knows, so the entry booted the normal desktop in silence. A new word needs a line here that says who reads it.
+READERS = {
+    r"root=live:CDLABEL=\S+|rd\.live\.dir=/|rd\.live\.squashimg=\S+|cdroot|rd\.live\.ram=1|rd\.debug": "dracut (dmsquash-live), the tail Catalyst writes",
+    r"nodhcp|nox": "livecd-tools, init.d/autoconfig",
+    r"secureconsole": "livecd-tools, init.d/fixinittab",
+    r"dokeymap": "livecd-tools, the dracut module 90dokeymap",
+    r"gentoo\.autostart=(rescue|installer-text)": "iso/root_overlay/etc/profile.d/20-gentoo-autostart.sh",
+    r"console=\S+|nomodeset|acpi=off|noapic|ignore_loglevel|loglevel=7|pcie_aspm=off|nvme_core\.default_ps_max_latency_us=0|usbcore\.autosuspend=-1"
+    r"|intel_iommu=off|amd_iommu=off": "the kernel",
+}
+
+
+def test_every_kernel_argument_of_the_menu_is_read_by_something(entries, pins: dict[str, str]) -> None:
+    unread = {(entry.title, word) for entry in entries for line in entry.linux for word in line.split()[2:]
+              if not any(re.fullmatch(pattern, word) for pattern in READERS)}
+    assert not unread, f"nothing on the disc reads: {sorted(unread)}; remove the word, or add its reader to READERS"
+    assert all(any(re.fullmatch(pattern, word) for pattern in READERS) for word in pins["ISO_BOOTARGS"].split())
+
+
+def test_the_menu_offers_no_speech_output(grub_text: str, entries) -> None:
+    """There is no speech synthesizer on the disc (no espeakup, no brltty), so no entry may promise one."""
+    assert "dospeakup" not in grub_text and "speakup" not in grub_text
+    assert not [e.title for e in entries if re.search(r"accessib|speech|speak|braille", e.title, re.I)]
 
 
 def test_no_safe_graphics_entry(entries) -> None:

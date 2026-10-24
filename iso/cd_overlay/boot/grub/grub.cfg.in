@@ -104,12 +104,6 @@ submenu 'More options (troubleshooting)' --class gnu-linux --class os {
 		linux /boot/gentoo @BOOTARGS@ root=live:CDLABEL=@VOLID@ rd.live.dir=/ rd.live.squashimg=image.squashfs cdroot nox dokeymap rd.live.ram=1
 		initrd /boot/gentoo.igz
 	}
-
-	menuentry 'Accessibility (speakup speech output)' --class gnu-linux --class os {
-		search --no-floppy --set=root -l @VOLID@
-		linux /boot/gentoo @BOOTARGS@ root=live:CDLABEL=@VOLID@ rd.live.dir=/ rd.live.squashimg=image.squashfs cdroot dospeakup
-		initrd /boot/gentoo.igz
-	}
 }
 
 if [ "x$grub_platform" = xpc ]; then

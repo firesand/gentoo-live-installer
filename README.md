@@ -27,7 +27,7 @@ On a PC that runs **Windows with BitLocker or "Device encryption"**, look up you
 | **Install in text mode** | Install without a desktop. |
 | Desktop in RAM | Run from memory (needs 6 GiB), then remove the stick. |
 | Text console only | A shell, for experts and headless machines. |
-| More options | Verbose boot, compatibility mode, serial console, old firmware, IOMMU off, text console in RAM, speech output. Also Memtest86+, firmware setup, restart and power off. |
+| More options | Verbose boot, compatibility mode, serial console, old firmware, IOMMU off, text console in RAM. Also Memtest86+, firmware setup, restart and power off. |
 
 The text entries ask for a keyboard layout first (you type passwords in both tools), then start their tool by themselves after the login on the first console. You can also run `sudo gentoo-rescue` or `sudo gentoo-installer-text` yourself. `gentoo-chroot SESSION` opens a shell in a system you mounted with the repair tool.
 
@@ -37,7 +37,7 @@ The text entries ask for a keyboard layout first (you type passwords in both too
 |---|---|
 | **Works** | 64-bit x86 PCs, laptops and virtual machines. BIOS/CSM, 64-bit UEFI and 32-bit UEFI firmware (the ISO carries `bootx64.efi` and `bootia32.efi`). SATA/AHCI, NVMe (also behind Intel VMD), USB, SD/eMMC and virtio disks. Wi-Fi, Bluetooth and sound that the Linux 6.18 kernel and `linux-firmware` support. Intel, AMD and (with the open nouveau driver) NVIDIA graphics. The proprietary NVIDIA driver is an option of the installed system. |
 | **Needs a step from you** | Secure Boot off (above). If the disk does not show up, switch the firmware's SATA mode from Intel RST/"RAID" to AHCI (mind Windows). A wrong clock is corrected once the network is up; the live system never writes to the hardware clock. |
-| **Not supported** | 32-bit CPUs, ARM machines (Apple Silicon Macs, Windows-on-ARM laptops, Raspberry Pi), Intel Macs with a T2 chip (the internal SSD is not visible), ZFS root. |
+| **Not supported** | 32-bit CPUs, ARM machines (Apple Silicon Macs, Windows-on-ARM laptops, Raspberry Pi), Intel Macs with a T2 chip (the internal SSD is not visible), ZFS root, speech output or braille (the disc has no screen reader). |
 | **Known limits** | The live kernel has **no generic framebuffer driver** (no `simpledrm`/`efidrm`): a GPU that is too new for this kernel gets no desktop, only the text entries. `nomodeset` gives a text console, not a "safe graphics" desktop ([docs/ISO.md](docs/ISO.md) section 9). The image is built from a fixed snapshot (Linux 6.18.57, Gentoo tree 2026-10): hardware released after it may lack drivers. Real-hardware boots are not part of the automated tests, only QEMU with BIOS and UEFI firmware. |
 
 The live session never mounts or activates the PC's disks, volume groups or RAID arrays by itself. It ignores the lid switch and idle timers, so an installation or repair is not interrupted.
