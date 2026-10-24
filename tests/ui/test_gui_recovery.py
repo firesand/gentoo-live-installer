@@ -66,10 +66,12 @@ def started(page, manifest=None, **kwargs):
     return FakeWorker.instances[-1]
 
 
-def stage(page, name, status="running", progress=None, **data):
+def stage(page, name, status="running", progress=None, seq=None, **data):
     event = {"type": "stage", "stage": name, "message": f"{status} {name}", "data": {"status": status, **data}}
     if progress is not None:
         event["progress"] = progress
+    if seq is not None:
+        event["seq"] = seq
     page.handle_event(event)
 
 
@@ -280,6 +282,18 @@ def test_resume_starts_a_resume_run_with_the_same_manifest_and_resets_the_latch(
     stage(page, "storage", "skipped")
     page.handle_event({"type": "completed", "message": "done", "data": {"success": True}})
     assert finished == [True]  # the failure latch was reset: a new outcome is reported
+
+
+def test_a_resumed_run_starts_its_sequence_numbers_again(page):
+    started(page)
+    stage(page, "storage", "completed", seq=57)
+    page.handle_event({"type": "stage", "stage": "kernel", "seq": 58, "data": {"status": "running"}})
+    error(page, "boom", data={"retryable": True})
+    assert page.last_seq == 58
+    page.resume_button.click()
+    assert page.last_seq == 0
+    page.handle_event({"type": "stage", "stage": "storage", "seq": 3, "data": {"status": "skipped"}})
+    assert page.last_seq == 3
 
 
 def test_panel_buttons_emit_their_signals(page, qtbot):

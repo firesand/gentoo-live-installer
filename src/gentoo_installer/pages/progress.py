@@ -360,7 +360,7 @@ class ProgressPage(Page):
     def attach(self, socket_path: str, after_seq: int = 0) -> None:
         """Follow a job that is already running (or show how the last one ended)."""
         self._socket_path = socket_path
-        self._begin_run(keep_log=after_seq > 0)
+        self._begin_run(keep_log=after_seq > 0, keep_seq=after_seq > 0)
         self.stage.setText("Reconnecting to the installation…")
         self.detail.setText("Replaying what happened so far")
         self.worker = BackendWorker(None, socket_path, self, attach=True, after_seq=after_seq)
@@ -375,14 +375,15 @@ class ProgressPage(Page):
         if self._manifest is not None:
             self.start(self._manifest, self._socket_path, resume=True)
 
-    def _begin_run(self, *, keep_log: bool) -> None:
+    def _begin_run(self, *, keep_log: bool, keep_seq: bool = False) -> None:
+        if not keep_seq:
+            self.last_seq = 0  # sequence numbers belong to one job; a resumed run is a new job
         if not keep_log:
             self.log.clear()
             self._pending.clear()
             self._lines_seen = 0
             self._truncated = False
             self.truncated_label.hide()
-            self.last_seq = 0
             self.model.reset()
             self._storage_started = False
             self._storage_done = False

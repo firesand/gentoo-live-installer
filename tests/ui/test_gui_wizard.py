@@ -15,7 +15,7 @@ from gentoo_installer.daemon_client import DaemonState
 from gentoo_installer.manifest import InstallManifest, ManifestError
 from gentoo_installer.pages import readiness as readiness_module
 from gentoo_installer.pages.system import PUBLISHED_PROFILES, desktop_problem, profile_path, profile_problem, stage_family
-from gentoo_installer.system_info import DiskInfo, SystemInfo
+from gentoo_installer.system_info import DiskInfo
 from tests.ui.conftest import sample_info
 
 GIB = 1024**3
@@ -120,8 +120,6 @@ def test_a_wrong_clock_is_an_error_with_instructions_and_offers_the_daemons_sync
 
 
 class _NoopWorker:
-    from PySide6.QtCore import QObject as _QObject
-
     def __init__(self):
         self.finished = _Signal()
 

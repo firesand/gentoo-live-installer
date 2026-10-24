@@ -100,7 +100,10 @@ def selection_problems(manifest: InstallManifest, info: SystemInfo | None) -> li
     """Blocking problems that only show with the final selection."""
     problems = []
     if info is not None:
-        missing = list(info.missing_for_selection) or [tool for tool in tools_for_selection(manifest) if info.tools.get(tool) is False]
+        # Judged against the tool map of the last inspection with the *current* selection;
+        # the daemon's own missing_for_selection was computed for whatever was chosen
+        # when the inspection ran, so it is not trusted here.
+        missing = [tool for tool in tools_for_selection(manifest) if info.tools.get(tool) is False]
         if missing:
             problems.append("The live system lacks tools that your choices need: " + ", ".join(sorted(set(missing))) + ". Change the filesystem, encryption or bootloader choice, or use a newer installer image.")
     return problems

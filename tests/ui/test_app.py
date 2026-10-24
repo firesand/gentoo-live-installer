@@ -4,7 +4,6 @@ import json
 
 import pytest
 from PySide6.QtCore import QSettings
-from PySide6.QtWidgets import QMessageBox
 
 from gentoo_installer.app import InstallerWindow, bounded_window_height
 from gentoo_installer.manifest import InstallManifest, Partition

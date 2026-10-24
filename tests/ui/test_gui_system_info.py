@@ -313,6 +313,22 @@ def test_inspect_with_daemon_without_a_service_keeps_the_local_result(tmp_path):
     assert [d.path for d in info.disks] == ["/dev/sda"]
 
 
+def test_a_daemon_that_rejects_the_manifest_is_asked_again_without_it(fake_daemon):
+    def handler(request):
+        if request["action"] == "inspect" and "manifest" in request:
+            return [{"type": "error", "error": "Unknown inspect field: manifest"}]
+        if request["action"] == "inspect":
+            return [{"type": "status", "data": {"architecture": "x86_64", "memory_bytes": 8 * GIB, "uefi": False, "network": True, "tools": {}, "errors": []}},
+                    {"type": "completed", "data": {"success": True}}]
+        return [{"type": "status", "data": {"status": "idle"}}]
+
+    daemon = fake_daemon(handler)
+    local = SystemInfo("x86_64", 2, True, [], False, False, [])
+    info = system_info.inspect_with_daemon(daemon.path, local=lambda: local, dev_mode=False, request_payload={"manifest": {"storage": {}}})
+    assert info.source == "daemon" and info.uefi is False and info.network
+    assert [("manifest" in r) for r in daemon.requests if r["action"] == "inspect"] == [True, False]
+
+
 def test_inspect_with_daemon_merges_the_reply_of_a_live_daemon(fake_daemon):
     def handler(request):
         if request["action"] == "inspect":

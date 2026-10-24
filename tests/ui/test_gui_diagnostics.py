@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import logging
 import os
 import stat
 import sys
@@ -14,7 +13,7 @@ from PySide6.QtWidgets import QFileDialog
 
 from gentoo_installer import diagnostics
 from gentoo_installer.manifest import InstallManifest
-from gentoo_installer.system_info import DiskInfo, SystemInfo
+from gentoo_installer.system_info import DiskInfo
 from tests.ui.conftest import sample_info
 
 

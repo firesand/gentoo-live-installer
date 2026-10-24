@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import email.utils
 import http.client
-import json
 import os
 import platform
 import re
@@ -705,13 +704,15 @@ def inspect_with_daemon(
     state = daemon_client.probe(socket_path)
     info.daemon = state
     if state.reachable:
-        try:
-            events = daemon_client.request(socket_path, "inspect", request_payload, timeout=15.0, max_seconds=40.0)
-        except OSError:
-            events = []
-        for event in events:
-            if event.get("type") == "status" and isinstance(event.get("data"), dict) and "architecture" in event["data"]:
-                merge_inspection(info, event["data"], state)
+        # A daemon that does not know the optional manifest (or rejects it) is asked again without it.
+        for payload in ([request_payload, None] if request_payload else [None]):
+            try:
+                events = daemon_client.request(socket_path, "inspect", payload, timeout=15.0, max_seconds=40.0)
+            except OSError:
+                break
+            reply = next((e["data"] for e in events if e.get("type") == "status" and isinstance(e.get("data"), dict) and "architecture" in e["data"]), None)
+            if reply is not None:
+                merge_inspection(info, reply, state)
                 break
     info.inspected = True
     return info

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import pytest
-from PySide6.QtWidgets import QComboBox, QMessageBox
+from PySide6.QtWidgets import QMessageBox
 
 from gentoo_installer.manifest import InstallManifest, Partition
 from gentoo_installer.pages import manual_storage
@@ -247,6 +247,23 @@ def test_manual_installs_ask_before_formatting(make_window, monkeypatch):
     window.start_installation()
     assert shown[0][0] == "Format these partitions?"
     assert "/dev/nvme0n1p3" in shown[0][1] and "/dev/nvme0n1p1" not in shown[0][1]
+
+
+def test_review_blocks_when_the_live_system_lacks_a_tool_the_selection_needs(make_window):
+    window = make_window(info=sample_info(tools={"cryptsetup": False, "mkfs.vfat": True, "swapon": True, "swapoff": True},
+                                          missing_for_selection=["mkfs.xfs"]))  # stale hint: ignored
+    window.manifest.storage.device = "/dev/sda"
+    window.manifest.storage.luks = True
+    window.manifest.storage.luks_passphrase = "long-enough-passphrase"
+    window._show_page(6)
+    window.review.confirmation.setText("/dev/sda")
+    valid, message = window.review.validate_page()
+    assert not valid and "cryptsetup" in message and "mkfs.xfs" not in message
+    window.manifest.storage.luks = False
+    window.manifest.storage.luks_passphrase = ""
+    window._show_page(6)
+    window.review.confirmation.setText("/dev/sda")
+    assert "cryptsetup" not in window.review.validate_page()[1]
 
 
 def test_exported_settings_carry_no_secret_and_no_proxy_password(tmp_path):

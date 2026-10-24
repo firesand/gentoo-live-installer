@@ -14,10 +14,9 @@ from PySide6.QtWidgets import QApplication, QComboBox, QMainWindow, QMessageBox
 
 from gentoo_installer import app as app_module
 from gentoo_installer import keyboard, theme
-from gentoo_installer.app import InstallerWindow, bounded_window_size
+from gentoo_installer.app import bounded_window_size
 from gentoo_installer.manifest import InstallManifest
 from gentoo_installer.widgets import Card, ChoiceGroup, Page, StatusRow
-from tests.ui.conftest import sample_info
 
 
 @pytest.fixture
