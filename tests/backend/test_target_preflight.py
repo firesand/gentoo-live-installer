@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import tempfile
-import time
 import unittest
 import urllib.error
 from pathlib import Path

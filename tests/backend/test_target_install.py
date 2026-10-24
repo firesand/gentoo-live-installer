@@ -10,7 +10,7 @@ from gentoo_installerd.install import RECEIPT_PATH, InstallError, Installer
 from gentoo_installerd.storage import LayoutEntry
 
 from tests.backend.helpers import FakeInspector
-from tests.backend.target_helpers import FakePlan, ScriptedRunner, mark_installed, read, target_manifest
+from tests.backend.target_helpers import FakePlan, ScriptedRunner, read, target_manifest
 from tests.backend.test_target_packages import EmergeDiagnosisTests
 
 UUID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"

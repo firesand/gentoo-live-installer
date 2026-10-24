@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import configparser
 import hashlib
 import inspect
 import ipaddress
