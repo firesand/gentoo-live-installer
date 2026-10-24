@@ -98,7 +98,8 @@ class Console:
         self.tty_in = is_tty(self.stdin)
         self.tty_out = is_tty(self.out)
         if color is None:
-            color = self.tty_out and not self.environ.get("NO_COLOR") and self.environ.get("TERM", "") != "dumb"
+            # A terminal that does not say what it is (TERM unset, as on some serial logins) gets no escape sequences.
+            color = self.tty_out and not self.environ.get("NO_COLOR") and self.environ.get("TERM", "") not in ("", "dumb")
         self.color = bool(color)
         columns, lines = self._screen_size()
         self.width = width if width else max(40, min(columns, self.MAX_COLUMNS) - 2)
@@ -321,10 +322,14 @@ class Console:
                 continue
             return text
 
-    def secret(self, prompt: str, *, help: str = "", back: bool = True) -> str:
-        """A password: nothing is shown while it is typed, and spaces count."""
+    def secret(self, prompt: str, *, hint: str = "", help: str = "", back: bool = True) -> str:
+        """A password: nothing is shown while it is typed, and spaces count.
+
+        ``hint`` is printed above the prompt (with a reminder that nothing is shown), so the prompt itself stays short."""
+        if hint:
+            self.para(f"{hint} Nothing is shown while you type.")
         while True:
-            text = self._read_line(f"{prompt} (nothing is shown while you type): ", secret=True)
+            text = self._read_line(f"{prompt}: ", secret=True)
             if text == BACK and back:
                 raise GoBack
             if text == "?":
@@ -332,7 +337,10 @@ class Console:
                 continue
             return text
 
-    def confirm(self, question: str, *, default: bool | None = None, back: bool = True, help: str = "") -> bool:
+    def confirm(self, question: str, *, default: bool | None = None, back: bool = True, help: str = "", detail: str = "") -> bool:
+        """A yes or no question; ``detail`` is printed above it so that the question itself stays short."""
+        if detail:
+            self.para(detail)
         hint = "[Y/n]" if default is True else "[y/N]" if default is False else "[y/n]"
         while True:
             text = self._read_line(f"{question} {hint} ").strip().lower()
@@ -432,12 +440,17 @@ class Console:
             if offset:
                 hints.append("p = previous page")
             hints.extend(["b = back"] if back else [])
+            hints.append("q = quit")
             self.para("Type a number, or part of a name to narrow the list." + (" " + ", ".join(item.replace(" ", NBSP) for item in hints) if hints else ""))
             suffix = f" [Enter = {items[default]}]" if default is not None else ""
             text = self._read_line(f"Your choice{suffix}: ").strip()
             word = text.lower()
             if word in BACK_WORDS and back:
                 raise GoBack
+            if word in QUIT_WORDS:
+                if self.confirm_quit():
+                    raise Quit
+                continue
             if word in HELP_WORDS:
                 self._help(help)
                 continue
@@ -457,6 +470,9 @@ class Console:
                 continue
             if word == "p" and offset:
                 offset = max(0, offset - page_size)
+                continue
+            if len(word) < 2:
+                self.say("Type at least two letters to search, or a number.")
                 continue
             matches = [index for index, label in enumerate(items) if word in label.lower()]
             if not matches:

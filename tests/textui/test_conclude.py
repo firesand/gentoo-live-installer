@@ -82,7 +82,7 @@ def test_an_earlier_stopped_installation_can_be_resumed_from_the_summary(install
     script = Script([
         *walk_to_review(), ("Step 9 of 9", "/dev/vda"),
         ("The installation stopped", "2"),
-        ("Resume it, without erasing the disk again?", "y"),
+        ("Resume it?", "y"),
         ("continue the installation on /dev/vda (nothing is erased again)", "/dev/vda"),
         ("The installation finished", "4"),
     ])

@@ -26,7 +26,7 @@ def test_the_whole_interactive_installation(installer, host: FakeHost) -> None:
         ("Step 3 of 9: This computer", ""),
         ("Step 4 of 9: Disk", "1"),
         ("Step 5 of 9", "3"),  # Btrfs
-        ("Encrypt the system disk", "y"), ("Passphrase", "disk-passphrase-1"), ("Type the passphrase again", "disk-passphrase-1"),
+        ("Encrypt the system disk", "y"), ("Passphrase", "disk-passphrase-1"), ("Type it again", "disk-passphrase-1"),
         ("Step 6 of 9", "3"),  # Xfce
         ("Which init system", "2"),  # systemd
         ("Step 7 of 9: Accounts", "mybox"), ("Your user name", "alice"), ("Password for alice", PASSWORD), ("Type it again", PASSWORD),
@@ -181,3 +181,26 @@ def test_q_in_a_menu_asks_before_leaving(installer, host: FakeHost, answer: str)
     fake = serial_installer(installer)
     script = Script([("Step 1 of 9", ""), ("Step 2 of 9", answer), ("Quit the installer?", "y")])
     assert run_main(["--socket", fake.path], script, host).code == 130
+
+
+def test_ctrl_c_while_the_program_is_busy_asks_in_the_same_way(installer, host: FakeHost, monkeypatch) -> None:
+    from gentoo_installer.textui.daemon import Daemon
+
+    fake = serial_installer(installer)
+    original = Daemon.inspect
+    calls = {"count": 0}
+
+    def inspect(self, proxy: str = ""):
+        calls["count"] += 1
+        if calls["count"] == 2:  # the check started by "r" in the network step
+            raise KeyboardInterrupt
+        return original(self, proxy)
+
+    monkeypatch.setattr(Daemon, "inspect", inspect)
+    script = Script([
+        ("Step 1 of 9", ""), ("Step 2 of 9: Network", "r"),  # Ctrl-C arrives while the service is being asked
+        ("Quit the installer?", "n"), ("Internet: connected", ""),  # not quit: the step starts again
+        ("Step 3 of 9", CTRL_C), ("Quit the installer?", "y"),
+    ])
+    assert run_main(["--socket", fake.path], script, host).code == 130
+    script.assert_finished()

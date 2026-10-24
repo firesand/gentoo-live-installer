@@ -417,7 +417,10 @@ def main(
     console = Console(stdin, err if json_mode else out, environ=environ, color=False if args.no_color else None)
     if stdin is None and console.tty_in:
         try:
-            import readline  # noqa: F401 - makes input() editable (arrow keys, history)
+            import readline  # makes input() editable (arrow keys, history)
+
+            # A serial terminal may not understand the "bracketed paste" codes that readline sends by default.
+            readline.parse_and_bind("set enable-bracketed-paste off")
         except ImportError:
             pass
     ctx = Context(args, console, host if host is not None else Host(), Daemon(args.socket), out if json_mode else None)

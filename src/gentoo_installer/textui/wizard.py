@@ -203,6 +203,9 @@ class Wizard:
                     else:
                         index -= 1
                     continue
+                except KeyboardInterrupt:  # Ctrl-C while the program was busy (asking the service), not waiting at a prompt
+                    self._ask_to_quit()
+                    continue
                 index += 1
                 continue
             self.console.heading(f"Step {total} of {total}: Review and start")
@@ -211,10 +214,19 @@ class Wizard:
             except GoBack:
                 index = len(self.steps) - 1
                 continue
+            except KeyboardInterrupt:
+                self._ask_to_quit()
+                continue
             if isinstance(result, Jump):
                 index = result.index
                 continue
             return result
+
+    def _ask_to_quit(self) -> None:
+        """Ctrl-C outside a prompt: the same question as at a prompt. Returns when the user wants to go on."""
+        self.console.say()
+        if self.console.confirm_quit():
+            raise Quit
 
     def substeps(self, *parts: Callable[[], bool]) -> None:
         """Run the questions of one step in order. A part returns whether it asked anything; going back skips parts that did not."""
@@ -268,10 +280,12 @@ class Wizard:
                 return f"This system has no keymap called {name}." + (f" Did you mean: {', '.join(near)}?" if near else "")
             return ""
 
-        name = c.ask("Console keymap name (for example de-latin1, fr, uk, dvorak)", validate=check_map)
+        c.para("The console keymap is the name of a keyboard layout for the text console, for example de-latin1, fr, uk or dvorak.")
+        name = c.ask("Console keymap name", validate=check_map)
         preset = keymaps.preset_for_console(name)
+        c.para("The desktop uses a layout with a short name, such as de, fr or us.")
         layout_name = c.ask(
-            "Keyboard layout for the desktop (short name such as de, fr or us)", default=preset.layout if preset else "us",
+            "Desktop keyboard layout", default=preset.layout if preset else "us",
             validate=lambda value: first_problem(field_errors("locale", lambda m: setattr(m.system, "keyboard_layout", value))),
         )
         variant = c.ask(
@@ -296,8 +310,9 @@ class Wizard:
     def _keyboard_looks_right(self) -> bool:
         if self.manifest.system.keymap == "us":
             return True
-        self.console.ask("Test the layout: type a few keys such as y z @ ' \" - and press Enter", allow_empty=True)
-        return self.console.confirm("Do the characters on the screen match the keys you pressed?", default=True)
+        self.console.para("Test the layout: type a few keys such as y z @ ' \" - and press Enter.")
+        self.console.ask("Try your keys", allow_empty=True)
+        return self.console.confirm("Do the characters match the keys you pressed?", default=True)
 
     # --- 2. network -----------------------------------------------------------------------------------
 
@@ -348,8 +363,9 @@ class Wizard:
 
     def _ask_proxy(self) -> None:
         network = self.manifest.network
+        self.console.para("A download proxy looks like http://proxy.example:3128. Type none if the network needs no proxy.")
         value = self.console.ask(
-            "Download proxy (for example http://proxy.example:3128; type none for no proxy)", default=network.proxy or "none",
+            "Download proxy", default=network.proxy or "none",
             validate=lambda text: "" if text.lower() in {"none", "-"} else first_problem(field_errors("network", lambda m: setattr(m.network, "proxy", text))),
         )
         network.proxy = "" if value.lower() in {"none", "-"} else value
@@ -485,7 +501,7 @@ class Wizard:
             f"It will be recognised by its hardware path {entry.by_path}, its size ({disk.size} bytes) and its model, "
             "and the installer refuses to continue if any of them changes. Check that this is really the disk you want."
         )
-        if not c.confirm(f"Approve {disk.path} ({disk.model or 'disk'}, {human_size(disk.size)}) as the disk to use?", default=False):
+        if not c.confirm("Is this the disk to install on?", default=False, detail=f"{disk.path}: {disk.model or 'unnamed disk'}, {human_size(disk.size)}"):
             raise GoBack
         apply_disk(self.manifest.storage, entry, approve_path=True)
         return True
@@ -544,7 +560,7 @@ class Wizard:
             c.warn(f"At start-up the keyboard layout is the one you chose in step 1: {keyboard_label(self.manifest)} (console keymap {system.keymap}). "
                    "Letters and digits are safest; characters such as ; ' [ ] sit in different places on different layouts.")
         while True:
-            first = c.secret("Passphrase (at least 8 characters; < goes back)")
+            first = c.secret("Passphrase", hint="Use at least 8 characters.")
 
             def change(m: InstallManifest, text: str = first) -> None:
                 m.storage.luks, m.storage.luks_passphrase = True, text
@@ -554,7 +570,7 @@ class Wizard:
                 c.warn(problem)
                 continue
             try:
-                again = c.secret("Type the passphrase again (< to start over)")
+                again = c.secret("Type it again")
             except GoBack:
                 continue
             if again != first:
@@ -658,7 +674,7 @@ class Wizard:
         if current and c.confirm(f"Keep the {label} you typed before?", default=True):
             return current
         while True:
-            first = c.secret(f"{prompt} (at least 8 characters; < goes back)")
+            first = c.secret(prompt, hint="Use at least 8 characters.")
 
             def change(m: InstallManifest, text: str = first) -> None:
                 m.accounts.password = m.accounts.root_password = text
@@ -668,7 +684,7 @@ class Wizard:
                 c.warn(problem)
                 continue
             try:
-                again = c.secret("Type it again (< to start over)")
+                again = c.secret("Type it again")
             except GoBack:
                 continue
             if again != first:
@@ -726,7 +742,8 @@ class Wizard:
         system = self.manifest.system
         zones = self.host.timezones()
         if not zones:
-            system.timezone = c.ask("Time zone (for example Europe/Berlin or UTC)", default=system.timezone,
+            c.para("Type the name of your time zone, for example Europe/Berlin or UTC.")
+            system.timezone = c.ask("Time zone", default=system.timezone,
                                     validate=lambda value: first_problem(field_errors("locale", lambda m: setattr(m.system, "timezone", value))))
             return True
         regions = [region for region in TIMEZONE_REGIONS if any(zone.startswith(region + "/") for zone in zones)]
@@ -786,7 +803,7 @@ class Wizard:
         elif self.resume_requested:
             resume = True
         elif self._resumable():
-            resume = c.confirm("An earlier installation stopped after the disk was prepared. Resume it, without erasing the disk again?", default=False)
+            resume = c.confirm("Resume it?", default=False, detail="An earlier installation stopped after the disk was prepared. Resuming continues it without erasing the disk again.")
         help_text = "c = change a setting, r = check this computer again, b = back, q = quit"
         summary = build_summary(manifest, self.view, require_identity=True)
         render_summary(c, summary)
@@ -862,7 +879,7 @@ class Wizard:
             c.para("The settings file does not contain passwords (they are never saved).")
             self._ask_user_password()
         if not accounts.disable_root_login and not accounts.root_password:
-            if c.confirm(f"The settings file has no root password. Use the same password as for {accounts.username}?", default=True):
+            if c.confirm("Use the same password for root?", default=True, detail=f"The settings file has no root password. It can be the same as the password of {accounts.username}."):
                 self.root_mode = "same"
             else:
                 self.root_mode = "separate"

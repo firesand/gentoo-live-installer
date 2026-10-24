@@ -35,6 +35,7 @@ def test_colour_is_used_only_on_a_terminal_without_no_color() -> None:
     assert tty.color and tty.style("x", "red") == "\x1b[31mx\x1b[0m"
     assert Console(io.StringIO(), FakeTerminal(), environ={"TERM": "linux", "NO_COLOR": "1"}).style("x", "red") == "x"
     assert Console(io.StringIO(), FakeTerminal(), environ={"TERM": "dumb"}).style("x", "bold") == "x"
+    assert Console(io.StringIO(), FakeTerminal(), environ={}).style("x", "bold") == "x"  # a terminal that does not say what it is
     assert Console(io.StringIO(), io.StringIO(), environ={"TERM": "linux"}).style("x", "bold") == "x"  # not a terminal
     assert Console(io.StringIO(), FakeTerminal(), environ={}, color=False).style("x", "bold") == "x"
 
@@ -130,8 +131,9 @@ def test_back_can_be_switched_off_for_the_first_question() -> None:
 
 def test_a_secret_is_never_echoed_into_the_transcript_and_keeps_its_spaces() -> None:
     console, script = console_for([("", " my secret pass ")])
-    assert console.secret("Password") == " my secret pass "
-    assert "secret" not in script.text and "nothing is shown while you type" in script.text
+    assert console.secret("Password", hint="Use at least 8 characters.") == " my secret pass "
+    assert "secret" not in script.text and "Use at least 8 characters. Nothing is shown while you type." in script.text
+    assert "Password: " in script.text  # the prompt itself is short
 
 
 def test_secret_less_than_goes_back() -> None:

@@ -479,5 +479,5 @@ def walk_to_review(disk: str = "1", *, approve: str | None = None, luks: str | N
     if approve is not None:
         steps.append(("neither a serial number nor a WWN", approve))
     steps.append(("Step 5 of 9", ""))
-    steps += [("Encrypt", "")] if luks is None else [("Encrypt", "y"), ("Passphrase", luks), ("Type the passphrase again", luks)]
+    steps += [("Encrypt", "")] if luks is None else [("Encrypt", "y"), ("Passphrase", luks), ("Type it again", luks)]
     return [*steps, ("Step 6 of 9", desktop), ("init system", ""), *accounts(user), *region()]

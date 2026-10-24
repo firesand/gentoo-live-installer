@@ -91,7 +91,7 @@ def test_a_console_that_cannot_switch_keymaps_is_not_an_error(start, host: FakeH
 def test_another_keymap_can_be_typed_and_is_checked_against_the_installed_ones(start, host: FakeHost) -> None:
     wizard, script, _ = start([
         ("", "another"), ("Console keymap name", "de-latin"), ("Did you mean", "bad name!"), ("letters, digits", "ru"),
-        ("Keyboard layout for the desktop", "Q"), ("short name", "ru"), ("Layout variant", ""), ("Test the layout", ""), ("match the keys", ""),
+        ("Desktop keyboard layout", "Q"), ("Invalid keyboard layout", "ru"), ("Layout variant", ""), ("Test the layout", ""), ("match the keys", ""),
     ])
     wizard.step_keyboard()
     system = wizard.manifest.system
@@ -323,8 +323,8 @@ def test_only_guided_erase_is_offered_and_the_text_says_where_manual_mode_is(sta
 
 def test_the_passphrase_is_asked_twice_and_a_mismatch_asks_again(start) -> None:
     wizard, script, _ = start([
-        ("Which filesystem", ""), ("Encrypt the system disk", "y"), ("Passphrase", "first-passphrase-1"), ("Type the passphrase again", "other-passphrase-2"),
-        ("not the same", "right-passphrase-3"), ("Type the passphrase again", "right-passphrase-3"),
+        ("Which filesystem", ""), ("Encrypt the system disk", "y"), ("Passphrase", "first-passphrase-1"), ("Type it again", "other-passphrase-2"),
+        ("not the same", "right-passphrase-3"), ("Type it again", "right-passphrase-3"),
     ])
     wizard.step_storage()
     storage = wizard.manifest.storage
