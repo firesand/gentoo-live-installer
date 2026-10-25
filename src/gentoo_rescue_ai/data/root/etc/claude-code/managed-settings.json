@@ -1,0 +1,36 @@
+{
+  "env": {
+    "DISABLE_AUTOUPDATER": "1",
+    "DISABLE_INSTALLATION_CHECKS": "1",
+    "CLAUDE_CODE_CERT_STORE": "system"
+  },
+  "installMethod": "native",
+  "permissions": {
+    "defaultMode": "default",
+    "ask": ["Bash"],
+    "allow": ["Read(//mnt/gentoo/**)", "Read(//mnt/rescue/**)"],
+    "deny": [
+      "Bash(rm -rf *)", "Bash(rm -fr *)", "Bash(mkfs*)", "Bash(dd *)", "Bash(wipefs*)", "Bash(shred *)", "Bash(sudo *)", "Bash(su *)",
+      "Bash(cryptsetup luksFormat*)", "Bash(cryptsetup luksErase*)", "Bash(cryptsetup erase*)",
+      "Edit(//mnt/gentoo/**)", "Edit(//mnt/rescue/**)",
+      "Read(//mnt/**/etc/shadow*)", "Read(//mnt/**/etc/gshadow*)", "Read(//mnt/**/ssh_host_*_key)", "Read(//mnt/**/.ssh/id_*)", "Read(//mnt/**/.gnupg/**)",
+      "Read(//mnt/**/.git-credentials)", "Read(//mnt/**/.claude/.credentials.json)", "Read(//mnt/**/auth.json)", "Read(//mnt/**/*.keyfile)", "Read(//mnt/**/crypto_keyfile*)"
+    ],
+    "disableBypassPermissionsMode": "disable",
+    "disableAutoMode": "disable"
+  },
+  "allowManagedPermissionRulesOnly": true,
+  "allowManagedHooksOnly": true,
+  "allowManagedMcpServersOnly": true,
+  "enableAllProjectMcpServers": false,
+  "autoMemoryEnabled": false,
+  "claudeMdExcludes": ["/mnt/gentoo/**", "/mnt/rescue/**"],
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit|Bash",
+        "hooks": [{"type": "command", "command": "python3 /etc/gentoo-rescue/hooks/pretooluse-guard.py"}]
+      }
+    ]
+  }
+}

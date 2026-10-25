@@ -1,0 +1,1 @@
+@/etc/gentoo-rescue/AGENTS.md

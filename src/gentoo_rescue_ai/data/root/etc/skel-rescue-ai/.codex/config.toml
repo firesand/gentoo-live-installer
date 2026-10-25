@@ -1,0 +1,15 @@
+# Codex on the Gentoo rescue stick. Keys checked against https://developers.openai.com/codex/config-reference (2026-10-25).
+# The sandbox is read-only and every command outside it asks. Root is reachable only through gentoo-rescue-do (approved on the PC's console).
+sandbox_mode = "read-only"
+approval_policy = "on-request"
+# The home directory is in RAM (the live overlay) and disappears at power-off. "ephemeral" (memory only) would also make
+# `codex login` forget the login as soon as it exits, so the login is kept in ~/.codex/auth.json for this session.
+cli_auth_credentials_store = "file"
+check_for_update_on_startup = false
+
+# Project-level .codex layers (config, hooks, rules) are skipped for untrusted projects: the broken disk is never trusted.
+[projects."/mnt/gentoo"]
+trust_level = "untrusted"
+
+[projects."/mnt/rescue"]
+trust_level = "untrusted"
