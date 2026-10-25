@@ -35,7 +35,7 @@ where = ["src"]
 # The pins, AGENTS.md, the agents' safe configs and the hook: the iso owner installs data/root as it is.
 gentoo_rescue_ai = [
     "data/*.json", "data/root/etc/*/*", "data/root/etc/*/*/*",
-    "data/root/etc/skel-rescue-ai/.codex/*", "data/root/etc/skel-rescue-ai/.config/opencode/*",
+    "data/root/etc/skel-rescue-ai/.bashrc", "data/root/etc/skel-rescue-ai/.bash_profile", "data/root/etc/skel-rescue-ai/.codex/*", "data/root/etc/skel-rescue-ai/.config/opencode/*",
 ]
 
 [tool.pytest.ini_options]

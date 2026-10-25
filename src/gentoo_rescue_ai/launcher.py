@@ -32,7 +32,7 @@ from .agents import AGENTS, installed_version
 GUIDE_PATH = "/etc/gentoo-rescue/AGENTS.md"
 SKEL_PATH = "/etc/skel-rescue-ai"
 SYMLINKS = {".codex/AGENTS.md": GUIDE_PATH, ".config/opencode/AGENTS.md": GUIDE_PATH}
-SAFE_FILES = (".codex/config.toml", ".config/opencode/opencode.json")  # put back at every start, whatever an agent wrote there
+SAFE_FILES = (".codex/config.toml", ".config/opencode/opencode.json", ".bashrc", ".bash_profile")  # put back at every start, whatever an agent wrote there
 DAEMON_SOCKET = "/run/gentoo-installer/server.sock"
 SAFE_PATH = "/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 CLEAR_SCREEN = "\033[3J\033[H\033[2J"
@@ -94,40 +94,113 @@ def below_target(path: str) -> bool:
     return any(real == prefix or real.startswith(prefix + "/") for prefix in TARGET_PREFIXES)
 
 
+class UnsafeHome(Exception):
+    """The home directory of rescue-ai holds a link or a file of another user where a folder must be: root does not touch it."""
+
+
+def _open_folder(parent_fd: int, name: str, owner: tuple[int, int] | None, shown: str) -> int:
+    """Open (making it when missing) the folder ``name`` below ``parent_fd`` without ever following a link. With ``owner`` the folder
+    must belong to rescue-ai or to root (root made it at an earlier start) and is handed to rescue-ai."""
+    try:
+        os.mkdir(name, 0o755, dir_fd=parent_fd)
+    except FileExistsError:
+        pass
+    try:
+        fd = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC, dir_fd=parent_fd)
+    except OSError as exc:
+        raise UnsafeHome(f"{shown} is a link or not a folder; it is left alone ({exc.strerror})") from exc
+    if owner is not None:
+        info = os.fstat(fd)
+        if info.st_uid not in (owner[0], 0):
+            os.close(fd)
+            raise UnsafeHome(f"{shown} belongs to user id {info.st_uid}, not to {AI_USER}; it is left alone")
+        os.fchown(fd, *owner)
+    return fd
+
+
+def _walk(home_fd: int, relative: str, owner: tuple[int, int] | None, home: str) -> tuple[int, str]:
+    """The fd of the folder that holds ``relative`` (every folder on the way opened with O_NOFOLLOW) and the file name."""
+    *folders, name = relative.split("/")
+    fd, shown = os.dup(home_fd), home
+    try:
+        for part in folders:
+            shown = f"{shown}/{part}"
+            child = _open_folder(fd, part, owner, shown)
+            os.close(fd)
+            fd = child
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd, name
+
+
+def _remove(fd: int, name: str) -> None:
+    try:
+        os.unlink(name, dir_fd=fd)
+    except FileNotFoundError:
+        return
+    except IsADirectoryError:
+        raise UnsafeHome(f"{name} is a folder where a file belongs; it is left alone") from None
+
+
 def prepare_home(home: str, skel: Path | None = None, owner: tuple[int, int] | None = None) -> list[str]:
     """Put the safe configuration of the agents in the home directory (always replacing what is there) and the AGENTS.md links.
-    Returns the paths written. ``owner`` is (uid, gid) for chown (None: leave as is, for tests)."""
+    Returns the paths written. ``owner`` is (uid, gid) for chown (None: leave as is, for tests).
+
+    The home directory is controlled by the agent, so every step goes through directory file descriptors opened with O_NOFOLLOW: a
+    folder the agent replaced by a link to /etc (or anything else) is refused (``UnsafeHome``) and never chowned or written into.
+    Files are made with O_EXCL|O_NOFOLLOW and handed over with fchown; links with lchown semantics."""
     skel = skel or skel_dir()
-    home_path = Path(home)
     written: list[str] = []
-    for relative in SAFE_FILES:
-        source, target = skel / relative, home_path / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        if target.is_symlink() or target.exists():
-            target.unlink()
-        shutil.copyfile(source, target)
-        target.chmod(0o644)
-        written.append(str(target))
-    for relative, destination in SYMLINKS.items():
-        link = home_path / relative
-        link.parent.mkdir(parents=True, exist_ok=True)
-        if link.is_symlink() or link.exists():
-            link.unlink()
-        link.symlink_to(destination)
-        written.append(str(link))
-    if owner is not None:
-        for folder in (home_path / ".codex", home_path / ".config", home_path / ".config" / "opencode", home_path / ".local", home_path / ".local" / "bin"):
-            folder.mkdir(parents=True, exist_ok=True)
-            os.chown(folder, *owner)
-        for path in written:
-            os.lchown(path, *owner)
+    try:
+        home_fd = os.open(home, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    except OSError as exc:
+        raise UnsafeHome(f"{home} cannot be opened as a plain folder ({exc.strerror})") from exc
+    try:
+        if owner is not None:
+            info = os.fstat(home_fd)
+            if info.st_uid not in (owner[0], 0):
+                raise UnsafeHome(f"{home} belongs to user id {info.st_uid}, not to {AI_USER}")
+            os.fchown(home_fd, *owner)
+        for relative in SAFE_FILES:
+            folder_fd, name = _walk(home_fd, relative, owner, home)
+            try:
+                _remove(folder_fd, name)
+                data = (skel / relative).read_bytes()
+                fd = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o644, dir_fd=folder_fd)
+                try:
+                    os.write(fd, data)
+                    os.fchmod(fd, 0o644)
+                    if owner is not None:
+                        os.fchown(fd, *owner)
+                finally:
+                    os.close(fd)
+            finally:
+                os.close(folder_fd)
+            written.append(f"{home}/{relative}")
+        for relative, destination in SYMLINKS.items():
+            folder_fd, name = _walk(home_fd, relative, owner, home)
+            try:
+                _remove(folder_fd, name)
+                os.symlink(destination, name, dir_fd=folder_fd)
+                if owner is not None:
+                    os.chown(name, *owner, dir_fd=folder_fd, follow_symlinks=False)
+            finally:
+                os.close(folder_fd)
+            written.append(f"{home}/{relative}")
+        if owner is not None:
+            for relative in (".local/bin/x",):  # the agents install themselves here
+                folder_fd, _ = _walk(home_fd, relative, owner, home)
+                os.close(folder_fd)
+    finally:
+        os.close(home_fd)
     return written
 
 
 def drop_privileges(launch: Launch) -> list[str]:
     """The argv that runs ``launch`` as rescue-ai from a root process: setpriv resets the groups and the environment."""
     env = [f"{key}={value}" for key, value in launch.env.items()]
-    return ["setpriv", f"--reuid={AI_USER}", f"--regid={AI_USER}", "--init-groups", "--reset-env", "env", "-i", "-C", launch.cwd, *env, *launch.argv]
+    return ["setpriv", f"--reuid={AI_USER}", f"--regid={AI_USER}", "--init-groups", "--no-new-privs", "--reset-env", "env", "-i", "-C", launch.cwd, *env, *launch.argv]
 
 
 def tmux_session_argv(agent_window: Launch, shell_window: Launch) -> list[str]:
@@ -278,7 +351,11 @@ def main(argv: Sequence[str] | None = None, *, prompts: Prompts | None = None, r
             return 1
     home = home or home_of()
     os.makedirs(home, exist_ok=True)
-    prepare_home(home, skel, owner if os.geteuid() == 0 else None)
+    try:
+        prepare_home(home, skel, owner if os.geteuid() == 0 else None)
+    except (UnsafeHome, OSError) as exc:
+        prompts.say(f"\nThe home folder of {AI_USER} is not safe to prepare: {exc}\nThis looks like tampering by an agent. Reboot the stick before going on.")
+        return 1
     problems = (preflight or checks.check)() if (require_root or preflight is not None) else []
     if problems:
         prompts.say("\nThis image does not meet the safety rules of the AI rescue stick:")

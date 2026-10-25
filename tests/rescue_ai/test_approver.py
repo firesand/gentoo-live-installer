@@ -43,13 +43,14 @@ class FakeConsole:
 
 
 class Service:
-    def __init__(self, tmp: Path, sock_dir: Path, answers: list[str | None], allowed: set[int] | None = None, runner=None, program_check=None) -> None:
+    def __init__(self, tmp: Path, sock_dir: Path, answers: list[str | None], allowed: set[int] | None = None, runner=None, program_check=None, cwd_check=None) -> None:
         self.console = FakeConsole(answers)
         self.log = tmp / "do.log"
         self.audit = approver.Audit(str(self.log))
         # In the sandbox "/" belongs to the user running the tests, so the real check (root-owned programs only) is switched off except where a test asks for it.
         kwargs = {"runner": runner} if runner else {}
         kwargs["program_check"] = program_check or (lambda program, peer: "")
+        kwargs["cwd_check"] = cwd_check or (lambda path, peer: "")
         self.approver = approver.Approver(self.console, PASSWORD, self.audit, {ME} if allowed is None else allowed, **kwargs)
         self.path = str(sock_dir / "do.sock")
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)

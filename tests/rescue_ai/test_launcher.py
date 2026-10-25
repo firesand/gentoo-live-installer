@@ -53,7 +53,7 @@ def test_the_session_has_an_agent_window_and_a_shell_window_and_no_approval_wind
     code, commands, prompts, home = run_main(tmp_path, "claude", installed=("claude",), answers=["", "n"])
     assert code == 0
     tmux = commands[-1]
-    assert tmux[:6] == ["setpriv", "--reuid=rescue-ai", "--regid=rescue-ai", "--init-groups", "--reset-env", "env"]
+    assert tmux[:5] == ["setpriv", "--reuid=rescue-ai", "--regid=rescue-ai", "--init-groups", "--no-new-privs"]
     session = tmux[tmux.index("tmux"):]
     assert session[:6] == ["tmux", "-u", "new-session", "-A", "-s", "rescue"]
     assert session.count("new-window") == 1 and session.count("new-session") == 1

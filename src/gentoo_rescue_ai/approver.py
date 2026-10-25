@@ -52,6 +52,11 @@ MAX_ARG_BYTES = 16 * 1024
 APPROVAL_SECONDS = 300.0  # how long the person has to type on the console
 REQUEST_SECONDS = 5.0  # how long a caller may take to send its request line
 MIN_PASSWORD = 8
+MAX_SHOWN_CHARS = 1000  # the rendered command must fit the screen (about 13 rows of 80): a longer one cannot be read, so it cannot be approved
+MAX_SHOWN_CWD = 300
+MAX_WARNINGS = 5
+MAX_RUN_SECONDS = 900.0  # an approved command runs at most this long
+BACKOFF_START, BACKOFF_MAX = 5.0, 120.0  # after a request nobody approved, the next ones wait (and never switch the console)
 CHUNK = 16 * 1024
 
 VT_GETSTATE, VT_ACTIVATE, VT_WAITACTIVE = 0x5603, 0x5606, 0x5607
@@ -74,8 +79,8 @@ def visible(text: str) -> str:
             out.append("\\n")
         elif char == "\t":
             out.append("\\t")
-        elif code < 0x20 or code == 0x7F or 0x80 <= code < 0xA0 or not char.isprintable():
-            out.append(f"\\x{code:02x}" if code < 0x100 else f"\\u{code:04x}" if code < 0x10000 else f"\\U{code:08x}")
+        elif not 0x20 <= code <= 0x7E:  # the Linux console font cannot be trusted with anything outside plain ASCII (lookalikes, blanks)
+            out.append(f"\\x{code:02x}" if code < 0x80 else f"\\u{code:04x}" if code < 0x10000 else f"\\U{code:08x}")
         else:
             out.append(char)
     return "".join(out)
@@ -91,7 +96,10 @@ def show_argv(argv: list[str]) -> str:
 
 
 def prompt_text(peer: "Peer", argv: list[str], cwd: str, warnings: list[str] | None = None) -> str:
-    caution = "".join(f"  !! The agent can still change {visible(item)} after you read this command. Do not approve it unless you have read that file.\n" for item in warnings or [])
+    items = list(warnings or [])
+    caution = "".join(f"  !! The agent can still change {visible(item)[:200]} after you read this command. Do not approve it unless you have read that file.\n" for item in items[:MAX_WARNINGS])
+    if len(items) > MAX_WARNINGS:
+        caution += f"  !! ... and {len(items) - MAX_WARNINGS} more files the agent can change.\n"
     return (
         "\n==================== gentoo-rescue-do ====================\n"
         f"An AI agent ({visible(peer.name)}, process {peer.pid}) asks to run this command as ROOT:\n\n"
@@ -313,8 +321,11 @@ def writable_arguments(argv: list[str], cwd: str, peer: "Peer") -> list[str]:
         if not arg or arg.startswith("-") or "\0" in arg:
             continue
         path = arg if arg.startswith("/") else os.path.join(cwd, arg)
-        if os.path.lexists(path) and changeable_by_peer(path, peer):
-            found.append(arg)
+        if os.path.lexists(path):
+            if changeable_by_peer(path, peer):
+                found.append(arg)
+        elif changeable_by_peer(os.path.dirname(path) or "/", peer):
+            found.append(arg)  # not there yet, but the agent can create it (a link to /etc/shadow, say) before the command runs
     return found
 
 
@@ -333,6 +344,10 @@ def check_request(request: Any) -> tuple[list[str], str]:
         raise Refused("cwd must be an absolute folder")
     if not os.path.isdir(cwd):
         raise Refused(f"{cwd} is not a folder")
+    if len(cwd) > MAX_SHOWN_CWD:
+        raise Refused("the folder name is too long to show on the approval screen")
+    if len(show_argv(list(argv))) > MAX_SHOWN_CHARS:
+        raise Refused(f"too long to approve: the command is longer than {MAX_SHOWN_CHARS} characters, so it would not fit on the approval screen. Put the long part in a file and have root run a short command")
     if below_target(cwd):
         raise Refused("commands never start inside the target disk (/mnt/gentoo, /mnt/rescue): use 'gentoo-rescue' for the target, or a full path from another folder")
     return list(argv), os.path.realpath(cwd)  # the resolved folder is shown and used: a link the agent repoints later changes nothing
@@ -341,18 +356,31 @@ def check_request(request: Any) -> tuple[list[str], str]:
 Send = Callable[[dict[str, Any]], bool]
 
 
-def run_command(argv: list[str], cwd: str, send: Send) -> int:
-    """execve ``argv`` without a shell in a clean environment; relay its output as data. Returns the exit status (128+signal when killed)."""
+def run_command(argv: list[str], cwd: str, send: Send, cwd_fd: int | None = None, max_seconds: float = MAX_RUN_SECONDS) -> int:
+    """execve ``argv`` without a shell in a clean environment; relay its output as data. Returns the exit status (128+signal when killed).
+    With ``cwd_fd`` the child changes into that already opened folder (not into the path, which could name another folder by now).
+    A command still running after ``max_seconds`` is killed (status 124)."""
     program = argv[0]  # already an absolute path chosen and checked by the service
-    process = subprocess.Popen([program, *argv[1:]], executable=os.path.realpath(program), cwd=cwd, env=dict(CLEAN_ENV), shell=False, stdin=subprocess.DEVNULL,
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True, start_new_session=True)
+    fchdir = (lambda: os.fchdir(cwd_fd)) if cwd_fd is not None else None
+    process = subprocess.Popen([program, *argv[1:]], executable=os.path.realpath(program), cwd=None if cwd_fd is not None else cwd, env=dict(CLEAN_ENV), shell=False,
+                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True, start_new_session=True, preexec_fn=fchdir)
+    deadline = time.monotonic() + max_seconds
+    timed_out = False
     selector = selectors.DefaultSelector()
     assert process.stdout is not None and process.stderr is not None
     selector.register(process.stdout, selectors.EVENT_READ, "stdout")
     selector.register(process.stderr, selectors.EVENT_READ, "stderr")
     open_streams = 2
     while open_streams:
-        for key, _ in selector.select():
+        left = deadline - time.monotonic()
+        if left <= 0:
+            timed_out = True
+            try:
+                os.killpg(process.pid, signal.SIGKILL)
+            except OSError:
+                process.kill()
+            break
+        for key, _ in selector.select(left):
             data = os.read(key.fileobj.fileno(), CHUNK)  # type: ignore[union-attr]
             if not data:
                 selector.unregister(key.fileobj)
@@ -360,6 +388,9 @@ def run_command(argv: list[str], cwd: str, send: Send) -> int:
                 continue
             send({"event": "output", "stream": key.data, "data": base64.b64encode(data).decode()})  # a gone caller never stops the command
     code = process.wait()
+    if timed_out:
+        send({"event": "output", "stream": "stderr", "data": base64.b64encode(f"\n[gentoo-rescue-do: stopped after {max_seconds:.0f} seconds]\n".encode()).decode()})
+        return 124
     return code if code >= 0 else 128 - code
 
 
@@ -367,12 +398,16 @@ def run_command(argv: list[str], cwd: str, send: Send) -> int:
 class Approver:
     def __init__(self, console: Console, password: str, audit: Audit, allowed_uids: set[int], *, runner: Callable[[list[str], str, Send], int] = run_command,
                  peer_of: Callable[[socket.socket], Peer] = peer_creds, approval_seconds: float = APPROVAL_SECONDS,
-                 program_check: Callable[[str, Peer], str] = program_problem) -> None:
+                 program_check: Callable[[str, Peer], str] = program_problem, cwd_check: Callable[[str, Peer], str] = changeable_by_peer,
+                 clock: Callable[[], float] = time.monotonic) -> None:
         if len(password) < MIN_PASSWORD:
             raise ValueError("the per-boot password is too short")
         self._password = password.encode()
         self.console, self.audit, self.allowed_uids = console, audit, set(allowed_uids)
         self.runner, self.peer_of, self.approval_seconds, self.program_check = runner, peer_of, approval_seconds, program_check
+        self.cwd_check, self.clock = cwd_check, clock
+        self._quiet_until = 0.0  # no new question before this time (after a request nobody approved)
+        self._backoff = 0.0
 
     # one request, one connection
     def handle(self, conn: socket.socket) -> None:
@@ -406,14 +441,49 @@ class Approver:
             send({"event": "denied", "reason": problem})
             return
         shown = [program, *argv[1:]]
+        if len(show_argv(shown)) > MAX_SHOWN_CHARS:
+            reason = f"too long to approve: the command is longer than {MAX_SHOWN_CHARS} characters once the program is spelled out"
+            self.audit.write("refused", reason=reason, cwd=cwd, pid=peer.pid, uid=peer.uid)
+            send({"event": "denied", "reason": reason})
+            return
+        if self.clock() < self._quiet_until:
+            self.audit.write("refused", reason="rate limit after an unanswered request", argv=shown[:8], cwd=cwd, pid=peer.pid, uid=peer.uid)
+            send({"event": "denied", "reason": "the person at the console did not approve the last request, so new ones are not shown for a while; try later"})
+            return
+        notes: list[str] = []
+        changeable = self.cwd_check(cwd, peer)
+        if changeable:  # a folder the agent can repoint: root never starts there; "/" is shown instead
+            notes.append(f"the folder {cwd} can be changed by the agent ({changeable}), so the command runs in / instead")
+            cwd = "/"
+        try:
+            cwd_fd = os.open(cwd, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+        except OSError as exc:
+            self.audit.write("refused", reason=f"cannot open the folder: {exc}", cwd=cwd, pid=peer.pid, uid=peer.uid)
+            send({"event": "denied", "reason": f"cannot open the folder {cwd}"})
+            return
+        try:
+            self._approve_and_run(conn, send, peer, program, argv, shown, cwd, cwd_fd, notes)
+        finally:
+            os.close(cwd_fd)
+
+    def _approve_and_run(self, conn: socket.socket, send: Send, peer: Peer, program: str, argv: list[str], shown: list[str], cwd: str, cwd_fd: int, notes: list[str]) -> None:
         if not self.audit.write("request", argv=shown, cwd=cwd, pid=peer.pid, uid=peer.uid):
             send({"event": "denied", "reason": "the audit log cannot be written, so nothing is run"})
             return
         send({"event": "waiting", "message": "waiting for the person at the PC's console to approve this command"})
-        answer = self._ask(peer, shown, cwd, writable_arguments(shown, cwd, peer))
+        answer = self._ask(peer, shown, cwd, notes + writable_arguments(shown, cwd, peer))
         if answer != "approved":
+            self._quiet_until = self.clock() + self._grow_backoff()
             self.audit.write("answer", answer=answer, argv=shown, pid=peer.pid)
             send({"event": "denied", "reason": {"timeout": "nobody approved it in time", "wrong": "the password was wrong or empty: refused", "console": "the console is not available"}.get(answer, answer)})
+            return
+        self._backoff = 0.0
+        self._quiet_until = 0.0
+        if self._same_folder(cwd, cwd_fd) is False:
+            self.audit.write("answer", answer="folder changed while the person was reading; not run", argv=shown, pid=peer.pid)
+            self.console.show("The folder changed while you were reading. Nothing was run.\n")
+            self.console.leave()
+            send({"event": "denied", "reason": "the folder changed after the question was shown: refused"})
             return
         if self._caller_gone(conn):
             self.audit.write("answer", answer="caller left before the command started", argv=shown, pid=peer.pid)
@@ -422,7 +492,7 @@ class Approver:
         self.console.show("Approved. Running it; its output goes back to the agent.\n")
         status = -1
         try:
-            status = self.runner([program, *argv[1:]], cwd, send)
+            status = self.runner([program, *argv[1:]], cwd, send, cwd_fd) if self.runner is run_command else self.runner([program, *argv[1:]], cwd, send)
         except (OSError, Refused) as exc:
             send({"event": "denied", "reason": f"could not start it: {exc}"})
             status = -2
@@ -431,6 +501,19 @@ class Approver:
         self.console.leave()  # before the caller hears about the end, so it never sees a half-restored console
         if status != -2:
             send({"event": "exit", "status": status})
+
+    def _grow_backoff(self) -> float:
+        self._backoff = BACKOFF_START if self._backoff == 0 else min(self._backoff * 2, BACKOFF_MAX)
+        return self._backoff
+
+    @staticmethod
+    def _same_folder(path: str, fd: int) -> bool:
+        """Whether ``path`` still names the folder that was opened at request time."""
+        try:
+            now, then = os.stat(path), os.fstat(fd)
+        except OSError:
+            return False
+        return (now.st_dev, now.st_ino) == (then.st_dev, then.st_ino)
 
     def _ask(self, peer: Peer, argv: list[str], cwd: str, warnings: list[str]) -> str:
         try:

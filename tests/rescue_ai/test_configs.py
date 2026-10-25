@@ -19,7 +19,7 @@ def test_the_tree_mirrors_where_the_files_go_and_holds_no_sudo_rule() -> None:
     files = sorted(str(p.relative_to(ROOT)) for p in ROOT.rglob("*") if p.is_file() and not p.is_symlink())
     assert files == sorted([
         "etc/claude-code/CLAUDE.md", "etc/claude-code/managed-settings.json", "etc/gentoo-rescue/AGENTS.md", "etc/gentoo-rescue/hooks/pretooluse-guard.py",
-        "etc/skel-rescue-ai/.codex/config.toml", "etc/skel-rescue-ai/.config/opencode/opencode.json"])
+        "etc/skel-rescue-ai/.codex/config.toml", "etc/skel-rescue-ai/.config/opencode/opencode.json", "etc/skel-rescue-ai/.bashrc", "etc/skel-rescue-ai/.bash_profile"])
     # The AGENTS.md links of Codex and OpenCode: absolute, so they dangle in the source tree (and setuptools leaves a dangling link out of a wheel);
     # gentoo-rescue-ai makes them again at every start (prepare_home), so they exist whichever way the tree was installed.
     links = {str(p.relative_to(ROOT)): os.readlink(p) for p in ROOT.rglob("*") if p.is_symlink()}

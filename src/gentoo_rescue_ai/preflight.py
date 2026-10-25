@@ -7,6 +7,7 @@ socket with the wrong owner. Every check is a function of facts passed in, so th
 
 from __future__ import annotations
 
+import glob
 import grp
 import os
 import pwd
@@ -20,6 +21,9 @@ from . import AI_USER, DO_SOCKET, STATE_DIR
 
 FORBIDDEN_GROUPS = frozenset({"tty", "wheel", "disk", "video", "input", "audio", "plugdev", "usb", "kvm", "portage", "root", "sudo", "adm", "lp", "dialout", "floppy", "cdrom"})
 DEFAULT_APPROVER_VT = 9
+# The password is typed on the keyboard: whoever can read or inject key events, read the screen buffers or memory could sniff or fake it.
+KEYBOARD_PATTERNS = ("/dev/input/*", "/dev/uinput", "/dev/vcs*", "/dev/vcsa*", "/dev/vcsu*", "/dev/mem", "/dev/kmem", "/dev/port", "/dev/kmsg")
+SHADOW = "/etc/shadow"
 YAMA = "/proc/sys/kernel/yama/ptrace_scope"
 VT_FILE = f"{STATE_DIR}/approver-vt"
 
@@ -34,6 +38,7 @@ class Facts:
     socket_stat: os.stat_result | None
     devices: dict[str, os.stat_result | None]
     socket_gid: int | None
+    root_locked: bool | None = None  # None: not known (not checked)
 
 
 def can_open(info: os.stat_result | None, uid: int, gids: frozenset[int]) -> bool:
@@ -64,6 +69,8 @@ def problems(facts: Facts, approver_vt: int = DEFAULT_APPROVER_VT) -> list[str]:
     for name, info in facts.devices.items():
         if can_open(info, facts.uid, facts.gids):
             found.append(f"{name} can be opened by {AI_USER}: the approval screen would not be private.")
+    if facts.root_locked is False:
+        found.append(f"The root account has a password ({SHADOW}); it must be locked (!) so that nothing can become root with 'su'. Root commands go through gentoo-rescue-do.")
     if facts.socket_stat is None:
         found.append(f"The approver is not running ({DO_SOCKET} is missing), so the agents cannot ask for root commands.")
     else:
@@ -71,6 +78,18 @@ def problems(facts: Facts, approver_vt: int = DEFAULT_APPROVER_VT) -> list[str]:
         if facts.socket_stat.st_uid != 0 or mode & 0o007 or (facts.socket_gid is not None and facts.socket_stat.st_gid != facts.socket_gid):
             found.append(f"{DO_SOCKET} must be owned by root, group {AI_USER}, mode 0660 (it is {mode:04o}).")
     return found
+
+
+def root_is_locked(shadow: str = SHADOW) -> bool | None:
+    """Whether the password field of root is a lock (starts with ! or *); None when /etc/shadow cannot be read."""
+    try:
+        for line in Path(shadow).read_text(encoding="utf-8").splitlines():
+            fields = line.split(":")
+            if fields[0] == "root" and len(fields) > 1:
+                return fields[1][:1] in {"!", "*"}
+    except OSError:
+        return None
+    return None
 
 
 def gather(user: str = AI_USER, approver_vt: int | None = None, run: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run) -> Facts:
@@ -97,16 +116,20 @@ def gather(user: str = AI_USER, approver_vt: int | None = None, run: Callable[..
         except (OSError, ValueError):
             approver_vt = DEFAULT_APPROVER_VT
     devices: dict[str, os.stat_result | None] = {}
-    for device in ("/dev/tty1", f"/dev/tty{approver_vt}", "/dev/tty0", "/dev/console"):
+    names = ["/dev/tty1", f"/dev/tty{approver_vt}", "/dev/tty0", "/dev/console"]
+    for pattern in KEYBOARD_PATTERNS:
+        names.extend(sorted(glob.glob(pattern)) or [pattern])
+    for device in names:
         try:
-            devices[device] = os.stat(device)
+            info_dev = os.stat(device)
+            devices[device] = None if stat.S_ISDIR(info_dev.st_mode) else info_dev  # /dev/input/by-path and the like are folders, not devices
         except OSError:
             devices[device] = None
     try:
         socket_stat: os.stat_result | None = os.stat(DO_SOCKET)
     except OSError:
         socket_stat = None
-    return Facts(info.pw_uid, frozenset(gids), frozenset(names), ptrace, allows, socket_stat, devices, info.pw_gid)
+    return Facts(info.pw_uid, frozenset(gids), frozenset(names), ptrace, allows, socket_stat, devices, info.pw_gid, root_is_locked())
 
 
 def check(user: str = AI_USER, approver_vt: int | None = None) -> list[str]:
