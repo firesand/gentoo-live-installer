@@ -97,8 +97,20 @@ class TestFreeSpaceBeforeTheDownload:
         with pytest.raises(Stage3Error, match="not enough free space to download"):
             s.install()
 
-    def test_free_space_is_read_from_the_nearest_existing_directory(self, tmp_path):
-        assert free_bytes(tmp_path / "does" / "not" / "exist") == free_bytes(tmp_path) > 0
+    def test_free_space_is_read_from_the_nearest_existing_directory(self, tmp_path, monkeypatch):
+        # Record which directory is asked instead of comparing two readings of a real disk: other programs writing in
+        # between change the free space (it made this test fail under parallel test runs).
+        import os
+        asked: list[Path] = []
+        real_statvfs = os.statvfs
+
+        def statvfs(path):
+            asked.append(Path(path))
+            return real_statvfs(path)
+
+        monkeypatch.setattr(os, "statvfs", statvfs)
+        assert free_bytes(tmp_path / "does" / "not" / "exist") > 0
+        assert asked == [tmp_path]
 
 
 class TestRemovingTheArchive:
