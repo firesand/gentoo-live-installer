@@ -216,15 +216,14 @@ class NetworkCard(Card):
         if self.synchronous:
             done(self.caller(action, payload))
             return
-        worker = netclient.CallWorker(self.caller, action, payload, self)
-        worker.answered.connect(lambda _action, answer, w=worker: self._answered(w, done, answer))
+        worker = netclient.CallWorker(self.caller, action, payload)
+        worker.answered.connect(netclient.deliver(self, lambda _action, answer, w=worker: self._answered(w, done, answer)))
         self._workers.append(worker)
         worker.start()
 
     def _answered(self, worker: netclient.CallWorker, done: Callable[[dict[str, Any]], None], answer: Any) -> None:
         if worker in self._workers:
             self._workers.remove(worker)
-        worker.deleteLater()
         done(answer if isinstance(answer, dict) else {"ok": False, "message": "No answer."})
 
     def wait(self, milliseconds: int = 5000) -> None:

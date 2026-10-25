@@ -10,7 +10,8 @@ import subprocess
 from collections.abc import Callable
 from typing import Any
 
-from PySide6.QtCore import QThread, Signal
+import shiboken6
+from PySide6.QtCore import QObject, QThread, Signal
 
 from . import daemon_client
 
@@ -59,14 +60,34 @@ def caller_for(socket_path: str) -> Caller:
     return run
 
 
+_LIVE: set["CallWorker"] = set()  # running workers stay referenced until they have ended, whatever happens to their widget
+
+
 class CallWorker(QThread):
-    """Runs ``caller(action, payload)`` off the GUI thread and emits ``answered(action, answer)``."""
+    """Runs ``caller(action, payload)`` off the GUI thread and emits ``answered(action, answer)``.
+
+    Destroying a QThread that still runs aborts the whole program, so a worker owns its own life: it has no parent (a page
+    closed during a Wi-Fi scan must not take a running thread with it), it stays referenced while it runs, and it is
+    deleted only once it has really ended. ``finished`` is emitted from the thread just before it ends, so the worker waits
+    for that end before it lets go (deleting it on ``answered``, or right on ``finished``, aborted test runs now and then).
+    ``parent`` is accepted for compatibility and ignored.
+    """
 
     answered = Signal(str, object)
 
     def __init__(self, caller: Caller, action: str, payload: dict[str, Any], parent: Any = None) -> None:
-        super().__init__(parent)
+        super().__init__(None)
         self._caller, self._action, self._payload = caller, action, payload
+        self.finished.connect(self._ended)
+
+    def start(self, *args: Any) -> None:
+        _LIVE.add(self)
+        super().start(*args)
+
+    def _ended(self) -> None:
+        self.wait()
+        _LIVE.discard(self)
+        self.deleteLater()
 
     def run(self) -> None:
         try:
@@ -74,6 +95,16 @@ class CallWorker(QThread):
         except Exception as exc:  # noqa: BLE001 - a thread must always answer
             answer = {"ok": False, "message": f"{type(exc).__name__}: the request failed."}
         self.answered.emit(self._action, answer)
+
+
+def deliver(owner: QObject, callback: Callable[..., Any]) -> Callable[..., None]:
+    """A slot that passes an answer on to ``callback`` only while ``owner``, the widget that asked, still exists."""
+
+    def slot(*arguments: Any) -> None:
+        if shiboken6.isValid(owner):
+            callback(*arguments)
+
+    return slot
 
 
 def read_live_secret(connection_uuid: str, timeout: float = 3.0) -> str:

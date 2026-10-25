@@ -63,8 +63,8 @@ class RemoteAccessDialog(QDialog):
         elif self.synchronous:
             done(self.caller(action, payload))
         else:
-            worker = netclient.CallWorker(self.caller, action, payload, self)
-            worker.answered.connect(lambda _a, answer, w=worker: self._answered(w, done, answer))
+            worker = netclient.CallWorker(self.caller, action, payload)
+            worker.answered.connect(netclient.deliver(self, lambda _a, answer, w=worker: self._answered(w, done, answer)))
             self._workers.append(worker)
             worker.start()
 
