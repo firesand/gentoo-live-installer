@@ -776,8 +776,10 @@ def check_accounts(
     for account in accounts:
         name = account["name"]
         fields = passwd.get(name)
-        if not report.expect(fields is not None, "accounts.exists", name, f"the account {name} is not in /etc/passwd"):
+        if fields is None:
+            report.failed("accounts.exists", f"the account {name} is not in /etc/passwd")
             continue
+        report.passed("accounts.exists", name)
         uid, gid = int(fields[2]), fields[3]
         problems: list[str] = []
         if uid > int(account.get("max_uid", 999)):
