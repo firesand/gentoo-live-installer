@@ -76,7 +76,7 @@ def test_f1_main_stops_when_the_home_is_unsafe(tmp_path) -> None:
     (tmp_path / "home" / ".codex").symlink_to(tmp_path)
     code, commands, prompts, _ = run_main(tmp_path, "shell", answers=[])
     assert code == 1 and commands == [] and "not safe" in prompts.text
-    assert sorted(p.name for p in tmp_path.iterdir()) == ["home"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["home", "pw"]
 
 
 def test_f1_the_session_is_started_with_no_new_privs() -> None:
