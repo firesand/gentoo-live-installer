@@ -24,7 +24,7 @@ class PreviewTests(unittest.TestCase):
             return {
                 preview.MAKE_CONF: (root / "etc/portage/make.conf").read_text(),
                 preview.PACKAGE_USE: (root / "etc/portage/package.use/installer").read_text(),
-                **({preview.BINREPOS: (root / "etc/portage/binrepos.conf/gentoo.conf").read_text()} if (root / "etc/portage/binrepos.conf/gentoo.conf").exists() else {}),
+                **({preview.BINREPOS: (root / preview.BINREPOS.lstrip("/")).read_text()} if (root / preview.BINREPOS.lstrip("/")).exists() else {}),
                 **({preview.PACKAGE_USE_HARDWARE: (root / "etc/portage/package.use/installer-hardware").read_text()}
                    if (root / "etc/portage/package.use/installer-hardware").exists() else {}),
             }

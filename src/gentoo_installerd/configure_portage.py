@@ -8,13 +8,68 @@ import shutil
 from pathlib import Path
 from typing import Mapping, MutableMapping, Sequence
 
+from gentoo_installer.binhost import binhost_url, BINREPO_NAME, cpu_level_of, render_binrepos
+from gentoo_installer.licenses import effective_accept_license, render_package_license
+from gentoo_installer.makeopts import auto_make_opts as shared_auto_make_opts
 from gentoo_installer.manifest import ATOM_RE, InstallManifest, USE_TOKEN_RE
+from gentoo_installer.mirrors import mirror_list
+from gentoo_installer.optimize import CPU_FLAGS_FILE, cpu_flags_of, cxxflags_value, native_wanted, render_cpu_flags, tuned_flags
 
 from .configure_base import _plan_list, ConfigurationError, ConfigurerBase, shell_value
 from .proxy import make_conf_settings, proxy_environment
+from .runner import RunnerError
 
 
 COMPANION_ATOMS = ("app-misc/hwmonux", "app-portage/portagehub")
+
+
+# Written when the binary package signing keys could not be set up (getuto failed): every later render of make.conf then
+# leaves the binary package host out, so packages are built from source and no unsigned package is ever accepted.
+BINHOST_OFF_MARKER = "var/log/gentoo-installer/binhost-off"
+
+
+# The Handbook's repos.conf for the Gentoo repository when it is synced with rsync, verification included.
+REPOS_CONF_KEYS = (
+    ("sync-type", "rsync"),
+    ("auto-sync", "yes"),
+    ("sync-rsync-verify-jobs", "1"),
+    ("sync-rsync-verify-metamanifest", "yes"),
+    ("sync-rsync-verify-max-age", "3"),
+    ("sync-openpgp-key-path", "/usr/share/openpgp-keys/gentoo-release.asc"),
+    ("sync-openpgp-keyserver", "hkps://keys.gentoo.org"),
+    ("sync-openpgp-key-refresh-retry-count", "40"),
+    ("sync-openpgp-key-refresh-retry-overall-timeout", "1200"),
+    ("sync-openpgp-key-refresh-retry-delay-exp-base", "2"),
+    ("sync-openpgp-key-refresh-retry-delay-max", "60"),
+    ("sync-openpgp-key-refresh-retry-delay-mult", "4"),
+    ("sync-webrsync-verify-signature", "yes"),
+)
+DEFAULT_RSYNC_URI = "rsync://rsync.gentoo.org/gentoo-portage"
+REPOS_CONF_BASE = "[DEFAULT]\nmain-repo = gentoo\n\n[gentoo]\nlocation = /var/db/repos/gentoo\n"
+
+
+def render_repos_conf(base: str, sync_uri: str) -> str:
+    """gentoo.conf for rsync with verification, starting from the stage3's own /usr/share/portage/config/repos.conf.
+
+    Every Handbook key is set (an existing value is replaced, a missing one appended to the [gentoo] section); verification
+    is part of the list and cannot be switched off from here.
+    """
+    lines = (base or REPOS_CONF_BASE).splitlines()
+    wanted = {**dict(REPOS_CONF_KEYS), "sync-uri": sync_uri}
+    start = next((i for i, line in enumerate(lines) if line.strip() == "[gentoo]"), None)
+    if start is None:
+        lines = [*lines, "", "[gentoo]", "location = /var/db/repos/gentoo"]
+        start = len(lines) - 2
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("[")), len(lines))
+    seen: set[str] = set()
+    for i in range(start + 1, end):
+        key = lines[i].partition("=")[0].strip()
+        if key in wanted:
+            lines[i] = f"{key} = {wanted[key]}"
+            seen.add(key)
+    missing = [f"{key} = {value}" for key, value in wanted.items() if key not in seen]
+    lines[end:end] = missing
+    return "\n".join(lines).rstrip("\n") + "\n"
 
 
 # A package.use key: an ordinary atom, or */* for USE_EXPAND lines such as "*/* VIDEO_CARDS: virgl".
@@ -73,9 +128,7 @@ def ninja_opts_from_make_opts(make_opts: str) -> str:
 
 def auto_make_opts(cpus: int, mem_available: int, swap_mib: int = 0) -> str:
     """-j/-l for MAKEOPTS: about 2 GiB per compile job, never above the thread count or 32."""
-    budget_gib = mem_available / 1024**3 + 0.5 * max(0, swap_mib) / 1024
-    jobs = max(1, min(cpus, 32, int(budget_gib // 2)))
-    return f"-j{jobs} -l{max(1, cpus)}"
+    return shared_auto_make_opts(cpus, mem_available, swap_mib)  # the wizard shows the same value
 
 
 def auto_emerge_jobs(cpus: int, mem_total: int) -> int:
@@ -121,38 +174,47 @@ _INCREMENTAL_KEYS = ("USE", "FEATURES", "EMERGE_DEFAULT_OPTS")
 _PLAN_FORBIDDEN_KEYS = {"ACCEPT_LICENSE", "GENTOO_MIRRORS", "PORTAGE_BINHOST"}
 
 
-def render_make_conf(manifest: InstallManifest, plan: object | None = None, *, make_opts: str | None = None) -> str:
+def render_make_conf(manifest: InstallManifest, plan: object | None = None, *, make_opts: str | None = None,
+                     binhost: bool | None = None) -> str:
     """Render the target's make.conf.
 
     Empty values are left out so the profile defaults (CPU_FLAGS_X86, VIDEO_CARDS, ...) stay in
-    force; a hardware plan may add or tune keys through ``plan.make_conf``.
+    force; a hardware plan may add or tune keys through ``plan.make_conf``. ``binhost`` False leaves the binary package host
+    out although the settings ask for it (its signing keys could not be set up); the host itself is in binrepos.conf,
+    not in make.conf.
     """
     p = manifest.portage
     plan_values = {key: str(value) for key, value in dict(getattr(plan, "make_conf", None) or {}).items()
                    if str(value).strip() and key not in _PLAN_FORBIDDEN_KEYS}
     jobs = make_opts if make_opts is not None else p.make_opts
-    features = " ".join([*p.features, *(["getbinpkg", "binpkg-request-signature"] if p.binhost else [])])
+    use_binhost = p.binhost if binhost is None else binhost and p.binhost
+    # A signature is always required for a binary package, also when the host is left out.
+    # When the host was switched off after a failed getuto, a getbinpkg the user typed into FEATURES is dropped too.
+    own = [word for word in p.features if use_binhost or not p.binhost or word != "getbinpkg"]
+    features = " ".join(dict.fromkeys([*own, *(["getbinpkg"] if use_binhost else []), "binpkg-request-signature"] if p.binhost else own))
+    native = native_wanted(p, manifest.hardware.target == "portable")
+    cflags, rustflags = tuned_flags(p.cflags, p.rustflags, native)
+    if native:
+        plan_values.pop("CPU_FLAGS_X86", None)  # native tuning writes CPU_FLAGS_X86 to package.use/00cpu-flags instead
     values: list[tuple[str, str]] = [
-        ("COMMON_FLAGS", p.cflags),
+        ("COMMON_FLAGS", cflags),
         ("CFLAGS", "${COMMON_FLAGS}"),
-        ("CXXFLAGS", p.cxxflags),
+        ("CXXFLAGS", cxxflags_value(p.cxxflags)),
         ("FCFLAGS", "${COMMON_FLAGS}"),
         ("FFLAGS", "${COMMON_FLAGS}"),
-        ("RUSTFLAGS", p.rustflags),
+        ("RUSTFLAGS", rustflags),
         ("MAKEOPTS", jobs or plan_values.pop("MAKEOPTS", "")),
         ("LC_MESSAGES", "C.UTF-8"),
         ("EMERGE_DEFAULT_OPTS", p.emerge_opts),
-        ("ACCEPT_LICENSE", p.accept_license),
-        ("GENTOO_MIRRORS", p.mirror),
+        ("ACCEPT_LICENSE", effective_accept_license(p)),
+        ("GENTOO_MIRRORS", " ".join(mirror_list(p.mirror, p.mirrors, p.mirror_fallbacks))),
         ("USE", " ".join(p.use_flags)),
         ("FEATURES", features),
-        # "auto" is a request for detection, not a value Portage understands.
-        ("CPU_FLAGS_X86", "" if p.cpu_flags == "auto" else p.cpu_flags),
+        # "auto" is a request for detection, not a value Portage understands; native tuning moves the flags to package.use.
+        ("CPU_FLAGS_X86", "" if p.cpu_flags == "auto" or native else p.cpu_flags),
         ("VIDEO_CARDS", "" if p.video_cards == "auto" else p.video_cards),
         ("GRUB_PLATFORMS", "pc efi-64"),
     ]
-    if p.binhost:
-        values.append(("PORTAGE_BINHOST", p.binhost_url))
     values.extend(sorted(make_conf_settings(manifest.network.proxy, manifest.network.keep_proxy).items()))
     plan_values.pop("MAKEOPTS", None)
     lines: list[str] = []
@@ -261,27 +323,82 @@ class PortageMixin(ConfigurerBase):
                 _require_use(package_use, atom, *flags)
         return package_use
 
-    def configure_portage(self, manifest: InstallManifest, plan: object | None = None) -> None:
+    def binhost_active(self, manifest: InstallManifest) -> bool:
+        """True when the binary package host is used: it is wanted and its signing keys were set up (getuto did not fail)."""
+        return manifest.portage.binhost and not self.path(BINHOST_OFF_MARKER).exists()
+
+    def sync_mode(self, manifest: InstallManifest) -> bool:
+        """True when the Portage tree is synced with rsync (verified); False for the web snapshot (emerge-webrsync, the default).
+
+        A settings file from before ``rsync_mode`` existed asked for rsync by naming a mirror; that still counts.
+        """
+        return manifest.portage.rsync_mode == "sync" or bool(manifest.portage.rsync_mirror)
+
+    def configure_portage(self, manifest: InstallManifest, plan: object | None = None, *, hardware: dict | None = None) -> list[str]:
+        """Write /etc/portage. ``hardware`` is the daemon's probe of this computer (binary package variant, CPU flags).
+
+        Returns notes for the user (a choice that could not be applied as asked). Writing the same files again is harmless.
+        """
         plan = self._plan(plan)
-        self.write("etc/portage/make.conf", render_make_conf(manifest, plan, make_opts=self.effective_make_opts(manifest, plan)))
+        notes: list[str] = []
+        p = manifest.portage
+        portable = manifest.hardware.target == "portable"
+        self.write("etc/portage/make.conf", render_make_conf(manifest, plan, make_opts=self.effective_make_opts(manifest, plan),
+                                                             binhost=self.binhost_active(manifest)))
         self.write("etc/portage/package.use/installer", render_package_use(self.package_use_table(manifest, plan)))
+        if native_wanted(p, portable):
+            flags = (p.cpu_flags if p.cpu_flags not in {"", "auto"} else "") \
+                or str((getattr(plan, "make_conf", None) or {}).get("CPU_FLAGS_X86", "")).strip() or " ".join(cpu_flags_of(hardware))
+            if flags and "${" not in flags:
+                self.write(CPU_FLAGS_FILE, render_cpu_flags(flags))
+            else:
+                notes.append("This processor's CPU flags could not be read, so the profile's defaults are used next to the native compiler flags.")
+        if p.package_license:
+            self.write("etc/portage/package.license/installer", render_package_license(p.package_license))
         hardware_use = getattr(plan, "package_use", None)
         if hardware_use:
             # Alphabetically after "installer", so within one directory the hardware lines win.
             self.write("etc/portage/package.use/installer-hardware", render_package_use(hardware_use))
         hardware_licenses = getattr(plan, "package_license", None)
         if hardware_licenses:
-            self.write("etc/portage/package.license/installer-hardware",
-                       "".join(f"{atom} {' '.join(names)}\n" for atom, names in sorted(hardware_licenses.items())))
+            self.write("etc/portage/package.license/installer-hardware", render_package_license(hardware_licenses))
         hardware_mask = _plan_list(plan, "package_mask")
         if hardware_mask:
             self.write("etc/portage/package.mask/installer-hardware", "".join(f"{entry}\n" for entry in hardware_mask))
-        if manifest.portage.binhost:
-            self.write("etc/portage/binrepos.conf/gentoo.conf", f"[gentoo]\npriority = 9999\nsync-uri = {manifest.portage.binhost_url}\n")
-        if manifest.portage.rsync_mirror:
-            if not manifest.portage.rsync_mirror.startswith(("rsync://", "https://")):
-                raise ConfigurationError("Repository sync mirror must use rsync or HTTPS")
-            self.write("etc/portage/repos.conf/gentoo.conf", f"[gentoo]\nlocation = /var/db/repos/gentoo\nsync-type = {'rsync' if manifest.portage.rsync_mirror.startswith('rsync:') else 'git'}\nsync-uri = {manifest.portage.rsync_mirror}\nauto-sync = yes\n")
+        if p.binhost:
+            url, note = binhost_url(p, cpu_level_of(hardware), portable)
+            if note:
+                notes.append(note)
+            # The stage3 ships this very file: replacing it (instead of adding a second file) keeps one [gentoobinhost] section.
+            self.write(f"etc/portage/binrepos.conf/{BINREPO_NAME}.conf", render_binrepos(url))
+        if self.sync_mode(manifest):
+            uri = p.rsync_mirror or DEFAULT_RSYNC_URI
+            if not uri.startswith("rsync://"):
+                raise ConfigurationError("The repository sync mirror must be an rsync:// address")
+            self.write("etc/portage/repos.conf/gentoo.conf", render_repos_conf(self.read_text("usr/share/portage/config/repos.conf"), uri))
+        return notes
+
+    def prepare_binhost_trust(self, manifest: InstallManifest, plan: object | None = None, *, hardware: dict | None = None) -> str:
+        """Set up the keys that check the signatures of binary packages (getuto) before the first emerge.
+
+        Returns "" when all is well and a warning when it failed. Then the binary package host is switched off for the rest of
+        the installation and everything is built from source: a package whose signature cannot be checked is never installed.
+        """
+        if not manifest.portage.binhost or self.dry_run or self.path(BINHOST_OFF_MARKER).exists():
+            return ""
+        error = ""
+        for attempt in range(2):
+            try:
+                self.chroot(("getuto",))
+                return ""
+            except RunnerError as exc:
+                error = str(exc.output).strip()[-200:] or f"exit status {exc.returncode}"
+                if attempt == 0:
+                    self.sleep(3)
+        self.write(BINHOST_OFF_MARKER, f"getuto failed: {error}\n")
+        self.configure_portage(manifest, plan, hardware=hardware)
+        return ("The keys that check ready-made packages could not be set up (" + error + "), so no ready-made packages are used: "
+                "everything is built from source, which takes much longer. Nothing unsigned was accepted.")
 
     def _variable(self, relative: str, name: str) -> str:
         """The value of NAME=... in a shell-style file of the new system ('' when it has none)."""

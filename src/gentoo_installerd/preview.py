@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 
 from gentoo_installer import layout as guided_layout
+from gentoo_installer.binhost import BINREPO_NAME, binhost_url, cpu_level_of, render_binrepos
 from gentoo_installer.manifest import InstallManifest
 
 from .configure import Configurer, render_fstab
@@ -23,7 +24,7 @@ FSTAB = "/etc/fstab"
 MAKE_CONF = "/etc/portage/make.conf"
 PACKAGE_USE = "/etc/portage/package.use/installer"
 PACKAGE_USE_HARDWARE = "/etc/portage/package.use/installer-hardware"
-BINREPOS = "/etc/portage/binrepos.conf/gentoo.conf"
+BINREPOS = f"/etc/portage/binrepos.conf/{BINREPO_NAME}.conf"  # the file the stage3 ships and configure_portage replaces
 FSTAB_UUID_PLACEHOLDER = "(assigned when the filesystem is created)"
 ROLE_NAMES = {"efi": "EFI system partition", "bios_boot": "BIOS boot partition", "swapfile": "swap file"}
 
@@ -67,12 +68,14 @@ def layout_entries(manifest: InstallManifest, plan: guided_layout.StoragePlan) -
 
 
 def preview_files(manifest: InstallManifest, plan: object | None = None, *, storage_plan: guided_layout.StoragePlan | None = None,
-                  layout: Sequence[LayoutEntry] | None = None, uuids: Mapping[str, str] | None = None, make_opts: str | None = None) -> dict[str, str]:
+                  layout: Sequence[LayoutEntry] | None = None, uuids: Mapping[str, str] | None = None, make_opts: str | None = None,
+                  hardware: dict | None = None) -> dict[str, str]:
     """{name: text} of the partition table, /etc/fstab, make.conf, package.use and binrepos.conf this installation will write.
 
     ``plan`` is the hardware plan (``None`` for the generic one), ``storage_plan`` the layout.StoragePlan of the review (without
     it the partition table and fstab are left out). ``layout`` and ``uuids`` replace the placeholder fstab entries, and
-    ``make_opts`` the MAKEOPTS the daemon would size for this machine."""
+    ``make_opts`` the MAKEOPTS the daemon would size for this machine. ``hardware`` is the daemon's probe, which chooses the
+    binary package variant exactly as configure_portage does."""
     configurer = Configurer(DryRunRunner(), "/nonexistent-preview-root", dry_run=True)
     jobs = make_opts if make_opts is not None else configurer.effective_make_opts(manifest, plan)
     files: dict[str, str] = {}
@@ -88,5 +91,6 @@ def preview_files(manifest: InstallManifest, plan: object | None = None, *, stor
     if hardware_use:
         files[PACKAGE_USE_HARDWARE] = render_package_use(hardware_use)
     if manifest.portage.binhost:
-        files[BINREPOS] = f"[gentoo]\npriority = 9999\nsync-uri = {manifest.portage.binhost_url}\n"
+        url, _note = binhost_url(manifest.portage, cpu_level_of(hardware), manifest.hardware.target == "portable")
+        files[BINREPOS] = render_binrepos(url)  # the very text configure_portage writes
     return files

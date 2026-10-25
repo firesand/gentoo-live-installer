@@ -362,7 +362,7 @@ def preview_texts(manifest: InstallManifest, info: SystemInfo | None) -> list[tu
         from gentoo_installerd.configure import preview_files
 
         plan = hardware_plan(manifest, info.hardware) if info is not None and info.hardware else None
-        files = preview_files(manifest, plan, storage_plan=storage_plan(manifest, info))
+        files = preview_files(manifest, plan, storage_plan=storage_plan(manifest, info), hardware=info.hardware if info is not None else None)
     except Exception:  # noqa: BLE001 - a preview must never stop the review
         LOG.exception("The file previews could not be built")
         return []

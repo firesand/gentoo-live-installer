@@ -530,7 +530,7 @@ def test_an_explicit_jobs_value_from_a_manifest_is_never_replaced(make_window):
     assert manifest.portage.make_opts == "-j6 -l8"  # extra flags survive an untouched round trip
     window.customize.jobs.setValue(3)
     window.customize.save_manifest()
-    assert manifest.portage.make_opts == "-j3"
+    assert manifest.portage.make_opts == "-j3 -l8"  # PORT-10: the load limit is its own control and is preserved
 
 
 def test_automatic_jobs_are_computed_for_this_machine(make_window, monkeypatch):

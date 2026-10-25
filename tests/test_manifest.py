@@ -389,7 +389,7 @@ def test_fallback_and_sync_mirrors_must_be_encrypted_or_rsync():
     manifest.portage.rsync_mirror = "ftp://example"
     errors = manifest.validate_sections()["portage"]
     assert "Fallback stage3 mirrors must use HTTPS" in errors
-    assert "The repository sync mirror must use rsync or HTTPS" in errors
+    assert any(error.startswith("The repository sync mirror must be an rsync:// address") for error in errors)  # PORT-07: HTTPS is no longer accepted
     manifest.portage.mirror_fallbacks = ["https://mirror.example/gentoo"]
     manifest.portage.rsync_mirror = "rsync://rsync.example/gentoo"
     assert manifest.validate_sections()["portage"] == []

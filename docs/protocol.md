@@ -307,19 +307,28 @@ Also in effect: the guided root and /home partitions get GPT type codes 8304 and
 ### portage
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `optimize` | `generic`, `native` | `generic` | `native` = `-march=native`. Effect later. |
-| `binhost_variant` | `auto`, `generic`, `v3` | `auto` | Binary package variant. Effect later. |
-| `mirrors` | list of HTTPS URLs | `[]` | Mirrors in order; `mirror` and `mirror_fallbacks` stay valid. Effect later. |
-| `rsync_mode` | `snapshot`, `sync` | `snapshot` | `snapshot` = emerge-webrsync (today). Effect later. |
-| `license_groups` | list of strings | `[]` | ACCEPT_LICENSE groups; `accept_license` stays the source of truth. Effect later. |
-| `depclean` | bool | `false` | Run emerge --depclean at the end. Effect later. |
-| `profile_override` | string | `""` | A published 23.0 profile path replacing the derived one. Effect later. |
+| `optimize` | `generic`, `native` | `generic` | `native` adds `-march=native` to COMMON_FLAGS and `-C target-cpu=native` to RUSTFLAGS and writes CPU_FLAGS_X86 to `package.use/00cpu-flags` (typed flags, else the plan's, else the probe's). Refused with `hardware.target` `portable`. |
+| `binhost_variant` | `auto`, `generic`, `v3` | `auto` | Binary package variant of the official host. `v3` is used only when the probe reports x86-64-v3 or better and the install is not portable (an explicit `v3` that does not fit falls back to generic with a warning). A hand-typed `binhost_url` is used as it is. |
+| `mirrors` | list of HTTPS URLs | `[]` | Mirrors in order. GENTOO_MIRRORS is `mirrors` (else `mirror`) then `mirror_fallbacks`; the stage3 download tries the first and then the others. |
+| `rsync_mode` | `snapshot`, `sync` | `snapshot` | `snapshot` = emerge-webrsync. `sync` = `emaint sync` with the Handbook's verified `repos.conf/gentoo.conf` (falls back to the signed snapshot with a warning when rsync is blocked). A non-empty `rsync_mirror` also means `sync`. |
+| `rsync_mirror` | `rsync://` URL or empty | `""` | The rsync server of `sync` mode (`rsync://rsync.gentoo.org/gentoo-portage` when empty). `https://` is refused. |
+| `license_groups` | list of strings | `[]` | ACCEPT_LICENSE groups. `accept_license` is the source of truth; while it is the untouched `@FREE`, the groups become `-* <groups>`. |
+| `package_license` | object `{atom: [licence, ...]}` | `{}` | Written to `package.license/installer`. |
+| `depclean` | bool | `false` | Run `emerge --depclean` last, only after a successful @world update (otherwise a warning says it was skipped). |
+| `profile_override` | string | `""` | A published 23.0 profile path replacing the derived one; it is what `eselect profile set` gets and is checked like `system.profile`. |
+
+The binary package host is written to `/etc/portage/binrepos.conf/gentoobinhost.conf` (the file the stage3 ships) with `verify-signature = true`;
+`PORTAGE_BINHOST` is no longer written. `getuto` runs in the new system before the first emerge; if it fails, `getbinpkg` is left out of FEATURES
+(`binpkg-request-signature` stays), `var/log/gentoo-installer/binhost-off` marks the decision for later stages and a warning is added to the result.
+
+The `repository` stage emits one `progress` event with `data.news = {"unread": N, "titles": ["YYYY-MM-DD  title", ...]}` after the tree is synced
+(absent when there is no unread news item).
 
 ### system
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `world_update` | `auto`, `now`, `later` | `later` | Was a bool: `true` loads as `now`, `false` as `later`. Only `now` updates @world today. |
-| `stage_auto` | bool | `true` | Pick the matching stage3 automatically. Effect later. |
+| `world_update` | `auto`, `now`, `later` | `later` | Was a bool: `true` loads as `now`, `false` as `later`. `auto` updates @world when the profile differs from the stage3's own or USE flags were set. |
+| `stage_auto` | bool | `true` | The Standard and Desktop families follow the desktop (Desktop stage3 for a graphical system, Standard for Minimal). A Hardened or No multilib choice is never replaced. |
 | `kernel` | adds `custom` | `gentoo-kernel-bin` | `custom` is built by the user's own choice. Effect later. |
 | `kernel_config_snippet` | string | `""` | `CONFIG_X=value` / `# CONFIG_X is not set` lines (at most 16 KiB). Effect later. |
 | `initramfs` | `dracut`, `ugrd`, `none` | `dracut` | `genkernel` is refused with a plain message. Distribution kernels still require `dracut`. |

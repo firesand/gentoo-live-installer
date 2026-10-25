@@ -129,7 +129,7 @@ def labels(widget):
 
 def test_the_flags_field_is_named_for_what_it_feeds(make_window):
     window, page = customize_page(make_window)
-    assert "COMMON_FLAGS" in labels(page) and "CFLAGS" not in labels(page)
+    assert "Compiler flags (COMMON_FLAGS)" in labels(page) and "CFLAGS" not in labels(page)  # PORT-02: a human label with the variable name
     assert "COMMON_FLAGS" in page.cflags.toolTip() or "Fortran" in page.cflags.toolTip()
 
 

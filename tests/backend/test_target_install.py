@@ -353,7 +353,7 @@ class Stage3StageTests(StageHarness):
         installer = self.make(target_manifest(network={"proxy": "http://proxy.example:3128"},
                                               portage={"mirror_fallbacks": ["https://mirror.example/gentoo"]}), stage3=capture)
         installer._stage3()
-        self.assertEqual(capture.args[:3], ("https://distfiles.gentoo.org", "amd64-openrc", installer.target_root))
+        self.assertEqual(capture.args[:3], ("https://distfiles.gentoo.org", "amd64-desktop-openrc", installer.target_root))  # KDE: the Desktop stage3 (PORT-08)
         self.assertEqual(capture.kwargs["proxy"], "http://proxy.example:3128")
         self.assertEqual(capture.kwargs["fallback_mirrors"], ("https://mirror.example/gentoo",))
         self.assertEqual(capture.kwargs["allowed_existing"], ["/", "/efi"])

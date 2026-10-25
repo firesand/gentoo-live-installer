@@ -76,8 +76,6 @@ class SystemPage(Page):
         self.profile = QComboBox()  # not editable: only published profiles can be installed
         self.profile.setAccessibleName("Portage profile")
         form.addRow("Portage profile", self.profile)
-        self.world_update = QCheckBox("Update @world during installation (can take much longer)")
-        form.addRow(self.world_update)
         base.content.addLayout(form)
         self.content.addWidget(base)
         self.init_group.selectionChanged.connect(self._init_changed)
@@ -197,7 +195,6 @@ class SystemPage(Page):
             self.stage.setCurrentIndex(max(0, self.stage.findData(system.stage_variant)))
             self._loaded_profile = system.profile
             self._refresh_profiles(keep=system.profile)
-            self.world_update.setChecked(system.world_update == "now")
             self.boot_section.load(system)
         finally:
             self._loading -= 1
@@ -214,8 +211,6 @@ class SystemPage(Page):
         system.profile = "" if chosen == self._derived_profile and chosen != self._loaded_profile else chosen
         self.desktop_section.collect(system)
         self.boot_section.collect(system)
-        if self.world_update.isChecked() != (system.world_update == "now"):  # "auto" stays unless the box changes
-            system.world_update = "now" if self.world_update.isChecked() else "later"
 
     def validate_page(self) -> tuple[bool, str]:
         self.save_manifest()
