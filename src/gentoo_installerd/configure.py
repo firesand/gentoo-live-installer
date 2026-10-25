@@ -126,6 +126,7 @@ from .configure_system import (  # noqa: F401
     generated_locales,
     live_input_problems,
     locale_gen_line,
+    option_problems,
     normalised_locale,
     render_dconf_keyboard,
     render_hosts,

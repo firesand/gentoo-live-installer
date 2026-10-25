@@ -546,3 +546,46 @@ def test_the_card_and_the_installer_share_one_status_text(customize):
 
     _, tab = customize
     assert tab.gaming_status.text() == gaming_readiness.FORTNITE_STATUS
+
+
+# --- review follow-ups -------------------------------------------------------------------------------------------
+
+
+def test_an_imported_settings_file_is_never_treated_as_a_fresh_start(page):
+    from gentoo_installer.manifest import Accounts
+
+    assert page.root_choice() == "off"  # the untouched first visit
+    page.manifest.accounts = Accounts()  # what an import does: a new object, here with the manifest's own defaults (a file has no passwords)
+    page.load_manifest()
+    assert page.root_choice() == "separate"
+    assert {g for g, c in page.group_checks.items() if c.isChecked()} == {"wheel", "audio", "video"}
+
+
+def test_once_saved_the_page_shows_what_the_manifest_holds(page):
+    page.password.setText("a-long-password-1")
+    page.password_confirm.setText("a-long-password-1")
+    page.save_manifest()
+    page.load_manifest()
+    assert page.root_choice() == "off" and page.manifest.accounts.root_mode == "locked"
+
+
+def test_a_leftover_journal_setting_cannot_reach_an_openrc_install(customize):
+    window, tab = customize
+    window.manifest.options.journal_persistent = True
+    tab.save_tools()
+    assert window.manifest.options.journal_persistent is False
+
+
+def test_the_customize_page_reports_choices_the_installer_cannot_carry_out(customize):
+    window, tab = customize
+    tab.set_tools_advanced(True)
+    tab.cron.addItem("bcron", "bcron")
+    tab.cron.setCurrentIndex(tab.cron.findData("bcron"))
+    ok, message = tab.validate_page()
+    assert not ok and "bcron is not available yet" in message
+    tab.cron.setCurrentIndex(tab.cron.findData("cronie"))
+    tab.gaming_buttons["native"].setChecked(True)
+    ok, message = tab.validate_page()
+    assert not ok and "accepts this" in message
+    tab.gaming_accept.setChecked(True)
+    assert tab.validate_page()[0]

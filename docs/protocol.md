@@ -297,33 +297,34 @@ The one deliberate change is `options.ssh`, now `true`.
 | `secure_boot_mode` | `off`, `own-key`, `create`, `shim` | `off` | An old file with `secure_boot: true` loads as `own-key`. Effect later. |
 | `serial_console` | string | `""` | e.g. `ttyS0,115200`. Effect later. |
 | `desktop` | adds `cinnamon`, `mate`, `lxqt`, `gnome-light`, `sway`, `i3` | `kde` | Checked against `FAMILY_DESKTOP_SUPPORT`; the registry comes later. |
-| `domain` | string | `""` | Domain name. Effect later. |
-| `hosts_extra` | list of `"address name [alias...]"` | `[]` | Extra /etc/hosts lines. Effect later. |
-| `extra_locales` | list of locales | `[]` | Locales besides `locale`. Effect later. |
+| `domain` | string | `""` | Domain name; `/etc/hosts` says `host.domain host` (no domain: just `host`). |
+| `hosts_extra` | list of `"address name [alias...]"` | `[]` | Extra /etc/hosts lines, appended as written (one space between fields). |
+| `extra_locales` | list of locales | `[]` | Locales generated besides `locale` and `en_US.UTF-8`; `locale -a` is checked afterwards (a miss is a warning). |
 
 ### accounts
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `root_mode` | `same`, `separate`, `locked` | `separate` | Kept in step with `disable_root_login` (`locked` = true). `same`/`separate` still need a root password today. |
-| `privilege` | `sudo`, `doas`, `run0`, `su` | `sudo` | `run0` needs systemd. Only `sudo`/`doas` have an effect today. |
-| `ssh_password_login` | bool | `true` | Password login over SSH (I10). With `ssh` on, `false` and no authorized key is refused. Effect later. |
-| `ssh_root_login` | bool | `false` | Effect later. |
+| `root_mode` | `same`, `separate`, `locked` | `separate` | Kept in step with `disable_root_login` (`locked` = true). `same` gives root the user's password, `separate` needs its own; `locked` needs `wheel` and an administrator tool other than `su`. |
+| `privilege` | `sudo`, `doas`, `run0`, `su` | `sudo` | `run0` needs systemd. `sudo`, `doas` and `run0` (polkit) install their package; `su` installs nothing and needs the root password. |
+| `ssh_password_login` | bool | `true` | Password login over SSH (I10). With `ssh` on, `false` and no authorized key is refused. Written to `/etc/ssh/sshd_config.d/10-installer.conf` (`PasswordAuthentication no`, `KbdInteractiveAuthentication no`). |
+| `ssh_root_login` | bool | `false` | `true` is refused ("not available"): the file always says `PermitRootLogin no`. |
 
 ### options
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `ssh` | bool | **`true`** (was `false`) | sshd enabled on the installed system. |
-| `logger` | `sysklogd`, `syslog-ng`, `metalog`, `none` | `syslog-ng` | Was a bool: `true` loads as `syslog-ng`, `false` as `none`. Only syslog-ng/none have an effect today. |
-| `cron` | `cronie`, `dcron`, `fcron`, `bcron`, `none` | `cronie` | Was a bool: `true` loads as `cronie`, `false` as `none`. |
+| `logger` | `sysklogd`, `syslog-ng`, `metalog`, `none` | `syslog-ng` | Was a bool: `true` loads as `syslog-ng`, `false` as `none`. OpenRC installs and enables the chosen logger; systemd keeps its journal (no package). |
+| `cron` | `cronie`, `dcron`, `fcron`, `bcron`, `none` | `cronie` | Was a bool: `true` loads as `cronie`, `false` as `none`. `bcron` (no service script) and `fcron` with systemd (no unit) are refused; an OpenRC `syslog-ng` pulls `cronie` for logrotate even with `none`. |
 | `timesync` | `chrony`, `timesyncd`, `none` | `chrony` | The old bool `chrony` still loads (`true` = `chrony`, `false` = `none`); `timesyncd` needs systemd. |
-| `gentoolkit`, `eclean_kernel`, `mlocate`, `journal_persistent` | bool | `false` | Effect later. |
+| `gentoolkit`, `eclean_kernel`, `mlocate` | bool | `false` | Install `app-portage/gentoolkit`, `app-admin/eclean-kernel`, `sys-apps/mlocate` (`file_indexing` means the same as `mlocate`). |
+| `journal_persistent` | bool | `false` | systemd only (refused with OpenRC): creates `/var/log/journal`. |
 | `browser` | `firefox`, `none` | `firefox` | Effect later. |
 | `flathub` | bool | `false` | Effect later. |
 | `input_method` | `auto`, `none`, `ibus`, `fcitx5` | `auto` | `auto` installs nothing yet. |
 | `accessibility` | bool | `false` | Effect later. |
-| `gaming` | `off`, `flatpak`, `native` | `off` | `native` is refused without multilib; both are refused on the minimal desktop. Effect later. |
-| `gaming_tweaks` | bool | `true` | Read only when `gaming` is not `off`. |
-| `gaming_windows_tools` | bool | `false` | Effect later. |
+| `gaming` | `off`, `flatpak`, `native` | `off` | `native` is refused without multilib and without `gaming_accept_external`; both are refused on the minimal desktop. `off` changes nothing. Implemented in `configure_gaming.py`; the wording and the read-only readiness list are in `gaming_readiness.py`. |
+| `gaming_tweaks` | bool | `true` | Read only when `gaming` is not `off`: sysctl `vm.max_map_count`, NTSYNC (dist kernels only) and GameMode. |
+| `gaming_windows_tools` | bool | `false` | Native mode: Heroic, Wine, DXVK, VKD3D-Proton, protontricks (Flatpak mode installs Heroic as a Flatpak anyway). |
 | `gaming_accept_external` | bool | `false` | Native mode: accept the Steam overlay, ~amd64 packages and the download from Valve. |
 
 ### hardware

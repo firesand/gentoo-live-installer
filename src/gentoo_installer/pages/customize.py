@@ -102,7 +102,7 @@ class CustomizePage(PortageTabMixin, NetworkTabMixin, ToolsTabMixin, Page):
         if problem:
             return False, problem
         sections = self.manifest.validate_sections()
-        errors = [error for name in ("portage", "network", "options") for error in sections[name]]
+        errors = [error for name in ("portage", "network", "options") for error in sections[name]] or self.tools_problems()
         if errors:
             return False, errors[0]
         hardware = self.hardware.problems()

@@ -120,8 +120,13 @@ def account_problems(manifest: InstallManifest) -> list[str]:
 
 def choice_problems(manifest: InstallManifest) -> list[str]:
     """Choices of the accounts and tools that cannot be carried out; a choice is refused here, never silently ignored."""
+    return [*account_problems(manifest), *option_problems(manifest)]
+
+
+def option_problems(manifest: InstallManifest) -> list[str]:
+    """Tool and gaming choices that cannot be carried out (the GUI shows them on the Customize page)."""
     options, system = manifest.options, manifest.system
-    problems = account_problems(manifest)
+    problems: list[str] = []
     if options.cron == "bcron":
         problems.append("bcron is not available yet: Gentoo's bcron package has no service script. Choose cronie, dcron or none")
     if options.cron == "fcron" and system.init == "systemd":

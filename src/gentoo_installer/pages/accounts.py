@@ -118,7 +118,8 @@ class AccountsPage(Page):
         self._table: dict[str, list[str]] = {}
         self._advanced = False
         self._auto_clock = False
-        self._fresh = self._is_fresh()
+        self._initial_accounts = manifest.accounts  # an import replaces this object: what it brings is never "fresh"
+        self._touched = False
         self._build_account_card()
         self._build_ssh_card()
         self._build_region_card()
@@ -364,9 +365,9 @@ class AccountsPage(Page):
 
     def _is_fresh(self) -> bool:
         """A manifest nobody has edited yet: the Guided defaults (root login off, the wider group list) may be pre-selected.
-        A loaded or already-edited manifest shows exactly what it holds."""
+        A loaded, imported or already-saved manifest shows exactly what it holds."""
         accounts = self.manifest.accounts
-        return (not accounts.password and not accounts.root_password and accounts.root_mode == "separate"
+        return (not self._touched and accounts is self._initial_accounts and not accounts.password and not accounts.root_password and accounts.root_mode == "separate"
                 and list(accounts.groups) == FACTORY_GROUPS and accounts.privilege == "sudo")
 
     # --- information from the rest of the window ---------------------------------------------------------------
@@ -618,7 +619,7 @@ class AccountsPage(Page):
     def load_manifest(self) -> None:
         accounts = self.manifest.accounts
         system = self.manifest.system
-        fresh = self._fresh
+        fresh = self._is_fresh()
         self.hostname.setText(accounts.hostname)
         self.full_name.setText(accounts.full_name)
         self.username.setText(accounts.username)
@@ -672,6 +673,7 @@ class AccountsPage(Page):
         return index
 
     def save_manifest(self) -> None:
+        self._touched = True
         accounts = self.manifest.accounts
         system = self.manifest.system
         accounts.hostname = self.hostname.text().strip()

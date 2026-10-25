@@ -297,7 +297,7 @@ def test_the_default_tool_atoms_are_what_they_were(tmp_path):
 def test_each_openrc_logger_has_its_package_and_service(tmp_path, logger, atoms, service):
     m, c, _, _ = tools(tmp_path, logger=logger, cron="none")
     assert all(atom in c.system_tool_atoms(m) for atom in atoms)
-    assert ("sys-process/cronie" in c.system_tool_atoms(m)) == (logger == "syslog-ng")  # only syslog-ng needs logrotate from cron
+    assert ("sys-process/cronie" in c.system_tool_atoms(m)) == (logger == "syslog-ng")  # sysklogd rotates itself (its logrotate USE flag is off), metalog too
     assert (service, "default", False) in c.service_specs(m)
 
 

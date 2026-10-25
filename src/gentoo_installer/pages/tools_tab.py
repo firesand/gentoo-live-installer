@@ -202,6 +202,12 @@ class ToolsTabMixin:
         self.cron_note.setText(note)
         self.cron_note.setVisible(bool(note))
 
+    def tools_problems(self) -> list[str]:
+        """Tool and gaming choices the installer cannot carry out, as the daemon would refuse them (so the user sees them before the install starts)."""
+        from gentoo_installerd.configure_system import option_problems  # lazy: the daemon's own list
+
+        return option_problems(self.manifest)
+
     def set_tools_advanced(self, advanced: bool) -> None:
         self.tools_more.set_advanced(advanced)
 
@@ -381,6 +387,8 @@ class ToolsTabMixin:
         options.cron = str(self.cron.currentData() or options.cron)
         options.kde_apps = str(self.kde_apps.currentData() or options.kde_apps)
         options.extra_packages = self.extra_packages.text().split()
+        if self.manifest.system.init != "systemd":
+            options.journal_persistent = False  # the box is hidden on OpenRC: a value left over from a file must not reach the install
         options.gaming = self._gaming_mode()
         options.gaming_tweaks = self.gaming_tweaks.isChecked()
         options.gaming_windows_tools = self.gaming_windows.isChecked()
