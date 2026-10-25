@@ -87,8 +87,13 @@ def ppm_header(data: bytes) -> tuple[int, int, int]:
 def ppm_to_png(data: bytes) -> bytes:
     """The PNG (8-bit RGB) of a PPM screendump; QEMU writes PPM, a person wants PNG."""
     width, height, offset = ppm_header(data)
-    stride = width * 3
-    raw = b"".join(b"\x00" + data[offset + row * stride:offset + (row + 1) * stride] for row in range(height))
+    # QEMU's screendump pads every row to a multiple of 4 bytes: at 1366 pixels a row is 4098 bytes of colour and 4100 in the file.
+    # Read with 4098, the picture shears a little more on every row (the first 1366x768 run of the harness). A plain PPM has no padding.
+    line = width * 3
+    stride = (len(data) - offset) // height
+    if not line <= stride < line + 4:
+        stride = line
+    raw = b"".join(b"\x00" + data[offset + row * stride:offset + row * stride + line] for row in range(height))
 
     def chunk(kind: bytes, payload: bytes) -> bytes:
         body = kind + payload

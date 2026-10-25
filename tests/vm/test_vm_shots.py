@@ -60,6 +60,18 @@ def test_a_ppm_becomes_a_valid_png_with_the_same_pixels():
     assert raw == (b"\x00" + b"\xff\x00\x80" * 3) * 2, "one filter byte per row, then the pixels"
 
 
+def test_rows_padded_to_four_bytes_are_read_without_the_padding():
+    """QEMU's screendump at 1366 pixels: 4098 bytes of colour per row, 4100 in the file. 3 pixels: 9 bytes, padded to 12."""
+    rows = [bytes([10 + row]) * 9 for row in range(4)]
+    padded = b"P6\n3 4\n255\n" + b"".join(row + b"\xee\xee\xee" for row in rows)
+    width, height, raw = decode_png(vm_shots.ppm_to_png(padded))
+    assert (width, height) == (3, 4)
+    assert raw == b"".join(b"\x00" + row for row in rows), "no padding byte becomes a pixel, so no row shifts"
+    # a plain PPM with a trailing newline is not mistaken for a padded one
+    plain = b"P6\n3 4\n255\n" + b"".join(rows) + b"\n"
+    assert decode_png(vm_shots.ppm_to_png(plain))[2] == b"".join(b"\x00" + row for row in rows)
+
+
 @pytest.mark.parametrize("data", [b"", b"P5\n1 1\n255\n\x00", b"P6\n1 1\n65535\n\x00\x00", b"P6\n2 2\n255\n\x00\x00\x00", b"P6\n0 5\n255\n", b"P6\nx y\n255\n"])
 def test_a_screendump_that_is_not_a_complete_ppm_is_refused(data):
     with pytest.raises(vm_shots.ShotsError):
