@@ -31,6 +31,11 @@
       "/etc/portage/package.env/installer-hardware",
       "# Written by the Gentoo installer: packages that need a lot of memory per compile job.\ndev-python/pyside installer-memory\ndev-qt/qtwebengine installer-memory\nllvm-core/llvm installer-memory\nllvm-core/clang installer-memory\nnet-libs/webkit-gtk installer-memory\n",
       420
+     ],
+     [
+      "/etc/bluetooth/main.conf.d/10-installer.conf",
+      "# Written by the Gentoo installer.\n[Policy]\nAutoEnable=true\n",
+      420
      ]
     ],
     "kernel_cmdline": [],
@@ -131,6 +136,11 @@
       "code": "hw.nvidia_skipped",
       "message": "The NVIDIA driver is available for NVIDIA GeForce RTX 4060 Max-Q / Mobile, but its licence has not been accepted, so the open nouveau driver is used. Accept the licence on the Hardware page to use the NVIDIA driver.",
       "severity": "info"
+     },
+     {
+      "code": "hw.sleep_s2idle",
+      "message": "This laptop only offers the s2idle suspend mode (modern standby). Suspend works, but the battery drains faster than with classic suspend; the firmware settings may offer a Linux or S3 sleep mode.",
+      "severity": "info"
      }
     ]
    }
@@ -164,6 +174,11 @@
      [
       "/etc/portage/package.env/installer-hardware",
       "# Written by the Gentoo installer: packages that need a lot of memory per compile job.\ndev-python/pyside installer-memory\ndev-qt/qtwebengine installer-memory\nllvm-core/llvm installer-memory\nllvm-core/clang installer-memory\nnet-libs/webkit-gtk installer-memory\n",
+      420
+     ],
+     [
+      "/etc/bluetooth/main.conf.d/10-installer.conf",
+      "# Written by the Gentoo installer.\n[Policy]\nAutoEnable=true\n",
       420
      ]
     ],
@@ -304,7 +319,13 @@
      "Storage: weekly TRIM for the solid-state disk (cron)",
      "Boot: fallback boot path is always written"
     ],
-    "warnings": []
+    "warnings": [
+     {
+      "code": "hw.sleep_s2idle",
+      "message": "This laptop only offers the s2idle suspend mode (modern standby). Suspend works, but the battery drains faster than with classic suspend; the firmware settings may offer a Linux or S3 sleep mode.",
+      "severity": "info"
+     }
+    ]
    }
   },
   "portable-nvidia": {
@@ -504,6 +525,11 @@
       420
      ],
      [
+      "/etc/bluetooth/main.conf.d/10-installer.conf",
+      "# Written by the Gentoo installer.\n[Policy]\nAutoEnable=true\n",
+      420
+     ],
+     [
       "/etc/skel/.config/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml",
       "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\n<channel name=\"xsettings\" version=\"1.0\">\n  <property name=\"Xft\" type=\"empty\">\n    <property name=\"DPI\" type=\"int\" value=\"216\"/>\n  </property>\n</channel>\n",
       420
@@ -618,10 +644,29 @@
      "Boot: fallback boot path is always written",
      "Display: 216 dpi interface scale for Xfce"
     ],
+    "user_services": [
+     [
+      "pipewire.socket",
+      "socket"
+     ],
+     [
+      "pipewire-pulse.socket",
+      "socket"
+     ],
+     [
+      "wireplumber.service",
+      "service"
+     ]
+    ],
     "warnings": [
      {
       "code": "hw.nvidia_skipped",
       "message": "The NVIDIA driver is available for NVIDIA GeForce RTX 4060 Max-Q / Mobile, but its licence has not been accepted, so the open nouveau driver is used. Accept the licence on the Hardware page to use the NVIDIA driver.",
+      "severity": "info"
+     },
+     {
+      "code": "hw.sleep_s2idle",
+      "message": "This laptop only offers the s2idle suspend mode (modern standby). Suspend works, but the battery drains faster than with classic suspend; the firmware settings may offer a Linux or S3 sleep mode.",
       "severity": "info"
      }
     ]

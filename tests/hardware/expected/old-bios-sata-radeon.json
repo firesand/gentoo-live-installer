@@ -514,6 +514,20 @@
      "Memory: compressed RAM swap (zram), 1953 MiB",
      "Memory: large programs that have to be compiled (Qt, LLVM, PySide) are built with one compile job, to stay within the memory of this PC"
     ],
+    "user_services": [
+     [
+      "pipewire.socket",
+      "socket"
+     ],
+     [
+      "pipewire-pulse.socket",
+      "socket"
+     ],
+     [
+      "wireplumber.service",
+      "service"
+     ]
+    ],
     "warnings": []
    }
   }

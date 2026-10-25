@@ -32,6 +32,11 @@
       "/etc/portage/package.env/installer-hardware",
       "# Written by the Gentoo installer: packages that need a lot of memory per compile job.\ndev-python/pyside installer-memory\ndev-qt/qtwebengine installer-memory\nllvm-core/llvm installer-memory\nllvm-core/clang installer-memory\nnet-libs/webkit-gtk installer-memory\n",
       420
+     ],
+     [
+      "/etc/bluetooth/main.conf.d/10-installer.conf",
+      "# Written by the Gentoo installer.\n[Policy]\nAutoEnable=true\n",
+      420
      ]
     ],
     "kernel_cmdline": [],
@@ -43,7 +48,8 @@
      "sys-power/switcheroo-control",
      "sys-firmware/sof-firmware",
      "sys-power/power-profiles-daemon",
-     "sys-power/thermald"
+     "sys-power/thermald",
+     "sys-apps/fwupd"
     ],
     "optional_services": [
      [
@@ -57,6 +63,10 @@
      [
       "thermald",
       "default"
+     ],
+     [
+      "fwupd",
+      "default"
      ]
     ],
     "package_license": {
@@ -69,6 +79,10 @@
     },
     "package_mask": [],
     "package_use": {
+     "kde-plasma/plasma-meta": [
+      "wacom",
+      "virtualkeyboard"
+     ],
      "media-video/pipewire": [
       "sound-server"
      ],
@@ -144,6 +158,16 @@
       "code": "hw.nvidia_skipped",
       "message": "The NVIDIA driver is available for NVIDIA GeForce RTX 4050 Max-Q / Mobile, but its licence has not been accepted, so the open nouveau driver is used. Accept the licence on the Hardware page to use the NVIDIA driver.",
       "severity": "info"
+     },
+     {
+      "code": "hw.sleep_s2idle",
+      "message": "This laptop only offers the s2idle suspend mode (modern standby). Suspend works, but the battery drains faster than with classic suspend; the firmware settings may offer a Linux or S3 sleep mode.",
+      "severity": "info"
+     },
+     {
+      "code": "hw.camera_ipu",
+      "message": "The built-in camera of this laptop (Intel IPU6) has no working driver on Gentoo yet. A USB webcam works, and so do video calls with it.",
+      "severity": "info"
      }
     ]
    }
@@ -179,6 +203,11 @@
       "/etc/portage/package.env/installer-hardware",
       "# Written by the Gentoo installer: packages that need a lot of memory per compile job.\ndev-python/pyside installer-memory\ndev-qt/qtwebengine installer-memory\nllvm-core/llvm installer-memory\nllvm-core/clang installer-memory\nnet-libs/webkit-gtk installer-memory\n",
       420
+     ],
+     [
+      "/etc/bluetooth/main.conf.d/10-installer.conf",
+      "# Written by the Gentoo installer.\n[Policy]\nAutoEnable=true\n",
+      420
      ]
     ],
     "first_steps": [
@@ -199,7 +228,8 @@
      "sys-power/switcheroo-control",
      "sys-firmware/sof-firmware",
      "sys-power/power-profiles-daemon",
-     "sys-power/thermald"
+     "sys-power/thermald",
+     "sys-apps/fwupd"
     ],
     "optional_services": [
      [
@@ -212,6 +242,10 @@
      ],
      [
       "thermald",
+      "default"
+     ],
+     [
+      "fwupd",
       "default"
      ]
     ],
@@ -228,6 +262,10 @@
     },
     "package_mask": [],
     "package_use": {
+     "kde-plasma/plasma-meta": [
+      "wacom",
+      "virtualkeyboard"
+     ],
      "media-video/pipewire": [
       "sound-server"
      ],
@@ -330,7 +368,18 @@
      "Storage: weekly TRIM for the solid-state disk (cron)",
      "Boot: fallback boot path is always written"
     ],
-    "warnings": []
+    "warnings": [
+     {
+      "code": "hw.sleep_s2idle",
+      "message": "This laptop only offers the s2idle suspend mode (modern standby). Suspend works, but the battery drains faster than with classic suspend; the firmware settings may offer a Linux or S3 sleep mode.",
+      "severity": "info"
+     },
+     {
+      "code": "hw.camera_ipu",
+      "message": "The built-in camera of this laptop (Intel IPU6) has no working driver on Gentoo yet. A USB webcam works, and so do video calls with it.",
+      "severity": "info"
+     }
+    ]
    }
   },
   "portable-nvidia": {
@@ -378,11 +427,16 @@
     ],
     "optional_atoms": [
      "sys-power/switcheroo-control",
-     "sys-firmware/sof-firmware"
+     "sys-firmware/sof-firmware",
+     "sys-apps/fwupd"
     ],
     "optional_services": [
      [
       "switcheroo-control",
+      "default"
+     ],
+     [
+      "fwupd",
       "default"
      ]
     ],
@@ -531,6 +585,11 @@
       420
      ],
      [
+      "/etc/bluetooth/main.conf.d/10-installer.conf",
+      "# Written by the Gentoo installer.\n[Policy]\nAutoEnable=true\n",
+      420
+     ],
+     [
       "/etc/skel/.config/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml",
       "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\n<channel name=\"xsettings\" version=\"1.0\">\n  <property name=\"Xft\" type=\"empty\">\n    <property name=\"DPI\" type=\"int\" value=\"240\"/>\n  </property>\n</channel>\n",
       420
@@ -548,7 +607,9 @@
      "sys-power/switcheroo-control",
      "sys-firmware/sof-firmware",
      "sys-power/tlp",
-     "sys-power/thermald"
+     "sys-power/thermald",
+     "sys-apps/fwupd",
+     "x11-drivers/xf86-input-wacom"
     ],
     "optional_services": [
      [
@@ -657,10 +718,34 @@
      "Boot: fallback boot path is always written",
      "Display: 240 dpi interface scale for Xfce"
     ],
+    "user_services": [
+     [
+      "pipewire.socket",
+      "socket"
+     ],
+     [
+      "pipewire-pulse.socket",
+      "socket"
+     ],
+     [
+      "wireplumber.service",
+      "service"
+     ]
+    ],
     "warnings": [
      {
       "code": "hw.nvidia_skipped",
       "message": "The NVIDIA driver is available for NVIDIA GeForce RTX 4050 Max-Q / Mobile, but its licence has not been accepted, so the open nouveau driver is used. Accept the licence on the Hardware page to use the NVIDIA driver.",
+      "severity": "info"
+     },
+     {
+      "code": "hw.sleep_s2idle",
+      "message": "This laptop only offers the s2idle suspend mode (modern standby). Suspend works, but the battery drains faster than with classic suspend; the firmware settings may offer a Linux or S3 sleep mode.",
+      "severity": "info"
+     },
+     {
+      "code": "hw.camera_ipu",
+      "message": "The built-in camera of this laptop (Intel IPU6) has no working driver on Gentoo yet. A USB webcam works, and so do video calls with it.",
       "severity": "info"
      }
     ]

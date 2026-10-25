@@ -32,17 +32,31 @@
       "/etc/portage/package.env/installer-hardware",
       "# Written by the Gentoo installer: packages that need a lot of memory per compile job.\ndev-python/pyside installer-memory\ndev-qt/qtwebengine installer-memory\nllvm-core/llvm installer-memory\nllvm-core/clang installer-memory\nnet-libs/webkit-gtk installer-memory\n",
       420
+     ],
+     [
+      "/etc/bluetooth/main.conf.d/10-installer.conf",
+      "# Written by the Gentoo installer.\n[Policy]\nAutoEnable=true\n",
+      420
      ]
+    ],
+    "first_steps": [
+     "Razer devices: open RazerGenie to choose colours and DPI. You were added to the group plugdev; log out and in once so it applies."
+    ],
+    "groups": [
+     "plugdev"
     ],
     "kernel_cmdline": [],
     "make_conf": {},
     "notes": [
-     "With 14.8 GiB of memory (and the swap), the packages that need about 4 GiB per compile job (pyside, qtwebengine, llvm, clang, webkit-gtk) get 4 compile jobs when they are built from source."
+     "With 14.8 GiB of memory (and the swap), the packages that need about 4 GiB per compile job (pyside, qtwebengine, llvm, clang, webkit-gtk) get 4 compile jobs when they are built from source.",
+     "OpenRazer is built on this PC against your kernel; a kernel update rebuilds it. If the build fails the system still starts without it."
     ],
     "optional_atoms": [
      "sys-power/switcheroo-control",
      "sys-power/power-profiles-daemon",
-     "sys-power/thermald"
+     "sys-power/thermald",
+     "sys-apps/openrazer",
+     "sys-apps/razergenie"
     ],
     "optional_services": [
      [
@@ -71,6 +85,9 @@
      "media-video/pipewire": [
       "sound-server"
      ],
+     "sys-apps/openrazer": [
+      "dist-kernel"
+     ],
      "sys-firmware/intel-microcode": [
       "initramfs"
      ],
@@ -79,6 +96,11 @@
      ]
     },
     "post_steps": [
+     [
+      "sh",
+      "-c",
+      "if [ -f /usr/share/openrazer/openrazer-daemon.desktop ]; then mkdir -p /etc/xdg/autostart && ln -sf /usr/share/openrazer/openrazer-daemon.desktop /etc/xdg/autostart/openrazer-daemon.desktop; fi; exit 0"
+     ],
      [
       "sh",
       "-c",
@@ -98,6 +120,7 @@
       "Intel graphics",
       "Bluetooth"
      ],
+     "first_user": "gentoo",
      "form_factor": "laptop",
      "gpu_driver": "open",
      "gpu_mode": "nouveau",
@@ -142,6 +165,11 @@
       "code": "hw.nvidia_skipped",
       "message": "The NVIDIA driver is available for NVIDIA GeForce RTX 3070 Mobile / Max-Q, but its licence has not been accepted, so the open nouveau driver is used. Accept the licence on the Hardware page to use the NVIDIA driver.",
       "severity": "info"
+     },
+     {
+      "code": "hw.sleep_s2idle",
+      "message": "This laptop only offers the s2idle suspend mode (modern standby). Suspend works, but the battery drains faster than with classic suspend; the firmware settings may offer a Linux or S3 sleep mode.",
+      "severity": "info"
      }
     ]
    }
@@ -177,11 +205,20 @@
       "/etc/portage/package.env/installer-hardware",
       "# Written by the Gentoo installer: packages that need a lot of memory per compile job.\ndev-python/pyside installer-memory\ndev-qt/qtwebengine installer-memory\nllvm-core/llvm installer-memory\nllvm-core/clang installer-memory\nnet-libs/webkit-gtk installer-memory\n",
       420
+     ],
+     [
+      "/etc/bluetooth/main.conf.d/10-installer.conf",
+      "# Written by the Gentoo installer.\n[Policy]\nAutoEnable=true\n",
+      420
      ]
     ],
     "first_steps": [
      "If the screen stays black after an update, choose \"Gentoo Linux (safe graphics)\" in the boot menu; it starts without the NVIDIA driver.",
-     "The NVIDIA modules are rebuilt by emerge after every kernel update (USE=dist-kernel). If an update reports that the build failed, run: emerge --ask @module-rebuild"
+     "The NVIDIA modules are rebuilt by emerge after every kernel update (USE=dist-kernel). If an update reports that the build failed, run: emerge --ask @module-rebuild",
+     "Razer devices: open RazerGenie to choose colours and DPI. You were added to the group plugdev; log out and in once so it applies."
+    ],
+    "groups": [
+     "plugdev"
     ],
     "kernel_cmdline": [],
     "make_conf": {
@@ -191,12 +228,15 @@
      "NVIDIA proprietary driver 595 (current, open kernel modules); if it fails to build, the open nouveau driver stays in use.",
      "The NVIDIA driver is not on the binary host: it is downloaded from download.nvidia.com and compiled on this PC, which adds several minutes and needs internet access to that address.",
      "Two graphics cards: programs run on the integrated card; start one on the NVIDIA card with prime-run.",
-     "With 14.8 GiB of memory (and the swap), the packages that need about 4 GiB per compile job (pyside, qtwebengine, llvm, clang, webkit-gtk) get 4 compile jobs when they are built from source."
+     "With 14.8 GiB of memory (and the swap), the packages that need about 4 GiB per compile job (pyside, qtwebengine, llvm, clang, webkit-gtk) get 4 compile jobs when they are built from source.",
+     "OpenRazer is built on this PC against your kernel; a kernel update rebuilds it. If the build fails the system still starts without it."
     ],
     "optional_atoms": [
      "sys-power/switcheroo-control",
      "sys-power/power-profiles-daemon",
-     "sys-power/thermald"
+     "sys-power/thermald",
+     "sys-apps/openrazer",
+     "sys-apps/razergenie"
     ],
     "optional_services": [
      [
@@ -228,6 +268,9 @@
      "media-video/pipewire": [
       "sound-server"
      ],
+     "sys-apps/openrazer": [
+      "dist-kernel"
+     ],
      "sys-firmware/intel-microcode": [
       "initramfs"
      ],
@@ -252,6 +295,11 @@
       "sh",
       "gentoo",
       "The NVIDIA driver could not be installed during the installation, so this PC runs on the open nouveau driver. To try again once the network works: emerge --ask x11-drivers/nvidia-drivers && dracut --force --regenerate-all (the driver is downloaded from download.nvidia.com and compiled on this PC)."
+     ],
+     [
+      "sh",
+      "-c",
+      "if [ -f /usr/share/openrazer/openrazer-daemon.desktop ]; then mkdir -p /etc/xdg/autostart && ln -sf /usr/share/openrazer/openrazer-daemon.desktop /etc/xdg/autostart/openrazer-daemon.desktop; fi; exit 0"
      ],
      [
       "sh",
@@ -326,7 +374,13 @@
      "Storage: weekly TRIM for the solid-state disk (cron)",
      "Boot: fallback boot path is always written"
     ],
-    "warnings": []
+    "warnings": [
+     {
+      "code": "hw.sleep_s2idle",
+      "message": "This laptop only offers the s2idle suspend mode (modern standby). Suspend works, but the battery drains faster than with classic suspend; the firmware settings may offer a Linux or S3 sleep mode.",
+      "severity": "info"
+     }
+    ]
    }
   },
   "portable-nvidia": {
@@ -527,10 +581,21 @@
       420
      ],
      [
+      "/etc/bluetooth/main.conf.d/10-installer.conf",
+      "# Written by the Gentoo installer.\n[Policy]\nAutoEnable=true\n",
+      420
+     ],
+     [
       "/etc/skel/.config/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml",
       "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\n<channel name=\"xsettings\" version=\"1.0\">\n  <property name=\"Xft\" type=\"empty\">\n    <property name=\"DPI\" type=\"int\" value=\"144\"/>\n  </property>\n</channel>\n",
       420
      ]
+    ],
+    "first_steps": [
+     "Razer devices: open Polychromatic to choose colours and DPI. You were added to the group plugdev; log out and in once so it applies."
+    ],
+    "groups": [
+     "plugdev"
     ],
     "kernel_cmdline": [],
     "make_conf": {
@@ -538,12 +603,15 @@
      "VIDEO_CARDS": "intel nouveau nvk"
     },
     "notes": [
-     "With 14.8 GiB of memory (and the swap), the packages that need about 4 GiB per compile job (pyside, qtwebengine, llvm, clang, webkit-gtk) get 4 compile jobs when they are built from source."
+     "With 14.8 GiB of memory (and the swap), the packages that need about 4 GiB per compile job (pyside, qtwebengine, llvm, clang, webkit-gtk) get 4 compile jobs when they are built from source.",
+     "OpenRazer is built on this PC against your kernel; a kernel update rebuilds it. If the build fails the system still starts without it."
     ],
     "optional_atoms": [
      "sys-power/switcheroo-control",
      "sys-power/tlp",
-     "sys-power/thermald"
+     "sys-power/thermald",
+     "sys-apps/openrazer",
+     "sys-apps/polychromatic"
     ],
     "optional_services": [
      [
@@ -575,6 +643,9 @@
      "media-video/pipewire": [
       "sound-server"
      ],
+     "sys-apps/openrazer": [
+      "dist-kernel"
+     ],
      "sys-firmware/intel-microcode": [
       "initramfs"
      ],
@@ -586,6 +657,11 @@
      ]
     },
     "post_steps": [
+     [
+      "sh",
+      "-c",
+      "if [ -f /usr/share/openrazer/openrazer-daemon.desktop ]; then mkdir -p /etc/xdg/autostart && ln -sf /usr/share/openrazer/openrazer-daemon.desktop /etc/xdg/autostart/openrazer-daemon.desktop; fi; exit 0"
+     ],
      [
       "sh",
       "-c",
@@ -605,6 +681,7 @@
       "Intel graphics",
       "Bluetooth"
      ],
+     "first_user": "gentoo",
      "form_factor": "laptop",
      "gpu_driver": "open",
      "gpu_mode": "nouveau",
@@ -651,10 +728,33 @@
      "Boot: fallback boot path is always written",
      "Display: 144 dpi interface scale for Xfce"
     ],
+    "user_services": [
+     [
+      "openrazer-daemon.service",
+      "service"
+     ],
+     [
+      "pipewire.socket",
+      "socket"
+     ],
+     [
+      "pipewire-pulse.socket",
+      "socket"
+     ],
+     [
+      "wireplumber.service",
+      "service"
+     ]
+    ],
     "warnings": [
      {
       "code": "hw.nvidia_skipped",
       "message": "The NVIDIA driver is available for NVIDIA GeForce RTX 3070 Mobile / Max-Q, but its licence has not been accepted, so the open nouveau driver is used. Accept the licence on the Hardware page to use the NVIDIA driver.",
+      "severity": "info"
+     },
+     {
+      "code": "hw.sleep_s2idle",
+      "message": "This laptop only offers the s2idle suspend mode (modern standby). Suspend works, but the battery drains faster than with classic suspend; the firmware settings may offer a Linux or S3 sleep mode.",
       "severity": "info"
      }
     ]

@@ -1010,7 +1010,25 @@ def derive_warnings(profile: HardwareProfile) -> list[HardwareWarning]:
             what = "Wi-Fi" if nic.kind == "wifi" else "network"
             out.append(_warn("net_no_driver", "warning", f"A {what} adapter ({nic.vendor_id}:{nic.device_id}) has no driver in this kernel. Use Ethernet or USB tethering during the install."))
             if nic.vendor_id == data.VENDOR_BROADCOM and nic.kind == "wifi":
-                out.append(_warn("net_broadcom_sta", "warning", "This Wi-Fi chip may need the proprietary broadcom-sta driver, which this installer does not provide. Use Ethernet or USB tethering during the install."))
+                out.append(_warn("net_broadcom_sta", "warning",
+                                 "This Broadcom Wi-Fi chip has no open driver in the kernel. It needs the proprietary broadcom-sta driver (net-wireless/broadcom-sta), "
+                                 "which this installer does not set up. Use Ethernet or USB tethering during the install, then install that package from the new system."))
+    # Vendors: whole-machine hints. Always "may": the installer cannot test every model, and nothing here says a machine is unsupported.
+    if machine.vendor_family == "microsoft" and machine.oem == "surface":
+        out.append(_warn("vendor_surface", "warning",
+                         "Microsoft Surface devices may need drivers that the standard Gentoo kernel does not include. The touch screen, pen, cameras and "
+                         "keyboard cover may not work until you add the linux-surface kernel patches after the installation."))
+    if machine.vendor_family == "apple" and any(c.vendor_id == data.VENDOR_APPLE for c in profile.storage_controllers):
+        out.append(_warn("vendor_apple_t2", "warning",
+                         "This Mac may have the Apple T2 security chip. A standard Linux kernel may not see its internal drive, keyboard, trackpad, "
+                         "Wi-Fi or sound without extra drivers; check the T2 Linux project before you install."))
+    if machine.oem == "victus" and is_hybrid(profile):
+        out.append(_warn("vendor_victus", "info",
+                         "HP Victus laptops with two graphics cards may wake up with a black screen after sleep (s2idle). A firmware update from HP often fixes it."))
+    if machine.oem == "legion":
+        out.append(_warn("vendor_legion", "info",
+                         "Lenovo Legion laptops work with the standard kernel and power-profiles-daemon (performance modes, battery conservation). "
+                         "Fan curves and keyboard lighting need the separate LenovoLegionLinux project, which this installer does not set up."))
     # Machine
     if machine.hypervisor:
         out.append(_warn("vm_detected", "info", f"Running in a virtual machine ({machine.hypervisor}). Guest tools can be installed; CPU microcode and power management are skipped.", "install_guest_tools"))

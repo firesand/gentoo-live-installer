@@ -25,6 +25,11 @@
       "/etc/portage/package.env/installer-hardware",
       "# Written by the Gentoo installer: packages that need a lot of memory per compile job.\ndev-python/pyside installer-memory\ndev-qt/qtwebengine installer-memory\nllvm-core/llvm installer-memory\nllvm-core/clang installer-memory\nnet-libs/webkit-gtk installer-memory\n",
       420
+     ],
+     [
+      "/etc/bluetooth/main.conf.d/10-installer.conf",
+      "# Written by the Gentoo installer.\n[Policy]\nAutoEnable=true\n",
+      420
      ]
     ],
     "kernel_cmdline": [],
@@ -33,11 +38,16 @@
      "With 29.6 GiB of memory (and the swap), the packages that need about 4 GiB per compile job (pyside, qtwebengine, llvm, clang, webkit-gtk) get 8 compile jobs when they are built from source."
     ],
     "optional_atoms": [
-     "sys-power/power-profiles-daemon"
+     "sys-power/power-profiles-daemon",
+     "sys-apps/fwupd"
     ],
     "optional_services": [
      [
       "power-profiles-daemon",
+      "default"
+     ],
+     [
+      "fwupd",
       "default"
      ]
     ],
@@ -141,6 +151,11 @@
       "/etc/portage/package.env/installer-hardware",
       "# Written by the Gentoo installer: packages that need a lot of memory per compile job.\ndev-python/pyside installer-memory\ndev-qt/qtwebengine installer-memory\nllvm-core/llvm installer-memory\nllvm-core/clang installer-memory\nnet-libs/webkit-gtk installer-memory\n",
       420
+     ],
+     [
+      "/etc/bluetooth/main.conf.d/10-installer.conf",
+      "# Written by the Gentoo installer.\n[Policy]\nAutoEnable=true\n",
+      420
      ]
     ],
     "kernel_cmdline": [],
@@ -149,11 +164,16 @@
      "With 29.6 GiB of memory (and the swap), the packages that need about 4 GiB per compile job (pyside, qtwebengine, llvm, clang, webkit-gtk) get 8 compile jobs when they are built from source."
     ],
     "optional_atoms": [
-     "sys-power/power-profiles-daemon"
+     "sys-power/power-profiles-daemon",
+     "sys-apps/fwupd"
     ],
     "optional_services": [
      [
       "power-profiles-daemon",
+      "default"
+     ],
+     [
+      "fwupd",
       "default"
      ]
     ],
@@ -273,9 +293,15 @@
      "With 29.6 GiB of memory (and the swap), the packages that need about 4 GiB per compile job (pyside, qtwebengine, llvm, clang, webkit-gtk) get 8 compile jobs when they are built from source."
     ],
     "optional_atoms": [
-     "sys-firmware/sof-firmware"
+     "sys-firmware/sof-firmware",
+     "sys-apps/fwupd"
     ],
-    "optional_services": [],
+    "optional_services": [
+     [
+      "fwupd",
+      "default"
+     ]
+    ],
     "package_license": {
      "sys-firmware/intel-microcode": [
       "intel-ucode"
@@ -411,6 +437,11 @@
       420
      ],
      [
+      "/etc/bluetooth/main.conf.d/10-installer.conf",
+      "# Written by the Gentoo installer.\n[Policy]\nAutoEnable=true\n",
+      420
+     ],
+     [
       "/etc/skel/.config/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml",
       "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\n<channel name=\"xsettings\" version=\"1.0\">\n  <property name=\"Xft\" type=\"empty\">\n    <property name=\"DPI\" type=\"int\" value=\"168\"/>\n  </property>\n</channel>\n",
       420
@@ -425,7 +456,8 @@
      "With 29.6 GiB of memory (and the swap), the packages that need about 4 GiB per compile job (pyside, qtwebengine, llvm, clang, webkit-gtk) get 8 compile jobs when they are built from source."
     ],
     "optional_atoms": [
-     "sys-power/tlp"
+     "sys-power/tlp",
+     "sys-apps/fwupd"
     ],
     "optional_services": [
      [
@@ -510,6 +542,20 @@
      "Storage: weekly TRIM for the solid-state disk (fstrim.timer)",
      "Boot: fallback boot path is always written",
      "Display: 168 dpi interface scale for Xfce"
+    ],
+    "user_services": [
+     [
+      "pipewire.socket",
+      "socket"
+     ],
+     [
+      "pipewire-pulse.socket",
+      "socket"
+     ],
+     [
+      "wireplumber.service",
+      "service"
+     ]
     ],
     "warnings": []
    }

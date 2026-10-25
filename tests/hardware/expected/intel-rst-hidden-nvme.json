@@ -43,7 +43,8 @@
      "sys-power/switcheroo-control",
      "sys-firmware/sof-firmware",
      "sys-power/power-profiles-daemon",
-     "sys-power/thermald"
+     "sys-power/thermald",
+     "sys-apps/fwupd"
     ],
     "optional_services": [
      [
@@ -56,6 +57,10 @@
      ],
      [
       "thermald",
+      "default"
+     ],
+     [
+      "fwupd",
       "default"
      ]
     ],
@@ -200,7 +205,8 @@
      "sys-power/switcheroo-control",
      "sys-firmware/sof-firmware",
      "sys-power/power-profiles-daemon",
-     "sys-power/thermald"
+     "sys-power/thermald",
+     "sys-apps/fwupd"
     ],
     "optional_services": [
      [
@@ -213,6 +219,10 @@
      ],
      [
       "thermald",
+      "default"
+     ],
+     [
+      "fwupd",
       "default"
      ]
     ],
@@ -388,11 +398,16 @@
     ],
     "optional_atoms": [
      "sys-power/switcheroo-control",
-     "sys-firmware/sof-firmware"
+     "sys-firmware/sof-firmware",
+     "sys-apps/fwupd"
     ],
     "optional_services": [
      [
       "switcheroo-control",
+      "default"
+     ],
+     [
+      "fwupd",
       "default"
      ]
     ],
@@ -565,7 +580,8 @@
      "sys-power/switcheroo-control",
      "sys-firmware/sof-firmware",
      "sys-power/tlp",
-     "sys-power/thermald"
+     "sys-power/thermald",
+     "sys-apps/fwupd"
     ],
     "optional_services": [
      [
@@ -666,6 +682,20 @@
      "Power: TLP and thermald",
      "Boot: fallback boot path is always written",
      "Display: 240 dpi interface scale for Xfce"
+    ],
+    "user_services": [
+     [
+      "pipewire.socket",
+      "socket"
+     ],
+     [
+      "pipewire-pulse.socket",
+      "socket"
+     ],
+     [
+      "wireplumber.service",
+      "service"
+     ]
     ],
     "warnings": [
      {

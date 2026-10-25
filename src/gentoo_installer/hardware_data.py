@@ -10,6 +10,7 @@ preferred over these tables by the callers.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Iterable, Mapping
 
 # ---------------------------------------------------------------------------
@@ -221,9 +222,40 @@ def intel_is_discrete(name: str, slot: str = "") -> bool:
 
 NVIDIA_ATOM = "x11-drivers/nvidia-drivers"
 DIST_KERNELS = frozenset({"gentoo-kernel-bin", "gentoo-kernel"})
-# Desktops with a Wayland session the NVIDIA driver must support (USE=wayland pulls egl-gbm, egl-wayland, egl-wayland2 and egl-x11).
-# Until the desktop registry (B14) says it, this is the table: Plasma, GNOME and its light variant, and the Sway compositor.
-WAYLAND_DESKTOPS = frozenset({"kde", "gnome", "gnome-light", "sway"})
+@dataclass(frozen=True)
+class DesktopTraits:
+    """What the hardware plan needs to know about a desktop. The desktop registry (B14) will own this; until it exists the table is here."""
+
+    graphical: bool = True
+    ppd_ui: bool = False  # has its own power-profile switcher, so power-profiles-daemon (or tlp-pd) is what it talks to
+    wayland: bool = False  # has a Wayland session the NVIDIA driver must support
+    toolkit: str = ""  # qt | gtk | "" (what a vendor front end should be built with)
+    min_ram_gib: float = 0.0  # below this the desktop feels slow
+    hidpi: str = ""  # who scales it: self (the desktop), xsettings, xresources, sway or "" (nothing to do)
+    brings_noto: bool = False  # its package set already installs media-fonts/noto
+
+
+DESKTOP_TRAITS: dict[str, DesktopTraits] = {
+    "minimal": DesktopTraits(graphical=False),
+    "kde": DesktopTraits(ppd_ui=True, wayland=True, toolkit="qt", min_ram_gib=4, hidpi="self", brings_noto=True),
+    "gnome": DesktopTraits(ppd_ui=True, wayland=True, toolkit="gtk", min_ram_gib=4, hidpi="self"),
+    "gnome-light": DesktopTraits(ppd_ui=True, wayland=True, toolkit="gtk", min_ram_gib=3, hidpi="self"),
+    "xfce": DesktopTraits(toolkit="gtk", hidpi="xsettings"),
+    "cinnamon": DesktopTraits(ppd_ui=True, toolkit="gtk", min_ram_gib=3, hidpi="self"),
+    "mate": DesktopTraits(toolkit="gtk", hidpi="self"),
+    "lxqt": DesktopTraits(toolkit="qt", hidpi="xresources"),
+    "sway": DesktopTraits(wayland=True, toolkit="gtk", hidpi="sway"),
+    "i3": DesktopTraits(toolkit="gtk", hidpi="xresources"),
+}
+
+
+def desktop_traits(desktop: str) -> DesktopTraits:
+    """Traits of a desktop; an unknown name is treated as a plain graphical desktop."""
+    return DESKTOP_TRAITS.get(desktop, DesktopTraits())
+
+
+WAYLAND_DESKTOPS = frozenset(name for name, traits in DESKTOP_TRAITS.items() if traits.wayland)
+QT_DESKTOPS = frozenset(name for name, traits in DESKTOP_TRAITS.items() if traits.toolkit == "qt")
 # One sentence for the three places that refuse an out-of-tree kernel module under Secure Boot signing: the plan, the GUI and the text installer.
 # {what} names the thing that is refused ("The NVIDIA driver's kernel modules", "OpenRazer").
 SECURE_BOOT_MODULES_MESSAGE = (

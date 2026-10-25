@@ -280,10 +280,11 @@ def test_resolving_auto_does_not_change_what_the_planner_decides(name, builder):
     machine = fixture_dict(name)
     m = manifest() if builder == "openrc" else __import__("tests.hardware.builders", fromlist=["systemd"]).systemd()
     m.storage.swap_mib = 6144  # a deliberate size, which the seeding leaves alone: the compile jobs of the heavy packages follow the swap
-    before = hwplan.plan(m, machine).to_dict()
     resolved = manifest() if builder == "openrc" else __import__("tests.hardware.builders", fromlist=["systemd"]).systemd()
     resolved.storage.swap_mib = 6144
     rec.apply_defaults(resolved, machine, resolve_auto=True, include_firmware=False)
+    m.hardware.fwupd = resolved.hardware.fwupd  # seeded from the maker (LVFS): a default of its own, not the resolution of an "auto"
+    before = hwplan.plan(m, machine).to_dict()
     assert all(getattr(resolved.hardware, field) != "auto" for field in ("power", "thermald", "zram", "trim", "sof_firmware", "nvk", "prime", "removable_fallback", "hidpi"))
     after = hwplan.plan(resolved, machine).to_dict()
     # In a VM the microcode option is switched off, which only removes the explanatory note.

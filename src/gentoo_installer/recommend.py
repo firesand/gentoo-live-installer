@@ -18,6 +18,7 @@ import math
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from . import devices
 from . import hardware_data as data
 from .hardware import HardwareProfile, gpu_label, is_hybrid
 from .manifest import InstallManifest, Storage
@@ -195,7 +196,7 @@ def recommend(profile: HardwareProfile | Mapping[str, Any] | None, manifest: Ins
             out.append(Recommendation("rec.low_memory_desktop", "warning",
                                       f"This PC has {gib:.1f} GiB of memory. A graphical desktop is not recommended; choose Minimal (no desktop) and keep compressed RAM swap on.",
                                       "system.desktop", "minimal"))
-        elif gib < 4 and desktop in ("kde", "gnome"):
+        elif gib < data.desktop_traits(desktop).min_ram_gib and desktop in ("kde", "gnome", "gnome-light", "cinnamon"):
             out.append(Recommendation("rec.tight_memory", "info",
                                       f"This PC has {gib:.1f} GiB of memory. {desktop.upper()} will feel slow; Xfce needs less.", "system.desktop", "xfce"))
         if manifest.options.install_hwmonux and nominal_ram_gib(total_kib) < HWMONUX_COMFORTABLE_GIB:
@@ -262,8 +263,9 @@ def recommend(profile: HardwareProfile | Mapping[str, Any] | None, manifest: Ins
 
     # Displays
     dpi = recommend_dpi(hw.displays)
-    if dpi > 96 and hardware.hidpi == "auto" and desktop == "xfce":
-        out.append(Recommendation("rec.hidpi", "info", f"The screen is dense ({dpi} dpi); Xfce will be set to {dpi} dpi so text and buttons are readable.", "hardware.hidpi", f"dpi:{dpi}"))
+    if dpi > 96 and hardware.hidpi == "auto" and data.desktop_traits(desktop).hidpi in ("xsettings", "xresources", "sway"):
+        out.append(Recommendation("rec.hidpi", "info", f"The screen is dense ({dpi} dpi); {desktop.upper() if desktop in ('kde', 'gnome', 'lxqt') else desktop.capitalize()} "
+                                  f"will be set to {dpi} dpi so text and buttons are readable.", "hardware.hidpi", f"dpi:{dpi}"))
     return out
 
 
@@ -285,6 +287,9 @@ def defaults_for(profile: HardwareProfile | Mapping[str, Any] | None, manifest: 
         changes["storage.swap_mib"] = recommend_swap_mib(hw.memory.total_kib, zram=zram, hibernate=manifest.hardware.hibernate)
     if not hw.errors_for("usb") and not hw.bluetooth.present and manifest.options.bluetooth:
         changes["options.bluetooth"] = False
+    if (hw.machine.vendor_family in devices.LVFS_VENDORS and hw.machine.form_factor in ("laptop", "tablet") and not hw.machine.hypervisor
+            and not manifest.hardware.fwupd):
+        changes["hardware.fwupd"] = True  # Dell, HP, Lenovo, Framework and System76 publish their firmware updates on the LVFS
     if hw.machine.hypervisor and manifest.options.microcode:
         changes["options.microcode"] = False  # the hypervisor owns the CPU microcode
     # A disk that moves to other screens keeps the default font; so does a font the user chose.

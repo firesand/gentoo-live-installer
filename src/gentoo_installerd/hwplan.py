@@ -30,12 +30,14 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Sequence
 
+from gentoo_installer import devices
 from gentoo_installer import hardware_data as data
 from gentoo_installer import keyboard_data, recommend
 from gentoo_installer.hardware import DiskInfo, GpuInfo, HardwareProfile, gpu_label, is_detected, is_hybrid, parent_disk_name, physical_gpus
 from gentoo_installer.manifest import InstallManifest
 
 from .hwissue import Issue
+from .hwplan_devices import DevicePlanMixin, device_issues
 from .hwplan_nvidia import NvidiaDecision, nvidia_decision
 from .hwplan_nvidia_plan import NVK_GENERATIONS, NvidiaPlanMixin, nvidia_policy_issues, rtd3_blocker
 
@@ -253,7 +255,7 @@ _detected = is_detected
 # Plan
 # ---------------------------------------------------------------------------
 
-class _Planner(NvidiaPlanMixin):
+class _Planner(NvidiaPlanMixin, DevicePlanMixin):
     def __init__(self, manifest: InstallManifest, hw: HardwareProfile) -> None:
         self.m = manifest
         self.hw = hw
@@ -266,6 +268,8 @@ class _Planner(NvidiaPlanMixin):
         self.mobile = _is_mobile(hw)
         self.gpus = _physical(hw.gpus)
         self.nvidia_gpus = [gpu for gpu in self.gpus if gpu.vendor == "nvidia"]
+        self.offers = devices.device_offers(hw, manifest)
+        self.traits = data.desktop_traits(manifest.system.desktop)
         self.proprietary = ""  # nvidia branch when the proprietary path is active
         self.firmware_reasons: list[str] = []
         self.fonts: tuple[str, str] | None = None  # (atom, what it covers) when the locale needs a font package
@@ -325,6 +329,7 @@ class _Planner(NvidiaPlanMixin):
         self.heavy_builds()
         self.guest_tools()
         self.peripherals()
+        self.vendor()
         self.audio()
         self.boot()
         self.display()
@@ -538,14 +543,24 @@ class _Planner(NvidiaPlanMixin):
     def power(self) -> None:
         choice = self.m.hardware.power
         if choice == "auto":
-            choice = "none" if (not self.mobile or self.vm or self.portable) else ("ppd" if self.desktop in ("kde", "gnome") else "tlp")
+            if not self.mobile or self.vm or self.portable:
+                choice = "none"
+            elif self.asus_wanted:
+                choice = "none"  # asusd manages the power profiles itself and conflicts with both
+            elif self.m.hardware.battery_charge_limit:
+                choice = "tlp"  # only TLP sets the charge limit
+            else:
+                choice = "ppd" if self.traits.ppd_ui else "tlp"
+        elif self.asus_wanted and choice in ("ppd", "tlp"):
+            self.warn("asus_power_conflict", "warning", "The ASUS tools manage the power profiles themselves, so the power management you chose was not installed.")
+            choice = "none"
         self.p.scalars["power"] = choice
         if choice == "ppd":
             self.p.optional_atoms.append(A_PPD)
             self.service(A_PPD.split("/")[1], optional=True)
         elif choice == "tlp":
             self.p.optional_atoms.append(A_TLP)
-            ppd_ui = self.desktop in ("kde", "gnome")
+            ppd_ui = self.traits.ppd_ui
             flags = [] if ppd_ui else ["-ppd"]  # tlp[ppd] replaces power-profiles-daemon for the desktop's profile switcher
             if self.m.network.manager != "networkmanager":
                 flags.append("-rdw")  # rdw needs NetworkManager
@@ -560,10 +575,14 @@ class _Planner(NvidiaPlanMixin):
         if want:
             self.p.optional_atoms.append(A_THERMALD)
             self.service("thermald", optional=True)
-        if self.m.hardware.fingerprint:
+        if self.fingerprint_wanted:
             self.p.optional_atoms.append(A_FPRINTD)
         if self.m.hardware.fwupd:
             self.p.optional_atoms.append(A_FWUPD)
+            if self.init == "openrc":
+                self.service("fwupd", optional=True)  # the ebuild ships an init script; systemd starts the daemon through D-Bus
+        if self.asus_wanted and self.p.scalars.get("power") == "none" and self.mobile:
+            self.note("ASUS tools replace power-profiles-daemon and TLP: asusd offers the power profiles, so neither of them is installed.")
 
     # Storage: TRIM and swap ------------------------------------------------------------------------------------------
 
@@ -643,7 +662,7 @@ class _Planner(NvidiaPlanMixin):
         hypervisor = self.hw.machine.hypervisor
         if not hypervisor or self.m.hardware.guest_tools == "none":
             return
-        graphical = self.desktop != "minimal"
+        graphical = self.traits.graphical
         if hypervisor in ("qemu", "kvm"):
             self.p.optional_atoms.append(A_QEMU_GA)
             self.service("qemu-guest-agent", optional=True)
@@ -695,6 +714,14 @@ class _Planner(NvidiaPlanMixin):
         if self.m.hardware.pipewire_alsa:
             self.use(A_PIPEWIRE, "pipewire-alsa")
         self.post("sh", "-c", 'if getent group pipewire >/dev/null; then usermod -aG pipewire "$1"; fi; exit 0', "sh", self.m.accounts.username)
+        if self.init == "systemd":
+            # The user's PipeWire is socket-activated by systemd; nothing enables it for a user session by itself.
+            for unit, kind in (("pipewire.socket", "socket"), ("pipewire-pulse.socket", "socket"), ("wireplumber.service", "service")):
+                self.p.user_services.append((unit, kind))
+        elif self.desktop == "sway":
+            self.file("/etc/sway/config.d/10-installer-pipewire.conf", "# Written by the Gentoo installer: start PipeWire with the session.\nexec gentoo-pipewire-launcher restart\n")
+        elif self.desktop == "i3":
+            self.first_step("Sound: add the line  exec --no-startup-id gentoo-pipewire-launcher restart  to ~/.config/i3/config so PipeWire starts with i3.")
 
     # Boot, display ------------------------------------------------------------------------------------------------------------
 
@@ -716,8 +743,14 @@ class _Planner(NvidiaPlanMixin):
         else:
             dpi = recommend.recommend_dpi(self.hw.displays)
         self.p.scalars["hidpi"] = "off" if dpi <= 96 else f"dpi:{dpi}"
-        if dpi > 96 and self.desktop == "xfce":
-            self.file("/etc/skel/.config/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml", xfce_xsettings(dpi))
+        method = self.traits.hidpi
+        if dpi > 96:
+            if method == "xsettings":
+                self.file("/etc/skel/.config/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml", xfce_xsettings(dpi))
+            elif method == "xresources":
+                self.file("/etc/skel/.Xresources", f"! Written by the Gentoo installer: the screen is dense, so text and buttons are scaled.\nXft.dpi: {dpi}\n")
+            elif method == "sway":
+                self.file("/etc/sway/config.d/20-installer-hidpi.conf", f"# Written by the Gentoo installer: the screen is dense.\noutput * scale {round(dpi / 96 * 4) / 4:g}\n")
 
     def locale(self) -> None:
         """Fonts for the script of the chosen language; without them a translated desktop shows empty boxes.
@@ -726,12 +759,12 @@ class _Planner(NvidiaPlanMixin):
         media-fonts/noto (kde-plasma/plasma-integration needs it); nothing in it has Chinese, Japanese or Korean
         glyphs. Both packages are large downloads, so they are optional atoms: a failure only degrades.
         """
-        if self.desktop == "minimal":
+        if not self.traits.graphical:
             return
         script = keyboard_data.locale_script(self.m.system.locale)
         if script == "cjk":
             self.fonts = (A_NOTO_CJK, "Chinese, Japanese and Korean text")
-        elif script == "complex" and self.desktop != "kde":
+        elif script == "complex" and not self.traits.brings_noto:
             self.fonts = (A_NOTO, "Arabic, Hebrew, Indic, Thai and other scripts")
         if self.fonts:
             self.p.optional_atoms.append(self.fonts[0])
@@ -813,8 +846,8 @@ class _Planner(NvidiaPlanMixin):
             lines.append(f"Virtual machine: {hw.machine.hypervisor}; " + ("guest tools installed" if tools else "no guest tools"))
         if s["removable_fallback"] != "never" and self.m.storage.firmware == "uefi":
             lines.append("Boot: " + {"always": "fallback boot path is always written", "if-missing": "fallback boot path is written only if missing"}[s["removable_fallback"]])
-        if s["hidpi"] != "off" and self.desktop == "xfce":
-            lines.append(f"Display: {s['hidpi'][4:]} dpi interface scale for Xfce")
+        if s["hidpi"] != "off" and self.traits.hidpi in ("xsettings", "xresources", "sway"):
+            lines.append(f"Display: {s['hidpi'][4:]} dpi interface scale for {self.desktop.upper() if self.desktop in ('kde', 'gnome', 'lxqt') else self.desktop.capitalize()}")
         if self.fonts:
             lines.append(f"Fonts: {self.fonts[0].rsplit('/', 1)[1]} for {self.fonts[1]}")
         if self.p.warnings:
@@ -902,7 +935,7 @@ def validate_plan(manifest: InstallManifest, hardware: Mapping[str, Any] | Hardw
     hw = _profile(hardware)
     m = manifest
     decision = nvidia_decision(m, hw)
-    issues: list[Issue] = [*decision.errors, *decision.warnings, *nvidia_policy_issues(m, hw, decision)]
+    issues: list[Issue] = [*decision.errors, *decision.warnings, *nvidia_policy_issues(m, hw, decision), *device_issues(m, hw)]
     issues.extend(_memory_issues(m, hw))
     issues.extend(_power_issues(m, hw))
     if _detected(hw):  # an empty profile (no probe ran) says nothing about firmware or disks
@@ -925,7 +958,8 @@ def blocking_issues(manifest: InstallManifest, hardware: Mapping[str, Any] | Har
 def _memory_issues(m: InstallManifest, hw: HardwareProfile) -> list[Issue]:
     out: list[Issue] = []
     gib = hw.memory.total_kib / recommend.KIB_PER_GIB
-    if hw.memory.total_kib and 2 <= gib < 4 and m.system.desktop in ("kde", "gnome"):
+    enough = data.desktop_traits(m.system.desktop).min_ram_gib
+    if hw.memory.total_kib and 2 <= gib < enough:
         out.append(Issue("hw.memory_tight", "info", f"This PC has {gib:.1f} GiB of memory. {m.system.desktop.upper()} will feel slow; Xfce needs less."))
     if m.hardware.hibernate:
         if m.storage.luks:
@@ -1062,7 +1096,7 @@ def _disk_issues(m: InstallManifest, hw: HardwareProfile, disk: DiskInfo) -> lis
         root_mib = _erase_root_mib(m, disk)
         minimum, recommended = recommend.minimum_root_gib(m.system.desktop, m.portage.binhost)
         if root_mib < minimum * 1024:
-            out.append(Issue("hw.disk_too_small", "error", f"The root filesystem would get {max(root_mib, 0) / 1024:.0f} GiB, but {m.system.desktop.upper() if m.system.desktop != 'minimal' else 'a minimal system'} needs at least {minimum} GiB."))
+            out.append(Issue("hw.disk_too_small", "error", f"The root filesystem would get {max(root_mib, 0) / 1024:.0f} GiB, but {m.system.desktop.upper() if data.desktop_traits(m.system.desktop).graphical else 'a minimal system'} needs at least {minimum} GiB."))
         elif root_mib < recommended * 1024:
             out.append(Issue("hw.disk_small", "warning", f"The root filesystem would get {root_mib / 1024:.0f} GiB; {recommended} GiB is recommended."))
     return out

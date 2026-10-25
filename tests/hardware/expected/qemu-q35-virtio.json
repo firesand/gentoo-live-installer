@@ -575,6 +575,20 @@
      "Virtual machine: qemu; guest tools installed",
      "Boot: fallback boot path is always written"
     ],
+    "user_services": [
+     [
+      "pipewire.socket",
+      "socket"
+     ],
+     [
+      "pipewire-pulse.socket",
+      "socket"
+     ],
+     [
+      "wireplumber.service",
+      "service"
+     ]
+    ],
     "warnings": []
    }
   }

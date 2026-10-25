@@ -24,10 +24,21 @@
       493
      ]
     ],
+    "first_steps": [
+     "Razer devices: open RazerGenie to choose colours and DPI. You were added to the group plugdev; log out and in once so it applies."
+    ],
+    "groups": [
+     "plugdev"
+    ],
     "kernel_cmdline": [],
     "make_conf": {},
-    "notes": [],
-    "optional_atoms": [],
+    "notes": [
+     "OpenRazer is built on this PC against your kernel; a kernel update rebuilds it. If the build fails the system still starts without it."
+    ],
+    "optional_atoms": [
+     "sys-apps/openrazer",
+     "sys-apps/razergenie"
+    ],
     "optional_services": [],
     "package_license": {
      "sys-firmware/intel-microcode": [
@@ -42,6 +53,9 @@
      "media-video/pipewire": [
       "sound-server"
      ],
+     "sys-apps/openrazer": [
+      "dist-kernel"
+     ],
      "sys-firmware/intel-microcode": [
       "initramfs"
      ],
@@ -50,6 +64,11 @@
      ]
     },
     "post_steps": [
+     [
+      "sh",
+      "-c",
+      "if [ -f /usr/share/openrazer/openrazer-daemon.desktop ]; then mkdir -p /etc/xdg/autostart && ln -sf /usr/share/openrazer/openrazer-daemon.desktop /etc/xdg/autostart/openrazer-daemon.desktop; fi; exit 0"
+     ],
      [
       "sh",
       "-c",
@@ -70,6 +89,7 @@
       "Wi-Fi",
       "Bluetooth"
      ],
+     "first_user": "gentoo",
      "form_factor": "desktop",
      "gpu_driver": "open",
      "gpu_mode": "nouveau",
@@ -135,7 +155,11 @@
     ],
     "first_steps": [
      "If the screen stays black after an update, choose \"Gentoo Linux (safe graphics)\" in the boot menu; it starts without the NVIDIA driver.",
-     "The NVIDIA modules are rebuilt by emerge after every kernel update (USE=dist-kernel). If an update reports that the build failed, run: emerge --ask @module-rebuild"
+     "The NVIDIA modules are rebuilt by emerge after every kernel update (USE=dist-kernel). If an update reports that the build failed, run: emerge --ask @module-rebuild",
+     "Razer devices: open RazerGenie to choose colours and DPI. You were added to the group plugdev; log out and in once so it applies."
+    ],
+    "groups": [
+     "plugdev"
     ],
     "kernel_cmdline": [],
     "make_conf": {
@@ -143,9 +167,13 @@
     },
     "notes": [
      "NVIDIA proprietary driver 595 (current, open kernel modules); if it fails to build, the open nouveau driver stays in use.",
-     "The NVIDIA driver is not on the binary host: it is downloaded from download.nvidia.com and compiled on this PC, which adds several minutes and needs internet access to that address."
+     "The NVIDIA driver is not on the binary host: it is downloaded from download.nvidia.com and compiled on this PC, which adds several minutes and needs internet access to that address.",
+     "OpenRazer is built on this PC against your kernel; a kernel update rebuilds it. If the build fails the system still starts without it."
     ],
-    "optional_atoms": [],
+    "optional_atoms": [
+     "sys-apps/openrazer",
+     "sys-apps/razergenie"
+    ],
     "optional_services": [],
     "package_license": {
      "sys-firmware/intel-microcode": [
@@ -162,6 +190,9 @@
     "package_use": {
      "media-video/pipewire": [
       "sound-server"
+     ],
+     "sys-apps/openrazer": [
+      "dist-kernel"
      ],
      "sys-firmware/intel-microcode": [
       "initramfs"
@@ -187,6 +218,11 @@
       "sh",
       "gentoo",
       "The NVIDIA driver could not be installed during the installation, so this PC runs on the open nouveau driver. To try again once the network works: emerge --ask x11-drivers/nvidia-drivers && dracut --force --regenerate-all (the driver is downloaded from download.nvidia.com and compiled on this PC)."
+     ],
+     [
+      "sh",
+      "-c",
+      "if [ -f /usr/share/openrazer/openrazer-daemon.desktop ]; then mkdir -p /etc/xdg/autostart && ln -sf /usr/share/openrazer/openrazer-daemon.desktop /etc/xdg/autostart/openrazer-daemon.desktop; fi; exit 0"
      ],
      [
       "sh",
@@ -424,13 +460,24 @@
      "sys-kernel/linux-firmware"
     ],
     "files": [],
+    "first_steps": [
+     "Razer devices: open Polychromatic to choose colours and DPI. You were added to the group plugdev; log out and in once so it applies."
+    ],
+    "groups": [
+     "plugdev"
+    ],
     "kernel_cmdline": [],
     "make_conf": {
      "CPU_FLAGS_X86": "aes avx avx2 avx_vnni bmi1 bmi2 f16c fma3 mmx mmxext pclmul popcnt rdrand sha sse sse2 sse3 sse4_1 sse4_2 ssse3 vpclmulqdq",
      "VIDEO_CARDS": "intel nouveau nvk"
     },
-    "notes": [],
-    "optional_atoms": [],
+    "notes": [
+     "OpenRazer is built on this PC against your kernel; a kernel update rebuilds it. If the build fails the system still starts without it."
+    ],
+    "optional_atoms": [
+     "sys-apps/openrazer",
+     "sys-apps/polychromatic"
+    ],
     "optional_services": [],
     "package_license": {
      "sys-firmware/intel-microcode": [
@@ -448,6 +495,9 @@
      "media-video/pipewire": [
       "sound-server"
      ],
+     "sys-apps/openrazer": [
+      "dist-kernel"
+     ],
      "sys-firmware/intel-microcode": [
       "initramfs"
      ],
@@ -456,6 +506,11 @@
      ]
     },
     "post_steps": [
+     [
+      "sh",
+      "-c",
+      "if [ -f /usr/share/openrazer/openrazer-daemon.desktop ]; then mkdir -p /etc/xdg/autostart && ln -sf /usr/share/openrazer/openrazer-daemon.desktop /etc/xdg/autostart/openrazer-daemon.desktop; fi; exit 0"
+     ],
      [
       "sh",
       "-c",
@@ -476,6 +531,7 @@
       "Wi-Fi",
       "Bluetooth"
      ],
+     "first_user": "gentoo",
      "form_factor": "desktop",
      "gpu_driver": "open",
      "gpu_mode": "nouveau",
@@ -517,6 +573,24 @@
      "Firmware: Linux firmware (NVIDIA GPU system processor firmware, Intel graphics, Wi-Fi, Bluetooth)",
      "Storage: weekly TRIM for the solid-state disk (fstrim.timer)",
      "Boot: fallback boot path is always written"
+    ],
+    "user_services": [
+     [
+      "openrazer-daemon.service",
+      "service"
+     ],
+     [
+      "pipewire.socket",
+      "socket"
+     ],
+     [
+      "pipewire-pulse.socket",
+      "socket"
+     ],
+     [
+      "wireplumber.service",
+      "service"
+     ]
     ],
     "warnings": [
      {
