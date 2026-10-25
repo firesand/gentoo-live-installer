@@ -87,7 +87,7 @@ READERS = {
     r"nodhcp|nox": "livecd-tools, init.d/autoconfig",
     r"secureconsole": "livecd-tools, init.d/fixinittab",
     r"dokeymap": "livecd-tools, the dracut module 90dokeymap",
-    r"gentoo\.autostart=(rescue|installer-text)": "iso/root_overlay/etc/profile.d/20-gentoo-autostart.sh",
+    r"gentoo\.autostart=(rescue|ai-rescue|installer-text)": "iso/root_overlay/etc/profile.d/20-gentoo-autostart.sh",
     r"console=\S+|nomodeset|acpi=off|noapic|ignore_loglevel|loglevel=7|pcie_aspm=off|nvme_core\.default_ps_max_latency_us=0|usbcore\.autosuspend=-1"
     r"|intel_iommu=off|amd_iommu=off": "the kernel",
 }

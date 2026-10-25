@@ -120,8 +120,11 @@ def test_the_documents_name_every_main_boot_entry() -> None:
     parser = load_script("scripts/verify-iso.py", "verify_iso")
     template = (ROOT / "iso/cd_overlay/boot/grub/grub.cfg.in").read_text()
     titles = [entry.title for entry in parser.parse_grub_cfg(template)[0]]
-    main = [t for t in titles[:5]]
+    ai_rescue = "AI rescue (text console)"  # wave 6: the disc's README must name it; docs/RESCUE-AI.md is the docs owner's page
+    assert ai_rescue in titles
+    main = [t for t in titles[:6] if t != ai_rescue]
     assert main[0] == "Gentoo installer and rescue desktop" and len(main) == 5
+    assert ai_rescue in re.sub(r"\s+", " ", (ROOT / "iso/README-live.txt").read_text()), "iso/README-live.txt does not mention the boot entry 'AI rescue (text console)'"
     documents = {
         "README.md": README.read_text(),
         "docs/USER-GUIDE.md": USER_GUIDE.read_text(),

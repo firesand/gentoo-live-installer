@@ -43,3 +43,20 @@ def test_ttyd_needs_no_keyword_while_the_pinned_tree_has_a_stable_version() -> N
     build on a bump that drops it to ~amd64; the keyword is then added there, not guessed now."""
     keywords = (ROOT / "iso/portage/package.accept_keywords/live-installer").read_text()
     assert "ttyd" not in keywords
+
+
+def test_the_console_hint_names_the_ai_tool_only_when_the_disc_has_it(tmp_path) -> None:
+    import os
+    import subprocess
+
+    from .conftest import write_executable
+
+    script = ROOT / "iso/root_overlay/etc/profile.d/10-gentoo-rescue-hint.sh"
+    base = {k: v for k, v in os.environ.items() if k not in ("DISPLAY", "WAYLAND_DISPLAY")}
+    without = subprocess.run(["bash", "--norc", "-i", "-c", f". {script}"], capture_output=True, text=True, env=base, check=False)
+    assert "gentoo-rescue-ai" not in without.stdout
+    write_executable(tmp_path / "gentoo-rescue-ai", "#!/bin/sh\n")
+    withit = subprocess.run(["bash", "--norc", "-i", "-c", f". {script}"], capture_output=True, text=True,
+                            env={**base, "PATH": f"{tmp_path}:{base['PATH']}"}, check=False)
+    assert "sudo gentoo-rescue-ai" in withit.stdout
+    assert max(len(line) for line in withit.stdout.splitlines()) <= 80

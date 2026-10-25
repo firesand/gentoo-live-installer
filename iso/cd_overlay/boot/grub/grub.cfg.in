@@ -14,10 +14,14 @@
 #    seconds for a keymap choice, so the default entries must not carry it.
 #  * "nox" keeps the display manager away (gui-libs/display-manager-init and livecd-tools
 #    honour it), so a text console entry works on a GPU the live kernel cannot drive.
-#  * gentoo.autostart=rescue and gentoo.autostart=installer-text are read by
-#    /etc/profile.d/20-gentoo-autostart.sh (iso/root_overlay): the first login on tty1 then
-#    starts "sudo gentoo-rescue" or "sudo gentoo-installer-text" once. The kernel ignores
-#    a parameter with a dot. Only the two text entries below carry them.
+#  * gentoo.autostart=rescue, gentoo.autostart=ai-rescue and gentoo.autostart=installer-text are
+#    read by /etc/profile.d/20-gentoo-autostart.sh (iso/root_overlay): the first login on tty1
+#    then starts "sudo gentoo-rescue", "sudo gentoo-rescue-ai" or "sudo gentoo-installer-text"
+#    once. The kernel ignores a parameter with a dot. Only the three text entries below carry
+#    them. The AI rescue entry also makes the OpenRC service gentoo-rescue-approver start (it
+#    reads /proc/cmdline); no other entry runs the approver or the agents.
+#  * No entry passes lsm=: the Yama security module (ptrace_scope=1, which keeps the agents
+#    away from each other's processes) is in the kernel's built-in list, and lsm= would replace it.
 #  * "Safe graphics" (nomodeset) works because the live kernel is sys-kernel/gentoo-kernel built
 #    with the fragment files/50-gentoo-live-safe-graphics.config of app-admin/gentoo-live-installer:
 #    SYSFB_SIMPLEFB + DRM_SIMPLEDRM (or EFIDRM/VESADRM) are built in, so the firmware framebuffer is a
@@ -62,6 +66,12 @@ menuentry 'Safe graphics (for a black screen or no picture)' --class gnu-linux -
 menuentry 'Repair a system (text console)' --class gnu-linux --class os {
 	search --no-floppy --set=root -l @VOLID@
 	linux /boot/gentoo @BOOTARGS@ root=live:CDLABEL=@VOLID@ rd.live.dir=/ rd.live.squashimg=image.squashfs cdroot nox dokeymap gentoo.autostart=rescue
+	initrd /boot/gentoo.igz
+}
+
+menuentry 'AI rescue (text console)' --class gnu-linux --class os {
+	search --no-floppy --set=root -l @VOLID@
+	linux /boot/gentoo @BOOTARGS@ root=live:CDLABEL=@VOLID@ rd.live.dir=/ rd.live.squashimg=image.squashfs cdroot nox dokeymap gentoo.autostart=ai-rescue
 	initrd /boot/gentoo.igz
 }
 

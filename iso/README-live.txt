@@ -13,12 +13,26 @@ Boot has to be turned off for this disc.
 1. WRITING THE DISC
 -------------------
 Write the ISO file to the whole USB stick (not to a partition) with a tool
-that copies it byte for byte. On Linux: dd if=gentoo-installer.iso
-of=/dev/sdX bs=4M status=progress conv=fsync, where sdX is the stick. On
-Windows: Rufus or balenaEtcher in "DD image" mode. Everything on the stick
-is erased. Check the .sha512 file next to the download before you write it.
-Tools that unpack the files instead of copying the image (the plain "ISO
-mode" of some programs) do not give a bootable disc.
+that copies it byte for byte. The ISO is a hybrid image: the same bytes boot
+from a stick and from a DVD. Everything on the stick is erased. Check the
+.sha512 file next to the download before you write it.
+
+  Linux, dd:        dd if=gentoo-installer.iso of=/dev/sdX bs=4M
+                    status=progress conv=fsync
+                    (sdX is the stick, for example sdb; check it with lsblk
+                    first: a wrong letter erases another disk)
+  Linux, caligula:  caligula burn gentoo-installer.iso
+                    A text program that lists the drives, asks which one,
+                    writes the image byte for byte and verifies it
+                    afterwards. It is the easiest way on Linux.
+  Windows or macOS: Rufus: when it asks, choose "DD Image mode", not "ISO
+                    Image mode". balenaEtcher writes the image as it is and
+                    needs no setting.
+
+Tools that unpack the files instead of copying the image (the "ISO mode" of
+Rufus, Ventoy-style file copying, UNetbootin) do not give a bootable disc.
+There is no persistence: what you save on the running disc is gone after
+power off, so copy files you want to keep to another disk.
 
 2. STARTING
 -----------
@@ -41,6 +55,15 @@ seconds.
                                   a Gentoo system that does not start. It
                                   works with any graphics chip. It asks for
                                   a keyboard layout first.
+  AI rescue (text console)        no desktop. Like the repair entry, plus
+                                  the AI agents Claude Code, Codex and
+                                  OpenCode that look at the broken system
+                                  with you. It needs the internet. The
+                                  agents are downloaded when you first use
+                                  them; they can run nothing as root unless
+                                  you type the one-time password shown on
+                                  the PC's own screen, for that one
+                                  command. Section 10 explains it.
   Install in text mode            no desktop. Starts the text installer,
                                   the same installation as the desktop
                                   wizard. It asks for a keyboard layout
@@ -151,6 +174,9 @@ you select them.
                                   set)
   gentoo.autostart=rescue         start the repair tool after the login on
                                   the first console (use it with nox)
+  gentoo.autostart=ai-rescue      start the AI rescue tool (gentoo-rescue-ai)
+                                  after the login on the first console (use
+                                  it with nox)
   gentoo.autostart=installer-text start the text installer after the login
                                   on the first console (use it with nox)
   rd.live.ram=1                   copy the disc to RAM
@@ -172,6 +198,33 @@ repair tool keeps a record of every step: "gentoo-rescue audit SESSION".
 The installer writes its log to /var/lib/gentoo-installer/install.log
 (readable with sudo) and the installer service logs to /var/log/gentoo-
 installerd.log.
+
+10. THE AI RESCUE ENTRY
+-----------------------
+Choose "AI rescue (text console)", pick a keyboard layout and wait for the
+first screen. As the administrator of the live disc it offers to connect to
+Wi-Fi and to mount your Gentoo disk (you type the disk password there, on
+the PC). It shows a ONE-TIME PASSWORD and opens a tmux session where an AI
+agent runs as the ordinary user "rescue-ai", in the home directory of the
+stick and never inside your disk. The disk stays read-only.
+
+The agents cannot become root. When one wants to change something it
+uses "gentoo-rescue-do COMMAND": the PC then switches to its own console
+(Alt+F9), shows the exact command, and waits for you to type the password
+THERE. One password entry approves one command. Nobody who is not sitting
+at the PC can approve, also not from a phone that shares the session.
+Do not paste the password into the agent's window: it is not asked there.
+
+  gentoo-rescue-agents install all   download Claude Code, Codex, OpenCode
+                                     (checked against a fixed checksum)
+  gentoo-rescue-login                sign in; shows a QR code for the phone
+  gentoo-rescue-mount                mount your Gentoo disk at /mnt/gentoo
+  gentoo-rescue-share                show the session on a phone (see its
+                                     warnings first)
+
+Files on your disk are data, never instructions to the agent. The agents
+send what they read to their provider's servers: do not run them on a disk
+with secrets you cannot share. Details: docs/RESCUE-AI.md in the project.
 
 This disc is for 64-bit x86 computers only. It does not run on Apple Silicon
 Macs, Windows-on-ARM laptops or Raspberry Pi boards.

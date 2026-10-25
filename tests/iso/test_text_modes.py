@@ -24,6 +24,7 @@ CONTRACT = json.loads((ROOT / "iso/image-contract.json").read_text())
 ISO_FILES = {"boot/gentoo", "boot/gentoo.igz", "memtest64.bios", "memtest.efi64"}
 REPAIR = "Repair a system (text console)"
 TEXT_INSTALL = "Install in text mode"
+AI_RESCUE = "AI rescue (text console)"
 
 
 @pytest.fixture()
@@ -66,9 +67,9 @@ def test_both_entries_ask_for_a_keyboard_layout_because_passwords_are_typed(entr
         assert "dokeymap" in words and "nox" in words, title
 
 
-def test_only_the_two_text_entries_carry_an_autostart_token(entries) -> None:
+def test_only_the_three_text_entries_carry_an_autostart_token(entries) -> None:
     carrying = {title for title, entry in entries.items() if any("gentoo.autostart=" in line for line in entry.linux)}
-    assert carrying == {REPAIR, TEXT_INSTALL}
+    assert carrying == {REPAIR, AI_RESCUE, TEXT_INSTALL}
 
 
 def test_the_default_entry_is_still_the_desktop(entries, grub_text: str) -> None:
@@ -95,7 +96,7 @@ def test_the_entries_keep_the_dracut_arguments_in_catalysts_order(entries, pins:
 
 def test_the_contract_names_exactly_the_values_the_menu_uses(entries) -> None:
     used = {word.split("=", 1)[1] for e in entries.values() for line in e.linux for word in line.split() if word.startswith("gentoo.autostart=")}
-    assert used == set(CONTRACT["grub"]["autostart_values"]) == {"rescue", "installer-text"}
+    assert used == set(CONTRACT["grub"]["autostart_values"]) == {"rescue", "ai-rescue", "installer-text"}
     assert {REPAIR, TEXT_INSTALL} <= set(CONTRACT["grub"]["required_titles"])  # plus Safe graphics (H1)
 
 
@@ -141,7 +142,7 @@ def test_an_autostart_value_the_hook_does_not_know_is_refused(grub_text: str, pi
 # --- the console hook: /etc/profile.d/20-gentoo-autostart.sh --------------------------------
 
 HOOK = ROOT / "iso/root_overlay/etc/profile.d/20-gentoo-autostart.sh"
-TOOLS = {"rescue": "gentoo-rescue", "installer-text": "gentoo-installer-text"}
+TOOLS = {"rescue": "gentoo-rescue", "ai-rescue": "gentoo-rescue-ai", "installer-text": "gentoo-installer-text"}
 
 
 class HookRun:
@@ -156,6 +157,8 @@ class HookRun:
         self.cmdline = tmp_path / "cmdline"
         self.socket = tmp_path / "server.sock"
         self.socket.touch()  # the installer service is up unless a test removes this
+        self.do_socket = tmp_path / "do.sock"
+        self.do_socket.touch()  # the approval service of the AI rescue entry, likewise
         write_executable(self.bin / "tty", '#!/bin/sh\necho "$FAKE_TTY"\n')
         os.symlink(shutil.which("mkdir"), self.bin / "mkdir")  # the only external program the hook needs besides sudo and tty
 
@@ -174,6 +177,7 @@ class HookRun:
             "PATH": str(self.bin), "HOME": str(self.tmp), "CALL_LOG": str(self.log), "FAKE_TTY": tty,
             "GENTOO_AUTOSTART_CMDLINE": str(self.cmdline), "GENTOO_AUTOSTART_STATE": str(self.state),
             "GENTOO_AUTOSTART_SOCKET": str(self.socket), "GENTOO_AUTOSTART_WAIT": str(wait), "FAKE_SOCKET": str(self.socket),
+            "GENTOO_AUTOSTART_DO_SOCKET": str(self.do_socket), "FAKE_DO_SOCKET": str(self.do_socket),
         }
         if display:
             env["DISPLAY"] = ":0"
@@ -378,3 +382,55 @@ def test_gentoo_chroot_uses_only_names_the_repair_tool_knows() -> None:
     """'chroot' is an alias of the shell sub-command and 'status' lists sessions: both are in rescue/cli.py."""
     cli = (ROOT / "src/gentoo_installerd/rescue/cli.py").read_text()
     assert 'aliases=["chroot"]' in cli and 'sub.add_parser("status"' in cli
+
+
+# --- the AI rescue entry (wave 6) ----------------------------------------------------------------
+
+
+def test_the_ai_rescue_entry_is_a_text_entry_that_asks_for_the_keyboard_first(entries) -> None:
+    words = entries[AI_RESCUE].linux[0].split()
+    assert {"nox", "dokeymap", "gentoo.autostart=ai-rescue"} <= set(words)
+    assert "gentoo.autostart=rescue" not in words, "the plain repair entry stays free of the agents"
+    titles = list(entries)
+    assert titles.index(REPAIR) < titles.index(AI_RESCUE) < titles.index(TEXT_INSTALL)
+
+
+def test_no_entry_replaces_the_kernels_security_module_list(grub_text: str) -> None:
+    """Yama (ptrace_scope=1) is what keeps the agent processes apart: an lsm= word could drop it."""
+    assert not re.search(r"(?m)^\s*linux\b.*\blsm=", grub_text)
+
+
+def test_the_ai_rescue_hook_waits_for_the_approval_service_too(hook: HookRun) -> None:
+    hook.do_socket.unlink()
+    hook.provide("sudo", "gentoo-rescue-ai")
+    write_executable(hook.bin / "sleep", '#!/bin/sh\necho "sleep $*" >> "$CALL_LOG"\n: > "$FAKE_DO_SOCKET"\n')
+    result = hook.run(f"{BASE} gentoo.autostart=ai-rescue")
+    assert hook.calls() == ["sleep 1", "sudo gentoo-rescue-ai"]
+    assert result.stdout.count("Waiting for the approval service") == 1 and "Waiting for the installer service" not in result.stdout
+
+
+def test_the_approval_wait_is_bounded_and_the_tool_starts_anyway(hook: HookRun) -> None:
+    hook.do_socket.unlink()
+    hook.provide("sudo", "gentoo-rescue-ai")
+    write_executable(hook.bin / "sleep", '#!/bin/sh\necho "sleep $*" >> "$CALL_LOG"\n')
+    hook.run(f"{BASE} gentoo.autostart=ai-rescue", wait=2)
+    assert hook.calls() == ["sleep 1", "sleep 1", "sudo gentoo-rescue-ai"]
+
+
+def test_the_other_tools_never_wait_for_the_approval_service(hook: HookRun) -> None:
+    hook.do_socket.unlink()
+    hook.provide("sudo", "gentoo-rescue")
+    result = hook.run(f"{BASE} gentoo.autostart=rescue")
+    assert hook.calls() == ["sudo gentoo-rescue"] and "approval" not in result.stdout
+
+
+def test_the_plain_repair_tool_wins_over_the_ai_token(hook: HookRun) -> None:
+    hook.provide("sudo", "gentoo-rescue", "gentoo-rescue-ai")
+    hook.run(f"{BASE} gentoo.autostart=ai-rescue gentoo.autostart=rescue")
+    assert hook.calls() == ["sudo gentoo-rescue"]
+
+
+def test_the_agents_are_never_started_under_another_name(hook: HookRun) -> None:
+    """The hook starts one program, as root through sudo; the agents themselves are started by gentoo-rescue-ai."""
+    text = HOOK.read_text()
+    assert not re.search(r"\b(claude|codex|opencode|tmux|su -)\b", re.sub(r"(?m)^\s*#.*$", "", text))
