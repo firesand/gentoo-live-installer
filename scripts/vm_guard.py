@@ -283,7 +283,9 @@ def _pci_vendor(sysfs: str, kname: str) -> str:
 
 def collect(spec: GuardSpec, *, sysfs: str = "/sys", dev: str = "/dev", run=subprocess.run) -> dict:
     """Inspect this machine and return the report for ``spec``."""
-    result = run(["lsblk", "--json", "--bytes", "--output", LSBLK_COLUMNS], stdout=subprocess.PIPE,
+    # --tree: util-linux 2.42 prints a flat list when the columns have no NAME, so the partitions would not be "children"
+    # (the first Wave 6 matrix saw "partitions": 0 on a disk with three).
+    result = run(["lsblk", "--json", "--tree", "--bytes", "--output", LSBLK_COLUMNS], stdout=subprocess.PIPE,
                  stderr=subprocess.PIPE, text=True, check=False)
     if result.returncode != 0:
         return {"type": REPORT_TYPE, "ok": False, "problems": [f"lsblk failed: {result.stderr.strip()[:300]}"],

@@ -306,7 +306,8 @@ def rescue_break(args: dict, runner=run) -> dict:
     if mode not in BREAK_MODES:
         raise GuestError(f"Unknown break mode {mode!r}")
     verify_disk(path, size, runner)
-    lsblk = json.loads(runner(["lsblk", "--json", "--bytes", "--paths", "--output", LSBLK_COLUMNS]).stdout)
+    # --tree: without NAME in the columns, util-linux 2.42 prints a flat list and the partitions are not "children".
+    lsblk = json.loads(runner(["lsblk", "--json", "--tree", "--bytes", "--paths", "--output", LSBLK_COLUMNS]).stdout)
     layout = choose_partitions(lsblk, path)
     partitions = next((node.get("children") or [] for node in lsblk.get("blockdevices", []) if node.get("path") == path), [])
     mount_point = tempfile.mkdtemp(prefix="harness-root-")
