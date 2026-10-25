@@ -181,7 +181,9 @@ class ToolsTabMixin:
     def _update_tool_notes(self) -> None:
         """Hide what the chosen init system does not use, and say when one choice brings another along."""
         systemd = self.manifest.system.init == "systemd"
-        self.logger.parentWidget().setVisible(not systemd)
+        row = self.logger.parentWidget()
+        if row is not None:
+            row.setVisible(not systemd)
         self.logger_label.setVisible(not systemd)
         self.journal_note.setVisible(systemd)
         self.checks["journal_persistent"].setVisible(systemd)
