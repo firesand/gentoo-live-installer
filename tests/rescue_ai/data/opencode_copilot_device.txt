@@ -1,0 +1,9 @@
+[0m┌  Add credential
+│
+◆  Select provider
+│  GitHub Copilot
+│
+◇  │
+│  Go to: https://github.com/login/device
+│  Enter code: 8F43-6FCF
+└  Waiting for authorization...

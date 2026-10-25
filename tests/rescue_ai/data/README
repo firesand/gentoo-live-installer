@@ -1,0 +1,11 @@
+Recorded-style outputs of the agents' login commands, used to test gentoo-rescue-login's URL scraping.
+
+HONESTY NOTE: the agents were never run on the machine that wrote these files (the project rule is that agent binaries are never
+executed outside a VM). The files are RECONSTRUCTED from the documented behaviour of each login flow:
+  * codex_device_auth.txt        codex login --device-auth       (https://developers.openai.com/codex/auth: a link and a one-time code)
+  * claude_auth_login_*.txt      claude auth login               (https://code.claude.com/docs/en/authentication: a URL, "Paste code here if prompted")
+  * opencode_copilot_device.txt  opencode auth login, GitHub Copilot (https://opencode.ai/docs/providers/: github.com/login/device)
+  * no_url_*.txt                 outputs without a login address (the fail-soft path)
+They include terminal colour codes and a wrapped address because those are the two ways scraping breaks. When the lead has recorded
+real outputs in a VM (a Claude/Codex/OpenCode login typed with `script -q`), add them here as new files and the parametrised test
+picks them up: a file name <agent>__<anything>.txt with the expected address in the first line of <same name>.expect.
