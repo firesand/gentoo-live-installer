@@ -248,6 +248,7 @@ ALIASES = {
     "text-ram": r"^text console in ram",
     "text-installer": r"text installer|text-mode installer|installer.*\btext\b|^install in text mode",
     "serial": r"serial console",
+    "ai-rescue": r"^ai rescue",
     "rescue": r"^rescue|rescue console|repair console|^repair a system",
     "desktop": r"^gentoo installer",
     "verbose": r"verbose boot",
