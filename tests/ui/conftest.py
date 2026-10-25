@@ -39,6 +39,17 @@ def no_stuck_dialogs(qapp):
 
 
 @pytest.fixture(autouse=True)
+def deferred_deletes_happen(qapp):
+    """Carry out the deleteLater() calls a test scheduled (pytest-qt's own for the windows it closes, and the pages' for
+    rebuilt rows), as the application's event loop does. Without a running loop they never happen, and the closed windows
+    and rows pile up: every theme change re-polishes all of them (13,000 widgets in a full run, 20 s per set-up)."""
+    yield
+    from PySide6.QtCore import QEvent
+
+    QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete)
+
+
+@pytest.fixture(autouse=True)
 def private_user_dirs(monkeypatch, tmp_path_factory):
     home = tmp_path_factory.mktemp("home")
     monkeypatch.setenv("HOME", str(home))
