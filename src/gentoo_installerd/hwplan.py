@@ -39,6 +39,7 @@ from gentoo_installer.manifest import InstallManifest
 from .hwissue import Issue
 from .hwplan_devices import DevicePlanMixin, device_issues
 from .hwplan_nvidia import NvidiaDecision, nvidia_decision
+from .hwplan_session import SessionPlanMixin
 from .hwplan_nvidia_plan import NVK_GENERATIONS, NvidiaPlanMixin, nvidia_policy_issues, rtd3_blocker
 
 PLAN_SCHEMA = 2
@@ -255,7 +256,7 @@ _detected = is_detected
 # Plan
 # ---------------------------------------------------------------------------
 
-class _Planner(NvidiaPlanMixin, DevicePlanMixin):
+class _Planner(NvidiaPlanMixin, DevicePlanMixin, SessionPlanMixin):
     def __init__(self, manifest: InstallManifest, hw: HardwareProfile) -> None:
         self.m = manifest
         self.hw = hw
@@ -334,6 +335,7 @@ class _Planner(NvidiaPlanMixin, DevicePlanMixin):
         self.boot()
         self.display()
         self.locale()
+        self.session()
         self.companions()
         self.finish()
         return p
