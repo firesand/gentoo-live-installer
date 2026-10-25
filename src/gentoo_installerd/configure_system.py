@@ -104,9 +104,9 @@ def render_dconf_keyboard(system: System) -> str:
     return "\n".join(lines) + "\n"
 
 
-def choice_problems(manifest: InstallManifest) -> list[str]:
-    """Choices of the accounts and tools that cannot be carried out; a choice is refused here, never silently ignored."""
-    accounts, options, system = manifest.accounts, manifest.options, manifest.system
+def account_problems(manifest: InstallManifest) -> list[str]:
+    """Account choices that cannot be carried out (the GUI shows them on the Personalize page)."""
+    accounts = manifest.accounts
     problems: list[str] = []
     if accounts.ssh_root_login:
         problems.append("Root login over SSH is not available: log in with your own account and use sudo (or su) for administrator rights")
@@ -115,6 +115,13 @@ def choice_problems(manifest: InstallManifest) -> list[str]:
             problems.append("Turning root login off needs an administrator account: the user must be in the wheel group")
         if accounts.privilege == "su":
             problems.append("su needs the root password, so it cannot be the administrator tool when root login is turned off: choose sudo, doas or run0")
+    return problems
+
+
+def choice_problems(manifest: InstallManifest) -> list[str]:
+    """Choices of the accounts and tools that cannot be carried out; a choice is refused here, never silently ignored."""
+    options, system = manifest.options, manifest.system
+    problems = account_problems(manifest)
     if options.cron == "bcron":
         problems.append("bcron is not available yet: Gentoo's bcron package has no service script. Choose cronie, dcron or none")
     if options.cron == "fcron" and system.init == "systemd":

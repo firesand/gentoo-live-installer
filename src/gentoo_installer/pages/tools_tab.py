@@ -1,14 +1,18 @@
-"""ACCT: the Applications && tools tab of the Customize page (companion apps, services, KDE applications, extra packages)."""
+"""ACCT: the Applications && tools tab of the Customize page (system tools, applications, KDE applications, extra packages, gaming)."""
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from PySide6.QtWidgets import QCheckBox, QComboBox, QFormLayout, QGridLayout, QLineEdit, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QButtonGroup, QCheckBox, QComboBox, QFormLayout, QGridLayout, QHBoxLayout, QLabel, QLineEdit, QPushButton, QRadioButton, QVBoxLayout, QWidget,
+)
 
+from .. import account_text as text
 from .. import recommend, system_info
 from ..manifest import InstallManifest
 from ..widgets import Card, wrapped_label
+from .help import AdvancedSection, HelpNote
 
 if TYPE_CHECKING:
     from .hardware import HardwareTab
@@ -20,6 +24,10 @@ AUTO_PLACEHOLDER = "Leave empty: chosen for this computer"
 HWMONUX_LOW_MEMORY = "HWMonux needs PySide6, which is compiled from source: about 40 minutes and up to 4 GiB of memory per compile job."
 HWMONUX_MEMORY_GIB = 8  # a computer with less memory than this gets the note
 HWMONUX_ADVICE = "rec.hwmonux_low_memory"  # the same advice from recommend.recommend(), when it gives one
+LOGGERS = (("sysklogd", "sysklogd (small and simple)"), ("syslog-ng", "syslog-ng (with log rotation)"), ("metalog", "metalog"), ("none", "No system logger"))
+CRONS = (("cronie", "cronie (the Handbook's default)"), ("dcron", "dcron"), ("fcron", "fcron (OpenRC only)"), ("none", "No cron daemon"))
+TIMESYNCS = (("chrony", "chrony (recommended)"), ("timesyncd", "systemd-timesyncd (systemd only)"), ("none", "Do not keep the clock correct"))
+GAMING_CHOICES = (("off", "No gaming setup"), ("flatpak", "Quick: Steam and Heroic from Flathub"), ("native", "Native Gentoo: Steam and 32-bit libraries built here"))
 KDE_APPS = (
     ("core", "Core: file manager, terminal, editor and help"),
     ("full", "Full: all KDE applications (games, education, multimedia; a long build)"),
@@ -43,6 +51,31 @@ def hwmonux_memory_note(info: system_info.SystemInfo | None, manifest: InstallMa
     return HWMONUX_LOW_MEMORY if 0 < info.memory_gib < HWMONUX_MEMORY_GIB else ""
 
 
+def _choice_combo(choices: tuple[tuple[str, str], ...], name: str) -> QComboBox:
+    combo = QComboBox()
+    for value, label in choices:
+        combo.addItem(label, value)
+    combo.setAccessibleName(name)
+    return combo
+
+
+def _with_help(widget: QWidget, note: str, anchor: str) -> QWidget:
+    row = QWidget()
+    layout = QHBoxLayout(row)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.addWidget(widget, 1)
+    layout.addWidget(HelpNote(note, anchor))
+    return row
+
+
+def _select(combo: QComboBox, value: str) -> None:
+    """Show a value; one that this installer does not offer is added and flagged, never replaced."""
+    index = combo.findData(value)
+    if index < 0:
+        combo.addItem(f"{value} (custom value)", value)
+        index = combo.count() - 1
+    combo.setCurrentIndex(index)
+
 
 class ToolsTabMixin:
     """The tab's widgets (checks, kde_apps, extra_packages, ...) are attributes of the page that mixes this in."""
@@ -55,10 +88,11 @@ class ToolsTabMixin:
     def _extras_tab(self) -> QWidget:
         page = QWidget()
         layout = QVBoxLayout(page)
-        card = Card("Applications and system services", parent=page)
+        self.checks: dict[str, QCheckBox] = {}
+        layout.addWidget(self._system_tools_card(page))
+        card = Card("Applications", parent=page)
         layout.addWidget(card)
         grid = QGridLayout()
-        self.checks: dict[str, QCheckBox] = {}
         entries = [
             ("install_hwmonux", "HWMonux hardware monitor"),
             ("install_portagehub", "PortageHub package manager"),
@@ -68,12 +102,6 @@ class ToolsTabMixin:
             ("flatpak", "Flatpak application support"),
             ("firmware", "Linux firmware"),
             ("microcode", "CPU microcode updates"),
-            ("chrony", "Network time synchronization"),
-            ("cron", "Cron scheduled tasks"),
-            ("logger", "System logger for OpenRC"),
-            ("ssh", "OpenSSH remote access"),
-            ("file_indexing", "File indexing with mlocate"),
-            ("shell_completion", "Bash completion"),
         ]
         for index, (key, label) in enumerate(entries):
             check = QCheckBox(label)
@@ -104,8 +132,158 @@ class ToolsTabMixin:
         self.extra_packages.setPlaceholderText("category/package category/other-package")
         self.extra_packages.setAccessibleName("Extra packages")
         card.content.addWidget(self.extra_packages)
+        layout.addWidget(self._gaming_card(page))
         layout.addStretch(1)
         return page
+
+    # --- system tools (the Handbook's Tools chapter) -----------------------------------------------------------
+
+    def _system_tools_card(self, parent: QWidget) -> Card:
+        card = Card("System tools (Handbook)", "Small programs every Gentoo system needs: the clock, the log and scheduled jobs. The defaults are right for most computers.", parent=parent)
+        form = QFormLayout()
+        self.timesync = _choice_combo(TIMESYNCS, "Time synchronisation")
+        form.addRow(text.TIMESYNC_TEXT, _with_help(self.timesync, "Sets the clock from the internet now and then, so the time stays right.", "Tools"))
+        card.content.addLayout(form)
+        completion = QCheckBox("Bash completion")
+        completion.setToolTip(text.COMPLETION_HELP)
+        self.checks["shell_completion"] = completion
+        card.content.addWidget(completion)
+        card.content.addWidget(wrapped_label(text.COMPLETION_HELP, muted=True))
+        self.tools_more = AdvancedSection("tools", "More system tools")
+        more = QFormLayout()
+        self.logger = _choice_combo(LOGGERS, "System logger")
+        self.logger_label = QLabel("System logger")
+        more.addRow(self.logger_label, _with_help(self.logger, text.LOGGER_HELP, "Tools"))
+        self.cron = _choice_combo(CRONS, "Cron daemon")
+        more.addRow("Scheduled jobs (cron)", _with_help(self.cron, text.CRON_HELP, "Tools"))
+        self.tools_more.add_layout(more)
+        self.journal_note = wrapped_label(text.JOURNAL_NOTE, muted=True)
+        self.tools_more.add_widget(self.journal_note)
+        journal = QCheckBox(text.JOURNAL_PERSISTENT_TEXT)
+        journal.setToolTip(text.JOURNAL_PERSISTENT_HELP)
+        self.checks["journal_persistent"] = journal
+        self.tools_more.add_widget(journal)
+        self.cron_note = wrapped_label("", muted=True)
+        self.cron_note.hide()
+        self.tools_more.add_widget(self.cron_note)
+        for key, label, tip in (("mlocate", "File search with locate (mlocate)", text.MLOCATE_HELP),
+                                ("gentoolkit", "Gentoo toolkit (gentoolkit)", text.GENTOOLKIT_HELP),
+                                ("eclean_kernel", "Old kernel cleaner (eclean-kernel)", "Removes kernels you no longer use, with their modules.")):
+            check = QCheckBox(label)
+            check.setToolTip(tip)
+            self.checks[key] = check
+            self.tools_more.add_widget(check)
+        card.content.addWidget(self.tools_more)
+        self.logger.currentIndexChanged.connect(lambda _=0: self._update_tool_notes())
+        self.cron.currentIndexChanged.connect(lambda _=0: self._update_tool_notes())
+        return card
+
+    def _update_tool_notes(self) -> None:
+        """Hide what the chosen init system does not use, and say when one choice brings another along."""
+        systemd = self.manifest.system.init == "systemd"
+        self.logger.parentWidget().setVisible(not systemd)
+        self.logger_label.setVisible(not systemd)
+        self.journal_note.setVisible(systemd)
+        self.checks["journal_persistent"].setVisible(systemd)
+        for combo, value, usable in ((self.cron, "fcron", not systemd), (self.timesync, "timesyncd", systemd)):
+            index, model = combo.findData(value), combo.model()
+            item = model.item(index) if index >= 0 and hasattr(model, "item") else None
+            if item is not None:
+                item.setEnabled(usable)
+        self.cron.setToolTip(text.CRON_SYSTEMD_HELP if systemd else text.CRON_HELP)
+        cron, logger = str(self.cron.currentData()), str(self.logger.currentData())
+        note = ""
+        if not systemd and logger == "syslog-ng" and cron == "none":
+            note = "syslog-ng rotates its logs from cron, so cronie is installed as well. Choose another logger to avoid that."
+        elif systemd and cron != "none":
+            note = text.CRON_SYSTEMD_HELP + " Choose No cron daemon unless a program of yours needs one."
+        self.cron_note.setText(note)
+        self.cron_note.setVisible(bool(note))
+
+    def set_tools_advanced(self, advanced: bool) -> None:
+        self.tools_more.set_advanced(advanced)
+
+    # --- gaming (optional) -------------------------------------------------------------------------------------------
+
+    def _gaming_card(self, parent: QWidget) -> Card:
+        from gentoo_installerd import gaming_readiness as gaming  # lazy: the wording lives next to the readiness check
+
+        card = Card("Gaming (optional)", gaming.CARD_INTRO, parent=parent)
+        self.gaming_group = QButtonGroup(card)
+        self.gaming_buttons: dict[str, QRadioButton] = {}
+        for value, label in GAMING_CHOICES:
+            button = QRadioButton(label)
+            button.setToolTip(gaming.GAMING_MODES_TEXT[value])
+            self.gaming_buttons[value] = button
+            self.gaming_group.addButton(button)
+            card.content.addWidget(button)
+            button.toggled.connect(lambda _=False: self._gaming_changed())
+        self.gaming_note = wrapped_label("", muted=True)
+        self.gaming_note.hide()
+        card.content.addWidget(self.gaming_note)
+        self.gaming_tweaks = QCheckBox("Game tweaks: more memory maps, NTSYNC and GameMode")
+        self.gaming_windows = QCheckBox("Windows game tools: Heroic, Wine, DXVK, VKD3D-Proton, protontricks")
+        self.gaming_accept = QCheckBox(gaming.ACCEPT_EXTERNAL_TEXT)
+        for box in (self.gaming_tweaks, self.gaming_windows, self.gaming_accept):
+            card.content.addWidget(box)
+        self.gaming_build_note = wrapped_label(gaming.BUILD_TIME_NOTE, muted=True)
+        card.content.addWidget(self.gaming_build_note)
+        self.gaming_status = wrapped_label(gaming.FORTNITE_STATUS, muted=True)
+        self.gaming_status.setObjectName("fortniteStatus")
+        card.content.addWidget(self.gaming_status)
+        self.gaming_check = QPushButton(gaming.CHECK_BUTTON)
+        self.gaming_check.clicked.connect(lambda _=False: self.run_gaming_check())
+        card.content.addWidget(self.gaming_check)
+        self.gaming_report = wrapped_label("", muted=True)
+        self.gaming_report.hide()
+        card.content.addWidget(self.gaming_report)
+        return card
+
+    def run_gaming_check(self, root: str = "/") -> None:
+        """The read-only list: it reads a few files, installs nothing and changes nothing."""
+        from gentoo_installerd import gaming_readiness as gaming
+
+        rows = gaming.check_this_pc(root, live=True)
+        self.gaming_report.setText(gaming.format_rows(rows) + "\n\n" + gaming.LIVE_NOTE)
+        self.gaming_report.show()
+
+    def _gaming_mode(self) -> str:
+        return next((value for value, button in self.gaming_buttons.items() if button.isChecked()), "off")
+
+    def _gaming_changed(self) -> None:
+        mode = self._gaming_mode()
+        self.gaming_tweaks.setVisible(mode != "off")
+        self.gaming_windows.setVisible(mode != "off")
+        self.gaming_accept.setVisible(mode == "native")
+        self.gaming_build_note.setVisible(mode == "native")
+
+    def refresh_gaming(self) -> None:
+        """Gaming needs a desktop; native also needs a multilib stage3. A choice that no longer fits is turned off or moved to Flatpak, with a notice."""
+        from gentoo_installerd import gaming_readiness as gaming
+
+        system, options = self.manifest.system, self.manifest.options
+        no_desktop = system.desktop == "minimal"
+        no_multilib = not system.multilib or "nomultilib" in system.stage_variant
+        note = ""
+        if no_desktop and options.gaming != "off":
+            options.gaming, note = "off", "Gaming was turned off because a minimal system has no desktop."
+        elif no_multilib and options.gaming == "native":
+            options.gaming, note = "flatpak", "Native gaming was changed to the quick Flatpak mode because this stage3 has no 32-bit support."
+        note = note or (gaming.NEEDS_DESKTOP if no_desktop else gaming.NATIVE_NEEDS_MULTILIB if no_multilib else "")
+        self.gaming_note.setText(note)
+        self.gaming_note.setVisible(bool(note))
+        for value, button in self.gaming_buttons.items():
+            button.setEnabled(not no_desktop or value == "off")
+        self.gaming_buttons["native"].setEnabled(not no_desktop and not no_multilib)
+        for box in (self.gaming_tweaks, self.gaming_windows, self.gaming_accept):
+            box.setEnabled(not no_desktop)
+        self.gaming_buttons[options.gaming if options.gaming in self.gaming_buttons else "off"].setChecked(True)
+        self._gaming_changed()
+
+    def showEvent(self, event) -> None:
+        self.refresh_gaming()
+        self._update_tool_notes()
+        super().showEvent(event)  # type: ignore[misc]
 
     def _update_hardware_note(self, info: system_info.SystemInfo | None, scalars: dict[str, Any]) -> None:
         """Firmware and microcode can be decided by the hardware: say so next to the two tick boxes."""
@@ -120,7 +298,7 @@ class ToolsTabMixin:
         self.hardware_note.setText("\n".join(lines))
         self.hardware_note.setVisible(bool(lines))
 
-    # --- reacting to the desktop choice ------------------------------------------------------------------
+    # --- reacting to the desktop choice ------------------------------------------------------------------------------
 
     def desktop_changed(self, desktop: str) -> None:
         """The user picked a desktop on the System page. A minimal system has no
@@ -137,13 +315,29 @@ class ToolsTabMixin:
             self._cleared_companions = None
         self._load_checks()
         self._load_kde_apps()
+        self.refresh_gaming()
 
     def _load_checks(self) -> None:
+        options = self.manifest.options
         for key, check in self.checks.items():
-            check.setChecked(self.manifest.options.is_on(key))
+            check.setChecked(options.file_indexing or options.mlocate if key == "mlocate" else options.is_on(key))
         minimal = self.manifest.system.desktop == "minimal"
         self.companion_note.setVisible(minimal and self._cleared_companions is not None)
         self._update_hwmonux_note()
+
+    def _load_system_tools(self) -> None:
+        options = self.manifest.options
+        _select(self.timesync, options.timesync)
+        _select(self.logger, options.logger)
+        _select(self.cron, options.cron)
+        self._update_tool_notes()
+
+    def _load_gaming(self) -> None:
+        options = self.manifest.options
+        self.gaming_tweaks.setChecked(options.gaming_tweaks)
+        self.gaming_windows.setChecked(options.gaming_windows_tools)
+        self.gaming_accept.setChecked(options.gaming_accept_external)
+        self.refresh_gaming()
 
     def _update_hwmonux_note(self) -> None:
         """Say what the PySide6 build costs under the HWMonux box while it is ticked. The box is the user's choice: it is never changed here."""
@@ -167,12 +361,25 @@ class ToolsTabMixin:
 
     def load_tools(self) -> None:
         self._load_checks()
+        self._load_system_tools()
         self._load_kde_apps()
+        self._load_gaming()
         self.extra_packages.setText(" ".join(self.manifest.options.extra_packages))
 
     def save_tools(self) -> None:
+        options = self.manifest.options
         for key, check in self.checks.items():
-            if check.isChecked() != self.manifest.options.is_on(key):  # a chosen logger or cron daemon stays unless it is switched
-                setattr(self.manifest.options, key, check.isChecked())
-        self.manifest.options.kde_apps = str(self.kde_apps.currentData() or self.manifest.options.kde_apps)
-        self.manifest.options.extra_packages = self.extra_packages.text().split()
+            if key == "mlocate":  # the older file_indexing setting means the same package
+                if check.isChecked() != (options.file_indexing or options.mlocate):
+                    options.mlocate = options.file_indexing = check.isChecked()
+            elif check.isChecked() != options.is_on(key):  # a chosen value stays unless the box is switched
+                setattr(options, key, check.isChecked())
+        options.timesync = str(self.timesync.currentData() or options.timesync)
+        options.logger = str(self.logger.currentData() or options.logger)
+        options.cron = str(self.cron.currentData() or options.cron)
+        options.kde_apps = str(self.kde_apps.currentData() or options.kde_apps)
+        options.extra_packages = self.extra_packages.text().split()
+        options.gaming = self._gaming_mode()
+        options.gaming_tweaks = self.gaming_tweaks.isChecked()
+        options.gaming_windows_tools = self.gaming_windows.isChecked()
+        options.gaming_accept_external = self.gaming_accept.isChecked()

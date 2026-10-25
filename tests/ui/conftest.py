@@ -149,3 +149,9 @@ def make_window(qtbot, monkeypatch, tmp_path):
         return window
 
     return build
+
+
+@pytest.fixture(autouse=True)
+def no_host_time_zone(monkeypatch):
+    """The time zone of the developer's computer must not leak into a page (it would end up in the manifest)."""
+    monkeypatch.setattr("gentoo_installer.pages.accounts.detect_timezone", lambda root="/": "")

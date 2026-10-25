@@ -60,6 +60,7 @@ class CustomizePage(PortageTabMixin, NetworkTabMixin, ToolsTabMixin, Page):
 
     def set_advanced(self, advanced: bool) -> None:
         self.hardware.set_advanced(advanced)
+        self.set_tools_advanced(advanced)
 
     def show_hardware(self) -> None:
         self.tabs.setCurrentWidget(self.hardware)
