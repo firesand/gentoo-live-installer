@@ -108,7 +108,8 @@ def main(argv: list[str] | None = None) -> int:
                          and area.verticalScrollBar().maximum() > 0), None)
             if tall is not None:  # what a scroll bar hides: the whole content of the page, in one tall picture
                 full = name.replace(".png", "-full.png")
-                if tall.widget().grab().save(str(args.output / full)):
+                content = tall.widget()
+                if content is not None and content.grab().save(str(args.output / full)):
                     report["pages"].append({"file": full, "index": index, "page": page_name(page, index), "mode": mode, "full_page_of": name})
             horizontal = [type(area).__name__ for area in scrolled if area.horizontalScrollBar().isVisibleTo(area) and area.horizontalScrollBar().maximum() > 0]
             report["pages"].append({"file": name, "index": index, "page": page_name(page, index), "mode": mode, "title": window.windowTitle(),

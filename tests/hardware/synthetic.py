@@ -32,7 +32,7 @@ _spec = importlib.util.spec_from_file_location("capture_hardware_fixture", ROOT 
 _capture = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
 sys.modules["capture_hardware_fixture"] = _capture
 _spec.loader.exec_module(_capture)  # type: ignore[union-attr]
-FixtureWriter = _capture.FixtureWriter
+FixtureWriter: Any = _capture.FixtureWriter
 
 FIXTURES = HERE / "fixtures"
 NOW = 1_792_800_000  # 2026-10-24T00:00:00Z: every synthetic machine "boots" at this instant
@@ -110,7 +110,7 @@ class Builder:
 
     name: str
     dest: Path = field(init=False)
-    writer: FixtureWriter = field(init=False)
+    writer: Any = field(init=False)
     _pci: list[tuple[str, str]] = field(default_factory=list)  # (vendor, device) for the trimmed pci.ids
     _cmdline: str = "BOOT_IMAGE=/boot/gentoo root=live:CDLABEL=GENTOO_INSTALLER_AMD64 rd.live.dir=/ rd.live.squashimg=image.squashfs cdroot nodhcp secureconsole"
     _mounts: list[str] = field(default_factory=list)

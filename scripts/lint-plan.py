@@ -63,7 +63,7 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Callable, Collection, Iterable, Sequence
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = Path(__file__).resolve().parent / "lint-plan-data"
@@ -194,7 +194,7 @@ def baseline_problem(desktop: str, init: str, count: int, baseline: dict | None 
     return ""
 
 
-def heavy_packages(closure: Sequence[str], table: dict | None = None, installed: Sequence[str] | set[str] = frozenset()) -> list[str]:
+def heavy_packages(closure: Sequence[str], table: dict | None = None, installed: Collection[str] = frozenset()) -> list[str]:
     """Members of the closure that take hours to compile ('cat/pkg-version (about N h)'); a source-only cell has to build every one of them.
 
     ``installed`` are the packages the stage3 already has (by category/package): the walk sees a newer version of them in the tree, which no cell has to compile.

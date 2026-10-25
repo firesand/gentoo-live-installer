@@ -70,7 +70,8 @@ def is_read_only(argv: Sequence[str]) -> bool:
 
 
 READ_ONLY_PATH_PREFIXES = ("/proc/", "/sys/", "/boot/", "/efi/", "/etc/gentoo-live-installer/", "/usr/lib/udev/rules.d/", "/lib/udev/rules.d/", "/dev/input/by-id")
-EXPECTED = {"gpu": "4090", "driver_branch": "595", "viper_usb": "1532:0091", "aura_usb": "0b05:18f3", "dualsense_usb": "054c:0ce6", "vram_gib": 24}
+EXPECTED = {"gpu": "4090", "driver_branch": "595", "viper_usb": "1532:0091", "aura_usb": "0b05:18f3", "dualsense_usb": "054c:0ce6"}
+VRAM_GIB = 24
 
 
 class Machine(Protocol):
@@ -140,9 +141,10 @@ def check_nvidia_smi(m: Machine) -> Result:
         problems.append(f"the GPU is {name!r}, expected an RTX {EXPECTED['gpu']}")
     if not driver.startswith(f"{EXPECTED['driver_branch']}."):
         problems.append(f"driver {driver} is not branch {EXPECTED['driver_branch']}")
-    gib = int(re.search(r"(\d+)", memory).group(1)) / 1024 if re.search(r"(\d+)", memory) else 0
-    if gib and gib < EXPECTED["vram_gib"] - 1:
-        problems.append(f"{memory} of video memory is less than the {EXPECTED['vram_gib']} GiB of the card")
+    digits = re.search(r"(\d+)", memory)
+    gib = int(digits.group(1)) / 1024 if digits else 0.0
+    if gib and gib < VRAM_GIB - 1:
+        problems.append(f"{memory} of video memory is less than the {VRAM_GIB} GiB of the card")
     return Result("nvidia-smi", title, FAIL if problems else PASS, "; ".join(problems) or f"{name}, driver {driver}, {memory}")
 
 
@@ -209,8 +211,8 @@ def check_suspend_preparation(m: Machine) -> Result:
         free = int(out.strip().splitlines()[-1]) / 2**30
     except (ValueError, IndexError):
         free = -1
-    if 0 <= free < EXPECTED["vram_gib"] + 2:
-        problems.append(f"/var/tmp has {free:.0f} GiB free, less than the {EXPECTED['vram_gib']} GiB the driver may save there")
+    if 0 <= free < VRAM_GIB + 2:
+        problems.append(f"/var/tmp has {free:.0f} GiB free, less than the {VRAM_GIB} GiB the driver may save there")
     return Result("suspend-preparation", title, FAIL if problems else PASS, "; ".join(problems) or f"preserve on, {free:.0f} GiB free in /var/tmp")
 
 
