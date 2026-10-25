@@ -308,6 +308,14 @@ def installed_agents(home: str) -> list[str]:
     return [name for name in AGENTS if installed_version(name, home) is not None]
 
 
+def approver_vt(vt_file: str = checks.VT_FILE) -> int:
+    """The console of the approver: the service writes it (tty9 unless that one was taken)."""
+    try:
+        return int(Path(vt_file).read_text(encoding="utf-8").strip())
+    except (OSError, ValueError):
+        return checks.DEFAULT_APPROVER_VT
+
+
 def show_password_once(prompts: Prompts, password_file: str = DO_PASSWORD_FILE) -> None:
     """The per-boot password goes on tty1 only as root, before the tmux session exists; the screen is cleared after a key press."""
     try:
@@ -317,7 +325,8 @@ def show_password_once(prompts: Prompts, password_file: str = DO_PASSWORD_FILE) 
         return
     prompts.say("\n=== The rescue password (this boot only) ===")
     prompts.say(f"    {password}")
-    prompts.say("When an agent asks to run a root command, the approver switches this PC to its own screen (Alt+F9 shows it).")
+    vt = approver_vt()
+    prompts.say(f"When an agent asks to run a root command, the approver switches this PC to its own screen (Alt+F{vt} shows it).")
     prompts.say("Type the password THERE, for that one command, after reading the command. Never type it into the agent, the phone or anywhere else.")
     prompts.ask("Press Enter when you have noted it; this screen is cleared. ")
     print(CLEAR_SCREEN, end="", file=prompts.out, flush=True)

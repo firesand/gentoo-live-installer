@@ -153,6 +153,10 @@ def test_the_approver_takes_the_next_console_when_tty9_is_in_use(service: Servic
     assert "--vt 10 " in " ".join(service.logged()) or "tty10" in result.stdout
     result = service.run("start_pre; echo $command_args", extra={"BUSY": f"{service.dev}/tty9 {service.dev}/tty10"})
     assert "--vt 11 " in result.stdout
+    # gentoo-rescue-ai checks that console and names its Alt+F key: it reads the number the service chose
+    assert (service.run_dir / "approver-vt").read_text() == "11\n"
+    service.run("stop_post")
+    assert not (service.run_dir / "approver-vt").exists()
 
 
 def test_a_missing_console_is_skipped_and_none_free_is_an_error(service: Service) -> None:

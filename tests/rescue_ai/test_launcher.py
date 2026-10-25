@@ -229,3 +229,14 @@ def test_the_agent_window_is_selected_by_name_not_by_a_number_that_depends_on_ba
     launch = launcher.agent_launch("claude", HOME)
     argv = launcher.tmux_session_argv(launch, launch)
     assert argv[-2:] == ["-t", "rescue:agent"] and "-n" in argv and argv[argv.index("-n") + 1] == "agent"
+
+
+def test_the_approver_console_is_read_from_the_service_file(tmp_path) -> None:
+    from gentoo_rescue_ai import launcher
+
+    path = tmp_path / "approver-vt"
+    assert launcher.approver_vt(str(path)) == 9, "no file: the default console"
+    path.write_text("11\n")
+    assert launcher.approver_vt(str(path)) == 11
+    path.write_text("junk")
+    assert launcher.approver_vt(str(path)) == 9

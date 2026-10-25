@@ -92,7 +92,7 @@ start_pre() {
 		return 1
 	fi
 	# Nothing from an earlier start survives: a stale socket or password is never offered again.
-	rm -f "${rescue_run_dir}/do.sock" "${rescue_run_dir}/do-password"
+	rm -f "${rescue_run_dir}/do.sock" "${rescue_run_dir}/do-password" "${rescue_run_dir}/approver-vt"
 	vt="$(rescue_pick_vt)" || { eerror "no free console for the approver (tty${RESCUE_VT:-9} to tty$((${RESCUE_VT:-9} + 3)) are in use)"; return 1; }
 	# The socket directory: root writes, the group rescue-ai may only enter it (no listing). Nobody else can enter it, the live user included: it
 	# looks at the socket as root. The audit log
@@ -106,10 +106,12 @@ start_pre() {
 	esac
 	( umask 077; printf '%s\n' "${password}" > "${rescue_run_dir}/do-password" ) || return 1
 	chown root:root "${rescue_run_dir}/do-password" && chmod 0600 "${rescue_run_dir}/do-password" || return 1
+	# Which console it is, for gentoo-rescue-ai: its safety check looks at that console, and it tells the person which Alt+F key.
+	( umask 022; printf '%s\n' "${vt}" > "${rescue_run_dir}/approver-vt" ) || return 1
 	command_args="--vt ${vt} --socket ${rescue_run_dir}/do.sock --audit ${rescue_log_dir}/do.log ${command_args_extra}"
 	einfo "approval console: tty${vt} (Alt+F${vt}); the password is shown there and on the first console"
 }
 
 stop_post() {
-	rm -f "${rescue_run_dir}/do.sock" "${rescue_run_dir}/do-password"
+	rm -f "${rescue_run_dir}/do.sock" "${rescue_run_dir}/do-password" "${rescue_run_dir}/approver-vt"
 }
