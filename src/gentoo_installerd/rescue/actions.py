@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from . import efi as efimod
+from . import nvidia
 from .adapters import base as efi_base
 from .adapters import detect_adapter
 from .builder import USERNAME_RE, PlanBuilder
@@ -64,6 +65,13 @@ ACTIONS: dict[str, dict[str, Any]] = {
                                  {"name": "expire", "type": "bool", "label": "Ask for a new password at the next login", "default": False}], "secrets": ["password"]},
     "acct.unlock": {"title": "Unlock an account", "group": "accounts", "risk": "medium", "writes": True, "description": "Removes a lock or failed-login block without changing the password.",
                     "params": [{"name": "username", "type": "text", "label": "User", "required": True}]},
+    "gfx.nvidia_rebuild": {"title": "Rebuild the NVIDIA kernel modules", "group": "graphics", "risk": "medium", "writes": True,
+                           "description": "Builds the NVIDIA modules again for the installed kernels, then rebuilds the initramfs. Use it when the screen stays black after a kernel update.",
+                           "params": [{"name": "mode", "type": "enum", "label": "Method", "choices": ["module-rebuild", "remerge"], "default": "module-rebuild"}]},
+    "gfx.nvidia_fbdev_off": {"title": "Remove nvidia-drm.fbdev=1", "group": "graphics", "risk": "medium", "writes": True,
+                             "description": "Removes nvidia-drm.fbdev=1 from the kernel command line files, then rebuilds the boot menu. It can blank the text console on some setups."},
+    "gfx.nouveau_switch": {"title": "Switch to the open-source driver (nouveau)", "group": "graphics", "risk": "high", "writes": True,
+                           "description": "Removes the NVIDIA driver and its settings so nouveau is used. Needs no network. Use it when the NVIDIA driver keeps the screen black."},
     "pkg.finish": {"title": "Finish an interrupted package operation", "group": "packages", "risk": "medium", "writes": True, "description": "Completes what the package manager was doing when it was interrupted."},
 }
 QUERIES = ("actions.list", "diag.summary", "diag.deep", "boot.inventory", "efi.list", "fstab.show", "acct.users", "logs.sources", "logs.tail", "logs.journal", "logs.pstore", "logs.live_dmesg")
@@ -131,6 +139,8 @@ def fill_builder(manager: RescueManager, session: RescueSession, view: SessionVi
         if not view.can_run_programs:
             raise Unsupported("Programs of this system cannot run here (inspection-only session).")
         adapter.finish(b)
+    elif action.startswith("gfx."):
+        nvidia.plan(b, adapter, action)
     elif action.startswith("efi."):
         _plan_efi(b, manager)
     elif action == "fstab.fix":

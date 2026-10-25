@@ -83,6 +83,7 @@ def diagnose(view: SessionView, *, hardware_changed: bool = False, efi_state: ef
     findings.extend(_esp_findings(view, boot, esp))
     findings.extend(_firmware_findings(view, boot, esp))
     findings.extend(_misc_findings(view, boot))
+    findings.extend(_nvidia_findings(view))
     if efi_state is not None and efi_state.usable and esp is not None:
         findings.extend(_nvram_findings(view, esp, efi_state))
     if hardware_changed:
@@ -230,6 +231,40 @@ def _misc_findings(view: SessionView, boot: Any) -> list[Finding]:
         if twins:
             findings.append(Finding("D17", "warn", "Another disk has the same ID as this system", "A cloned disk is connected; the system may start from the wrong one.", [f"{root.uuid}: {root.path}, {', '.join(twins)}"], []))
     return findings
+
+
+def _nvidia_findings(view: SessionView) -> list[Finding]:
+    """N01-N04: the NVIDIA driver against the kernels, nouveau blocked without a driver, and the argument that can blank the console. Only reads files; Gentoo only."""
+    from . import nvidia
+
+    if view.family != "gentoo":
+        return []
+    found: list[Finding] = []
+    version = nvidia.driver_version(view)
+    if version:
+        states = nvidia.module_states(view)
+        missing = [item for item in states if not item.path]
+        if missing:
+            found.append(Finding("N01", "warn", "The NVIDIA kernel modules are missing for " + ("a kernel" if len(missing) == 1 else "some kernels"),
+                                 f"The NVIDIA driver {version} is installed, but {', '.join(item.kernel for item in missing)} has no nvidia.ko, so the screen stays black or falls back to a plain console with that kernel.",
+                                 [item.to_line() for item in states], ["gfx.nvidia_rebuild", "gfx.nouveau_switch"]))
+        base_version = version.split("-r")[0]
+        stale = [item for item in states if item.path and item.version and item.version != base_version]
+        if stale:
+            found.append(Finding("N02", "warn", "An NVIDIA kernel module does not match the installed driver",
+                                 f"The driver libraries are version {version}, but the module of {', '.join(item.kernel for item in stale)} is another version; the driver refuses to start with a mismatch.",
+                                 [item.to_line() for item in states], ["gfx.nvidia_rebuild", "gfx.nouveau_switch"]))
+    elif nvidia.nouveau_blocks(view):
+        blocks = nvidia.nouveau_blocks(view)
+        found.append(Finding("N03", "warn", "The open-source graphics driver is switched off and the NVIDIA driver is not installed",
+                             "A file in /etc/modprobe.d blocks nouveau, but x11-drivers/nvidia-drivers is not installed, so no graphics driver loads.",
+                             [f"{path}: {line.strip()}" for path, lines in blocks for line in lines], ["gfx.nouveau_switch"]))
+    uses = nvidia.cmdline_uses(view, nvidia.FBDEV_ARGUMENTS)
+    if uses:
+        found.append(Finding("N04", "warn" if version else "info", "The kernel command line sets nvidia-drm.fbdev=1",
+                             "The installer added this argument for the NVIDIA driver. The driver uses it by default, and Gentoo warns that setting it can break the text console on some setups. "
+                             "A black screen at boot can come from it; removing it is safe.", uses, ["gfx.nvidia_fbdev_off"]))
+    return found
 
 
 def _pending_package_work(view: SessionView) -> list[str]:

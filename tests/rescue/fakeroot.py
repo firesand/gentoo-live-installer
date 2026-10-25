@@ -283,3 +283,22 @@ BUILDERS = {
     "unknown": _unknown,
     "data": _not_a_system,
 }
+
+
+def nvidia(root: Path, *, driver: str = "580.126.18", module: str | None = "580.126.18", kver: str = GENTOO_KVER, nouveau: bool = True, video_cards: str | None = "nvidia",
+           distfile: bool = True, blacklist: bool = False) -> None:
+    """The NVIDIA driver in a Gentoo tree: its Portage record, the kernel module of ``kver`` (``module`` is the version inside it; None = no module), VIDEO_CARDS and the distfile."""
+    if driver:
+        put(root, f"var/db/pkg/x11-drivers/nvidia-drivers-{driver}/CATEGORY", "x11-drivers\n")
+        put(root, f"var/db/pkg/x11-drivers/nvidia-drivers-{driver}/PF", f"nvidia-drivers-{driver}\n")
+    if module is not None:
+        target = put(root, f"usr/lib/modules/{kver}/video/nvidia.ko")
+        target.write_bytes(b"\x7fELF" + b"\0" * 4096 + b"\0license=NVIDIA\0version=" + module.encode() + b"\0vermagic=6.18\0" + b"\0" * 4096)
+    put(root, f"usr/lib/modules/{kver}/modules.dep", "kernel/fs/ext4/ext4.ko:\n" + ("kernel/drivers/gpu/drm/nouveau/nouveau.ko:\n" if nouveau else ""))
+    if video_cards is not None:
+        put(root, "etc/portage/make.conf", f'COMMON_FLAGS="-O2 -pipe"\nVIDEO_CARDS="{video_cards}"\nCPU_FLAGS_X86="aes avx2"\n')
+    if distfile:
+        put(root, f"var/cache/distfiles/NVIDIA-Linux-x86_64-{driver}.run", "x")
+    if blacklist:
+        put(root, "etc/modprobe.d/blacklist-nouveau.conf", "# keep nouveau away\nblacklist nouveau\noptions nouveau modeset=0\n")
+    put(root, "usr/src/linux/Makefile", "VERSION = 6\n")

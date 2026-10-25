@@ -7,6 +7,7 @@ nothing here runs a program from the target; Portage's state is read as files.
 from __future__ import annotations
 
 import json
+import os
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
@@ -141,6 +142,36 @@ class SessionView:
     def sha256(self, path: str) -> str:
         with self._fs() as fs:
             return fs.sha256(path)
+
+    def search_binary(self, path: str, patterns: tuple[re.Pattern[bytes], ...], limit: int = 256 << 20) -> bytes | None:
+        """The first group of the first pattern that matches in a (large) binary file, read in chunks; None when nothing matches or the file cannot be read.
+
+        Used for facts a kernel module states about itself (its version), without running a program of the system."""
+        chunk, overlap = 1 << 20, 4096
+        try:
+            with self._fs() as fs:
+                fd = fs.open_fd(path, os.O_RDONLY | os.O_NONBLOCK | os.O_NOCTTY)
+        except (OSError, RescueError):
+            return None
+        try:
+            tail = b""
+            seen = 0
+            while seen < limit:
+                data = os.read(fd, chunk)
+                if not data:
+                    break
+                seen += len(data)
+                window = tail + data
+                for pattern in patterns:
+                    found = pattern.search(window)
+                    if found:
+                        return found.group(1)
+                tail = window[-overlap:]
+        except OSError:
+            return None
+        finally:
+            os.close(fd)
+        return None
 
     def size(self, path: str) -> int:
         with self._fs() as fs:

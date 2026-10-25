@@ -283,6 +283,14 @@ gentoo-chroot SESSION --writable             # a shell that can change the syste
 * `exit` leaves the terminal. The session stays mounted until you unmount it: `gentoo-rescue unmount`, or *Unmount and quit* in the menu. Unmount before you restart.
 * `gentoo-rescue audit SESSION` shows everything the tool did.
 
+### A black screen with the NVIDIA driver
+
+When the system uses the NVIDIA driver, the repair tool also checks that a kernel module exists for every kernel in /boot and that its version is the one of the installed driver, and it looks for `nvidia-drm.fbdev=1` on the kernel command line (Gentoo warns it can break the text console). A card **NVIDIA graphics** then offers three repairs, each shown as exact commands first:
+
+* **Rebuild the NVIDIA kernel modules** runs `emerge --oneshot @module-rebuild` and then `dracut --force --regenerate-all`. It needs the network only when the driver file is not in `/var/cache/distfiles`.
+* **Remove nvidia-drm.fbdev=1** edits the files the boot entries are made from (a backup copy is kept beside each) and rebuilds the boot menu.
+* **Switch to the open-source driver (nouveau)** needs no network: it unmerges `x11-drivers/nvidia-drivers`, changes `VIDEO_CARDS` from `nvidia` to `nouveau`, switches off a block on nouveau in `/etc/modprobe.d`, removes the NVIDIA kernel arguments and rebuilds the initramfs and the boot menu. It is refused when the kernel has no nouveau driver. Mesa gets its nouveau support at the next system update.
+
 ### Copy your files out
 
 Mount the system with the tool. Plug in an external disk. The desktop does not mount disks by itself, so mount it yourself. The mount directory of the repaired system is only open to root, so copy with `sudo`:
