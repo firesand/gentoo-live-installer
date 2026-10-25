@@ -181,6 +181,15 @@ def test_stopping_removes_the_socket_and_the_password(service: Service) -> None:
     assert not (service.run_dir / "do.sock").exists() and not (service.run_dir / "do-password").exists()
 
 
+def test_stopping_on_a_boot_that_started_nothing_is_quiet(service: Service) -> None:
+    """On every other entry start() ran no daemon: there is no pid file, and the stop at shutdown must not fail on that."""
+    result = service.run("pidfile=" + str(service.tmp / "none.pid") + "; default_stop() { echo default_stop; }; stop; echo status=$?")
+    assert "status=0" in result.stdout and "default_stop" not in result.stdout
+    (service.tmp / "some.pid").write_text("1\n")
+    result = service.run("pidfile=" + str(service.tmp / "some.pid") + "; default_stop() { echo default_stop; }; stop; echo status=$?")
+    assert "default_stop" in result.stdout
+
+
 def test_a_stale_socket_from_an_earlier_start_does_not_survive_a_start(service: Service) -> None:
     service.run_dir.mkdir(parents=True)
     (service.run_dir / "do.sock").touch()

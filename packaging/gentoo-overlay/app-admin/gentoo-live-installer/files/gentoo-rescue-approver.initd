@@ -75,6 +75,12 @@ start() {
 	default_start
 }
 
+stop() {
+	# On every other boot start() ran nothing, so there is no pid file and nothing to stop.
+	[ -f "${pidfile}" ] || return 0
+	default_stop
+}
+
 start_pre() {
 	local vt password
 	# start() does nothing outside the AI rescue entry; so must this.

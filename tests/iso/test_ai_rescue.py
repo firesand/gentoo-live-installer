@@ -38,11 +38,12 @@ def test_ttyd_gets_a_libwebsockets_with_tls_and_libuv() -> None:
     assert match and {"libuv", "ssl"} <= set(match.group(1).split())
 
 
-def test_ttyd_needs_no_keyword_while_the_pinned_tree_has_a_stable_version() -> None:
-    """ttyd-1.7.7-r1 is KEYWORDS=amd64 in the tree (the research read the ~amd64 -r2). iso/check-atoms.py fails the
-    build on a bump that drops it to ~amd64; the keyword is then added there, not guessed now."""
+def test_ttyd_is_the_exact_revision_that_pins_libwebsockets() -> None:
+    """ttyd-1.7.7-r1 is stable but takes any libwebsockets >= 4.4 (5.0.0 is stable in the tree); -r2 (~amd64) pins 4.5*.
+    The spec asks for the exact-version keyword; a bare 'www-apps/ttyd ~amd64' would follow every later revision."""
     keywords = (ROOT / "iso/portage/package.accept_keywords/live-installer").read_text()
-    assert "ttyd" not in keywords
+    lines = [l.split() for l in keywords.splitlines() if "ttyd" in l and not l.startswith("#")]
+    assert lines == [["=www-apps/ttyd-1.7.7-r2", "~amd64"]]
 
 
 def test_cifs_utils_is_built_without_kerberos_and_python() -> None:

@@ -210,7 +210,7 @@ stick and never inside your disk. The disk stays read-only.
 
 The agents cannot become root. When one wants to change something it
 uses "gentoo-rescue-do COMMAND": the PC then switches to its own console
-(Alt+F9), shows the exact command, and waits for you to type the password
+(usually Alt+F9; the screen says which), shows the exact command, and waits for you to type the password
 THERE. One password entry approves one command. Nobody who is not sitting
 at the PC can approve, also not from a phone that shares the session.
 Do not paste the password into the agent's window: it is not asked there.
