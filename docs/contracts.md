@@ -431,3 +431,18 @@ bootloader, hardware), ACCT (accounts, tools, text installer).
 The window's Detail level (Guided or Advanced) calls `set_advanced(bool)` on every page (`Page.set_advanced` does nothing by
 default). A page puts its expert-only controls in an `AdvancedSection`; the section opens in Advanced, collapses in Guided, and
 never clears a value.
+
+
+### Hardware wave 5 (hw owner)
+
+* **Probe v2** (`gentoo_installer/hardware.py`): `MachineInfo.vendor_family/oem`, `PeripheralInfo.usb_devices` (vendor, product, names, classes, `role`; never a serial),
+  `PlatformInfo` (asus-nb-wmi, asus-armoury, platform_profile, thinkpad_acpi, i2c-dev, kbd_backlight), `LaptopInfo` (pm_profile, mem_sleep, charge threshold, IIO sensors,
+  pen, convertible, IPU camera), `GpuInfo.vram_mib`. GPU generations: `blackwell`, `ampere_plus`, `turing` (the coarse `turing+` is still understood).
+* **NVIDIA** (`hwplan_nvidia.nvidia_decision`): Automatic installs the NVIDIA driver only once `nvidia_license_accepted` is set (595 open modules for Turing and newer, 580 closed
+  for Maxwell to Volta, nouveau otherwise; `hw.nvidia_skipped` says why). Scalars for other stages: `safe_graphics` = `{title, cmdline}` (the boot stage builds the
+  Safe graphics entry from it; present whenever the proprietary driver is planned), `gpu_mode`, `nvidia_flavour`, `nvidia_reason`, `first_user`.
+* **Plan fields in use**: `repos` entries read `NAME git HTTPS-URI` (GURU and edorp for the ASUS tools); `package_keywords` are always one exact `=cat/pkg-ver` with `~amd64`;
+  `groups`, `user_services` (systemd only), `first_steps` (written to `~/first-steps.txt` by `Configurer.write_first_steps`). `Configurer.prepare_plan_repos` runs at the start of
+  `install_desktop`; `write_plan_files` writes keywords, unmask and repos.conf.
+* **Devices** (`gentoo_installer/devices.py`): `device_offers(profile, manifest)` is the single list behind the Devices card, the plan and the tests.
+* Desktop traits (`hardware_data.DESKTOP_TRAITS`) stand in for the desktop registry (B14) until it exists.

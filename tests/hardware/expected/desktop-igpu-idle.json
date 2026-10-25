@@ -121,7 +121,7 @@
     "summary": [
      "CPU: Intel Core i9-14900K, 32 threads; Intel microcode",
      "Graphics: Intel UHD Graphics 770 - open Intel driver",
-     "Graphics: NVIDIA GeForce RTX 4090 - open driver (nouveau)",
+     "Graphics: NVIDIA GeForce RTX 4090 - open driver (nouveau; the NVIDIA driver is used once you accept its licence)",
      "Firmware: Linux firmware (NVIDIA GPU system processor firmware, Intel graphics, Wi-Fi, Bluetooth)",
      "Storage: weekly TRIM for the solid-state disk (cron)",
      "Boot: fallback boot path is always written"
@@ -569,7 +569,7 @@
      "CPU: Intel Core i9-14900K, 32 threads; Intel microcode",
      "CPU flags: tuned for this CPU (packages are built, not downloaded)",
      "Graphics: Intel UHD Graphics 770 - open Intel driver",
-     "Graphics: NVIDIA GeForce RTX 4090 - open driver (nouveau + NVK)",
+     "Graphics: NVIDIA GeForce RTX 4090 - open driver (nouveau + NVK; the NVIDIA driver is used once you accept its licence)",
      "Firmware: Linux firmware (NVIDIA GPU system processor firmware, Intel graphics, Wi-Fi, Bluetooth)",
      "Storage: weekly TRIM for the solid-state disk (fstrim.timer)",
      "Boot: fallback boot path is always written"

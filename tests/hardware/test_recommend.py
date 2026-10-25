@@ -101,8 +101,10 @@ def test_the_authors_pc_only_gets_the_optional_nvidia_suggestion():
     result = found(m, fixture_dict("asus-desktop-rtx4090"))
     assert set(result) == {"rec.nvidia_proprietary"}
     suggestion = result["rec.nvidia_proprietary"]
-    assert (suggestion.field, suggestion.suggestion, suggestion.severity) == ("hardware.gpu_driver", "nvidia", "info")
-    assert "595" in suggestion.message and "licence" in suggestion.message
+    assert (suggestion.field, suggestion.suggestion, suggestion.severity) == ("hardware.nvidia_license_accepted", "true", "info")
+    assert "595" in suggestion.message and "licence" in suggestion.message and "open kernel modules" in suggestion.message
+    chosen = found(manifest(hardware={"gpu_driver": "nouveau"}), fixture_dict("asus-desktop-rtx4090"))["rec.nvidia_proprietary"]
+    assert (chosen.field, chosen.suggestion) == ("hardware.gpu_driver", "auto")
 
 
 @pytest.mark.parametrize(("ram", "desktop", "code", "suggestion"), [
@@ -189,6 +191,7 @@ def test_graphics_advice():
     assert "rec.nvidia_legacy" in found(manifest(), profile(gpus=(gpu("nvidia", "kepler"),)))
     already = found(manifest(hardware={"gpu_driver": "nvidia", "nvidia_license_accepted": True}), profile(gpus=(gpu("nvidia", "turing+"),)))
     assert "rec.nvidia_proprietary" not in already
+    assert "rec.nvidia_proprietary" not in found(manifest(hardware={"nvidia_license_accepted": True}), profile(gpus=(gpu("nvidia", "ampere_plus"),)))   # Automatic does it
     assert "rec.nvidia_proprietary" not in found(manifest(), profile(hypervisor="qemu", gpus=(gpu("virtio"),)))
     assert "rec.old_intel_graphics" in found(manifest(), profile(gpus=(gpu("intel", "gen3", integrated=True),)))
     assert "rec.old_intel_graphics" not in found(manifest(portage={"binhost": False}), profile(gpus=(gpu("intel", "gen3", integrated=True),)))

@@ -142,7 +142,7 @@
     "summary": [
      "CPU: 11th Gen Intel Core i7-11800H @ 2.30GHz, 16 threads; Intel microcode",
      "Graphics: Intel UHD Graphics - open Intel driver",
-     "Graphics: NVIDIA RTX A5000 Mobile - open driver (nouveau)",
+     "Graphics: NVIDIA RTX A5000 Mobile - open driver (nouveau; the NVIDIA driver is used once you accept its licence)",
      "Graphics: two graphics cards; GPU switching helpers installed",
      "Firmware: Linux firmware (NVIDIA GPU system processor firmware, Intel graphics, Wi-Fi, Bluetooth)",
      "Audio: Sound Open Firmware (many laptop audio chips need it)",
@@ -683,7 +683,7 @@
      "CPU: 11th Gen Intel Core i7-11800H @ 2.30GHz, 16 threads; Intel microcode",
      "CPU flags: tuned for this CPU (packages are built, not downloaded)",
      "Graphics: Intel UHD Graphics - open Intel driver",
-     "Graphics: NVIDIA RTX A5000 Mobile - open driver (nouveau + NVK)",
+     "Graphics: NVIDIA RTX A5000 Mobile - open driver (nouveau + NVK; the NVIDIA driver is used once you accept its licence)",
      "Graphics: two graphics cards; GPU switching helpers installed",
      "Firmware: Linux firmware (NVIDIA GPU system processor firmware, Intel graphics, Wi-Fi, Bluetooth)",
      "Audio: Sound Open Firmware (many laptop audio chips need it)",

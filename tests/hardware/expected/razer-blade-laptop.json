@@ -153,7 +153,7 @@
     "summary": [
      "CPU: Intel Core i7-10750H CPU @ 2.60GHz, 12 threads; Intel microcode",
      "Graphics: Intel UHD Graphics - open Intel driver",
-     "Graphics: NVIDIA GeForce RTX 3070 Mobile / Max-Q - open driver (nouveau)",
+     "Graphics: NVIDIA GeForce RTX 3070 Mobile / Max-Q - open driver (nouveau; the NVIDIA driver is used once you accept its licence)",
      "Graphics: two graphics cards; GPU switching helpers installed",
      "Firmware: Linux firmware (NVIDIA GPU system processor firmware, Intel graphics, Bluetooth)",
      "Power: power-profiles-daemon and thermald",
@@ -720,7 +720,7 @@
      "CPU: Intel Core i7-10750H CPU @ 2.60GHz, 12 threads; Intel microcode",
      "CPU flags: tuned for this CPU (packages are built, not downloaded)",
      "Graphics: Intel UHD Graphics - open Intel driver",
-     "Graphics: NVIDIA GeForce RTX 3070 Mobile / Max-Q - open driver (nouveau + NVK)",
+     "Graphics: NVIDIA GeForce RTX 3070 Mobile / Max-Q - open driver (nouveau + NVK; the NVIDIA driver is used once you accept its licence)",
      "Graphics: two graphics cards; GPU switching helpers installed",
      "Firmware: Linux firmware (NVIDIA GPU system processor firmware, Intel graphics, Bluetooth)",
      "Power: TLP and thermald",

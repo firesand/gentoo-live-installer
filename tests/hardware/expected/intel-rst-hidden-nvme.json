@@ -135,7 +135,7 @@
     "summary": [
      "CPU: Intel Core i7-7700HQ CPU @ 2.80GHz, 8 threads; Intel microcode",
      "Graphics: Intel HD Graphics 630 - open Intel driver",
-     "Graphics: NVIDIA GeForce GTX 1050 Mobile - open driver (nouveau)",
+     "Graphics: NVIDIA GeForce GTX 1050 Mobile - open driver (nouveau; the NVIDIA driver is used once you accept its licence)",
      "Graphics: two graphics cards; GPU switching helpers installed",
      "Firmware: Linux firmware (Intel graphics, Wi-Fi)",
      "Audio: Sound Open Firmware (many laptop audio chips need it)",
@@ -675,7 +675,7 @@
      "CPU: Intel Core i7-7700HQ CPU @ 2.80GHz, 8 threads; Intel microcode",
      "CPU flags: tuned for this CPU (packages are built, not downloaded)",
      "Graphics: Intel HD Graphics 630 - open Intel driver",
-     "Graphics: NVIDIA GeForce GTX 1050 Mobile - open driver (nouveau + NVK)",
+     "Graphics: NVIDIA GeForce GTX 1050 Mobile - open driver (nouveau + NVK; the NVIDIA driver is used once you accept its licence)",
      "Graphics: two graphics cards; GPU switching helpers installed",
      "Firmware: Linux firmware (Intel graphics, Wi-Fi)",
      "Audio: Sound Open Firmware (many laptop audio chips need it)",

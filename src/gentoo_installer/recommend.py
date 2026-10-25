@@ -235,13 +235,16 @@ def recommend(profile: HardwareProfile | Mapping[str, Any] | None, manifest: Ins
 
     # Graphics
     nvidia = [gpu for gpu in hw.gpus if gpu.vendor == "nvidia"]
-    if nvidia and hardware.gpu_driver in ("auto", "nouveau") and not hw.machine.hypervisor:
+    if nvidia and hardware.gpu_driver in ("auto", "nouveau") and not hardware.nvidia_license_accepted and not hw.machine.hypervisor:
         branch = data.nvidia_branch_for(nvidia[0].generation)
         if branch:
+            modules = "closed kernel modules" if branch == "580" else "open kernel modules"
+            card = gpu_label(nvidia[0]) if nvidia[0].name else "your NVIDIA card"
             out.append(Recommendation("rec.nvidia_proprietary", "info",
-                                      f"The NVIDIA proprietary driver (version {branch}) is available for {gpu_label(nvidia[0]) if nvidia[0].name else 'your NVIDIA card'}. "
-                                      "The open driver works everywhere; the proprietary one is faster for games and CUDA, but it is non-free and needs you to accept NVIDIA's licence.",
-                                      "hardware.gpu_driver", "nvidia"))
+                                      f"The NVIDIA driver (version {branch}, {modules}) fits {card}. It gives the best 3D and games, but it is non-free software: "
+                                      "accept NVIDIA's licence on the Hardware page to use it, otherwise the open nouveau driver is used.",
+                                      "hardware.nvidia_license_accepted" if hardware.gpu_driver == "auto" else "hardware.gpu_driver",
+                                      "true" if hardware.gpu_driver == "auto" else "auto"))
         elif nvidia[0].generation in ("kepler", "fermi", "older"):
             out.append(Recommendation("rec.nvidia_legacy", "info", "This NVIDIA card is too old for a supported proprietary driver; the open nouveau driver will be used."))
     if any(gpu.vendor == "intel" and gpu.generation == "gen3" for gpu in hw.gpus) and manifest.portage.binhost:

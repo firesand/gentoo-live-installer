@@ -863,7 +863,8 @@ class _Planner(NvidiaPlanMixin, DevicePlanMixin, SessionPlanMixin):
             if self.proprietary:
                 return f" - proprietary driver {self.proprietary}"
             nvk = " + NVK" if self.p.scalars.get("nvk") == "yes" else ""
-            return f" - open driver (nouveau{nvk})"
+            ready = "; the NVIDIA driver is used once you accept its licence" if self.decision.available[0] else ""
+            return f" - open driver (nouveau{nvk}{ready})"
         driver = {"intel": "Intel", "amd": "AMD"}.get(gpu.vendor, gpu.vendor)
         return f" - open {driver} driver"
 

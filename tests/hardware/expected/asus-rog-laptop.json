@@ -123,7 +123,7 @@
     "services": [],
     "summary": [
      "CPU: AMD Ryzen 9 7940HS w/ Radeon 780M Graphics, 16 threads; AMD microcode (linux-firmware)",
-     "Graphics: NVIDIA GeForce RTX 4060 Max-Q / Mobile - open driver (nouveau)",
+     "Graphics: NVIDIA GeForce RTX 4060 Max-Q / Mobile - open driver (nouveau; the NVIDIA driver is used once you accept its licence)",
      "Graphics: AMD Phoenix1 - open AMD driver",
      "Graphics: two graphics cards; GPU switching helpers installed",
      "Firmware: Linux firmware (AMD graphics, NVIDIA GPU system processor firmware, Bluetooth)",
@@ -635,7 +635,7 @@
     "summary": [
      "CPU: AMD Ryzen 9 7940HS w/ Radeon 780M Graphics, 16 threads; AMD microcode (linux-firmware)",
      "CPU flags: tuned for this CPU (packages are built, not downloaded)",
-     "Graphics: NVIDIA GeForce RTX 4060 Max-Q / Mobile - open driver (nouveau + NVK)",
+     "Graphics: NVIDIA GeForce RTX 4060 Max-Q / Mobile - open driver (nouveau + NVK; the NVIDIA driver is used once you accept its licence)",
      "Graphics: AMD Phoenix1 - open AMD driver",
      "Graphics: two graphics cards; GPU switching helpers installed",
      "Firmware: Linux firmware (AMD graphics, NVIDIA GPU system processor firmware, Bluetooth)",
