@@ -32,15 +32,20 @@ livecd/packages:
 	app-arch/7zip
 	app-arch/cpio
 	app-arch/zstd
+	app-backup/fsarchiver
+	app-backup/restic
+	app-backup/snapper
 	app-cdr/cdrtools
 	app-crypt/gnupg
 	app-crypt/sbsigntools
-	sec-keys/openpgp-keys-gentoo-release
 	app-editors/mousepad
 	app-editors/nano
+	app-editors/vim
+	app-forensics/foremost
 	app-misc/hwmonux
 	app-misc/jq
 	app-misc/livecd-tools
+	app-misc/mc
 	app-misc/screen
 	app-misc/tmux
 	app-portage/cpuid2cpuflags
@@ -61,13 +66,19 @@ livecd/packages:
 	media-fonts/dejavu
 	media-fonts/fira-sans
 	media-fonts/jetbrains-mono
+	media-gfx/qrencode
 	media-libs/mesa
+	net-analyzer/mtr
+	net-analyzer/tcpdump
+	net-fs/cifs-utils
 	net-misc/chrony
 	net-misc/networkmanager
 	net-misc/openssh
+	net-misc/rclone
 	net-misc/rsync
 	net-wireless/iw
 	net-wireless/wpa_supplicant
+	sec-keys/openpgp-keys-gentoo-release
 	sys-apps/acl
 	sys-apps/attr
 	sys-apps/busybox
@@ -81,9 +92,11 @@ livecd/packages:
 	sys-apps/kexec-tools
 	sys-apps/lshw
 	sys-apps/memtest86+
+	sys-apps/memtester
 	sys-apps/nvme-cli
 	sys-apps/pciutils
 	sys-apps/pv
+	sys-apps/ripgrep
 	sys-apps/smartmontools
 	sys-apps/usbutils
 	sys-apps/util-linux
@@ -103,7 +116,9 @@ livecd/packages:
 	sys-fs/bcache-tools
 	sys-fs/btrfs-progs
 	sys-fs/cryptsetup
+	sys-fs/dd-rescue
 	sys-fs/ddrescue
+	sys-fs/dislocker
 	sys-fs/dmraid
 	sys-fs/dosfstools
 	sys-fs/e2fsprogs
@@ -116,6 +131,7 @@ livecd/packages:
 	sys-fs/lvm2
 	sys-fs/mdadm
 	sys-fs/multipath-tools
+	sys-fs/ncdu
 	sys-fs/ntfs3g
 	sys-fs/squashfs-tools
 	sys-fs/xfsprogs
@@ -124,6 +140,7 @@ livecd/packages:
 	sys-process/htop
 	sys-process/lsof
 	sys-process/psmisc
+	www-apps/ttyd
 	www-client/firefox-bin
 	www-client/links
 	x11-apps/setxkbmap

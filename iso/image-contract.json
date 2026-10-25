@@ -171,7 +171,10 @@
       "sys-fs/mdadm", "sys-fs/ntfs3g", "sys-fs/xfsprogs", "sys-kernel/dracut", "sys-process/psmisc",
       "www-client/links", "x11-apps/setxkbmap", "x11-apps/xrandr", "xfce-extra/xfce4-xkb-plugin",
       "x11-themes/arc-theme", "x11-themes/papirus-icon-theme", "media-fonts/fira-sans", "media-fonts/jetbrains-mono",
-      "xfce-extra/xfce4-notifyd", "xfce-extra/xfce4-pulseaudio-plugin", "xfce-extra/xfce4-whiskermenu-plugin", "www-client/firefox-bin"
+      "xfce-extra/xfce4-notifyd", "xfce-extra/xfce4-pulseaudio-plugin", "xfce-extra/xfce4-whiskermenu-plugin", "www-client/firefox-bin",
+      "app-backup/fsarchiver", "app-backup/restic", "app-backup/snapper", "app-editors/vim", "app-forensics/foremost", "app-misc/mc",
+      "media-gfx/qrencode", "net-analyzer/mtr", "net-analyzer/tcpdump", "net-fs/cifs-utils", "net-misc/rclone", "sys-apps/memtester",
+      "sys-apps/ripgrep", "sys-fs/dd-rescue", "sys-fs/dislocker", "sys-fs/ncdu", "www-apps/ttyd"
     ],
     "forbidden_packages": ["dev-lang/rust-bin", "sys-boot/shim", "net-misc/netifrc"],
     "content": [
