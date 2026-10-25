@@ -575,8 +575,9 @@ class Wizard:
         choice = c.menu([Option(label, detail) for _, label, detail in FILESYSTEMS], title="Which filesystem should the system use?", default=current,
                         help="ext4 is the safe choice. XFS and Btrfs are fine if you know why you want them.")
         storage.mode, storage.filesystem = "erase", FILESYSTEMS[choice.index][0]
-        if storage.swap_mib:
-            c.note(f"Swap space of {storage.swap_mib} MiB is set up, chosen from the amount of memory in this computer.")
+        swap_mib = layout.effective_swap_mib(storage, int(self.view.memory_gib * 1024 * 1024))
+        if swap_mib:
+            c.note(f"Swap space of {swap_mib} MiB is set up, chosen from the amount of memory in this computer.")
         return True
 
     def _ask_encryption(self) -> bool:

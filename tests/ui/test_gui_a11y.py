@@ -235,7 +235,7 @@ def test_the_applications_tab_does_not_stretch_its_card(themed, make_window):
 def test_guided_start_state_is_applied_once_at_startup(make_window):
     window = make_window()
     assert window.mode.currentData() == "guided"
-    assert not window.storage.encryption.isVisibleTo(window.storage)
+    assert window.storage.luks.isVisibleTo(window.storage) and not window.storage.passphrase.isVisibleTo(window.storage)
     assert "Recommended choices" in window.header_subtitle.text()
 
 

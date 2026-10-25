@@ -268,14 +268,19 @@ def filesystem_tools(manifest: InstallManifest) -> str:
     return ", ".join(packages)
 
 
-def swap_text(manifest: InstallManifest) -> str:
+def swap_text(manifest: InstallManifest, info: SystemInfo | None = None) -> str:
+    """The swap the installation really gets: a "recommended" or "hibernate" choice is sized from this PC's memory (STOR-04)."""
     storage = manifest.storage
     if storage.mode != "erase":
         return "As set in your partition rows"
-    if not storage.swap_mib:
-        return "None"
-    kind = {"file": " (a swap file)", "partition": " (a swap partition)", "zram": " (compressed memory)"}.get(storage.swap_kind, "")
-    return f"{storage.swap_mib:,} MiB{kind}"
+    kib = int(info.memory_gib * 1024 * 1024) if info is not None else 0
+    swap = layout.effective_swap_mib(storage, kib)
+    if swap:
+        where = "a swap file" if layout.swap_in_root(layout.resolve_swap(storage, kib)) else "a swap partition"
+        return f"{swap:,} MiB ({where})"
+    if storage.swap_kind == "zram" and storage.swap_choice != "none":
+        return "Compressed memory (zram), no swap on the disk"
+    return "None"
 
 
 def root_login_text(manifest: InstallManifest) -> str:
@@ -311,7 +316,7 @@ def core_rows(manifest: InstallManifest, info: SystemInfo | None = None) -> dict
         ("Disk", disk_text),
         ("Boot mode", "UEFI" if storage.firmware == "uefi" else "Legacy BIOS"),
         ("Encryption", storage.encryption_summary()),
-        ("Swap", swap_text(manifest)),
+        ("Swap", swap_text(manifest, info)),
     ]
     tools = filesystem_tools(manifest)
     if tools:
@@ -588,6 +593,7 @@ class ReviewPage(Page):
         self.resume_check.setVisible(resumable)
         self.resume_check.setChecked(False)
         self._rebuild_previews()
+
 
     def resume_requested(self) -> bool:
         return self.resume_check.isVisibleTo(self) and self.resume_check.isChecked()

@@ -273,7 +273,7 @@ class TestNameCollisions:
         runner = StatefulRunner([old])
         runner.pvs = [("/dev/vda1", "gentoo")]
         make_manager(runner, tmp_path).prepare(erase(lvm=True))
-        assert ("vgcreate", "gentoo", "/dev/vda3") in runner.commands
+        assert ("vgcreate", "gentoo", "/dev/vda4") in runner.commands  # LVM always gets a /boot partition of its own
 
 
 class TestCapacity:

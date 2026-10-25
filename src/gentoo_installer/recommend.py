@@ -91,23 +91,42 @@ def nominal_ram_gib(total_kib: int) -> int:
 
 
 def recommend_swap_mib(total_kib: int, *, zram: bool = False, hibernate: bool = False) -> int:
-    """Swap partition size in MiB.
+    """Swap size in MiB, following the table of the Gentoo Handbook ("What about swap space?").
 
-    Hibernation needs room for all of memory (the Ubuntu SwapFaq rule: RAM +
-    sqrt(RAM)). Otherwise small machines get 2x or 1x RAM, larger ones 8 GiB,
-    and with compressed RAM swap (zram) the disk swap only has to be a small
-    overflow area.
+    =============  =====================  ==============================
+    RAM            ordinary use           with hibernation
+    =============  =====================  ==============================
+    up to 2 GiB    4 GiB                  3x RAM (at least 4 GiB)
+    2 to 8 GiB     as much as the RAM     2x RAM
+    8 to 64 GiB    8 GiB (16 GiB > 32)    1.5x RAM
+    over 64 GiB    8 GiB                  hibernation is not advised: 8 GiB
+    =============  =====================  ==============================
+
+    With compressed RAM swap (zram) the disk only needs a small overflow area.
     """
     ram = nominal_ram_gib(total_kib)
-    if hibernate:
-        return (ram + round(math.sqrt(ram))) * 1024
-    if zram:
+    if zram and not hibernate:
         return 2048 if ram <= 8 else 0
+    if ram > HIBERNATION_MAX_GIB:
+        return 8192
+    if hibernate:
+        if ram <= 2:
+            return max(4096, 3 * ram * 1024)
+        return (2 * ram * 1024) if ram <= 8 else (ram * 3 * 512)
     if ram <= 2:
-        return 2 * ram * 1024
+        return 4096
     if ram <= 8:
         return ram * 1024
-    return 8192
+    return 8192 if ram <= 32 else 16384
+
+
+# The Handbook does not advise hibernation above this much memory (the swap would have to be as large as the memory).
+HIBERNATION_MAX_GIB = 64
+
+
+def hibernation_advised(total_kib: int) -> bool:
+    """Whether the Handbook table has a hibernation size for this much memory."""
+    return nominal_ram_gib(total_kib) <= HIBERNATION_MAX_GIB
 
 
 def zram_by_default(total_kib: int) -> bool:
@@ -204,15 +223,24 @@ def recommend(profile: HardwareProfile | Mapping[str, Any] | None, manifest: Ins
             out.append(Recommendation("rec.hwmonux_low_memory", "info",
                                       f"This PC has {gib:.1f} GiB of memory. HWMonux needs PySide6, which is compiled from source: about 40 minutes and up to 4 GiB of memory "
                                       "per compile job. Turn HWMonux off if you do not need it.", "options.install_hwmonux", "false"))
-        if hardware.hibernate:
+        if hardware.hibernate and not hibernation_advised(total_kib):
+            out.append(Recommendation("rec.hibernate_large_memory", "warning",
+                                      f"This PC has {gib:.0f} GiB of memory. The Gentoo Handbook does not advise hibernation above {HIBERNATION_MAX_GIB} GiB: "
+                                      "the swap would have to be as large as the memory. Turn hibernation off.", "hardware.hibernate", "false"))
+        elif hardware.hibernate:
             wanted = recommend_swap_mib(total_kib, hibernate=True)
             if manifest.storage.swap_mib < wanted:
                 out.append(Recommendation("rec.hibernate_swap", "warning",
-                                          f"Hibernation writes all memory to swap: make the swap partition at least {wanted} MiB.", "storage.swap_mib", str(wanted)))
-        elif manifest.storage.swap_mib == DEFAULT_SWAP_MIB:
-            wanted = recommend_swap_mib(total_kib, zram=hardware.zram != "no" and zram_by_default(total_kib))
+                                          f"Hibernation writes all memory to swap: the Handbook advises at least {wanted / 1024:.0f} GiB of swap for {gib:.0f} GiB of memory.",
+                                          "storage.swap_choice", "hibernate"))
+        elif manifest.storage.swap_mib == DEFAULT_SWAP_MIB and manifest.storage.swap_choice == "custom":
+            wanted = recommend_swap_mib(total_kib)
             if wanted != DEFAULT_SWAP_MIB:
-                out.append(Recommendation("rec.swap_size", "info", f"For {gib:.0f} GiB of memory a swap partition of {wanted} MiB is enough.", "storage.swap_mib", str(wanted)))
+                out.append(Recommendation("rec.swap_size", "info", f"For {gib:.0f} GiB of memory the Handbook advises {wanted / 1024:.0f} GiB of swap.", "storage.swap_mib", str(wanted)))
+        if zram_by_default(total_kib) and hardware.zram != "no" and manifest.storage.swap_kind == "auto" and not hardware.hibernate:
+            out.append(Recommendation("rec.swap_zram", "info",
+                                      f"With {gib:.0f} GiB of memory, a small compressed-memory swap (zram) is used first and is much faster than swap on the disk. "
+                                      "Choose it as the swap type to skip the swap partition.", "storage.swap_kind", "zram"))
 
     # Build speed: the old fixed default is far too low on a big machine
     if manifest.portage.make_opts == LEGACY_MAKE_OPTS and hw.cpu.threads > 4:
@@ -284,9 +312,11 @@ def defaults_for(profile: HardwareProfile | Mapping[str, Any] | None, manifest: 
         return changes  # no detection data: keep the manifest as it is
     if include_firmware and not hw.errors_for("firmware") and hw.firmware.mode in ("uefi", "bios"):
         changes["storage.firmware"] = hw.firmware.mode
-    if hw.memory.total_kib and manifest.storage.swap_mib == DEFAULT_SWAP_MIB:
-        zram = manifest.hardware.zram == "yes" or (manifest.hardware.zram == "auto" and zram_by_default(hw.memory.total_kib))
-        changes["storage.swap_mib"] = recommend_swap_mib(hw.memory.total_kib, zram=zram, hibernate=manifest.hardware.hibernate)
+    if hw.memory.total_kib and manifest.storage.swap_mib == DEFAULT_SWAP_MIB and manifest.storage.swap_choice == "custom":
+        # A new installation opens on "Recommended for this computer"; the size is stored too, so every screen shows the same number.
+        hibernate = manifest.hardware.hibernate and hibernation_advised(hw.memory.total_kib)
+        changes["storage.swap_choice"] = "hibernate" if hibernate else "recommended"
+        changes["storage.swap_mib"] = recommend_swap_mib(hw.memory.total_kib, hibernate=hibernate)
     if not hw.errors_for("usb") and not hw.bluetooth.present and manifest.options.bluetooth:
         changes["options.bluetooth"] = False
     if (hw.machine.vendor_family in devices.LVFS_VENDORS and hw.machine.form_factor in ("laptop", "tablet") and not hw.machine.hypervisor

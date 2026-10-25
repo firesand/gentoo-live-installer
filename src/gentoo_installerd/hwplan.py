@@ -32,7 +32,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from gentoo_installer import devices
 from gentoo_installer import hardware_data as data
-from gentoo_installer import keyboard_data, recommend
+from gentoo_installer import keyboard_data, layout, recommend
 from gentoo_installer.hardware import DiskInfo, GpuInfo, HardwareProfile, gpu_label, is_detected, is_hybrid, parent_disk_name, physical_gpus
 from gentoo_installer.manifest import InstallManifest
 
@@ -231,11 +231,15 @@ def _target_disks(manifest: InstallManifest, hw: HardwareProfile) -> list[DiskIn
     return [disk for disk in hw.disks if disk.name in wanted or any(device == f"/dev/{part.name}" for device in devices for part in disk.partitions)]
 
 
-def _erase_root_mib(m: InstallManifest, disk: DiskInfo) -> int:
-    """MiB the root filesystem gets when the whole disk is erased and partitioned by the installer."""
+def _erase_root_mib(m: InstallManifest, disk: DiskInfo, total_kib: int = 0) -> int:
+    """MiB the root filesystem gets when the whole disk is erased and partitioned by the installer.
+
+    The swap really put on the disk follows swap_choice and swap_kind (layout.effective_swap_mib), so a "recommended" size,
+    a swap file inside root, zram or no swap are all counted the way the layout will create them.
+    """
     storage = m.storage
-    return disk.size // 1024**2 - (1024 if storage.firmware == "uefi" else 3) - (1024 if storage.luks else 0) - storage.swap_mib \
-        - (storage.home_mib if storage.separate_home else 0)
+    return disk.size // 1024**2 - (1024 if storage.firmware == "uefi" else 3) - (1024 if storage.luks else 0) \
+        - layout.effective_swap_mib(storage, total_kib) - (storage.home_mib if storage.separate_home else 0)
 
 
 def _typed_flags(text: str) -> tuple[str, list[str]]:
@@ -475,7 +479,7 @@ class _Planner(NvidiaPlanMixin, DevicePlanMixin, SessionPlanMixin):
             disks = _target_disks(self.m, self.hw)
             if not disks or not disks[0].size:
                 return None
-            root_mib = _erase_root_mib(self.m, disks[0])
+            root_mib = _erase_root_mib(self.m, disks[0], self.hw.memory.total_kib)
         minimum, _recommended = recommend.minimum_root_gib(self.desktop, self.m.portage.binhost)
         return root_mib - minimum * 1024 if root_mib else None
 
@@ -643,7 +647,7 @@ class _Planner(NvidiaPlanMixin, DevicePlanMixin, SessionPlanMixin):
         total_kib = self.hw.memory.total_kib
         if not total_kib:
             return
-        swap_mib = _swap_mib(self.m, self.hw) or 0
+        swap_mib = (layout.effective_swap_mib(self.m.storage, self.hw.memory.total_kib) if self.m.storage.mode != "manual" else _swap_mib(self.m, self.hw)) or 0
         jobs = recommend.memory_heavy_jobs(total_kib, swap_mib)
         typed = self.m.portage.make_opts.strip()
         machine = recommend.make_opts_jobs(typed) if typed else recommend.recommend_jobs(self.hw.cpu.threads, self.hw.memory.available_kib, swap_mib)
@@ -983,7 +987,7 @@ def _memory_issues(m: InstallManifest, hw: HardwareProfile) -> list[Issue]:
 def _swap_mib(m: InstallManifest, hw: HardwareProfile) -> int | None:
     """MiB of swap the installation will have; None when a manual layout's swap is not a partition the probe lists (so it is not measured)."""
     if m.storage.mode != "manual":
-        return m.storage.swap_mib
+        return layout.effective_swap_partition_mib(m.storage, hw.memory.total_kib)  # follows swap_choice and swap_kind
     rows = [row for row in m.storage.partitions if row.filesystem == "swap"]
     if not rows:
         return 0
@@ -1096,7 +1100,7 @@ def _disk_issues(m: InstallManifest, hw: HardwareProfile, disk: DiskInfo) -> lis
     if not disk.serial and not disk.wwn and storage.device_id_kind != "path":
         out.append(Issue("hw.st_no_serial", "info", "This disk has no serial number or WWN. It must be identified by its bus connection, size and model, which you have to approve."))
     if storage.mode == "erase" and disk.size:
-        root_mib = _erase_root_mib(m, disk)
+        root_mib = _erase_root_mib(m, disk, hw.memory.total_kib)
         minimum, recommended = recommend.minimum_root_gib(m.system.desktop, m.portage.binhost)
         if root_mib < minimum * 1024:
             out.append(Issue("hw.disk_too_small", "error", f"The root filesystem would get {max(root_mib, 0) / 1024:.0f} GiB, but {m.system.desktop.upper() if data.desktop_traits(m.system.desktop).graphical else 'a minimal system'} needs at least {minimum} GiB."))

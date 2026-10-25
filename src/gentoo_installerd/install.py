@@ -19,6 +19,8 @@ from urllib.parse import urlsplit
 from gentoo_installer import first_steps
 from gentoo_installer.manifest import InstallManifest
 
+from gentoo_installer import layout
+
 from . import __version__
 from .configure import GRUB_EFI_FILES, RECEIPT_PATH, Configurer, ExistingStack, PackageInstallError, grub_efi_target, live_input_problems, render_fstab
 from .events import ErrorCode, Event, EventSink
@@ -124,14 +126,15 @@ def tools_for_selection(manifest: InstallManifest) -> set[str]:
     tools: set[str] = set()
     if storage.firmware == "uefi":
         tools.add("mkfs.vfat")
-    if storage.filesystem in {"xfs", "btrfs"}:
+    if storage.filesystem in {"xfs", "btrfs", "f2fs"}:
         tools.add("mkfs." + storage.filesystem)
+    tools.add("blockdev")  # sizes the filesystems (mkfs -T small on a small disk)
     if storage.filesystem == "btrfs" and storage.mode == "erase":
         tools.add("btrfs")  # subvolumes and the swap file of an encrypted install
     for partition in storage.partitions:
-        if partition.format and partition.filesystem in {"ext4", "xfs", "btrfs", "vfat"}:
+        if partition.format and partition.filesystem in {"ext4", "xfs", "btrfs", "vfat", "f2fs"}:
             tools.add("mkfs." + partition.filesystem)
-    if storage.swap_mib or any(p.filesystem == "swap" for p in storage.partitions):
+    if (storage.mode == "erase" and layout.effective_swap_mib(storage)) or any(p.filesystem == "swap" for p in storage.partitions):
         tools.update(("swapon", "swapoff"))
     if storage.luks:
         tools.add("cryptsetup")

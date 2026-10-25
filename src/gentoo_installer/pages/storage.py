@@ -17,13 +17,15 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import blockdev, keymaps, layout, theme
+from .. import blockdev, keymaps, layout, recommend, theme
 from ..keyboard import start_detached
 from ..manifest import InstallManifest
 from ..system_info import DiskInfo, SystemInfo, device_from_disk, format_size, holder_reasons_of, smallest_disk_bytes
 from ..widgets import Card, ChoiceGroup, FlowLayout, FormGrid, Page, wrapped_label
 from .hardware import CAPACITY_CODES, blocking_findings
+from .help import AdvancedSection, HelpNote
 from .manual_storage import ManualLayoutEditor
+from .storage_widgets import ExistingTable, Note, PlanPreview
 
 UEFI_ON_BIOS = (
     "This session was booted in legacy BIOS mode, so a UEFI install cannot register its boot entry. "
@@ -37,6 +39,34 @@ RAID_HINT = (
     "with manual partitions."
 )
 BTRFS_LABEL = "Btrfs with subvolumes @ and @home"
+FILESYSTEMS = (
+    ("ext4", "ext4 (default): the long-time Linux standard"),
+    ("xfs", "XFS: fast, the Handbook's recommendation"),
+    ("btrfs", "Btrfs: snapshots and compression (subvolumes @ and @home)"),
+    ("f2fs", "F2FS: made for flash media such as SSDs, SD cards and eMMC"),
+)
+FILESYSTEM_HELP = {
+    "ext4": "ext4: the long-time Linux standard; can be grown and shrunk. It is the default here because it is the simplest to repair. The Handbook recommends XFS for most computers.",
+    "xfs": "XFS: fast and the Handbook's recommendation; cannot be made smaller later.",
+    "btrfs": "Btrfs: adds snapshots and compression; good if you want to roll back. Separate subvolumes @ and @home are created.",
+    "f2fs": "F2FS: designed for flash storage. GRUB cannot read an F2FS root, so a separate /boot partition is created for it.",
+}
+SWAP_HELP = "Swap is disk space the computer uses when memory runs short; the recommended size follows the Gentoo Handbook for your amount of RAM."
+WINDOWS_NOTE = "Windows is installed on this disk. Guided mode will ERASE it, including Windows and its recovery partition."
+REMOVABLE_NOTE = (
+    "SD cards and USB sticks wear out quickly under a full Linux system; an internal SSD or hard disk is a much better home for Gentoo."
+)
+XFS_NVME_NOTE = "Some early Intel NVMe drives can corrupt XFS; update the drive firmware or choose ext4."
+
+
+def with_help(widget: QWidget, text: str, anchor: str | None = None) -> QWidget:
+    """``widget`` with a small information button (HelpNote) next to it."""
+    holder = QWidget()
+    row = QHBoxLayout(holder)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.addWidget(widget, 1)
+    row.addWidget(HelpNote(text, anchor))
+    return holder
 SWAPPED_DISK = "The disk at {path} is not the same disk you selected before (its serial number or hardware path is different). Select a disk again."
 
 
@@ -80,6 +110,9 @@ def holder_reasons(info: SystemInfo, devices: list[str]) -> list[str]:
     return list(dict.fromkeys(reasons))
 
 
+NO_DISK_CHOSEN = "Select the disk you want to use."
+
+
 class StoragePage(Page):
     rescanRequested = Signal()
 
@@ -94,7 +127,10 @@ class StoragePage(Page):
         self._swapped = False  # the disk that is gone was replaced by another one under the same name
         self._consented_disk = ""  # the disk the consent box below was shown for
         self._extras_written = False
+        self._custom_origin = 0  # a loaded swap size that is not a whole number of GiB
+        self._loaded_swap: tuple = ()
         self.disk_group = ChoiceGroup([disk_choice(disk) for disk in self.disks], columns=1)
+        self.disk_group.setToolTip("Nothing is selected for you: choose the disk Gentoo should be installed on.")
         self.content.addWidget(self.disk_group)
         self.disk_notice = wrapped_label("", muted=True)
         self.disk_notice.hide()
@@ -137,37 +173,53 @@ class StoragePage(Page):
         self.holders_card.hide()
         self.content.addWidget(self.holders_card)
 
+        self.choose_hint = wrapped_label("Choose a disk above. Nothing is selected for you, so nothing can be erased by accident.", muted=True)
+        self.content.addWidget(self.choose_hint)
+        self.existing = ExistingTable()
+        self.existing.hide()
+        self.content.addWidget(self.existing)
+        self.windows_note = Note("error")
+        self.content.addWidget(self.windows_note)
+        self.removable_note = Note("warning")
+        self.content.addWidget(self.removable_note)
+
         self.mode = QComboBox()
-        self.mode.addItem("Guided — erase the selected disk", "erase")
-        self.mode.addItem("Manual — assign partitions and mountpoints", "manual")
+        self.mode.addItem("Erase the whole disk and install Gentoo (all data lost)", "erase")
+        self.mode.addItem("Choose partitions myself", "manual")
         self.mode.setAccessibleName("Storage mode")
         self.mode.currentIndexChanged.connect(self._mode_changed)
         self.content.addWidget(self.mode)
 
-        self.guided = Card("Guided layout", "The installer creates an EFI or BIOS boot partition, optional swap, and a Gentoo root partition. Existing data on the selected disk will be erased only after your final confirmation.")
+        self.guided = Card("Guided layout", "Gentoo gets a complete layout on the disk you chose. Existing data on it is erased only after your final confirmation.")
+        self.boot_mode_text = wrapped_label("")
+        self.guided.content.addWidget(self.boot_mode_text)
         form = QFormLayout()
-        self.firmware = QComboBox()
-        self.firmware.addItem("UEFI", "uefi")
-        self.firmware.addItem("Legacy BIOS", "bios")
-        self.firmware.setCurrentIndex(0 if info.uefi else 1)
-        self.firmware.activated.connect(self._firmware_picked)
-        form.addRow("Firmware", self.firmware)
-        self.firmware_note = wrapped_label("", muted=True)
-        self.firmware_note.hide()
-        form.addRow("", self.firmware_note)
-        self.table = QComboBox()
-        self.table.addItem("GPT (recommended)", "gpt")
-        self.table.addItem("DOS / MBR", "dos")
-        form.addRow("Partition table", self.table)
         self.filesystem = QComboBox()
-        for name, value in (("ext4 — reliable default", "ext4"), ("XFS — large filesystems", "xfs"), (BTRFS_LABEL, "btrfs")):
-            self.filesystem.addItem(name, value)
-        form.addRow("Root filesystem", self.filesystem)
+        self.filesystem.setAccessibleName("Root filesystem")
+        self._rebuild_filesystems("ext4")
+        self.filesystem.currentIndexChanged.connect(self._filesystem_changed)
+        form.addRow("Root filesystem", with_help(self.filesystem, "Pick the filesystem for the system partition. ext4 is the safe default; the Handbook explains the differences.", "Filesystems"))
+        self.fs_note = wrapped_label("", muted=True)
+        form.addRow("", self.fs_note)
+        self.xfs_note = Note("warning")
+        form.addRow("", self.xfs_note)
+        self.swap_mode = QComboBox()
+        self.swap_mode.addItem("Recommended for this computer", "recommended")
+        self.swap_mode.addItem("None", "none")
+        self.swap_mode.addItem("Custom size", "custom")
+        self.swap_mode.setAccessibleName("Swap")
+        self.swap_mode.currentIndexChanged.connect(self._swap_mode_changed)
+        form.addRow("Swap", with_help(self.swap_mode, SWAP_HELP, "Disks"))
         self.swap = QSpinBox()
-        self.swap.setRange(0, 131072)
-        self.swap.setSuffix(" MiB")
-        self.swap.setValue(manifest.storage.swap_mib)
-        form.addRow("Swap size (0 disables)", self.swap)
+        self.swap.setRange(1, 128)
+        self.swap.setSuffix(" GiB")
+        self.swap.setValue(max(1, round(manifest.storage.swap_mib / 1024)))
+        self.swap.setAccessibleName("Custom swap size in GiB")
+        self.swap.valueChanged.connect(self._swap_size_edited)
+        self.swap_label = QLabel("Custom swap size")
+        form.addRow(self.swap_label, self.swap)
+        self.swap_note = wrapped_label("", muted=True)
+        form.addRow("", self.swap_note)
         self.home = QCheckBox("Create a separate /home partition")
         self.home.toggled.connect(self._home_changed)
         form.addRow(self.home)
@@ -183,9 +235,12 @@ class StoragePage(Page):
         self.guided.content.addWidget(self.capacity_label)
         self.content.addWidget(self.guided)
 
-        self.encryption = Card("Encryption and advanced storage")
-        self.luks = QCheckBox("Encrypt the Gentoo root with LUKS2")
+        self.encryption = Card("Encryption")
+        self.luks = QCheckBox("Encrypt my disk (asks for a passphrase at every start)")
         self.encryption.content.addWidget(self.luks)
+        self.luks_details = QWidget()
+        details = QVBoxLayout(self.luks_details)
+        details.setContentsMargins(0, 0, 0, 0)
         passphrase_form = FormGrid()
         self.passphrase = QLineEdit()
         self.passphrase.setEchoMode(QLineEdit.EchoMode.Password)
@@ -194,16 +249,90 @@ class StoragePage(Page):
         self.passphrase_confirm = QLineEdit()
         self.passphrase_confirm.setEchoMode(QLineEdit.EchoMode.Password)
         passphrase_form.add_field(2, "Repeat passphrase", self.passphrase_confirm)
-        self.encryption.content.addLayout(passphrase_form)
+        details.addLayout(passphrase_form)
         self.show_passphrase = QCheckBox("Show the passphrase")
         self.show_passphrase.toggled.connect(self._show_passphrase)
-        self.encryption.content.addWidget(self.show_passphrase)
+        details.addWidget(self.show_passphrase)
         self.luks_note = wrapped_label("", muted=True)
-        self.encryption.content.addWidget(self.luks_note)
-        self.lvm = QCheckBox("Use LVM inside the encrypted/root storage")
-        self.encryption.content.addWidget(self.lvm)
+        details.addWidget(self.luks_note)
+        self.luks_details.hide()
+        self.encryption.content.addWidget(self.luks_details)
+        self.content.addWidget(self.encryption)
+
+        self.manual = Card("Manual partitions", "Pick the partitions Gentoo should use. Existing data is kept unless Format is ticked. Set the EFI partition to /efi on UEFI. Partitions of other disks can be used too; each such disk has to be confirmed again at the end.")
+        self.manual_editor = ManualLayoutEditor()
+        self.manual_editor.set_info(info)
+        self.partitions = self.manual_editor.table  # the table the page always exposed
+        self.manual.content.addWidget(self.manual_editor)
+        self.extra_box = QVBoxLayout()
+        self.extra_checks: dict[str, QCheckBox] = {}
+        self.manual.content.addLayout(self.extra_box)
+        self.content.addWidget(self.manual)
+
+        self.preview_card = Card()
+        self.preview = PlanPreview()
+        self.preview_card.content.addWidget(self.preview)
+        self.preview_card.hide()
+        self.content.addWidget(self.preview_card)
+
+        # The expert choices: Advanced opens the group, Guided keeps it collapsed. Nothing in it is cleared when the view changes.
+        self.advanced_section = AdvancedSection("storage")
+        self.firmware = QComboBox()
+        self.firmware.addItem("UEFI", "uefi")
+        self.firmware.addItem("Legacy BIOS", "bios")
+        self.firmware.setCurrentIndex(0 if info.uefi else 1)
+        self.firmware.activated.connect(self._firmware_picked)
+        self.firmware.setAccessibleName("Firmware")
+        self.firmware_note = wrapped_label("", muted=True)
+        self.firmware_note.hide()
+        shared = QFormLayout()
+        shared.addRow("Firmware", with_help(self.firmware, "Almost every computer made after 2012 uses UEFI; the installer detects this for you.", "Disks"))
+        shared.addRow("", self.firmware_note)
+        self.erase_options = QWidget()
+        erase_form = QFormLayout(self.erase_options)
+        erase_form.setContentsMargins(0, 0, 0, 0)
+        self.table = QComboBox()
+        self.table.addItem("GPT (recommended)", "gpt")
+        self.table.addItem("DOS / MBR", "dos")
+        self.table.setAccessibleName("Partition table")
+        erase_form.addRow("Partition table", with_help(self.table, "GPT is the modern way to divide a disk. Choose MBR only for a very old computer whose firmware cannot start from a GPT disk.", "Partitioning"))
+        self.swap_kind = QComboBox()
+        self.swap_kind.setAccessibleName("Swap type")
+        for value in ("auto", "partition", "file", "zram"):
+            self.swap_kind.addItem("", value)
+        self._label_swap_kinds()
+        erase_form.addRow("Swap type", with_help(self.swap_kind, "A small compressed-memory swap (zram) is used first and is much faster than disk swap. A swap file lives inside the system partition and can be resized later.", "Disks"))
+        self.hibernate = QCheckBox("Large enough for hibernation")
+        self.hibernate.setToolTip("Hibernation writes all memory to swap, so the swap has to be bigger. Switch hibernation itself on under Customize, Hardware.")
+        erase_form.addRow(self.hibernate)
+        self.separate_boot = QCheckBox("Separate /boot partition (1 GiB)")
+        self.separate_boot.setToolTip("Always created for encrypted, LVM and RAID installs. Needed for F2FS with GRUB.")
+        erase_form.addRow(self.separate_boot)
+        self.boot_noauto = QCheckBox("Mount /boot only when needed (noauto)")
+        erase_form.addRow(self.boot_noauto)
+        self.boot_noauto_note = wrapped_label("Kernel updates need /boot to be mounted: mount it first (mount /boot), or the new kernel lands in the wrong place.", muted=True)
+        erase_form.addRow("", self.boot_noauto_note)
+        self.lvm = QCheckBox("Use LVM (volumes that can be resized later)")
+        self.lvm.setToolTip("LVM lets you resize or add storage later without repartitioning; most home users do not need it.")
+        self.lvm_widget = with_help(self.lvm, "LVM lets you resize or add storage later without repartitioning; most home users do not need it.", "Disks")
+        shared.addRow(self.lvm_widget)
+        self.fstab_ident = QComboBox()
+        self.fstab_ident.setAccessibleName("Refer to filesystems by")
+        for text, value in (("Filesystem UUID (default)", "uuid"), ("Label", "label"), ("Partition UUID (GPT only)", "partuuid")):
+            self.fstab_ident.addItem(text, value)
+        shared.addRow("Refer to filesystems by", with_help(self.fstab_ident, "How /etc/fstab names your disks. The UUID never changes when disks are plugged in a different order. Volumes on LVM or encryption keep the UUID.", "Fstab"))
+        self.atime = QComboBox()
+        self.atime.setAccessibleName("Access-time updates")
+        for text, value in (("noatime (default)", "noatime"), ("lazytime", "lazytime"), ("relatime", "relatime")):
+            self.atime.addItem(text, value)
+        shared.addRow("Access-time updates", with_help(self.atime, "noatime stops Linux writing a timestamp every time a file is read, which is faster and gentler on SSDs.", "Fstab"))
+        advanced_form = QVBoxLayout()
+        advanced_form.setContentsMargins(0, 0, 0, 0)
+        advanced_form.addLayout(shared)
+        advanced_form.addWidget(self.erase_options)
+        self.advanced_section.add_layout(advanced_form)
         # The installer never creates software RAID: the combo is for installing onto an array that was assembled
-        # beforehand, so it only shows in the Advanced view with manual partitions (a loaded value keeps it visible).
+        # beforehand, so it only shows with manual partitions (a loaded value keeps it visible).
         self.raid_widget = QWidget()
         raid_box = QVBoxLayout(self.raid_widget)
         raid_box.setContentsMargins(0, 0, 0, 0)
@@ -220,28 +349,22 @@ class StoragePage(Page):
         self.raid_note = wrapped_label(RAID_HINT, muted=True)
         raid_box.addWidget(self.raid_note)
         self.raid_widget.hide()
-        self.encryption.content.addWidget(self.raid_widget)
-        self.content.addWidget(self.encryption)
+        self.advanced_section.add_widget(self.raid_widget)
+        self.content.addWidget(self.advanced_section)
 
-        self.manual = Card("Manual partitions", "Pick the partitions Gentoo should use. Existing data is kept unless Format is ticked. Set the EFI partition to /efi on UEFI. Partitions of other disks can be used too; each such disk has to be confirmed again at the end. For other layouts, prepare the partitions with GParted first.")
-        self.manual_editor = ManualLayoutEditor()
-        self.manual_editor.set_info(info)
-        self.partitions = self.manual_editor.table  # the table the page always exposed
-        self.manual.content.addWidget(self.manual_editor)
-        self.extra_box = QVBoxLayout()
-        self.extra_checks: dict[str, QCheckBox] = {}
-        self.manual.content.addLayout(self.extra_box)
-        self.content.addWidget(self.manual)
         self.disk_group.selectionChanged.connect(self._disk_changed)
         self.approve_path.toggled.connect(lambda _=False: self._update_approval_text())
         self.manual_editor.changed.connect(self._manual_changed)
         for signal in (self.swap.valueChanged, self.home_size.valueChanged):
             signal.connect(lambda _=0: self._update_capacity())
-        for toggle in (self.home.toggled, self.luks.toggled):
-            toggle.connect(lambda _=False: self._update_capacity())
-        for choice in (self.firmware.currentIndexChanged, self.table.currentIndexChanged, self.mode.currentIndexChanged):
-            choice.connect(lambda _=0: self._update_capacity())
+        for toggle in (self.home.toggled, self.luks.toggled, self.hibernate.toggled, self.separate_boot.toggled, self.boot_noauto.toggled, self.lvm.toggled):
+            toggle.connect(lambda _=False: self._refresh())
+        for choice in (self.firmware.currentIndexChanged, self.table.currentIndexChanged, self.mode.currentIndexChanged, self.swap_mode.currentIndexChanged,
+                       self.swap_kind.currentIndexChanged, self.filesystem.currentIndexChanged, self.fstab_ident.currentIndexChanged, self.atime.currentIndexChanged):
+            choice.connect(lambda _=0: self._refresh())
+        self.boot_noauto.toggled.connect(lambda checked: self.separate_boot.setChecked(True) if checked else None)
         self.luks.toggled.connect(lambda _=False: self._update_luks_note())
+        self.luks.toggled.connect(lambda _=False: self._luks_changed())
         self.luks.toggled.connect(lambda _=False: self._update_visibility())
         self.release_holders.toggled.connect(lambda _=False: self._update_holders())
         self._mode_changed()
@@ -275,6 +398,8 @@ class StoragePage(Page):
         self.manual_editor.set_info(info)
         if not self.firmware_touched:
             self.firmware.setCurrentIndex(max(0, self.firmware.findData(self.manifest.storage.firmware)))
+        if self._swap_state() == self._loaded_swap:
+            self._load_swap(self.manifest.storage)  # the swap the detection suggested; a swap the user chose is left alone
         self._disk_changed()
         self._update_firmware_note()
         self._update_empty_state()
@@ -344,7 +469,9 @@ class StoragePage(Page):
             self._consented_disk = disk.path
         self._update_approval()
         self._update_holders()
-        self._update_capacity()
+        self._refresh()
+        self._update_visibility()
+        self._suggest_when_empty()
 
     def _manual_changed(self) -> None:
         self._update_extra_approvals()
@@ -457,18 +584,192 @@ class StoragePage(Page):
         self.guided.setVisible(not manual)
         self._update_visibility()
         self._update_holders()
+        self._suggest_when_empty()
+
+    def _suggest_when_empty(self) -> None:
+        """Entering the manual mode with an empty table fills it with a layout made from what is on the disk (nothing is written by this)."""
+        if self.mode.currentData() == "manual" and self.selected_disk() is not None and not self.manual_editor.row_count():
+            self.manual_editor.suggest_layout(confirm=False)
 
     def set_advanced(self, advanced: bool) -> None:
         self.advanced = advanced
+        self.advanced_section.set_advanced(advanced)
+        self._rebuild_filesystems(self.filesystem.currentData() or "ext4")
         self._update_visibility()
 
     def _update_visibility(self) -> None:
-        """The RAID setting is for experts installing onto an assembled array: Advanced view and manual partitions only.
-        The encryption card shows in the Advanced view and whenever one of its settings is in use."""
+        """What each mode shows: the RAID setting is for experts installing onto an assembled array (manual partitions only; a loaded value
+        keeps it visible); the swap, partition table and /boot options belong to the guided layout."""
         manual = self.mode.currentData() == "manual"
-        loaded = bool(self.raid.currentData())
-        self.raid_widget.setVisible((self.advanced and manual) or loaded)
-        self.encryption.setVisible(self.advanced or self.luks.isChecked() or loaded)
+        self.raid_widget.setVisible(manual or bool(self.raid.currentData()))
+        self.erase_options.setVisible(not manual)
+        self._update_disk_state()
+
+    def _has_advanced_values(self) -> bool:
+        """Whether the loaded settings use something the Advanced group holds, so it opens by itself and the user sees what is in use."""
+        storage = self.manifest.storage
+        return bool(
+            storage.separate_boot or storage.boot_noauto or storage.lvm or storage.raid_level or storage.swap_kind not in {"auto", "partition"}
+            or storage.swap_choice == "hibernate" or storage.fstab_ident != "uuid" or storage.atime != "noatime" or storage.filesystem == "f2fs"
+            or storage.table != "gpt" or storage.firmware != ("uefi" if self.info.uefi else "bios"))
+
+    # --- the choices of the guided layout ---------------------------------------------------------------
+
+    def _rebuild_filesystems(self, keep: str) -> None:
+        """XFS, ext4 and Btrfs always; F2FS (flash media) only in Advanced or while it is the chosen one."""
+        self.filesystem.blockSignals(True)
+        self.filesystem.clear()
+        for value, text in FILESYSTEMS:
+            if value != "f2fs" or self.advanced or keep == "f2fs":
+                self.filesystem.addItem(text, value)
+        self.filesystem.setCurrentIndex(max(0, self.filesystem.findData(keep)))
+        self.filesystem.blockSignals(False)
+        self._update_filesystem_note()
+
+    def _filesystem_changed(self, _index: int = 0) -> None:
+        self._update_filesystem_note()
+
+    def _update_filesystem_note(self) -> None:
+        if not hasattr(self, "fs_note"):
+            return
+        value = self.filesystem.currentData() or "ext4"
+        self.fs_note.setText(FILESYSTEM_HELP.get(value, ""))
+        disk = self.selected_disk()
+        risky = value == "xfs" and disk is not None and layout.xfs_risky_model(disk.model)
+        self.xfs_note.show_text(XFS_NVME_NOTE if risky else "")
+
+    def _label_swap_kinds(self) -> None:
+        encrypted = self.luks.isChecked() if hasattr(self, "luks") else False
+        texts = {
+            "auto": "File inside the root (required with encryption)" if encrypted else "Partition (default; a file when the disk is encrypted)",
+            "partition": "Partition",
+            "file": "File inside the root",
+            "zram": "Compressed RAM only (zram)",
+        }
+        for index in range(self.swap_kind.count()):
+            self.swap_kind.setItemText(index, texts[self.swap_kind.itemData(index)])
+
+    def _luks_changed(self) -> None:
+        """An encrypted disk keeps its swap inside the encrypted root: the plain partition choice is off. The passphrase fields show while it is on."""
+        encrypted = self.luks.isChecked()
+        self.luks_details.setVisible(encrypted)
+        self._label_swap_kinds()
+        model = self.swap_kind.model()
+        item = model.item(self.swap_kind.findData("partition")) if hasattr(model, "item") else None
+        if item is not None:
+            item.setEnabled(not encrypted)
+        if encrypted and self.swap_kind.currentData() == "partition":
+            self.swap_kind.setCurrentIndex(self.swap_kind.findData("auto"))
+
+    def _swap_mode_changed(self, _index: int = 0) -> None:
+        self._update_swap_widgets()
+
+    def _swap_size_edited(self, _value: int = 0) -> None:
+        self._custom_origin = 0  # a size typed by hand replaces the loaded one
+        if self.swap_mode.currentData() != "custom":
+            self.swap_mode.setCurrentIndex(self.swap_mode.findData("custom"))
+
+    def _memory_kib(self) -> int:
+        kib = self.info.profile.memory.total_kib
+        return kib or int(self.info.memory_gib * 1024 * 1024)
+
+    def _recommended_mib(self, hibernate: bool | None = None) -> int:
+        kib = self._memory_kib()
+        wanted = self.hibernate.isChecked() if hibernate is None else hibernate
+        if kib <= 0:
+            return self.manifest.storage.swap_mib
+        return recommend.recommend_swap_mib(kib, hibernate=wanted and recommend.hibernation_advised(kib))
+
+    def _custom_mib(self) -> int:
+        gib = self.swap.value()
+        if self._custom_origin and max(1, round(self._custom_origin / 1024)) == gib:
+            return self._custom_origin  # a size that is not a whole number of GiB, loaded from a file, stays as it was
+        return gib * 1024
+
+    def _effective_swap_mib(self) -> int:
+        """The size of the swap on the disk, as the daemon will create it."""
+        mode = self.swap_mode.currentData()
+        if mode == "none" or self.swap_kind.currentData() == "zram":
+            return 0
+        return self._custom_mib() if mode == "custom" else self._recommended_mib()
+
+    def _swap_choice(self) -> str:
+        mode = self.swap_mode.currentData()
+        return "hibernate" if mode == "recommended" and self.hibernate.isChecked() and self._hibernation_advised() else mode
+
+    def _hibernation_advised(self) -> bool:
+        kib = self._memory_kib()
+        return kib <= 0 or recommend.hibernation_advised(kib)
+
+    def _update_swap_widgets(self) -> None:
+        advised = self._hibernation_advised()
+        self.hibernate.setEnabled(advised)
+        if not advised:
+            self.hibernate.setToolTip(f"The Gentoo Handbook does not advise hibernation above {recommend.HIBERNATION_MAX_GIB} GiB of memory: the swap would have to be as large as the memory.")
+        mib = self._recommended_mib()
+        self.swap_mode.setItemText(self.swap_mode.findData("recommended"), f"Recommended for this computer ({mib / 1024:g} GiB)")
+        custom = self.swap_mode.currentData() == "custom"
+        self.swap.setVisible(custom)
+        self.swap_label.setVisible(custom)
+        zram = self.swap_kind.currentData() == "zram"
+        if zram:
+            note = "No swap partition or file is created. A compressed part of the memory is used as swap instead."
+        elif self.swap_mode.currentData() == "none":
+            note = "Without swap the computer cannot move rarely used memory to the disk, and hibernation does not work."
+        else:
+            note = SWAP_HELP
+        self.swap_note.setText(note)
+
+    def _update_disk_state(self) -> None:
+        """No disk chosen yet: the layout is greyed out and an inline hint says what to do (nothing is preselected, for safety)."""
+        disk = self.selected_disk()
+        chosen = disk is not None
+        self.choose_hint.setVisible(not chosen)
+        for widget in (self.guided, self.encryption, self.advanced_section):
+            widget.setEnabled(chosen)
+        self.existing.set_disk(disk)
+        self.existing.setVisible(chosen)
+        erase = self.mode.currentData() == "erase"
+        windows = disk is not None and erase and any(part.is_windows for part in disk.partitions)
+        self.windows_note.show_text(WINDOWS_NOTE if windows else "")
+        flash = disk is not None and (disk.removable or disk.path.startswith("/dev/mmcblk"))
+        self.removable_note.show_text(REMOVABLE_NOTE if flash else "")
+        self._update_filesystem_note()
+
+    def _boot_mode_sentence(self) -> str:
+        firmware, table = self.firmware.currentData(), self.table.currentData()
+        detected = "UEFI" if self.info.uefi else "BIOS"
+        if firmware == ("uefi" if self.info.uefi else "bios"):
+            start = f"This computer started in {detected} mode, so Gentoo will boot with {detected}."
+        else:
+            start = f"You chose {'UEFI' if firmware == 'uefi' else 'legacy BIOS'} in the Advanced options, although this computer started in {detected} mode."
+        name = "GPT" if table == "gpt" else "DOS (MBR)"
+        extra = " with a small EFI system partition" if firmware == "uefi" else " with a small BIOS boot partition that lets GRUB start" if table == "gpt" else ""
+        return f"{start} The disk gets a {name} partition table{extra}."
+
+    def _refresh(self) -> None:
+        """Everything that follows from the choices: swap labels, notes, the capacity text and the table of what will be created."""
+        self.boot_noauto_note.setVisible(self.boot_noauto.isChecked())
+        self.boot_mode_text.setText(self._boot_mode_sentence())
+        self._update_swap_widgets()
+        self._update_filesystem_note()
+        self._update_capacity()
+        self._update_preview()
+
+    def _update_preview(self) -> None:
+        disk = self.selected_disk()
+        if disk is None or self.mode.currentData() != "erase":
+            self.preview_card.hide()
+            return
+        storage = self._planned_storage()
+        manifest = dataclasses.replace(self.manifest, storage=storage)
+        try:
+            plan = layout.plan_storage(manifest, self.info.block_devices(), memory_kib=self._memory_kib())
+        except Exception:  # noqa: BLE001 - a preview must never break the page
+            self.preview_card.hide()
+            return
+        self.preview.set_rows(layout.plan_table(plan.disks[0], lvm=storage.lvm))
+        self.preview_card.show()
 
     def _home_changed(self, checked: bool) -> None:
         self.home_size.setEnabled(checked)
@@ -502,9 +803,13 @@ class StoragePage(Page):
     def _planned_storage(self) -> Any:
         """The storage choices as they stand in the widgets (the manifest is only written when the page is left)."""
         return dataclasses.replace(
-            self.manifest.storage, mode=str(self.mode.currentData()), firmware=str(self.firmware.currentData()), table=str(self.table.currentData()),
-            filesystem=str(self.filesystem.currentData()), swap_mib=self.swap.value(), separate_home=self.home.isChecked(),
-            home_mib=self.home_size.value() if self.home.isChecked() else 0, luks=self.luks.isChecked())
+            self.manifest.storage, mode=str(self.mode.currentData()), device=self.disk_group.value() or self.manifest.storage.device,
+            firmware=str(self.firmware.currentData()), table=str(self.table.currentData()),
+            filesystem=str(self.filesystem.currentData()), swap_mib=self._effective_swap_mib(), swap_choice=self._swap_choice(),
+            swap_kind=str(self.swap_kind.currentData()), separate_home=self.home.isChecked(),
+            home_mib=self.home_size.value() if self.home.isChecked() else 0, luks=self.luks.isChecked(), lvm=self.lvm.isChecked(),
+            separate_boot=self.separate_boot.isChecked(), boot_noauto=self.boot_noauto.isChecked(),
+            fstab_ident=str(self.fstab_ident.currentData()), atime=str(self.atime.currentData()))
 
     def _update_capacity(self) -> None:
         """'The system partition will get 41 GiB': what is left for Gentoo after the other partitions of the guided layout."""
@@ -538,17 +843,22 @@ class StoragePage(Page):
         self.mode.setCurrentIndex(max(0, self.mode.findData(storage.mode)))
         self.firmware.setCurrentIndex(max(0, self.firmware.findData(storage.firmware)))
         self.table.setCurrentIndex(max(0, self.table.findData(storage.table)))
-        self.filesystem.setCurrentIndex(max(0, self.filesystem.findData(storage.filesystem)))
-        self.swap.setValue(storage.swap_mib)
+        self._rebuild_filesystems(storage.filesystem)
+        self._load_swap(storage)
         self.home.setChecked(storage.separate_home)
         self.home_size.setValue(storage.home_mib or 16384)
         self.luks.setChecked(storage.luks)
         self.passphrase.setText(storage.luks_passphrase)
         self.passphrase_confirm.setText(storage.luks_passphrase)
         self.lvm.setChecked(storage.lvm)
+        self.separate_boot.setChecked(storage.separate_boot)
+        self.boot_noauto.setChecked(storage.boot_noauto)
+        self.fstab_ident.setCurrentIndex(max(0, self.fstab_ident.findData(storage.fstab_ident)))
+        self.atime.setCurrentIndex(max(0, self.atime.findData(storage.atime)))
         self.raid.setCurrentIndex(max(0, self.raid.findData(storage.raid_level)))
         self.release_holders.setChecked(storage.release_holders)
         self.manual_editor.set_rows(storage.partitions)
+        self._luks_changed()
         self._mode_changed()
         self._update_approval()
         disk = self.selected_disk()
@@ -558,8 +868,32 @@ class StoragePage(Page):
         self._update_firmware_note()
         self._update_luks_note()
         self._update_holders()
-        self._update_capacity()
+        self._refresh()
         self._update_empty_state()
+        if self._has_advanced_values():
+            self.advanced_section.set_open(True)
+
+    def _load_swap(self, storage: Any) -> None:
+        """Show the stored swap choice: Recommended, None or a custom size, the swap type and the hibernation box."""
+        for widget in (self.swap_mode, self.swap, self.swap_kind, self.hibernate):
+            widget.blockSignals(True)
+        choice = storage.swap_choice
+        if storage.swap_kind == "none" or (choice == "custom" and storage.swap_mib == 0):
+            choice = "none"
+        self.swap_mode.setCurrentIndex(self.swap_mode.findData("recommended" if choice == "hibernate" else choice))
+        self.hibernate.setChecked(choice == "hibernate")
+        self._custom_origin = storage.swap_mib if choice == "custom" else 0
+        self.swap.setValue(min(128, max(1, round(storage.swap_mib / 1024))) if storage.swap_mib else 4)
+        self.swap_kind.setCurrentIndex(max(0, self.swap_kind.findData(storage.swap_kind)))
+        for widget in (self.swap_mode, self.swap, self.swap_kind, self.hibernate):
+            widget.blockSignals(False)
+        self._update_swap_widgets()
+        self._loaded_swap = self._swap_state()
+
+    def _swap_state(self) -> tuple:
+        """The swap choices as they stand (the size only for a custom one): what tells a swap the user changed from one that was loaded."""
+        choice = self._swap_choice()
+        return (choice, self.swap_kind.currentData(), self._custom_mib() if choice == "custom" else 0)
 
     def save_manifest(self) -> None:
         storage = self.manifest.storage
@@ -580,12 +914,19 @@ class StoragePage(Page):
         storage.firmware = self.firmware.currentData()
         storage.table = self.table.currentData()
         storage.filesystem = self.filesystem.currentData()
-        storage.swap_mib = self.swap.value()
+        # The size written is the size the disk gets, so the review, the text installer and the service all show the same number.
+        storage.swap_mib = self._effective_swap_mib()
+        storage.swap_choice = self._swap_choice()
+        storage.swap_kind = self.swap_kind.currentData()
         storage.separate_home = self.home.isChecked()
         storage.home_mib = self.home_size.value() if self.home.isChecked() else 0
         storage.luks = self.luks.isChecked()
         storage.luks_passphrase = self.passphrase.text() if storage.luks else ""
         storage.lvm = self.lvm.isChecked()
+        storage.separate_boot = self.separate_boot.isChecked()
+        storage.boot_noauto = self.boot_noauto.isChecked()
+        storage.fstab_ident = self.fstab_ident.currentData()
+        storage.atime = self.atime.currentData()
         storage.raid_level = self.raid.currentData()
         storage.partitions = self.manual_editor.rows()
         if self.holders_card.isVisibleTo(self):
@@ -605,6 +946,16 @@ class StoragePage(Page):
         storage.additional_device_ids = wanted
         self._extras_written = True
 
+    def show_inline_problem(self, message: str) -> bool:
+        """Show the "no disk chosen" problem as the hint on the page instead of a dialog (the window asks before it opens a message box)."""
+        if message != NO_DISK_CHOSEN:
+            return False
+        self.choose_hint.setProperty("muted", False)
+        self.choose_hint.setStyleSheet("font-weight: 600;")
+        self.choose_hint.show()
+        self.disk_group.setFocus()
+        return True
+
     def validate_page(self) -> tuple[bool, str]:
         self.save_manifest()
         storage = self.manifest.storage
@@ -613,7 +964,7 @@ class StoragePage(Page):
                 if self._swapped:
                     return False, SWAPPED_DISK.format(path=self._vanished)
                 return False, f"The disk you selected ({self._vanished}) is no longer present. Select a disk again."
-            return False, "Select the disk you want to use."
+            return False, NO_DISK_CHOSEN
         disk = self.selected_disk()
         if disk is None:
             return False, f"The selected disk {self.disk_group.value()} is no longer present. Press “Check again” on the readiness page and select a disk."
@@ -637,11 +988,22 @@ class StoragePage(Page):
             return False, UEFI_ON_BIOS
         if storage.luks and self.passphrase.text() != self.passphrase_confirm.text():
             return False, "The LUKS passphrases do not match."
+        if storage.mode == "erase":
+            problem = layout.swap_kind_problem(self._planned_storage(), self.manifest.hardware.hibernate)
+            if problem:
+                return False, problem
+            problems = layout.table_problems(storage, disk.size, disk.log_sec)
+            if problems:
+                return False, problems[0]
+            if storage.fstab_ident == "partuuid" and storage.table == "dos":
+                return False, "Naming filesystems by partition UUID needs a GPT partition table. Choose the filesystem UUID or the label."
+            if storage.boot_noauto and not layout.has_boot_partition(storage):
+                return False, "Mounting /boot only when needed needs a /boot partition of its own: tick “Separate /boot partition”."
         raid = storage.raid_problem()
         if raid:
             return False, raid
         if storage.mode == "manual":
-            problems = self.manual_editor.problems(storage.firmware)
+            problems = self.manual_editor.problems(storage.firmware, bootloader=self.manifest.system.bootloader, initramfs=self.manifest.system.initramfs)
             if problems:
                 return False, problems[0]
             for path, check in self.extra_checks.items():

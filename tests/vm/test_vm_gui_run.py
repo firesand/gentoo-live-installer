@@ -55,7 +55,7 @@ def test_the_defaults_scenario_leaves_firmware_table_and_disk_to_the_gui(lab):
     assert plan["detected"] == {"storage.device": "/dev/vda", "storage.device_id": vm.TARGET_SERIAL, "storage.device_id_kind": "",
                                 "storage.firmware": "uefi", "storage.table": "gpt",
                                 # seeded from the hardware report: recorded, not asserted
-                                "storage.swap_mib": None, "options.bluetooth": None, "options.microcode": None,
+                                "storage.swap_mib": None, "storage.swap_choice": None, "options.bluetooth": None, "options.microcode": None,
                                 "options.install_hwmonux": None, "options.install_portagehub": None}
     assert json.loads((lab.run_dir() / "gui-detected.json").read_text()) == detected  # the GUI's own choices are kept as evidence
 

@@ -516,7 +516,9 @@ class InstallerWindow(QMainWindow):
         page = self.pages[self.current]
         valid, message = page.validate_page()
         if not valid:
-            page.set_problem(message)  # inline, beside the step; the sidebar marks it (CORE-09)
+            inline = getattr(page, "show_inline_problem", None)  # a page may point at the exact control instead (storage: the disk list)
+            if not (callable(inline) and inline(message)):
+                page.set_problem(message)  # inline, beside the step; the sidebar marks it (CORE-09)
             return
         page.set_problem("")
         page.save_manifest()
