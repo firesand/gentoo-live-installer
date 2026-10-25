@@ -16,10 +16,15 @@ script opens the ISO read-only and checks what a user's PC will depend on:
   * boot/gentoo-config (the live kernel's configuration): a generic framebuffer DRM driver
     (SYSFB_SIMPLEFB + DRM_SIMPLEDRM, or DRM_EFIDRM + DRM_VESADRM), built in or, as a module, in the
     initramfs, so that "Safe graphics" has a display device under nomodeset;
+  * boot/gentoo-config again (wave 6): Yama built in and named in CONFIG_LSM, which the AI rescue stick
+    needs for kernel.yama.ptrace_scope=1 (the agents must not read each other's memory);
   * the initramfs: dmsquash-live and the storage modules a live medium needs;
   * image.squashfs: the required files and commands, every service in livecd/rcadd as a
     runlevel link plus init script, no builder-owned files (uid/gid 1000), a locked root
     account, no builder make.conf settings, and in a release no test-access artifacts;
+  * the account of the AI agents (wave 6): rescue-ai is a locked system account in no group but its own and
+    appears in no sudoers or doas file, and no sudo rule is for ALL users: its only way to root is the
+    approver service (gentoo-rescue-do);
   * the installed package list, written to --packages-out;
   * sshd (I9): in the default runlevel of every flavour, no host keys in the image, and the first
     PermitEmptyPasswords of the sshd drop-ins in name order is `no` (a test image also needs
@@ -614,6 +619,31 @@ def check_kernel_config(report: Report, text: str, contract: Mapping[str, Any], 
     )
 
 
+def check_kernel_security(report: Report, text: str, contract: Mapping[str, Any]) -> None:
+    """Symbols and list entries the live kernel must have besides the display drivers (wave 6: Yama).
+
+    A rule has "symbols" (CONFIG_X must have one of the listed values) and "lists" (a comma-separated string
+    option such as CONFIG_LSM must name every listed word). The fragment
+    files/51-gentoo-live-rescue-ai.config asks for them; this check is the gate, because the base
+    configuration of sys-kernel/gentoo-kernel is a distfile that is not read here."""
+    symbols = parse_kernel_config(text)
+    for rule in contract.get("kernel_config", {}).get("required", []):
+        problems = [
+            f"CONFIG_{name}={wanted} (is {symbols.get(name, 'absent')})"
+            for name, wanted in rule.get("symbols", {}).items()
+            if symbols.get(name, "n") not in wanted.split("|")
+        ]
+        for name, words in rule.get("lists", {}).items():
+            have = [w.strip() for w in symbols.get(name, "").split(",") if w.strip()]
+            problems += [f"CONFIG_{name} lacks {word} (is {symbols.get(name, 'absent')!r})" for word in words if word not in have]
+        report.expect(
+            not problems,
+            f"kernel.{rule['id']}",
+            rule["name"],
+            f"{rule['name']}: " + "; ".join(problems) + f". {rule.get('why', '')}".rstrip(),
+        )
+
+
 # ---------------------------------------------------------------------------
 # squashfs
 
@@ -698,6 +728,82 @@ def sshd_first_value(entries: Mapping[str, Entry], read_file: Callable[[str], by
             if words[0].lower() == keyword.lower() and len(words) > 1:
                 return words[1], path
     return None, ""
+
+
+SUDO_NON_RULES = ("defaults", "user_alias", "runas_alias", "host_alias", "cmnd_alias", "cmd_alias")
+
+
+def sudo_rules(text: str) -> list[str]:
+    """The active lines of a sudoers file that are rules or aliases (not comments, #include and Defaults)."""
+    lines = []
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith(("#include", "@include")):
+            continue
+        if line.startswith("#") and not re.match(r"#\d+\s", line):
+            continue
+        lines.append(line)
+    return lines
+
+
+def check_accounts(
+    report: Report,
+    accounts: Sequence[Mapping[str, Any]],
+    entries: Mapping[str, Entry],
+    read_file: Callable[[str], bytes],
+) -> None:
+    """Accounts that must stay weak (wave 6: rescue-ai, the user the AI agents run as).
+
+    Each rule names an account that must exist in /etc/passwd as a system account (max_uid), be locked in
+    /etc/shadow, have its own group as primary group and no other group in /etc/group (forbidden_groups
+    only improves the message), and be named in no sudoers or doas file. No sudo rule may be for ALL users
+    either, because that rule would cover the account as well."""
+    if not accounts:
+        return
+
+    def text(path: str) -> str:
+        if path not in entries:
+            return ""
+        try:
+            return read_file("/" + path).decode(errors="replace")
+        except VerifyError:
+            return ""
+
+    passwd = {line.split(":")[0]: line.split(":") for line in text("etc/passwd").splitlines() if line.count(":") >= 6}
+    group_lines = [line.split(":") for line in text("etc/group").splitlines() if line.count(":") >= 3]
+    shadow = {line.split(":")[0]: line.split(":") for line in text("etc/shadow").splitlines() if ":" in line}
+    sudo_files = ["etc/sudoers"] + sorted(p for p, e in entries.items() if p.startswith("etc/sudoers.d/") and e.kind == "file" and "/" not in p[len("etc/sudoers.d/"):])
+    for account in accounts:
+        name = account["name"]
+        fields = passwd.get(name)
+        if fields is None:
+            report.failed("accounts.exists", f"the account {name} is not in /etc/passwd")
+            continue
+        report.passed("accounts.exists", name)
+        uid, gid = int(fields[2]), fields[3]
+        problems: list[str] = []
+        if uid > int(account.get("max_uid", 999)):
+            problems.append(f"uid {uid} is not a system uid (at most {account.get('max_uid', 999)})")
+        own = next((g for g in group_lines if g[0] == name), None)
+        if own is None or own[2] != gid:
+            problems.append(f"its primary group {gid} is not the group {name}")
+        member_of = sorted(g[0] for g in group_lines if g[0] != name and name in g[3].split(","))
+        if member_of:
+            bad = sorted(set(member_of) & set(account.get("forbidden_groups", [])))
+            problems.append("it is in the groups " + ", ".join(member_of) + (f" (of which {', '.join(bad)} must never be)" if bad else ""))
+        locked = shadow.get(name, ["", ""])[1]
+        if name not in shadow or locked[:1] not in ("!", "*"):
+            problems.append("its password is not locked in /etc/shadow")
+        if account.get("no_sudo", True):
+            for path in sudo_files + ["etc/doas.conf"]:
+                for line in sudo_rules(text(path)):
+                    words = line.split()
+                    users = [u.lstrip("!") for u in words[0].split(",")] if words[0].lower() not in SUDO_NON_RULES and not words[0].lower().startswith("defaults") else []
+                    if re.search(rf"(?<![\w-]){re.escape(name)}(?![\w-])", line) or f"#{uid}" in users:
+                        problems.append(f"/{path} names it: {line[:60]}")
+                    elif "ALL" in users or (path == "etc/doas.conf" and re.match(r"permit\b", line) and not re.search(r":\w", line)):
+                        problems.append(f"/{path} has a rule for all users: {line[:60]}")
+        report.expect(not problems, "accounts.weak", name, f"{name} would not stay unprivileged: " + "; ".join(problems) + f". {account.get('why', '')}".rstrip())
 
 
 def check_squashfs(
@@ -815,6 +921,8 @@ def check_squashfs(
         for pattern in rule.get("must_not_match", []):
             report.expect(not re.search(pattern, body, re.M), "squashfs.content", f"{path} !~ {pattern}", f"{path} contains {pattern!r}: {rule.get('why', '')}".strip())
 
+    check_accounts(report, rules.get("accounts", []), entries, read_file)
+
     # sshd runs on every flavour (I9). It must not accept an empty password (the live user has none),
     # and the image must carry no host keys: each boot makes its own, so no two discs share a key.
     for keyword, wanted in rules.get("sshd_first_values", {}).get(flavor, {}).items():
@@ -914,7 +1022,9 @@ def verify(
     config_file = contract.get("kernel_config", {}).get("file")
     if config_file:
         try:
-            check_kernel_config(report, tools.iso_read("/" + config_file).decode(errors="replace"), contract, initramfs)
+            config_text = tools.iso_read("/" + config_file).decode(errors="replace")
+            check_kernel_config(report, config_text, contract, initramfs)
+            check_kernel_security(report, config_text, contract)
         except VerifyError as exc:
             report.failed("kernel.config", f"{config_file} cannot be read: {exc}")
 

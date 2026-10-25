@@ -1,0 +1,115 @@
+#!/sbin/openrc-run
+
+name="Gentoo rescue approver"
+description="Asks a person on the PC's own console before an AI agent runs a command as root"
+
+# The root half of gentoo-rescue-do (src/gentoo_rescue_ai). The AI agents run as the user rescue-ai, which
+# has no rule that lets it become root. A request from gentoo-rescue-do reaches this service over a Unix socket; the service
+# switches to a console of its own (a virtual terminal no rescue-ai process can open), shows the exact
+# command and waits for the per-boot password to be typed THERE, for that one command.
+#
+# Started by OpenRC at boot, as root, and only by the boot menu entry "AI rescue (text console)", which
+# adds gentoo.autostart=ai-rescue to the kernel command line. On every other boot this service does
+# nothing: no socket, no password, no approver. Nothing the agents do can start it.
+#
+# The per-boot password: twelve characters of an alphabet without look-alikes (abcd-efgh-jkmn), made from
+# /dev/urandom at every start into /run/gentoo-rescue/do-password (root:root 0600). The approver shows it
+# on its console and gentoo-rescue-ai shows it on the first console, as root, before the agents' tmux
+# session starts. The agents cannot read the file.
+#
+# The three GENTOO_RESCUE_* variables are for the tests of the disc; they are not set on a real disc.
+
+command="/usr/bin/gentoo-rescue-approver"
+# The approver stays in the foreground; OpenRC puts it in the background and tracks the pid.
+command_background=true
+pidfile="/run/${RC_SVCNAME}.pid"
+output_log="/var/log/gentoo-rescue/approver.log"
+error_log="/var/log/gentoo-rescue/approver.log"
+retry="TERM/10/KILL/5"
+
+rescue_run_dir="${GENTOO_RESCUE_RUN_DIR:-/run/gentoo-rescue}"
+rescue_log_dir="${GENTOO_RESCUE_LOG_DIR:-/var/log/gentoo-rescue}"
+rescue_cmdline="${GENTOO_RESCUE_CMDLINE:-/proc/cmdline}"
+rescue_dev_dir="${GENTOO_RESCUE_DEV_DIR:-/dev}"
+rescue_random="${GENTOO_RESCUE_RANDOM:-/dev/urandom}"
+
+depend() {
+	# The console and the log directory need the device nodes and a writable /var; no network, no D-Bus.
+	need localmount
+	after udev
+	use logger
+}
+
+rescue_ai_boot() {
+	# Only the whole word counts: gentoo.autostart=ai-rescue2 or xgentoo.autostart=ai-rescue do not.
+	local word
+	for word in $(cat "${rescue_cmdline}" 2> /dev/null); do
+		[ "${word}" = "gentoo.autostart=ai-rescue" ] && return 0
+	done
+	return 1
+}
+
+rescue_pick_vt() {
+	# tty9 (Alt+F9) unless something has it open; then the next ones. The first six are logins.
+	local candidate="${RESCUE_VT:-9}" tries=0
+	while [ "${tries}" -lt 4 ]; do
+		if [ -e "${rescue_dev_dir}/tty${candidate}" ] && ! fuser -s "${rescue_dev_dir}/tty${candidate}" 2> /dev/null; then
+			echo "${candidate}"
+			return 0
+		fi
+		candidate=$((candidate + 1))
+		tries=$((tries + 1))
+	done
+	return 1
+}
+
+rescue_make_password() {
+	LC_ALL=C tr -dc 'abcdefghjkmnpqrstuvwxyz23456789' < "${rescue_random}" | head -c 12 | sed 's/^\(....\)\(....\)\(....\)$/\1-\2-\3/'
+}
+
+start() {
+	if [ "${RESCUE_APPROVER_ALWAYS:-no}" != "yes" ] && ! rescue_ai_boot; then
+		einfo "${RC_SVCNAME}: not the AI rescue boot entry (gentoo.autostart=ai-rescue), so no approver runs"
+		return 0
+	fi
+	default_start
+}
+
+stop() {
+	# On every other boot start() ran nothing, so there is no pid file and nothing to stop.
+	[ -f "${pidfile}" ] || return 0
+	default_stop
+}
+
+start_pre() {
+	local vt password
+	# start() does nothing outside the AI rescue entry; so must this.
+	if [ "${RESCUE_APPROVER_ALWAYS:-no}" != "yes" ] && ! rescue_ai_boot; then
+		return 0
+	fi
+	if [ ! -x "${command}" ]; then
+		eerror "${command} is missing: the AI rescue package is not installed"
+		return 1
+	fi
+	# Nothing from an earlier start survives: a stale socket or password is never offered again.
+	rm -f "${rescue_run_dir}/do.sock" "${rescue_run_dir}/do-password"
+	vt="$(rescue_pick_vt)" || { eerror "no free console for the approver (tty${RESCUE_VT:-9} to tty$((${RESCUE_VT:-9} + 3)) are in use)"; return 1; }
+	# The socket directory: root writes, the group rescue-ai may only enter it (no listing). Nobody else can enter it, the live user included: it
+	# looks at the socket as root. The audit log
+	# is root's alone: an agent that could read or edit it could hide what it did.
+	checkpath -d -m 0710 -o root:rescue-ai "${rescue_run_dir}" || return 1
+	checkpath -d -m 0700 -o root:root "${rescue_log_dir}" || return 1
+	password="$(rescue_make_password)"
+	case "${password}" in
+		????-????-????) ;;
+		*) eerror "could not make the one-time password"; return 1 ;;
+	esac
+	( umask 077; printf '%s\n' "${password}" > "${rescue_run_dir}/do-password" ) || return 1
+	chown root:root "${rescue_run_dir}/do-password" && chmod 0600 "${rescue_run_dir}/do-password" || return 1
+	command_args="--vt ${vt} --socket ${rescue_run_dir}/do.sock --audit ${rescue_log_dir}/do.log ${command_args_extra}"
+	einfo "approval console: tty${vt} (Alt+F${vt}); the password is shown there and on the first console"
+}
+
+stop_post() {
+	rm -f "${rescue_run_dir}/do.sock" "${rescue_run_dir}/do-password"
+}

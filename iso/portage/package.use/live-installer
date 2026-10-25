@@ -22,7 +22,13 @@ sys-apps/util-linux -cryptsetup
 # because liquidctl is ~amd64) and Secure Boot signing tools for the installer's checks.
 app-misc/hwmonux liquidctl
 # safe-graphics installs the kernel configuration fragment for the live kernel (see the stage2 spec).
-app-admin/gentoo-live-installer secureboot safe-graphics
+app-admin/gentoo-live-installer secureboot safe-graphics rescue-ai
 # The live desktop's look (wave 5): the Arc GTK and xfwm4 themes, without the GTK 2 theme (it would
 # pull gtk-engines-murrine and gnome-themes-standard for programs the disc does not have).
 x11-themes/arc-theme xfce -gtk2
+# The AI rescue stick (wave 6): ttyd shares the rescue session to a phone over TLS, so it needs
+# libwebsockets with libuv and OpenSSL support (the ttyd ebuild requires [libuv,ssl]).
+net-libs/libwebsockets libuv ssl
+# mount.cifs is there to copy data off a broken PC to a network share. Kerberos mounts (ads: cifs.upcall,
+# krb5, keyutils) and the Python helpers are not needed for that and would add packages to a build.
+net-fs/cifs-utils -ads -python

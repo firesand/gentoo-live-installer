@@ -1,2 +1,6 @@
 app-misc/liquidctl ~amd64
 dev-python/hidapi ~amd64
+# The AI rescue stick shares its tmux session with ttyd. ttyd-1.7.7-r1 is stable but accepts any
+# libwebsockets >= 4.4 (the tree has 5.0.0 stable); -r2 is ~amd64 only and pins =libwebsockets-4.5*, the
+# series ttyd was released against, so a build cannot pick a libwebsockets that ttyd does not build with.
+=www-apps/ttyd-1.7.7-r2 ~amd64

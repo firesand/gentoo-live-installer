@@ -29,16 +29,17 @@
   "grub": {
     "kernel": "/boot/gentoo",
     "initrd": "/boot/gentoo.igz",
-    "min_entries": 12,
-    "required_arguments": ["nox", "dokeymap", "nomodeset", "rd.live.ram=1", "console=ttyS0,115200n8", "acpi=off", "rd.debug", "gentoo.autostart=rescue", "gentoo.autostart=installer-text"],
+    "min_entries": 13,
+    "required_arguments": ["nox", "dokeymap", "nomodeset", "rd.live.ram=1", "console=ttyS0,115200n8", "acpi=off", "rd.debug", "gentoo.autostart=rescue", "gentoo.autostart=ai-rescue", "gentoo.autostart=installer-text"],
     "required_argument_groups": [
       "nox dokeymap",
       "nox dokeymap gentoo.autostart=rescue",
+      "nox dokeymap gentoo.autostart=ai-rescue",
       "nox dokeymap gentoo.autostart=installer-text",
       "nomodeset pcie_aspm=off nvme_core.default_ps_max_latency_us=0 usbcore.autosuspend=-1"
     ],
-    "autostart_values": ["rescue", "installer-text"],
-    "required_titles": ["Safe graphics (for a black screen or no picture)", "Repair a system (text console)", "Install in text mode"],
+    "autostart_values": ["rescue", "ai-rescue", "installer-text"],
+    "required_titles": ["Safe graphics (for a black screen or no picture)", "Repair a system (text console)", "AI rescue (text console)", "Install in text mode"],
     "safe_graphics": {"title_prefix": "safe graphics", "required_arguments": ["nomodeset"], "forbidden_arguments": ["nox", "dokeymap"]},
     "forbidden_titles": []
   },
@@ -49,7 +50,11 @@
       {"name": "simpledrm", "symbols": {"SYSFB_SIMPLEFB": "y", "DRM_SIMPLEDRM": "y|m"}},
       {"name": "efidrm and vesadrm", "symbols": {"DRM_EFIDRM": "y|m", "DRM_VESADRM": "y|m"}}
     ],
-    "module_names": {"DRM_SIMPLEDRM": "simpledrm", "DRM_EFIDRM": "efidrm", "DRM_VESADRM": "vesadrm"}
+    "module_names": {"DRM_SIMPLEDRM": "simpledrm", "DRM_EFIDRM": "efidrm", "DRM_VESADRM": "vesadrm"},
+    "required": [
+      {"id": "yama", "name": "Yama (ptrace_scope)", "symbols": {"SECURITY": "y", "SECURITY_YAMA": "y"}, "lists": {"LSM": ["yama"]},
+       "why": "the AI rescue stick sets kernel.yama.ptrace_scope=1 so that the agents (user rescue-ai) cannot read or inject into each other's processes; a kernel without Yama in CONFIG_LSM silently ignores the sysctl"}
+    ]
   },
   "initramfs": {
     "required": [
@@ -104,6 +109,13 @@
       {"path": "etc/issue", "type": "file"},
       {"path": "etc/profile.d/10-gentoo-rescue-hint.sh", "type": "file"},
       {"path": "etc/profile.d/20-gentoo-autostart.sh", "type": "file"},
+      {"path": "etc/sysctl.d/60-gentoo-rescue-ai.conf", "type": "file"},
+      {"path": "etc/polkit-1/rules.d/00-gentoo-rescue-ai.rules", "type": "file"},
+      {"path": "etc/init.d/gentoo-rescue-approver", "type": "file", "executable": true},
+      {"path": "etc/conf.d/gentoo-rescue-approver", "type": "file"},
+      {"path": "etc/passwd", "type": "file"},
+      {"path": "etc/group", "type": "file"},
+      {"path": "home/rescue-ai", "type": "dir", "mode": "0700"},
       {"path": "etc/modules-load.d/hwmonux.conf", "type": "file"},
       {"path": "usr/bin/gentoo-installer", "type": "file|slink"},
       {"path": "usr/bin/gentoo-installerd", "type": "file|slink"},
@@ -119,6 +131,17 @@
       {"path": "usr/bin/gentoo-installer-text", "type": "file|slink", "when_source": {"path": "pyproject.toml", "contains": "gentoo-installer-text ="}},
       {"path": "usr/bin/gentoo-chroot", "type": "file|slink", "executable": true, "when_source": "src/gentoo_installerd/rescue/__init__.py"},
       {"path": "usr/share/applications/gentoo-rescue.desktop", "type": "file", "when_source": "src/gentoo_installerd/rescue/__init__.py"},
+      {"path": "etc/gentoo-rescue/AGENTS.md", "type": "file", "when_source": "src/gentoo_rescue_ai/data/root/etc/gentoo-rescue/AGENTS.md"},
+      {"path": "etc/claude-code/CLAUDE.md", "type": "file", "when_source": "src/gentoo_rescue_ai/data/root/etc/claude-code/CLAUDE.md"},
+      {"path": "etc/claude-code/managed-settings.json", "type": "file", "when_source": "src/gentoo_rescue_ai/data/root/etc/claude-code/managed-settings.json"},
+      {"path": "etc/skel-rescue-ai", "type": "dir", "when_source": "src/gentoo_rescue_ai/data/root/etc/skel-rescue-ai"},
+      {"path": "usr/bin/gentoo-rescue-agents", "type": "file|slink", "executable": true, "when_source": {"path": "pyproject.toml", "contains": "gentoo-rescue-agents ="}},
+      {"path": "usr/bin/gentoo-rescue-login", "type": "file|slink", "executable": true, "when_source": {"path": "pyproject.toml", "contains": "gentoo-rescue-login ="}},
+      {"path": "usr/bin/gentoo-rescue-ai", "type": "file|slink", "executable": true, "when_source": {"path": "pyproject.toml", "contains": "gentoo-rescue-ai ="}},
+      {"path": "usr/bin/gentoo-rescue-do", "type": "file|slink", "executable": true, "when_source": {"path": "pyproject.toml", "contains": "gentoo-rescue-do ="}},
+      {"path": "usr/bin/gentoo-rescue-approver", "type": "file|slink", "executable": true, "when_source": {"path": "pyproject.toml", "contains": "gentoo-rescue-approver ="}},
+      {"path": "usr/bin/gentoo-rescue-mount", "type": "file|slink", "executable": true, "when_source": {"path": "pyproject.toml", "contains": "gentoo-rescue-mount ="}},
+      {"path": "usr/bin/gentoo-rescue-share", "type": "file|slink", "executable": true, "when_source": {"path": "pyproject.toml", "contains": "gentoo-rescue-share ="}},
       {"path": "boot/memtest86plus/memtest64.bios", "type": "file"},
       {"path": "boot/memtest86plus/memtest.efi64", "type": "file"},
       {"path": "mnt/gentoo", "type": "dir"},
@@ -138,9 +161,11 @@
       "cpuid2cpuflags", "setxkbmap", "xrandr", "xset", "chronyd", "jq", "pv", "links", "gpg", "gpgv",
       "tar", "rsync", "gparted", "lsof", "lvs", "lscpu", "chronyc", "loadkeys", "nmtui", "nmcli",
       "blockdev", "mount", "umount", "dmesg", "script", "setsid", "chroot", "timeout", "sync", "modprobe",
-      "dumpe2fs", "tune2fs", "xfs_db", "jfs_fsck", "lsinitrd", "pvs", "vgs", "vgchange", "zstd"
+      "dumpe2fs", "tune2fs", "xfs_db", "jfs_fsck", "lsinitrd", "pvs", "vgs", "vgchange", "zstd",
+      "tmux", "ttyd", "qrencode", "rg", "openssl", "chvt",
+      "snapper", "fsarchiver", "ncdu", "tcpdump", "mtr", "dd_rescue", "dislocker", "foremost", "memtester", "restic", "rclone", "mount.cifs", "vim", "mc"
     ],
-    "implicit_services": [["autoconfig", "default"], ["xdm", "default"], ["fixinittab", "default"], ["syslog-ng", "default"]],
+    "implicit_services": [["autoconfig", "default"], ["xdm", "default"], ["fixinittab", "default"], ["syslog-ng", "default"], ["sysctl", "boot"]],
     "forbidden_services": ["acpid"],
     "forbidden": [
       "var/cache/binhost*",
@@ -154,6 +179,11 @@
       "var/db/repos/*",
       "usr/src/*",
       "etc/ssh/ssh_host_*"
+    ],
+    "accounts": [
+      {"name": "rescue-ai", "max_uid": 999, "no_sudo": true,
+       "forbidden_groups": ["tty", "wheel", "disk", "video", "input", "audio", "plugdev", "usb", "kvm", "portage", "root", "users", "gentoo-installer", "dialout", "cdrom", "floppy", "games", "lp", "uucp"],
+       "why": "the AI agents run as rescue-ai on a stick next to somebody's broken disk; their only way to root is gentoo-rescue-do, approved by a person on the approver's own console. wheel is the group Catalyst gives passwordless sudo and su needs; the live user's empty password must not be reachable through it"}
     ],
     "sshd_first_values": {
       "release": {"PermitEmptyPasswords": "no"},
@@ -171,7 +201,10 @@
       "sys-fs/mdadm", "sys-fs/ntfs3g", "sys-fs/xfsprogs", "sys-kernel/dracut", "sys-process/psmisc",
       "www-client/links", "x11-apps/setxkbmap", "x11-apps/xrandr", "xfce-extra/xfce4-xkb-plugin",
       "x11-themes/arc-theme", "x11-themes/papirus-icon-theme", "media-fonts/fira-sans", "media-fonts/jetbrains-mono",
-      "xfce-extra/xfce4-notifyd", "xfce-extra/xfce4-pulseaudio-plugin", "xfce-extra/xfce4-whiskermenu-plugin", "www-client/firefox-bin"
+      "xfce-extra/xfce4-notifyd", "xfce-extra/xfce4-pulseaudio-plugin", "xfce-extra/xfce4-whiskermenu-plugin", "www-client/firefox-bin",
+      "app-backup/fsarchiver", "app-backup/restic", "app-backup/snapper", "app-editors/vim", "app-forensics/foremost", "app-misc/mc",
+      "media-gfx/qrencode", "net-analyzer/mtr", "net-analyzer/tcpdump", "net-fs/cifs-utils", "net-misc/rclone", "sys-apps/memtester",
+      "sys-apps/ripgrep", "sys-fs/dd-rescue", "sys-fs/dislocker", "sys-fs/ncdu", "www-apps/ttyd"
     ],
     "forbidden_packages": ["dev-lang/rust-bin", "sys-boot/shim", "net-misc/netifrc"],
     "content": [
@@ -209,8 +242,18 @@
       {"path": "etc/issue", "must_match": ["gentoo-rescue", "gentoo-remote-access"], "why": "first-time users need to know where repair is and how to log in from another computer"},
       {"path": "etc/motd", "must_match": ["gentoo-installer-text"], "when_source": {"path": "pyproject.toml", "contains": "gentoo-installer-text ="},
        "why": "the text installer is advertised on a text console only when the package has it"},
-      {"path": "etc/profile.d/20-gentoo-autostart.sh", "must_match": ["gentoo\\.autostart=rescue ", "gentoo\\.autostart=installer-text ", "sudo"],
+      {"path": "etc/profile.d/20-gentoo-autostart.sh", "must_match": ["gentoo\\.autostart=rescue ", "gentoo\\.autostart=ai-rescue ", "gentoo\\.autostart=installer-text ", "sudo", "gentoo-rescue-ai"],
        "why": "the boot menu entries Repair a system and Install in text mode start their tool through this hook"},
+      {"path": "etc/sysctl.d/60-gentoo-rescue-ai.conf", "must_match": ["^kernel\\.yama\\.ptrace_scope\\s*=\\s*1$"], "must_not_match": ["ptrace_scope\\s*=\\s*0"],
+       "why": "Yama keeps the AI agents from reading or injecting into each other's processes (the sysctl service runs in the boot runlevel)"},
+      {"path": "etc/polkit-1/rules.d/00-gentoo-rescue-ai.rules", "must_match": ["rescue-ai", "polkit\\.Result\\.NO"],
+       "why": "the live user has an empty password and polkit offers wheel as its administrators: without this rule an agent could pkexec its way to root"},
+      {"path": "etc/pam.d/su", "must_match": ["^auth\\s+required\\s+pam_wheel\\.so\\s+use_uid\\s*$"], "must_not_match": ["^\\s*auth\\s.*pam_wheel\\.so.*\\b(root_only|trust)\\b"],
+       "why": "rescue-ai is not in wheel, so su to the live user (empty password, passwordless sudo) must be refused by pam_wheel: without it an agent reaches root with no approver"},
+      {"path": "etc/init.d/gentoo-rescue-approver", "must_match": ["gentoo\\.autostart=ai-rescue", "do-password", "umask 077", "gentoo-rescue-approver", "rescue-ai"],
+       "must_not_match": ["command_user", "\\bsudo\\b"],
+       "why": "the approver is root's own service, started only by the AI rescue boot entry, with a per-boot password nobody but root can read"},
+      {"path": "etc/conf.d/gentoo-rescue-approver", "must_match": ["RESCUE_VT="], "why": "the console the approver switches to"},
       {"path": "etc/issue", "flavor": "testkey", "must_match": ["TEST BUILD"], "why": "a test image must say what it is"},
       {"path": "etc/motd", "flavor": "testkey", "must_match": ["TEST BUILD"], "why": "a test image must say what it is"},
       {"path": "etc/issue", "flavor": "release", "must_not_match": ["TEST BUILD"], "why": "a release is not a test build"}

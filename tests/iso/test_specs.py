@@ -22,6 +22,7 @@ SERVICE_PACKAGE = {
     "NetworkManager": "net-misc/networkmanager",
     "chronyd": "net-misc/chrony",
     "gentoo-installerd": "app-admin/gentoo-live-installer",
+    "gentoo-rescue-approver": "app-admin/gentoo-live-installer",
     "sshd": "net-misc/openssh",
 }
 IMPLICIT_PACKAGES = {"sys-apps/systemd-utils", "sys-apps/dbus"}

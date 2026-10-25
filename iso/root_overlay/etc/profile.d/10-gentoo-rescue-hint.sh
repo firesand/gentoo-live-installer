@@ -6,6 +6,9 @@ case $- in
 	*i*)
 		if [ -z "${DISPLAY-}" ] && [ -z "${WAYLAND_DISPLAY-}" ]; then
 			echo "Repair a Gentoo system that does not start: sudo gentoo-rescue"
+			if command -v gentoo-rescue-ai > /dev/null 2>&1; then
+				echo "Repair with AI help (needs the internet): sudo gentoo-rescue-ai"
+			fi
 			echo "Install Gentoo (desktop): gentoo-installer"
 			echo "Install Gentoo (text mode): sudo gentoo-installer-text"
 		fi
