@@ -688,7 +688,7 @@ def fetch_https(port: int, user: str | None, password: str | None, scheme: str =
         connection.request("GET", "/", headers=headers)
         fingerprint = ""
         if scheme == "https" and connection.sock is not None:
-            der = connection.sock.getpeercert(binary_form=True)  # type: ignore[attr-defined]
+            der = connection.sock.getpeercert(binary_form=True)  # type: ignore[union-attr]
             fingerprint = hashlib.sha256(der).hexdigest() if der else ""
         response = connection.getresponse()
         response.read(1024)
