@@ -312,3 +312,65 @@ def test_agent_install_problems_name_a_wrong_owner_mode_or_program():
     bad = good.replace("rescue-ai 755 /home/rescue-ai/.local/bin/codex", "root 755 /home/rescue-ai/.local/bin/codex").replace("opencode-fake 0.0.1\n", "")
     problems = w6.agent_install_problems(bad)
     assert any("codex is root 755" in problem for problem in problems) and any("opencode does not run" in problem for problem in problems)
+
+
+# --- the host's HTTPS client against a real TLS server with basic authentication ------------------------------------------------------------------
+
+@pytest.fixture
+def tls_server(tmp_path):
+    import base64 as b64
+    import http.server
+    import shutil
+    import ssl
+    import subprocess
+    import threading
+
+    if shutil.which("openssl") is None:
+        pytest.skip("openssl is not installed")
+    cert, key = tmp_path / "cert.pem", tmp_path / "key.pem"
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "ec", "-pkeyopt", "ec_paramgen_curve:prime256v1", "-nodes", "-keyout", str(key), "-out", str(cert),
+                    "-days", "1", "-subj", "/CN=test", "-addext", "subjectAltName=IP:127.0.0.1"], check=True, capture_output=True)
+    expected = "Basic " + b64.b64encode(b"rescue:bako-fidu-meza").decode()
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            ok = self.headers.get("Authorization") == expected
+            self.send_response(200 if ok else 401)
+            self.send_header("WWW-Authenticate", 'Basic realm="ttyd"')
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"ok")
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    context = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
+    context.load_cert_chain(cert, key)
+    server.socket = context.wrap_socket(server.socket, server_side=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    fingerprint = subprocess.run(["openssl", "x509", "-noout", "-fingerprint", "-sha256", "-in", str(cert)], check=True, capture_output=True, text=True).stdout
+    yield server.server_address[1], w6.normalize_fingerprint(fingerprint.strip().split("=", 1)[1])
+    server.shutdown()
+    server.server_close()
+
+
+def test_the_https_client_sees_the_status_and_the_certificate_the_server_showed(tls_server):
+    port, printed = tls_server
+    good = w6.fetch_https(port, "rescue", "bako-fidu-meza")
+    assert good.status == 200 and good.fingerprint == printed, "openssl's fingerprint of the file equals the digest of the certificate on the wire"
+    assert w6.fetch_https(port, None, None).status == 401
+    assert w6.fetch_https(port, "rescue", "wrong").status == 401
+    plain = w6.fetch_https(port, "rescue", "bako-fidu-meza", "http")
+    assert plain.status != 200 and (plain.status is None or plain.status >= 400)
+
+
+def test_a_closed_port_is_an_error_not_a_status():
+    import socket
+
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        port = probe.getsockname()[1]
+    answer = w6.fetch_https(port, "rescue", "x")
+    assert answer.status is None and answer.error

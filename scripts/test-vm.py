@@ -52,8 +52,10 @@ import vm_secureboot  # noqa: E402
 import vm_session  # noqa: E402
 import vm_shots  # noqa: E402
 import vm_wave5  # noqa: E402
+import vm_wave6  # noqa: E402
 from vm_hw import VMHardware  # noqa: E402
 from vm_probes import ANSI_RE, ProbeResult, parse_probe_result, parse_receipt_probe, parse_swap_probe  # noqa: E402, F401
+import vm_qmp  # noqa: E402
 from vm_qmp import (  # noqa: E402
     SUN_PATH_MAX, TEST_LUKS_PASSPHRASE, connect_unix, screen_digest, screendump as qmp_screendump,
     type_luks_passphrase as qmp_type_luks_passphrase,
@@ -215,6 +217,8 @@ class Scenario:
     secure_boot_install: bool = False   # systemd-boot + a UKI signed with the test key (--sb-key, --sb-cert), booted under OVMF Secure Boot; module-load experiment
     live_expect: tuple[tuple[str, Any], ...] = ()   # live_only: dotted paths into the installer's hardware report and the values they must have
     screenshots: bool = False        # live_only: pictures of the live desktop and of every installer page at each size of --screenshot-sizes
+    # --- Wave 6: the AI rescue stick (docs/TESTING.md, "The AI rescue stick") ----------------------------------------------------
+    ai_rescue: str = ""              # "" | "live" (boot entry, security rules, gentoo-rescue-do, share, agents) | "full" (also: install first, then gentoo-rescue-mount)
 
     @property
     def hostname(self) -> str:
@@ -329,6 +333,13 @@ SCENARIO_MAP.update({
     "secure-boot-modules": Scenario("secure-boot-modules", "systemd", "uefi", bootloader="systemd-boot", secure_boot_install=True, in_all=False,
                                     hardware=_hw(secure_boot=True),
                                     note="systemd-boot with a UKI signed by the test key, booted under OVMF Secure Boot; an unsigned and a signed dummy module are loaded on gentoo-kernel-bin (evidence for B07 step 2)"),
+})
+SCENARIO_MAP.update({
+    "ai-rescue-live": Scenario("ai-rescue-live", "openrc", "uefi", ai_rescue="live", boot_entry="ai-rescue", in_all=False,
+                               note="the AI rescue boot entry on a blank disk: the tmux session of rescue-ai, the security rules, gentoo-rescue-do asks on the approver's console, "
+                                    "gentoo-rescue-share over TLS (with and without the password, stop), agent install from a folder (bad checksum refused)"),
+    "ai-rescue": Scenario("ai-rescue", "openrc", "uefi", ai_rescue="full", boot_entry="ai-rescue", in_all=False,
+                          note="a minimal Gentoo installed first, then everything of ai-rescue-live plus gentoo-rescue-mount (read-only at /mnt/gentoo, then unmounted)"),
 })
 SCENARIO_MAP["screenshots"] = Scenario(
     "screenshots", "openrc", "uefi", live_only=True, screenshots=True, in_all=False,
@@ -1760,6 +1771,15 @@ class VMProcess:
     def screendump(self, output: Path) -> Path:
         return qmp_screendump(self.run_dir / SOCKET_NAMES[1], output)
 
+    def type_text(self, text: str, *, enter: bool = True) -> int:
+        return vm_qmp.type_text(self.run_dir / SOCKET_NAMES[1], text, enter=enter)
+
+    def hostfwd_add(self, host_port: int, guest_port: int) -> None:
+        vm_qmp.hostfwd_add(self.run_dir / SOCKET_NAMES[1], host_port, guest_port)
+
+    def hostfwd_remove(self, host_port: int) -> None:
+        vm_qmp.hostfwd_remove(self.run_dir / SOCKET_NAMES[1], host_port)
+
     def type_test_luks_passphrase(self) -> None:
         qmp_type_luks_passphrase(self.run_dir / SOCKET_NAMES[1], TEST_LUKS_PASSPHRASE)
 
@@ -2657,6 +2677,130 @@ class ScenarioRunner:
         if failures:
             raise HarnessError("gentoo-chroot in the live system: " + "; ".join(failures) + f"; see {log}")
 
+    # --- Wave 6: the AI rescue stick (docs/TESTING.md, "The AI rescue stick") -------------------------------------------------
+
+    AI_LAUNCHER_SECONDS = 180      # gentoo-rescue-ai asks two questions on tty1 before it opens the tmux session
+    AI_LAUNCHER_SETTLE = 6.0
+    AI_SLEEP_SCALE = 1.0           # tests shorten every wait of the flows
+    ai_counter = 0
+    share_fetch = staticmethod(vm_wave6.fetch_https)
+
+    def ai_hands(self, live: VMProcess) -> vm_wave6.Hands:
+        """The harness as the machine owner and as the agents' account: root over SSH, the keyboard through QMP, the logs without any secret."""
+        def run(command: str, label: str) -> tuple[int, str]:
+            self.ai_counter += 1
+            slow = label.startswith(("mount", "unmount", "agents"))
+            code, log = self.ssh(self.args.ssh_user, command, f"ai-{self.ai_counter:03d}-{label or 'command'}.log",
+                                 max(600, self.args.command_timeout) if slow else self.args.command_timeout)
+            text = log.read_text(errors="replace")
+            hidden = hands.hide(text)
+            if hidden != text:
+                log.write_text(hidden)
+            return code, hidden
+
+        def password() -> str:
+            code, log = self.ssh(self.args.ssh_user, f"cat {vm_wave6.DO_PASSWORD_FILE}", "ai-password.log", self.args.command_timeout)
+            value = log.read_text(errors="replace").strip()
+            log.write_text("[the per-boot password was read here and is not kept]\n")
+            if code != 0 or not value:
+                raise HarnessError(f"The per-boot password could not be read from {vm_wave6.DO_PASSWORD_FILE} (exit {code}): the approver service did not start")
+            hands.secrets.append(value)
+            return value
+
+        def type_console(text: str) -> None:
+            live.type_text(text)
+
+        hands = vm_wave6.Hands(run, type_console, password, lambda seconds: time.sleep(seconds * self.AI_SLEEP_SCALE), time.monotonic)
+        return hands
+
+    def ai_forwarder(self, live: VMProcess, opened: list[int]) -> Callable[[int], int]:
+        def forward(guest_port: int) -> int:
+            with socket.socket() as probe:
+                probe.bind(("127.0.0.1", 0))
+                host_port = probe.getsockname()[1]
+            live.hostfwd_add(host_port, guest_port)
+            opened.append(host_port)
+            return host_port
+        return forward
+
+    def ai_uploader(self) -> Callable[[bytes], tuple[int, str]]:
+        def upload(payload: bytes) -> tuple[int, str]:
+            self.ai_counter += 1
+            code, log = self.ssh(self.args.ssh_user, vm_wave6.upload_command(), f"ai-{self.ai_counter:03d}-agents-upload.log", self.args.command_timeout, stdin=payload)
+            return code, log.read_text(errors="replace")
+        return upload
+
+    def ai_rescue_check(self, result: dict, live: VMProcess, *, mount: bool) -> None:
+        """On the booted AI rescue entry: the launcher is answered like a person would, then the session, the security rules, gentoo-rescue-do
+        (the harness types on the PC's console), the share over TLS, the agent installer and, with ``mount``, gentoo-rescue-mount.
+        Every check runs even when an earlier one failed; the run fails at the end with all of them."""
+        record: dict[str, Any] = {"mount": mount}
+        result["ai_rescue"] = record
+        hands = self.ai_hands(live)
+        up, typed = vm_wave6.drive_launcher(hands, timeout=self.AI_LAUNCHER_SECONDS, settle=self.AI_LAUNCHER_SETTLE)
+        record["launcher"] = {"typed": typed, "session": up}
+        if not up:
+            raise HarnessError(f"The AI rescue entry did not open the tmux session 'rescue' as rescue-ai within {self.AI_LAUNCHER_SECONDS}s "
+                               f"(typed on tty1: {', '.join(typed) or 'nothing'}). The launcher may have stopped at its safety check or at another question: "
+                               "see the failure screenshot and the ai-*.log files")
+        code, passwd = hands.run(f"getent passwd {vm_wave6.AI_USER}", "passwd")
+        hands.home = vm_wave6.home_of(passwd)
+        code, approver = hands.run(vm_wave6.APPROVER_COMMAND, "approver-vt")
+        vt = vm_wave6.approver_vt(approver)
+        failures: list[str] = []
+        probes: list[ProbeResult] = []
+        for name, command, parser, as_ai in vm_wave6.security_probes(vt, hands.home):
+            code, text = hands.ai(command, f"probe-{name}") if as_ai else hands.run(command, f"probe-{name}")
+            probes.append(parser(code, text))
+        record["probes"] = [probe.record() for probe in probes]
+        failures += [f"{probe.name}: {probe.error}" for probe in probes if not probe.success]
+        flows: dict[str, Any] = {}
+        record["flows"] = flows
+        forwards: list[int] = []
+        try:
+            reports = [("do", lambda: vm_wave6.do_flow(hands, vt)),
+                       ("share", lambda: vm_wave6.share_flow(hands, self.ai_forwarder(live, forwards), self.share_fetch)),
+                       ("agents", lambda: vm_wave6.agents_flow(hands, self.ai_uploader()))]
+            if mount:
+                reports.append(("mount", lambda: vm_wave6.mount_flow(hands)))
+            for name, flow in reports:
+                try:
+                    report = flow()
+                except (OSError, RuntimeError, ValueError, HarnessError) as exc:  # a broken helper (QMP, forward) is a finding of that flow
+                    flows[name] = {"success": False, "steps": [], "problems": [f"the flow stopped: {exc}"]}
+                else:
+                    flows[name] = report.to_dict()
+                failures += [f"{name}: {problem}" for problem in flows[name]["problems"]]
+            if mount:
+                done, cleanup_log = self.ssh(self.args.ssh_user, vm_rescue.cleanup_command(self.target_device), "ai-mount-cleanup.log", self.args.command_timeout)
+                left = vm_rescue.cleanup_problems(done, cleanup_log.read_text(errors="replace"))
+                flows["mount"]["leftovers"] = left
+                failures += [f"mount: after --unmount, {problem}" for problem in left]
+        finally:
+            for port in forwards:
+                try:
+                    live.hostfwd_remove(port)
+                except (OSError, RuntimeError):
+                    pass
+        (self.run_dir / "ai-rescue.json").write_text(json.dumps(record, indent=2) + "\n")
+        self.power_off_live(live)
+        if failures:
+            raise HarnessError("The AI rescue stick does not behave as designed: " + "; ".join(failures) + f"; see {self.run_dir / 'ai-rescue.json'}")
+
+    def run_ai_rescue(self, result: dict) -> dict:
+        """Boot the AI rescue entry on a blank disk and run every check that does not need an installed system."""
+        self.create_disks()
+        live = self.boot_live()
+        self.ai_rescue_check(result, live, mount=False)
+        result["success"] = True
+        return result
+
+    def ai_rescue_after_install(self, result: dict, target: VMProcess) -> None:
+        """The installed system is on the disk: stop it, boot the AI rescue entry again and run all the checks, gentoo-rescue-mount included."""
+        self.stop_vm(target)
+        live = self.boot_live()
+        self.ai_rescue_check(result, live, mount=True)
+
     # --- an entry of the ISO's boot menu (--boot-entry) ----------------------------------------------------------
 
     boot_entry: vm_iso.BootEntry | None = None
@@ -2987,6 +3131,8 @@ class ScenarioRunner:
             self.prepare_boot_entry(result)
             if self.scenario.screenshots:
                 return self.run_screenshots(result)
+            if self.scenario.ai_rescue == "live":
+                return self.run_ai_rescue(result)
             if getattr(self.args, "live_only", False) or self.scenario.live_only:
                 return self.run_live_smoke(result)
             self.create_disks()
@@ -3025,6 +3171,8 @@ class ScenarioRunner:
                 target = self.fresh_nvram_check(result, target)
             if self.scenario.safe_graphics:
                 target = self.safe_graphics_check(result, target)
+            if self.scenario.ai_rescue == "full":
+                self.ai_rescue_after_install(result, target)
             if self.scenario.chroot:
                 self.chroot_check(result, target)
             if decoys:
@@ -3362,6 +3510,12 @@ def hardware_problems(scenario: Scenario, install_mode: str | None) -> list[str]
         problems.append("--vga none leaves no screen for the keystroke LUKS unlock; add console=ttyS0 and use the serial unlock")
     if scenario.chroot and scenario.luks:
         problems.append("gentoo-chroot asks for the LUKS passphrase on the console, which the non-interactive check does not drive; use an unencrypted scenario")
+    if scenario.ai_rescue and scenario.luks:
+        problems.append("gentoo-rescue-mount asks for the LUKS passphrase on the console, which the AI rescue check does not drive; use an unencrypted scenario")
+    if scenario.ai_rescue and scenario.hardware.vga == "none":
+        problems.append("the AI rescue checks type on the PC's console (the launcher's questions, the approval): they need a display adapter, not --vga none")
+    if scenario.ai_rescue and not scenario.boot_entry:
+        problems.append("the AI rescue checks need the AI rescue boot entry (boot_entry='ai-rescue')")
     if scenario.live_checks and not scenario.live_only:
         problems.append("the remote access and host key checks run on the live ISO only (live_only)")
     return [f"{scenario.name}: {problem}" for problem in problems]
@@ -3378,6 +3532,7 @@ def list_scenarios() -> str:
                                     "fresh NVRAM on the target boot" if hw.ovmf_vars == "fresh-on-target" else "",
                                     f"{scenario.install_mode} installer" if scenario.install_mode else "",
                                     f"boot entry {scenario.boot_entry}" if scenario.boot_entry else "",
+                                    f"AI rescue checks ({scenario.ai_rescue})" if scenario.ai_rescue else "",
                                     f"breaks {','.join(scenario.breaks)}" if scenario.breaks else "") if text]
         lines.append(f"{name:<22} {scenario.init or '-':<8} {scenario.firmware:<5} {'yes' if scenario.in_all else 'no':<9} "
                      f"{shape}{'; ' + ', '.join(extras) if extras else ''}{' - ' + scenario.note if scenario.note else ''}")

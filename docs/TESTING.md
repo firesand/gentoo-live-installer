@@ -166,6 +166,7 @@ them and even when the harness is killed with SIGKILL (the kernel sends QEMU SIG
 | `ssh-keys-only` | `accounts.ssh_password_login=false`: `sshd -T` of the installed system must show password and keyboard-interactive login off and root login off (interface I10) |
 | `live-remote-access` | the live ISO only: sshd runs at boot, `gentoo-remote-access status/on/off` with a password login as `gentoo` from the host, fresh SSH host keys on a second boot (interface I9) |
 | `rescue-chroot` | a minimal Gentoo installed first, then `gentoo-chroot` run non-interactively from the live ISO: it finds the system, mounts it, runs commands with working DNS and leaves nothing mounted (interface I12) |
+| `ai-rescue-live`, `ai-rescue` | the AI rescue stick (Wave 6): the ISO's `AI rescue (text console)` entry. `ai-rescue-live` boots it on a blank disk and checks the tmux session of `rescue-ai`, the security rules, `gentoo-rescue-do` on the approver's console, `gentoo-rescue-share` over TLS and the agent installer; `ai-rescue` installs a minimal Gentoo first and adds `gentoo-rescue-mount` (see "The AI rescue stick") |
 
 The validated four set `hardware.guest_tools=none`, explicit build jobs and no microcode so that
 nothing automatic changes their configuration; the new scenarios use the installer's `auto`
@@ -570,6 +571,48 @@ image) and the image has an ext4, XFS or Btrfs root that the breaker can mount. 
 anything; the repair and everything after it run in the live system, and the base image's size,
 modification time and the checksum of its first MiB are checked afterwards.
 
+## The AI rescue stick
+
+The scenarios `ai-rescue-live` and `ai-rescue` (Wave 6) test the ISO's `AI rescue (text console)` boot entry (`--boot-entry ai-rescue` is built into them;
+the entry is started directly with its own kernel arguments, so GRUB is not part of the run). They need an ISO built from the tree that has the entry, the
+`gentoo-rescue-*` programs, the `rescue-ai` account and the approver service, and a display adapter (the harness types on the PC's console, so `--vga none` is refused).
+Encrypted installs are refused for `ai-rescue` (the passphrase is typed on the console). `ai-rescue-live` installs nothing; `ai-rescue` installs the
+minimal Gentoo of `rescue-chroot` first, which takes as long as that scenario.
+
+**The two parts the harness plays.** It is the *person at the keyboard* (QMP key events on the guest's console, `vm_qmp.type_text`; it reads the
+per-boot password as root, which stands for reading it off the screen, and the log of that read is overwritten) and it is the *agents' account* (commands run
+with `setpriv` as `rescue-ai`, clean environment, the home directory as working directory, exactly as the launcher starts the agents). It never gives
+`rescue-ai` more than the real stick does. The password is typed with a US keyboard map: letters, digits and `- _ . / space ! @ # $ % ^ & * ( ) + = , ; : ?`
+work; a password with any other character fails the check with a message instead of being typed wrongly.
+
+What each run checks (all of it runs even after a failure; `ai-rescue.json` in the run directory has every step, `result.json` has the same under `ai_rescue`):
+
+| Part | Required |
+|---|---|
+| Boot entry | The launcher asks two questions on tty1 as root (Enter after the password screen, `n` to "open your Gentoo system now?"); the harness answers them one at a time and stops typing when `tmux has-session -t rescue` works as `rescue-ai`. Then: windows exactly `agent` and `shell`, both on a pty (`/dev/pts/*`, never a VT) in the home directory, a tmux client on `/dev/tty1`, every tmux process owned by `rescue-ai`, and no extra window (an approval window would be a hole) |
+| Security design | Yama in `/sys/kernel/security/lsm` and `kernel.yama.ptrace_scope` 1 or more; `rescue-ai` in none of tty, wheel, disk, video, input, audio, plugdev, usb, kvm, portage (and root, sudo, adm, floppy, cdrom), no sudo rule (`sudo -n -l -U`, `/etc/sudoers*`), no password hash; the approver runs with `--vt N`, `do.sock` is `root:rescue-ai 660`, `do-password` is `root:root 600`; **as `rescue-ai`**: opening `/dev/tty1`, the approver's VT, `/dev/tty0`, `/dev/console` fails, `chvt` and `TIOCSTI` fail, `do-password` and the audit log cannot be read, `sudo -n true` fails, and the active console does not change; no process of `rescue-ai` has a working directory below `/mnt/gentoo` or `/mnt/rescue` (also checked again with the disk mounted) |
+| `gentoo-rescue-do` | Three requests for `id -u`, each started as `rescue-ai` in the background. Each one switches the console to the approver's VT (`/sys/class/tty/tty0/active`) and nothing runs before the answer. Request 1 is answered with a bare Enter: exit 77, nothing printed. Request 2 gets the per-boot password: exit 0 and `0`. Request 3 asks again (an approval is for one command, never a window of time) and is refused with Enter. The console returns to tty1 each time. The audit log (`/var/log/gentoo-rescue/do.log`) has three requests with their argv, the answers `wrong`, `approved`, `wrong`, one exit status 0, and never the password |
+| `gentoo-rescue-mount` (`ai-rescue` only) | With no input the tool opens the installed Gentoo: it says "open at /mnt/gentoo (read-only), session ID" and how to get a shell (`gentoo-chroot`) and how to unmount; `/mnt/gentoo` points below `/mnt/rescue`, the mount options contain `ro`, `/mnt/gentoo/etc/gentoo-release` names Gentoo, creating a file as root fails; `--unmount` removes the link and the cleanup check of the rescue finds nothing mounted. `--writable` (typed confirmation) is not driven |
+| `gentoo-rescue-share` | Run as `rescue-ai` (the tool refuses root), once writable and once `--read-only`. The output has address, `rescue / three-word-password` and the certificate fingerprint, says whether the phone can type and that it can **never** approve; `ttyd` runs as `rescue-ai` with `-S`, `-O`, `-m 1`, `-c rescue:...`, a named `-i` interface, and `-W` only in the writable share. The guest port is random, so the harness adds a port forward while the VM runs (`hostfwd_add` through the QEMU monitor, `vm_qmp.hostfwd_add`) and from the host: the right password gets 200 and the **SHA-256 of the certificate on the wire equals the printed fingerprint**; no password and a wrong password get 401; plain HTTP on the TLS port gets no page. Writable only: `status` shows port and fingerprint, never the password; a second start is refused. `stop` ends `ttyd`, nothing answers afterwards, `status` says no share is running, and the certificate, key and state are removed |
+| `gentoo-rescue-agents` | Nothing is installed at the start. As root it refuses. With the real pins, a file named like the real download but of the wrong size is refused for all three agents and leaves nothing in `~/.local/bin`. With a test pins file (three tiny stand-ins with true sizes and sha256, built by `vm_wave6.fake_mirror`) a file of the right size with one changed byte is refused on its checksum; the good files install with "Checksum is correct", belong to `rescue-ai`, are mode 755, run and print their own version, `status` shows them, and `remove all` takes them away |
+
+**What is not tested here, and why.** The agent install uses `--from DIR` (the tool's offline path) with the harness's own pins, not a download from a mirror: the
+tool only accepts `https` URLs on an allow-list of hosts and takes its pins file only as the Python argument `agents.main(pins_path=...)`, which the harness calls from
+`python3 -c`. A real download of the three agents (hundreds of MiB) is for a person with network access. The planted `CLAUDE.md`, `AGENTS.md`, `opencode.json` and
+`.claude/settings.json` of a broken disk are a unit test of the launcher (the agents are not installed in the VM); the VM shows only that no process of `rescue-ai` works below the target.
+The idle timeout of the share and its refusal without a LAN address are not driven (taking the VM's only NIC down would end the SSH session the harness uses).
+The phone's WebSocket (typing through the share) is not driven; `-W` present or absent in the `ttyd` command line is the check.
+
+Commands for the lead (a testkey ISO built from the tree with the AI rescue entry; `$testkey` as in "Running a scenario"):
+
+```sh
+python3 scripts/test-vm.py --scenario ai-rescue-live --iso build/test-dist/<iso> --ssh-host 127.0.0.1 --ssh-port 40222 --ssh-private-key "$testkey" --memory 4096
+python3 scripts/test-vm.py --scenario ai-rescue      --iso build/test-dist/<iso> --ssh-host 127.0.0.1 --ssh-port 40222 --ssh-private-key "$testkey" --memory 4096 --companions none --no-world-probe
+```
+
+On a failure the run keeps its logs: `ai-NNN-<step>.log` per command (no secret in them), `ai-rescue.json`, and a screenshot of the console (`failure_screenshots`).
+If the session never appears, look at the screenshot first: the launcher stops at its safety check ("Type yes to start anyway") or at a question the harness does not know.
+
 ## The Wave 3 matrix
 
 `test-vm.py --matrix wave3` runs the acceptance matrix: one child `test-vm.py` per entry, each
@@ -700,5 +743,5 @@ automated, the generators should accept `luks-unlock-receipt.json` instead of th
 The harness is `scripts/test-vm.py` plus small modules next to it: `scripts/vm_guard.py` (the disk
 guard), `scripts/vm_hw.py` (the machine shape), `scripts/vm_guest.py` (programs run in the live system),
 `scripts/vm_probes.py` (what the probes accept), `scripts/vm_rescue.py` (the rescue driver and the
-checks around it), `scripts/vm_iso.py` (the ISO's boot menu) and `scripts/vm_matrix.py` (the matrix and its
+checks around it), `scripts/vm_iso.py` (the ISO's boot menu), `scripts/vm_wave5.py` and `scripts/vm_wave6.py` (the Wave 5 and Wave 6 checks: SSH, remote access, chroot; the AI rescue stick) and `scripts/vm_matrix.py` (the matrix and its
 scheduler).

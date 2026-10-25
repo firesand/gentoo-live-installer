@@ -667,7 +667,40 @@ class Fetch:
     error: str = ""
 
 
-Forward = Callable[[int], int]                         # guest port -> port on the host's loopback
+def fetch_https(port: int, user: str | None, password: str | None, scheme: str = "https", *, host: str = "127.0.0.1", timeout: float = 10.0) -> Fetch:
+    """GET / on the forwarded port the way a phone's browser would, certificate warning accepted. Returns the status and the SHA-256 of the DER
+    certificate that the server showed (compared with the fingerprint the tool printed: that is the real security claim)."""
+    import http.client
+    import ssl
+
+    headers = {}
+    if user is not None:
+        headers["Authorization"] = "Basic " + base64.b64encode(f"{user}:{password or ''}".encode()).decode()
+    connection: http.client.HTTPConnection | None = None
+    try:
+        if scheme == "https":
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE
+            connection = http.client.HTTPSConnection(host, port, timeout=timeout, context=context)
+        else:
+            connection = http.client.HTTPConnection(host, port, timeout=timeout)
+        connection.request("GET", "/", headers=headers)
+        fingerprint = ""
+        if scheme == "https" and connection.sock is not None:
+            der = connection.sock.getpeercert(binary_form=True)  # type: ignore[attr-defined]
+            fingerprint = hashlib.sha256(der).hexdigest() if der else ""
+        response = connection.getresponse()
+        response.read(1024)
+        return Fetch(response.status, fingerprint)
+    except (OSError, http.client.HTTPException, ssl.SSLError) as exc:
+        return Fetch(None, "", f"{type(exc).__name__}: {exc}")
+    finally:
+        if connection is not None:
+            connection.close()
+
+
+Forward = Callable[[int], int]                        # guest port -> port on the host's loopback
 Fetcher = Callable[[int, str | None, str | None, str], Fetch]   # host port, user, password, scheme
 
 
