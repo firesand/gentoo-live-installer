@@ -164,6 +164,14 @@ class HookRun:
 
     def provide(self, *names: str, status: int = 0) -> None:
         for name in names:
+            if name == "sudo":
+                # "sudo -n test ..." is the hook looking at the root-only socket directory as root: it runs
+                # (through the one real program it needs) and is not logged like a started tool.
+                write_executable(self.bin / name, '#!/bin/sh\nif [ "$1" = -n ] && [ "$2" = test ]; then shift; exec "$@"; fi\n'
+                                 f'echo "sudo $*" >> "$CALL_LOG"\nexit {status}\n')
+                if not (self.bin / "test").exists():
+                    os.symlink(shutil.which("test"), self.bin / "test")
+                continue
             write_executable(self.bin / name, f'#!/bin/sh\necho "{name} $*" >> "$CALL_LOG"\nexit {status}\n')
 
     def calls(self) -> list[str]:
@@ -434,3 +442,36 @@ def test_the_agents_are_never_started_under_another_name(hook: HookRun) -> None:
     """The hook starts one program, as root through sudo; the agents themselves are started by gentoo-rescue-ai."""
     text = HOOK.read_text()
     assert not re.search(r"\b(claude|codex|opencode|tmux|su -)\b", re.sub(r"(?m)^\s*#.*$", "", text))
+
+
+def test_the_approval_socket_is_looked_for_as_root_because_its_directory_is_closed_to_the_live_user(hook: HookRun) -> None:
+    """/run/gentoo-rescue is root:rescue-ai 0710. The live user is not in that group, so only root can see the socket."""
+    directory = hook.tmp / "closed"
+    directory.mkdir()
+    sock = directory / "do.sock"
+    sock.touch()
+    hook.do_socket = sock
+    directory.chmod(0o000)  # the unprivileged user cannot enter it (like the live user with 0710 root:rescue-ai)
+    try:
+        # stand-in for sudo: "root" may enter the directory, nobody else
+        write_executable(hook.bin / "sudo", '#!/bin/sh\nif [ "$1" = -n ] && [ "$2" = test ]; then\n'
+                         f'  chmod 0700 "{directory}"; test "$3" "$4"; r=$?; chmod 0000 "{directory}"; exit $r\nfi\n'
+                         'echo "sudo $*" >> "$CALL_LOG"\n')
+        hook.provide("gentoo-rescue-ai")
+        os.symlink(shutil.which("chmod"), hook.bin / "chmod")
+        write_executable(hook.bin / "sleep", '#!/bin/sh\necho "sleep $*" >> "$CALL_LOG"\n')
+        result = hook.run(f"{BASE} gentoo.autostart=ai-rescue")
+        assert hook.calls() == ["sudo gentoo-rescue-ai"], result.stdout
+        assert "Waiting for the approval service" not in result.stdout
+        assert "did not start" not in result.stdout
+    finally:
+        directory.chmod(0o700)
+
+
+def test_a_missing_approval_service_is_reported_not_silently_waited_for(hook: HookRun) -> None:
+    hook.do_socket.unlink()
+    hook.provide("sudo", "gentoo-rescue-ai")
+    write_executable(hook.bin / "sleep", '#!/bin/sh\n:\n')
+    result = hook.run(f"{BASE} gentoo.autostart=ai-rescue", wait=1)
+    assert "The approval service did not start" in result.stdout and "it shows the reason" in result.stdout
+    assert hook.calls() == ["sudo gentoo-rescue-ai"]

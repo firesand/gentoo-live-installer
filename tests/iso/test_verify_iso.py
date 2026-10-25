@@ -453,6 +453,7 @@ def image_entries(flavor: str, live_make_conf: str) -> dict[str, tuple[str, int,
     add("etc/shadow", mode=0o640, extra="root:!:20000::::::\ngentoo::20000:0:99999:7:::\nrescue-ai:!:20000::::::\n")
     # what app-admin/gentoo-live-installer[rescue-ai] installs from its files/ directory
     add("etc/init.d/gentoo-rescue-approver", mode=0o755, extra=(FILES_DIR / "gentoo-rescue-approver.initd").read_text())
+    add("etc/pam.d/su", mode=0o644, extra="auth\t\tsufficient\tpam_rootok.so\nauth\t\trequired\tpam_wheel.so use_uid\nauth\t\tinclude\t\tsystem-auth\n")
     add("etc/conf.d/gentoo-rescue-approver", extra=(FILES_DIR / "gentoo-rescue-approver.confd").read_text())
     add("etc/passwd", extra=PASSWD)
     add("etc/group", extra=GROUP)

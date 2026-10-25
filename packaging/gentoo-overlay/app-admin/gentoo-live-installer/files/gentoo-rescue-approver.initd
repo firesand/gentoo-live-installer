@@ -94,7 +94,8 @@ start_pre() {
 	# Nothing from an earlier start survives: a stale socket or password is never offered again.
 	rm -f "${rescue_run_dir}/do.sock" "${rescue_run_dir}/do-password"
 	vt="$(rescue_pick_vt)" || { eerror "no free console for the approver (tty${RESCUE_VT:-9} to tty$((${RESCUE_VT:-9} + 3)) are in use)"; return 1; }
-	# The socket directory: root writes, the group rescue-ai may only enter it (no listing). The audit log
+	# The socket directory: root writes, the group rescue-ai may only enter it (no listing). Nobody else can enter it, the live user included: it
+	# looks at the socket as root. The audit log
 	# is root's alone: an agent that could read or edit it could hide what it did.
 	checkpath -d -m 0710 -o root:rescue-ai "${rescue_run_dir}" || return 1
 	checkpath -d -m 0700 -o root:root "${rescue_log_dir}" || return 1

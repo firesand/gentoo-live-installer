@@ -55,7 +55,7 @@ def test_fsscript_checks_files_that_the_overlay_provides() -> None:
             continue
         # wave 6: files of the gentoo_rescue_ai package (its data tree), and the sudo and doas files the fsscript checks
         # rescue-ai against
-        if path.startswith(("/etc/skel-rescue-ai", "/etc/gentoo-rescue/", "/etc/sudoers", "/etc/doas.conf")):
+        if path.startswith(("/etc/skel-rescue-ai", "/etc/gentoo-rescue/", "/etc/pam.d/su", "/etc/sudoers", "/etc/doas.conf")):
             continue
         relative = path.lstrip("/")
         assert (ROOT / "iso/root_overlay" / relative).exists(), f"fsscript refers to {path}, which the overlay does not provide"

@@ -248,6 +248,8 @@
        "why": "Yama keeps the AI agents from reading or injecting into each other's processes (the sysctl service runs in the boot runlevel)"},
       {"path": "etc/polkit-1/rules.d/00-gentoo-rescue-ai.rules", "must_match": ["rescue-ai", "polkit\\.Result\\.NO"],
        "why": "the live user has an empty password and polkit offers wheel as its administrators: without this rule an agent could pkexec its way to root"},
+      {"path": "etc/pam.d/su", "must_match": ["^auth\\s+required\\s+pam_wheel\\.so\\s+use_uid\\s*$"], "must_not_match": ["^\\s*auth\\s.*pam_wheel\\.so.*\\b(root_only|trust)\\b"],
+       "why": "rescue-ai is not in wheel, so su to the live user (empty password, passwordless sudo) must be refused by pam_wheel: without it an agent reaches root with no approver"},
       {"path": "etc/init.d/gentoo-rescue-approver", "must_match": ["gentoo\\.autostart=ai-rescue", "do-password", "umask 077", "gentoo-rescue-approver", "rescue-ai"],
        "must_not_match": ["command_user", "\\bsudo\\b"],
        "why": "the approver is root's own service, started only by the AI rescue boot entry, with a per-boot password nobody but root can read"},

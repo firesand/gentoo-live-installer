@@ -56,6 +56,13 @@ if grep -rqsE '^[[:space:]]*(ALL|%rescue-ai)[[:space:]]' /etc/sudoers /etc/sudoe
 	fail "a sudo rule for ALL users would give rescue-ai root"
 fi
 
+# su is the other way from rescue-ai to the live user (empty password, wheel, passwordless sudo):
+# pam_wheel with use_uid refuses everybody outside wheel. shadow or util-linux may ship su without it.
+if ! grep -qE '^auth[[:space:]]+required[[:space:]]+pam_wheel\.so[[:space:]]+use_uid[[:space:]]*$' /etc/pam.d/su 2>/dev/null \
+	|| grep -qE '^[[:space:]]*auth[[:space:]].*pam_wheel\.so.*(root_only|trust)' /etc/pam.d/su; then
+	fail "/etc/pam.d/su must hold 'auth required pam_wheel.so use_uid' (no root_only, no trust): rescue-ai could su to the live user"
+fi
+
 # Everything the installer, the repair tool and the hardware support run on the live
 # side. A missing program must stop the build here, not surface on somebody's PC.
 for command_path in \

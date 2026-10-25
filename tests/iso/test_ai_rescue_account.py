@@ -179,3 +179,46 @@ def test_the_polkit_rule_refuses_the_agents_before_any_other_rule() -> None:
     assert sorted(p.name for p in rules.iterdir())[0] == "00-gentoo-rescue-ai.rules", "the first answer wins, so this file is read first"
     text = (rules / "00-gentoo-rescue-ai.rules").read_text()
     assert 'subject.user == "rescue-ai"' in text and "polkit.Result.NO" in text
+
+
+def _su_rule() -> dict:
+    return next(r for r in CONTRACT["squashfs"]["content"] if r["path"] == "etc/pam.d/su")
+
+
+def _su_ok(body: str) -> bool:
+    rule = _su_rule()
+    return all(re.search(p, body, re.M) for p in rule["must_match"]) and not any(re.search(p, body, re.M) for p in rule["must_not_match"])
+
+
+GOOD_SU = "auth\t\tsufficient\tpam_rootok.so\nauth\t\trequired\tpam_wheel.so use_uid\nauth\t\tinclude\t\tsystem-auth\n"
+
+
+def test_su_must_be_closed_to_non_wheel_users_by_pam_wheel() -> None:
+    """rescue-ai is not in wheel; su to the live user (empty password, passwordless sudo) must stop at pam_wheel."""
+    assert _su_ok("auth\t\trequired\tpam_wheel.so use_uid\nauth\tinclude\tsystem-auth\n")
+    assert _su_ok(GOOD_SU)
+
+
+@pytest.mark.parametrize("body", [
+    "auth\tinclude\tsystem-auth\n",
+    "# auth required pam_wheel.so use_uid\nauth include system-auth\n",
+    "auth required pam_wheel.so use_uid root_only\n",
+    "auth sufficient pam_wheel.so trust use_uid\nauth required pam_wheel.so use_uid\n",
+    "auth required pam_wheel.so\n",
+])
+def test_a_su_without_a_working_pam_wheel_is_refused(body: str) -> None:
+    assert not _su_ok(body)
+
+
+def test_the_fsscript_stops_the_build_when_su_is_not_closed() -> None:
+    assert "/etc/pam.d/su" in FSSCRIPT and "pam_wheel" in FSSCRIPT
+    assert FSSCRIPT.index("pam_wheel\\.so") < FSSCRIPT.index("Everything the installer, the repair tool")
+
+
+def test_the_readme_dd_command_is_one_pasteable_line_with_sudo_and_makes_no_untested_claim_about_ventoy() -> None:
+    text = (ROOT / "iso/README-live.txt").read_text()
+    line = next(l for l in text.splitlines() if "dd if=" in l)
+    assert "sudo dd if=gentoo-installer.iso of=/dev/sdX" in line and "status=progress" in line and "conv=fsync" in line
+    assert not line.rstrip().endswith("\\") and "conv=fsync" in line.split("dd if=")[1]
+    assert not re.search(r"Ventoy-style|(?<!not tested with this disc\.)\bVentoy\b.*do not give", text)
+    assert "Ventoy" not in text.split("do not give a bootable disc")[0].splitlines()[-1]

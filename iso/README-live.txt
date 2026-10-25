@@ -17,8 +17,7 @@ that copies it byte for byte. The ISO is a hybrid image: the same bytes boot
 from a stick and from a DVD. Everything on the stick is erased. Check the
 .sha512 file next to the download before you write it.
 
-  Linux, dd:        dd if=gentoo-installer.iso of=/dev/sdX bs=4M
-                    status=progress conv=fsync
+  Linux, dd:        sudo dd if=gentoo-installer.iso of=/dev/sdX bs=4M status=progress conv=fsync
                     (sdX is the stick, for example sdb; check it with lsblk
                     first: a wrong letter erases another disk)
   Linux, caligula:  caligula burn gentoo-installer.iso
@@ -30,7 +29,8 @@ from a stick and from a DVD. Everything on the stick is erased. Check the
                     needs no setting.
 
 Tools that unpack the files instead of copying the image (the "ISO mode" of
-Rufus, Ventoy-style file copying, UNetbootin) do not give a bootable disc.
+Rufus, UNetbootin) do not give a bootable disc. Other tools that copy the file
+onto a stick (Ventoy, for example) are not tested with this disc.
 There is no persistence: what you save on the running disc is gone after
 power off, so copy files you want to keep to another disk.
 

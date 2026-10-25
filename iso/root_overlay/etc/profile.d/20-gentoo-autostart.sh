@@ -61,7 +61,9 @@ case $- in
 					done
 					if [ -n "${gentoo_autostart_wants_approver}" ]; then
 						gentoo_autostart_waited=0
-						while [ ! -e "${GENTOO_AUTOSTART_DO_SOCKET:-/run/gentoo-rescue/do.sock}" ] \
+						# /run/gentoo-rescue is root:rescue-ai 0710: the live user cannot enter it, so the
+						# look has to be done as root (the live user has passwordless sudo).
+						while ! sudo -n test -e "${GENTOO_AUTOSTART_DO_SOCKET:-/run/gentoo-rescue/do.sock}" 2> /dev/null \
 							&& [ "${gentoo_autostart_waited}" -lt "${GENTOO_AUTOSTART_WAIT:-20}" ]; do
 							if [ "${gentoo_autostart_waited}" -eq 0 ]; then
 								printf '\nWaiting for the approval service ...\n'
@@ -69,6 +71,10 @@ case $- in
 							sleep 1
 							gentoo_autostart_waited=$((gentoo_autostart_waited + 1))
 						done
+						if ! sudo -n test -e "${GENTOO_AUTOSTART_DO_SOCKET:-/run/gentoo-rescue/do.sock}" 2> /dev/null; then
+							printf '\nThe approval service did not start. The AI tools will start, but no command can be approved.\n'
+							printf 'Look at its console (tty9 to tty12); it shows the reason\n'
+						fi
 					fi
 					printf '\nStarting %s: sudo %s\n' "${gentoo_autostart_name}" "${gentoo_autostart_tool}"
 					printf 'When it ends you are back at this shell.\n\n'
