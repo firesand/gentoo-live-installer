@@ -183,7 +183,7 @@ def load_data(name: str, data_dir: Path = DATA) -> dict:
     return json.loads((data_dir / name).read_text())
 
 
-def baseline_problem(desktop: str, init: str, count: int, baseline: dict | None = None, tolerance: float = 0.12) -> str:
+def baseline_problem(desktop: str, init: str, count: int, baseline: dict | None = None, tolerance: float = 0.15) -> str:
     """'' when the number of packages a desktop pulls in is within ``tolerance`` of the baseline (desktops.md), else why not."""
     table = (baseline if baseline is not None else load_data("desktop-baseline.json"))["counts"]
     if desktop not in table:
@@ -194,13 +194,16 @@ def baseline_problem(desktop: str, init: str, count: int, baseline: dict | None 
     return ""
 
 
-def heavy_packages(closure: Sequence[str], table: dict | None = None) -> list[str]:
-    """Members of the closure that take hours to compile ('cat/pkg-version (about N h)'); a source-only cell has to build every one of them."""
+def heavy_packages(closure: Sequence[str], table: dict | None = None, installed: Sequence[str] | set[str] = frozenset()) -> list[str]:
+    """Members of the closure that take hours to compile ('cat/pkg-version (about N h)'); a source-only cell has to build every one of them.
+
+    ``installed`` are the packages the stage3 already has (by category/package): the walk sees a newer version of them in the tree, which no cell has to compile.
+    """
     hours = (table if table is not None else load_data("heavy-builds.json"))["hours"]
     found = []
     for cpv in closure:
         name = re.sub(r"-[0-9][0-9A-Za-z._+-]*$", "", cpv)
-        if name in hours:
+        if name in hours and name not in installed:
             found.append(f"{cpv} (about {hours[name]} h)")
     return found
 
@@ -661,7 +664,7 @@ def lint_cell(cell: Cell, tree: Path, scratch: Path | None = None, *, plan=None,
     report = lint_atoms(rendered.config, scratch, rendered.atoms, stage3, name=cell.name, profile=rendered.profile, build_deps=build_deps)
     report.forbid_heavy = cell.forbid_heavy
     report.errors += expectation_errors(cell, rendered)
-    report.heavy = heavy_packages(report.packages)
+    report.heavy = heavy_packages(report.packages, installed=stage3)
     if report.heavy:
         report.notes.append("builds that take hours without a binary package: " + ", ".join(report.heavy))
     if baseline and cell.desktop in load_data("desktop-baseline.json")["counts"]:

@@ -332,13 +332,14 @@ def network_status_of(output: str) -> tuple[dict[str, Any] | None, dict[str, Any
 
 
 def network_status_problems(status: Mapping[str, Any]) -> list[str]:
-    """A wired VM with working user-mode networking: online, a route, DNS, a reachable mirror, one connected ethernet device, no problem code."""
+    """A wired VM with working user-mode networking: online, a route, DNS, one connected ethernet device, no problem code.
+
+    An unreachable mirror is not a finding of the harness: a host without internet cannot be fixed by the installer (the summary still shows it).
+    """
     problems: list[str] = []
     for key in ("online", "default_route", "dns"):
         if status.get(key) is not True:
             problems.append(f"{key} is {status.get(key)!r}, expected true")
-    if status.get("mirror") is False:
-        problems.append("the mirror is not reachable")
     if status.get("problem"):
         problems.append(f"problem {status['problem']!r}: {status.get('message', '')}".rstrip(": "))
     devices = status.get("devices")
@@ -366,6 +367,7 @@ def parse_network_status_probe(returncode: int, output: str) -> ProbeResult:
 # --- gentoo-chroot, non-interactive (I12) -----------------------------------------------------------------------------
 
 CHROOT_MARKERS = {
+    "write": ("touch /root/.gentoo-vm-chroot-write && echo \"CHROOT-WRITE-$((6*7))\"", "CHROOT-WRITE-42"),
     "found": ("echo \"CHROOT-FOUND-$((6*7))\"", "CHROOT-FOUND-42"),
     "release": ("cat /etc/gentoo-release 2>/dev/null | sed 's/^/CHROOT-RELEASE-/'", "CHROOT-RELEASE-"),
     "dns": ("getent hosts distfiles.gentoo.org >/dev/null && echo \"CHROOT-DNS-$((6*7))\"", "CHROOT-DNS-42"),
@@ -380,7 +382,7 @@ def chroot_input(bootloader: str = "grub", *, writable: bool = True) -> str:
     The markers are computed (``$((6*7))``), so the text of a command that the shell echoes can never pass for its output.
     """
     lines = ["y"] if writable else []
-    names = ["found", "release", "dns", "emerge"] + (["grub"] if bootloader == "grub" else [])
+    names = ["found", "release", "dns", "emerge"] + (["grub"] if bootloader == "grub" else []) + (["write"] if writable else [])
     lines += [CHROOT_MARKERS[name][0] for name in names]
     lines.append("exit")
     return "\n".join(lines) + "\n"
@@ -390,12 +392,13 @@ def chroot_command(*, writable: bool = True) -> str:
     return "gentoo-chroot" + ("" if writable else " --read-only")
 
 
-def chroot_problems(returncode: int, output: str, bootloader: str = "grub") -> list[str]:
-    """Did the session find the installed system, mount it, run the commands with DNS, and end normally?"""
+def chroot_problems(returncode: int, output: str, bootloader: str = "grub", *, writable: bool = True) -> list[str]:
+    """Did the session find the installed system, mount it, run the commands with DNS, and end normally? A writable one must also be able to write."""
     clean = ANSI_RE.sub("", output)
-    names = ["found", "dns", "emerge"] + (["grub"] if bootloader == "grub" else [])
+    names = ["found", "dns", "emerge"] + (["grub"] if bootloader == "grub" else []) + (["write"] if writable else [])
     labels = {"found": "the shell inside the system never started", "dns": "DNS does not work inside the chroot (resolv.conf not prepared)",
-              "emerge": "emerge --info failed inside the chroot", "grub": "grub-mkconfig failed inside the chroot"}
+              "emerge": "emerge --info failed inside the chroot", "grub": "grub-mkconfig failed inside the chroot",
+              "write": "the system was opened read-only although a writable session was asked for (touch failed)"}
     problems = [labels[name] for name in names if CHROOT_MARKERS[name][1] not in clean]
     if "CHROOT-FOUND-42" not in clean and re.search(r"(?i)no (gentoo )?systems? found|nothing to open|not found", clean):
         problems.append("gentoo-chroot did not find the installed system")

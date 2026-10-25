@@ -323,7 +323,6 @@ def test_a_wired_vm_with_working_networking_passes():
     ({"online": False}, "online is False"),
     ({"default_route": False, "problem": "no_route", "message": "No route."}, "default_route"),
     ({"dns": False, "problem": "no_dns"}, "dns is False"),
-    ({"mirror": False}, "mirror"),
     ({"devices": []}, "no network devices"),
     ({"devices": [{"name": "wlan0", "kind": "wifi", "state": "connected"}]}, "no connected ethernet"),
     ({"problem": "cable", "message": "Plug in the cable."}, "problem 'cable'"),
@@ -333,8 +332,10 @@ def test_network_problems_are_named(changes, fragment):
     assert not result.success and fragment in result.error and not result.advisory
 
 
-def test_an_unknown_mirror_is_not_a_problem():
+def test_an_unreachable_mirror_is_information_not_a_failure_of_the_harness():
     assert w5.parse_network_status_probe(0, status_line(mirror=None)).success
+    unreachable = w5.parse_network_status_probe(0, status_line(mirror=False))
+    assert unreachable.success and json.loads(unreachable.output)["mirror"] is False
 
 
 def test_a_daemon_without_network_actions_is_advisory():
@@ -366,6 +367,7 @@ Common fixes: emerge --sync ...   Type exit to leave; the system is unmounted fo
 (chroot) CHROOT-DNS-42
 (chroot) CHROOT-EMERGE-42
 (chroot) CHROOT-GRUB-42
+(chroot) CHROOT-WRITE-42
 (chroot) Unmounted.
 """
 
@@ -374,9 +376,10 @@ def test_the_chroot_input_answers_the_question_runs_the_commands_and_exits():
     text = w5.chroot_input("grub")
     lines = text.splitlines()
     assert lines[0] == "y" and lines[-1] == "exit" and text.endswith("\n")
-    assert any("emerge --info" in line for line in lines) and any("grub-mkconfig" in line for line in lines)
+    assert any("emerge --info" in line for line in lines) and any("grub-mkconfig" in line for line in lines) and any(line.startswith("touch /root/") for line in lines)
     assert not any("grub-mkconfig" in line for line in w5.chroot_input("systemd-boot").splitlines())
-    assert w5.chroot_input("grub", writable=False).splitlines()[0] != "y"
+    read_only = w5.chroot_input("grub", writable=False).splitlines()
+    assert read_only[0] != "y" and not any(line.startswith("touch") for line in read_only), "a read-only session neither answers a question nor writes"
     assert w5.chroot_command() == "gentoo-chroot" and w5.chroot_command(writable=False) == "gentoo-chroot --read-only"
 
 
@@ -393,6 +396,7 @@ def test_the_echo_of_a_command_is_not_its_output():
     ("CHROOT-DNS-42", "DNS does not work"),
     ("CHROOT-EMERGE-42", "emerge --info failed"),
     ("CHROOT-GRUB-42", "grub-mkconfig failed"),
+    ("CHROOT-WRITE-42", "opened read-only"),
 ])
 def test_each_failed_command_is_named(remove, fragment):
     problems = w5.chroot_problems(0, CHROOT_OK.replace(remove, "nothing"), "grub")
@@ -407,6 +411,12 @@ def test_a_system_that_was_not_found_is_reported_as_that():
 def test_a_shell_in_the_wrong_system_is_caught_by_the_release_file():
     output = CHROOT_OK.replace("CHROOT-RELEASE-Gentoo Base System release 2.18\n", "")
     assert any("gentoo-release" in problem for problem in w5.chroot_problems(0, output, "grub"))
+
+
+def test_a_read_only_session_does_not_have_to_write():
+    output = CHROOT_OK.replace("(chroot) CHROOT-WRITE-42\n", "")
+    assert w5.chroot_problems(0, output, "grub", writable=False) == []
+    assert any("opened read-only" in problem for problem in w5.chroot_problems(0, output, "grub", writable=True))
 
 
 def test_other_bootloaders_do_not_need_grub():

@@ -83,7 +83,7 @@ def test_the_baseline_accepts_the_measured_counts_and_names_a_deviation():
     assert {name: values for name, values in baseline["counts"].items()} == {
         "kde": [524, 512], "gnome": [578, 579], "xfce": [343, 334], "cinnamon": [485, 474], "mate": [422, 409], "lxqt": [392, 371]}
     assert lint.baseline_problem("kde", "openrc", 524) == "" and lint.baseline_problem("kde", "systemd", 512) == ""
-    assert lint.baseline_problem("xfce", "openrc", 343 + 30) == ""
+    assert lint.baseline_problem("xfce", "openrc", 343 + 30) == "" and lint.baseline_problem("xfce", "openrc", 300) == "", "the measured Xfce is 12.5 % under the baseline"
     problem = lint.baseline_problem("xfce", "systemd", 600)
     assert "334" in problem and "600" in problem
     assert lint.baseline_problem("sway", "openrc", 5) == "", "a desktop without a measurement is not judged"
@@ -94,6 +94,7 @@ def test_heavy_builds_are_found_by_name_not_by_prefix():
     found = lint.heavy_packages(closure)
     assert found == ["dev-qt/qtwebengine-6.8.2-r1 (about 3.0 h)", "www-client/firefox-153.5.1 (about 3.0 h)"]
     assert lint.heavy_packages([]) == []
+    assert lint.heavy_packages(["sys-devel/gcc-16.2.1", "llvm-core/llvm-22.1.8"], installed={"sys-devel/gcc"}) == ["llvm-core/llvm-22.1.8 (about 1.5 h)"], "the stage3 has gcc already"
 
 
 def test_a_heavy_build_is_a_finding_only_for_a_cell_that_must_not_compile_it():

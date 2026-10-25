@@ -2498,18 +2498,32 @@ class ScenarioRunner:
 
     live_network: list[dict] | None = None
 
+    NETWORK_RETRY_SECONDS = 3.0   # the daemon's socket and DHCP are not ready the moment SSH is: ask again
+    NETWORK_WAIT_SECONDS = 90.0
+
     def check_live_network(self) -> dict:
-        """network_status runs for real in every VM: wired, so online with a route, DNS and no problem code. A daemon without it is a warning."""
+        """network_status runs for real in every VM: wired, so online with a route, DNS and no problem code.
+
+        The live system answers SSH before the daemon has made its socket and before DHCP has finished, so a failure is asked again for a
+        bounded time (NETWORK_WAIT_SECONDS) before it counts. A daemon without the action is a warning, not a failure, and is not asked twice.
+        """
         records = self.__dict__.setdefault("live_network", [])
-        code, log = self.ssh(self.args.ssh_user, vm_wave5.network_status_command(), f"live-network-status-{len(records) + 1}.log", self.args.command_timeout)
-        probe = vm_wave5.parse_network_status_probe(code, log.read_text(errors="replace"))
-        record = probe.record()
-        records.append(record)
+        deadline = time.monotonic() + self.NETWORK_WAIT_SECONDS
+        attempt = 0
+        while True:
+            attempt += 1
+            code, log = self.ssh(self.args.ssh_user, vm_wave5.network_status_command(), f"live-network-status-{len(records) + 1}-{attempt}.log",
+                                 self.args.command_timeout)
+            probe = vm_wave5.parse_network_status_probe(code, log.read_text(errors="replace"))
+            if probe.success or probe.advisory or time.monotonic() >= deadline:
+                break
+            time.sleep(self.NETWORK_RETRY_SECONDS)
+        records.append({**probe.record(), "attempts": attempt})
         if not probe.success and probe.advisory:
             print(f"WARNING {self.scenario.name}: {probe.name}: {probe.error}", file=sys.stderr)
         elif not probe.success:
-            raise HarnessError(f"network_status in the live system: {probe.error}; see {log}")
-        return record
+            raise HarnessError(f"network_status in the live system: {probe.error} (asked {attempt} times); see {log}")
+        return records[-1]
 
     def password_login(self, password: str) -> tuple[int, str]:
         """A password login as the live user from the host, with the harness key out of the way (SSH_ASKPASS, never the command line)."""
@@ -2619,21 +2633,27 @@ class ScenarioRunner:
         return report
 
     def chroot_check(self, result: dict, target: VMProcess) -> None:
-        """Stop the installed system, boot the live ISO and run gentoo-chroot with its commands on standard input; nothing may stay mounted."""
+        """Stop the installed system, boot the live ISO and run gentoo-chroot twice with its commands on standard input: read-only first (no question to
+        answer, so it does not depend on how the tool reads its prompt), then writable (the answer ``y`` first). Nothing may stay mounted after either."""
         self.stop_vm(target)
-        manifest = InstallManifest.load(self.run_dir / "manifest.json")
+        bootloader = InstallManifest.load(self.run_dir / "manifest.json").system.bootloader
         live = self.boot_live()
-        evidence: dict = {"command": vm_wave5.chroot_command()}
-        result["chroot"] = evidence
-        code, log = self.ssh(self.args.ssh_user, vm_wave5.chroot_command(), "chroot-session.log", max(600, self.args.command_timeout),
-                             stdin=vm_wave5.chroot_input(manifest.system.bootloader).encode())
-        problems = vm_wave5.chroot_problems(code, log.read_text(errors="replace"), manifest.system.bootloader)
-        done, cleanup_log = self.ssh(self.args.ssh_user, vm_rescue.cleanup_command(self.target_device), "chroot-cleanup.log", self.args.command_timeout)
-        problems += vm_rescue.cleanup_problems(done, cleanup_log.read_text(errors="replace"))
-        evidence.update(exit=code, log=log.name, problems=problems)
+        sessions: list[dict] = []
+        result["chroot"] = {"sessions": sessions}
+        failures: list[str] = []
+        log: Path | None = None
+        for writable in (False, True):
+            name = "writable" if writable else "read-only"
+            code, log = self.ssh(self.args.ssh_user, vm_wave5.chroot_command(writable=writable), f"chroot-session-{name}.log", max(600, self.args.command_timeout),
+                                 stdin=vm_wave5.chroot_input(bootloader, writable=writable).encode())
+            problems = vm_wave5.chroot_problems(code, log.read_text(errors="replace"), bootloader, writable=writable)
+            done, cleanup_log = self.ssh(self.args.ssh_user, vm_rescue.cleanup_command(self.target_device), f"chroot-cleanup-{name}.log", self.args.command_timeout)
+            problems += vm_rescue.cleanup_problems(done, cleanup_log.read_text(errors="replace"))
+            sessions.append({"mode": name, "command": vm_wave5.chroot_command(writable=writable), "exit": code, "log": log.name, "problems": problems})
+            failures += [f"{name}: {problem}" for problem in problems]
         self.power_off_live(live)
-        if problems:
-            raise HarnessError("gentoo-chroot in the live system: " + "; ".join(problems) + f"; see {log}")
+        if failures:
+            raise HarnessError("gentoo-chroot in the live system: " + "; ".join(failures) + f"; see {log}")
 
     # --- an entry of the ISO's boot menu (--boot-entry) ----------------------------------------------------------
 

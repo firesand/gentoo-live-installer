@@ -256,7 +256,9 @@ change `STATE_LINE_RE` and friends in `vm_wave5.py` and the recorded text in `te
 * **`network_status` in every VM.** Every `boot_live` asks the live daemon for `network_status` (a short Python program that speaks the
   daemon's socket protocol; no client library is needed in the guest). The VM is wired, so the answer must be `online`, `default_route`
   and `dns` true, a connected ethernet device and no problem code. A daemon without `network.v1` (answer `proto.unsupported_action`) is
-  a warning on stderr and an advisory record in `result.json` (`live.network_status`), not a failure.
+  a warning on stderr and an advisory record in `result.json` (`live.network_status`), not a failure. The live system answers SSH before the daemon has made its
+  socket and before DHCP has finished, so a failed answer is asked again every 3 seconds for up to 90 seconds (`attempts` in the record) before it counts.
+  An unreachable mirror is shown in the record but is not a failure (the installer cannot fix a host without internet).
 * **`live-remote-access`** (use `--live-only`-style runs; the scenario implies it, with no display):
   `rc-service sshd status` must say started at boot; `gentoo-remote-access status` must show remote access off; `on` must print the
   password, an `ssh gentoo@ADDRESS` line and key fingerprints, and a password login as `gentoo` must work from the host; `off` must
@@ -267,13 +269,14 @@ change `STATE_LINE_RE` and friends in `vm_wave5.py` and the recorded text in `te
   `live-remote-NN.log`, like everything else the guest prints). The ISO is then shut down and booted a second time: the fingerprints of
   `/etc/ssh/ssh_host_*_key.pub` must differ per key type between the two boots (`live.host_keys` in `result.json`).
   Needs the **testkey ISO** (root key login for the harness) built from the tree that has `gentoo-remote-access`.
-* **`rescue-chroot`**: after the install and the usual probes the installed VM is stopped, the live ISO is booted and
-  `gentoo-chroot` (no session argument) is started with this on standard input: `y` (the answer to its one read-write question; a tool
-  that does not ask just gets an unknown command), then marker commands (`echo "CHROOT-FOUND-$((6*7))"`; the number is computed, so the echo
-  of a typed command cannot pass for its output), `getent hosts distfiles.gentoo.org`, `emerge --info >/dev/null`, `grub-mkconfig -o /dev/null`
-  (GRUB installs only) and `exit`. Required: all markers, `/etc/gentoo-release` read inside, exit status 0, and then the cleanup check of
-  the rescue runs (`vm_rescue.cleanup_command`): nothing mounted below `/mnt/rescue`, no session file left behind, no read-only flag, no
-  `rescue-*` device-mapper volume. Encrypted installs are refused (the passphrase prompt is on the console).
+* **`rescue-chroot`**: after the install and the usual probes the installed VM is stopped, the live ISO is booted and `gentoo-chroot` (no session argument) is run
+  twice with this on standard input, once as `gentoo-chroot --read-only` (no question to answer, so the check does not depend on how the tool reads its prompt)
+  and once as plain `gentoo-chroot` (the first line is `y`, the answer to its one read-write question; a tool that does not ask just gets an unknown command):
+  marker commands (`echo "CHROOT-FOUND-$((6*7))"`; the number is computed, so the echo of a typed command cannot pass for its output), `getent hosts distfiles.gentoo.org`,
+  `emerge --info >/dev/null`, `grub-mkconfig -o /dev/null` (GRUB installs only), in the writable session `touch /root/.gentoo-vm-chroot-write`, and `exit`.
+  Required: all markers, `/etc/gentoo-release` read inside, exit status 0, and after each session the cleanup check of the rescue runs
+  (`vm_rescue.cleanup_command`): nothing mounted below `/mnt/rescue`, no session file left behind, no read-only flag, no `rescue-*` device-mapper volume.
+  Encrypted installs are refused (the passphrase prompt is on the console). `result.json` has both sessions under `chroot.sessions`.
 
 Commands for the lead (each needs the testkey ISO and its private key; see "Running a scenario"):
 

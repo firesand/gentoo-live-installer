@@ -114,31 +114,53 @@ def test_an_sshd_that_still_takes_passwords_fails_a_keys_only_install(lab):
     assert "sshd-config" in lab.result()["error"] and "password login is possible" in lab.result()["error"]
 
 
-def chroot_rules(output: str = CHROOT_OK, *, clean: str = CLEAN, **kwargs) -> list[dict]:
-    return [{"user": "^root$", "match": r"^gentoo-chroot$", "stdin_to": "chroot-input.txt", "stdout": output},
+def chroot_rules(output: str = CHROOT_OK, *, writable_output: str | None = None, clean: str = CLEAN, **kwargs) -> list[dict]:
+    """Two sessions: ``gentoo-chroot --read-only`` (no CHROOT-WRITE line, none is asked for) and ``gentoo-chroot`` (answered with y, writes)."""
+    read_only = output.replace("(chroot) CHROOT-WRITE-42\n", "")
+    return [{"user": "^root$", "match": r"^gentoo-chroot --read-only$", "stdin_to": "chroot-input-read-only.txt", "stdout": read_only},
+            {"user": "^root$", "match": r"^gentoo-chroot$", "stdin_to": "chroot-input-writable.txt", "stdout": writable_output or output},
             {"user": "^root$", "match": "HARNESS_FS_ROOT", "stdout": clean}] + guest_rules(vm, "rescue-chroot", sudo=True, **kwargs)
 
 
-def test_the_rescue_chroot_scenario_runs_the_commands_on_standard_input_and_checks_nothing_stays_mounted(lab):
+def test_the_rescue_chroot_scenario_runs_both_sessions_with_commands_on_standard_input_and_checks_nothing_stays_mounted(lab):
     lab.rules = chroot_rules()
     assert lab.run("--scenario", "rescue-chroot") == 0, lab.result().get("error")
     run = lab.run_dir()
-    evidence = lab.result()["chroot"]
-    assert evidence["problems"] == [] and evidence["exit"] == 0
-    typed = (run / "fake-guest" / "chroot-input.txt").read_text()
-    assert typed.splitlines()[0] == "y" and typed.rstrip().endswith("exit") and "emerge --info" in typed and "grub-mkconfig" in typed
+    sessions = lab.result()["chroot"]["sessions"]
+    assert [(item["mode"], item["problems"], item["exit"]) for item in sessions] == [("read-only", [], 0), ("writable", [], 0)]
+    typed = (run / "fake-guest" / "chroot-input-writable.txt").read_text()
+    assert typed.splitlines()[0] == "y" and typed.rstrip().endswith("exit") and "emerge --info" in typed and "grub-mkconfig" in typed and "touch /root/" in typed
+    read_only = (run / "fake-guest" / "chroot-input-read-only.txt").read_text()
+    assert not read_only.startswith("y") and "touch" not in read_only
 
 
 def test_a_chroot_without_dns_fails_the_scenario(lab):
     lab.rules = chroot_rules(CHROOT_OK.replace("CHROOT-DNS-42", "nothing"))
     assert lab.run("--scenario", "rescue-chroot") == 1
-    assert "DNS does not work inside the chroot" in lab.result()["error"]
+    assert "read-only: DNS does not work inside the chroot" in lab.result()["error"]
+
+
+def test_a_writable_session_that_cannot_write_fails_the_scenario(lab):
+    lab.rules = chroot_rules(CHROOT_OK, writable_output=CHROOT_OK.replace("CHROOT-WRITE-42", "touch: cannot touch: Read-only file system"))
+    assert lab.run("--scenario", "rescue-chroot") == 1
+    error = lab.result()["error"]
+    assert "writable: the system was opened read-only" in error and "read-only: " not in error
 
 
 def test_a_chroot_that_leaves_the_system_mounted_fails_the_scenario(lab):
     lab.rules = chroot_rules(clean=json.dumps({"mounts": ["/mnt/rescue/proc"], "sessions": [], "read_only": [], "dm": []}) + "\n")
     assert lab.run("--scenario", "rescue-chroot") == 1
     assert "still mounted: /mnt/rescue/proc" in lab.result()["error"]
+
+
+def test_the_network_answer_is_asked_again_while_the_daemon_and_dhcp_come_up(lab):
+    """sshd answers before the daemon has made its socket: the first answers are socket errors, then the real one. The run must pass."""
+    not_yet = {"user": "^root$", "match": "network_status", "times": 3,
+               "stdout": json.dumps({"events": [{"type": "harness-error", "error": "[Errno 2] No such file or directory"}]}) + "\n"}
+    lab.rules = [not_yet, *live_rules()]
+    assert lab.run("--scenario", "live-remote-access") == 0, lab.result().get("error")
+    records = lab.result()["live"]["network_status"]
+    assert records[0]["success"] is True and records[0]["attempts"] == 4 and records[1]["attempts"] == 1
 
 
 def test_the_new_scenarios_refuse_combinations_that_cannot_work(lab, capsys):
