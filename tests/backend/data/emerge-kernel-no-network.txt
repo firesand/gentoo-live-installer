@@ -1,0 +1,42 @@
+>>> Running pre-merge checks for sys-kernel/gentoo-kernel-bin-6.18.57
+ [32m*[0m Assuming you do not have a separate /boot partition.
+ [32m*[0m Assuming you do not have a separate /efi partition.
+ [32m*[0m Assuming you do not have a separate /boot/efi partition.
+ [32m*[0m Assuming you do not have a separate /boot/EFI partition.
+
+>>> Emerging (1 of 5) sys-boot/gnu-efi-4.0.4::gentoo
+Package 1 of 5
+>>> Downloading 'https://distfiles.gentoo.org/distfiles/96/gnu-efi-4.0.4.tar.gz'
+--2026-10-25 16:32:30--  https://distfiles.gentoo.org/distfiles/96/gnu-efi-4.0.4.tar.gz
+Resolving distfiles.gentoo.org... failed: Temporary failure in name resolution.
+wget: unable to resolve host address ‘distfiles.gentoo.org’
+>>> Downloading 'https://github.com/ncroxon/gnu-efi/archive/4.0.4.tar.gz'
+--2026-10-25 16:32:31--  https://github.com/ncroxon/gnu-efi/archive/4.0.4.tar.gz
+Resolving github.com... failed: Temporary failure in name resolution.
+wget: unable to resolve host address ‘github.com’
+!!! Couldn't download 'gnu-efi-4.0.4.tar.gz'. Aborting.
+
+>>> Failed to emerge sys-boot/gnu-efi-4.0.4, Log file:
+
+>>>  '/var/tmp/portage/sys-boot/gnu-efi-4.0.4/temp/build.log'
+
+
+Exiting on signal 15
+[ERROR] Task was destroyed but it is pending!
+task: <Task pending name='Task-221' coro=<PipeLogger._io_loop() done, defined at /usr/lib/python3.14/site-packages/portage/util/_async/PipeLogger.py:82> wait_for=<Future pending cb=[Task.task_wakeup()]> cb=[PipeLogger._io_loop_done()]>
+[ERROR] Task was destroyed but it is pending!
+task: <Task pending name='Task-222' coro=<BuildLogger._main() done, defined at /usr/lib/python3.14/site-packages/portage/util/_async/BuildLogger.py:131> wait_for=<Future pending cb=[AsynchronousTask.async_wait.<locals>.<lambda>() at /usr/lib/python3.14/site-packages/_emerge/AsynchronousTask.py:49, Task.task_wakeup()]> cb=[BuildLogger._main_exit()]>
+[ERROR] Task was destroyed but it is pending!
+task: <Task pending name='Task-223' coro=<PipeLogger._io_loop() done, defined at /usr/lib/python3.14/site-packages/portage/util/_async/PipeLogger.py:82> wait_for=<Future pending cb=[Task.task_wakeup()]> cb=[PipeLogger._io_loop_done()]>
+[ERROR] Task was destroyed but it is pending!
+task: <Task pending name='Task-224' coro=<ForkProcess._main() done, defined at /usr/lib/python3.14/site-packages/portage/util/_async/ForkProcess.py:185> wait_for=<Future pending cb=[AsynchronousTask.async_wait.<locals>.<lambda>() at /usr/lib/python3.14/site-packages/_emerge/AsynchronousTask.py:49, Task.task_wakeup()]> cb=[SpawnProcess._main_exit()]>
+Installation failed: Command failed (1): chroot /mnt/gentoo emerge --noreplace sys-kernel/installkernel sys-kernel/gentoo-kernel-bin sys-block/io-scheduler-udev-rules: -222' coro=<BuildLogger._main() done, defined at /usr/lib/python3.14/site-packages/portage/util/_async/BuildLogger.py:131> wait_for=<Future pending cb=[AsynchronousTask.async_wait.<locals>.<lambda>() at /usr/lib/python3.14/site-packages/_emerge/AsynchronousTask.py:49, Task.task_wakeup()]> cb=[BuildLogger._main_exit()]>
+[ERROR] Task was destroyed but it is pending!
+task: <Task pending name='Task-223' coro=<PipeLogger._io_loop() done, defined at /usr/lib/python3.14/site-packages/portage/util/_async/PipeLogger.py:82> wait_for=<Future pending cb=[Task.task_wakeup()]> cb=[PipeLogger._io_loop_done()]>
+[ERROR] Task was destroyed but it is pending!
+task: <Task pending name='Task-224' coro=<ForkProcess._main() done, defined at /usr/lib/python3.14/site-packages/portage/util/_async/ForkProcess.py:185> wait_for=<Future pending cb=[AsynchronousTask.async_wait.<locals>.<lambda>() at /usr/lib/python3.14/site-packages/_emerge/AsynchronousTask.py:49, Task.task_wakeup()]> cb=[SpawnProcess._main_exit()]>
+Command failed (1): chroot /mnt/gentoo emerge --noreplace sys-kernel/installkernel sys-kernel/gentoo-kernel-bin sys-block/io-scheduler-udev-rules: -222' coro=<BuildLogger._main() done, defined at /usr/lib/python3.14/site-packages/portage/util/_async/BuildLogger.py:131> wait_for=<Future pending cb=[AsynchronousTask.async_wait.<locals>.<lambda>() at /usr/lib/python3.14/site-packages/_emerge/AsynchronousTask.py:49, Task.task_wakeup()]> cb=[BuildLogger._main_exit()]>
+[ERROR] Task was destroyed but it is pending!
+task: <Task pending name='Task-223' coro=<PipeLogger._io_loop() done, defined at /usr/lib/python3.14/site-packages/portage/util/_async/PipeLogger.py:82> wait_for=<Future pending cb=[Task.task_wakeup()]> cb=[PipeLogger._io_loop_done()]>
+[ERROR] Task was destroyed but it is pending!
+task: <Task pending name='Task-224' coro=<ForkProcess._main() done, defined at /usr/lib/python3.14/site-packages/portage/util/_async/ForkProcess.py:185> wait_for=<Future pending cb=[AsynchronousTask.async_wait.<locals>.<lambda>() at /usr/lib/python3.14/site-packages/_emerge/AsynchronousTask.py:49, Task.task_wakeup()]> cb=[SpawnProcess._main_exit()]>

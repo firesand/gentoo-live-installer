@@ -18,6 +18,22 @@ from .runner import CommandResult, RunnerError
 
 
 
+class EmergeFailed(RunnerError):
+    """A failed emerge, told in words: the diagnosis is the message, not the last lines of emerge's output.
+
+    It is still a RunnerError with the same argv, return code and output, so every caller that reads those keeps working; the
+    whole output is in the install log. The first VM matrix of Wave 6 showed why: with the network gone, the kernel stage
+    reported "Command failed (1): ... -222' coro=<BuildLogger._main() done ..." (Portage's asyncio noise at exit).
+    """
+
+    def __init__(self, error: RunnerError, diagnosis: "EmergeDiagnosis") -> None:
+        super().__init__(error.argv, error.returncode, error.output)
+        self.diagnosis = diagnosis
+        advice = " This looks like a network problem: check the internet connection, then try again." if diagnosis.transient else ""
+        RuntimeError.__init__(self, f"Installing packages failed: {diagnosis.summary.rstrip('. ')}.{advice} (emerge exited with {error.returncode}; "
+                                    "the whole output is in the install log)")
+
+
 class PackageInstallError(ConfigurationError):
     """A package set could not be installed; ``failed`` names what is missing."""
 
@@ -86,7 +102,7 @@ _RESOLUTION_MARKERS = (
 
 
 _TRANSIENT_PATTERN = re.compile(
-    r"Fetch failed for|Temporary failure in name resolution|Could not resolve host|Name or service not known|"
+    r"Fetch failed for|Couldn't download|unable to resolve host|Temporary failure in name resolution|Could not resolve host|Name or service not known|"
     r"Connection (?:timed out|reset|refused)|Network is unreachable|Operation timed out|Couldn't connect|"
     r"Failed to connect|SSL connection|HTTP(?: error)? 5\d\d|503 Service|502 Bad Gateway", re.IGNORECASE)
 
@@ -267,11 +283,19 @@ def explain_emerge_failure(output: str, read_log: Callable[[str], str] | None = 
         (sentences if sentence else undescribed).append(sentence or failure.package)
     undescribed.extend(failure.package for failure in failures[4:])
     items = sentences + items
+    # "Fetch failed for CPV" (older Portage) and "!!! Couldn't download 'FILE'. Aborting." (Portage of 2026)
+    fetch = [m.group(1) or m.group(2) for line in lines for m in [re.search(r"Fetch failed for ([^\s,]+)|Couldn't download '([^']+)'", line)] if m]
+    no_names = any(re.search(r"Temporary failure in name resolution|unable to resolve host|Could not resolve host", line) for line in lines)
+    if fetch:
+        # a package that failed without a build phase failed at its download: it is named here, not as "failed to build"
+        who = f" ({', '.join(dict.fromkeys(undescribed))})" if undescribed else ""
+        undescribed = []
+        items.insert(0, "download failed for " + ", ".join(dict.fromkeys(fetch)) + who
+                     + (" (the internet cannot be reached: names cannot be looked up)" if no_names else " (check the network connection)"))
+    elif no_names:
+        items.insert(0, "the internet cannot be reached: names such as distfiles.gentoo.org cannot be looked up (check the network connection)")
     if undescribed:
         items.append("failed to build: " + ", ".join(dict.fromkeys(undescribed)))
-    fetch = [m.group(1) for line in lines for m in [re.search(r"Fetch failed for ([^\s,]+)", line)] if m]
-    if fetch:
-        items.append("download failed for " + ", ".join(dict.fromkeys(fetch)) + " (check the network connection)")
     unique = list(dict.fromkeys(items))
     summary = "; ".join(unique[:6]) + (f"; and {len(unique) - 6} more" if len(unique) > 6 else "")
     if not summary:
@@ -401,7 +425,17 @@ class PackagesMixin(PortageMixin):
             # NINJAOPTS too: unset, ninja-utils derives it from MAKEOPTS, but an inherited value would win over that.
             env.update({"MAKEOPTS": "-j1", "NINJAOPTS": ninja_opts_from_make_opts("-j1")})
             arguments = ("--jobs=1", *arguments)  # the command line wins over --jobs in EMERGE_DEFAULT_OPTS
-        return self.chroot(("emerge", *arguments), env=env, capture=capture)
+        try:
+            return self.chroot(("emerge", *arguments), env=env, capture=capture)
+        except EmergeFailed:
+            raise
+        except RunnerError as exc:
+            if type(exc) is not RunnerError:  # a timeout or a cancel keeps its own words
+                raise
+            diagnosis = self.explain(exc)
+            if not diagnosis.summary:
+                raise
+            raise EmergeFailed(exc, diagnosis) from exc
 
     # ----- why a build failed --------------------------------------------------------------------------
 
