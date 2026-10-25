@@ -25,6 +25,7 @@ class DesktopStage(StorageStages):
             error.bootable = True  # type: ignore[attr-defined]
             raise error from exc
         warnings = [*result.degraded, *self.configurer.configure_services(self.manifest, plan, phase="desktop")]
+        warnings.extend(self.configurer.install_gaming(self.manifest, plan))  # the optional gaming setup; [] unless it was chosen
         self.configurer.configure_desktop_session(self.manifest)
         warnings.extend(self.configurer.run_plan_steps(plan))
         # Only binary packages can leave the installed USE flags different from make.conf, so source

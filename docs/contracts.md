@@ -437,6 +437,8 @@ bootloader, hardware), ACCT (accounts, tools, text installer).
 | `gentoo_installerd/configure_hardware.py` | BOOT | applying the hardware plan (`run_plan_steps`, `write_plan_files`) |
 | `gentoo_installerd/configure_system.py` | BOOT | hostname, locale, time zone, keyboard, hosts, services, logger, cron, sshd, `live_input_problems` |
 | `gentoo_installerd/configure_accounts.py` | ACCT | users, groups, privileges |
+| `gentoo_installerd/configure_gaming.py`, `gaming_readiness.py` | ACCT | the optional gaming setup; the dated Fortnite wording and the read-only "Check this PC" list |
+| `gentoo_installer/account_text.py` | ACCT | the account and tool sentences shared by the graphical and the text installer |
 | `gentoo_installerd/install.py` | CORE | stage list and weights, dispatch, preflight, validation and cleanup stages, checkpoints, events |
 | `gentoo_installerd/stages/context.py` | CORE | `InstallError`, `StageContext` (what every stage may use) |
 | `gentoo_installerd/stages/plan.py` | BOOT | the hardware plan of a job (plan, save, restore) |

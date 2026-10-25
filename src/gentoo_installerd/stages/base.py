@@ -16,4 +16,8 @@ class BaseStage(StorageStages):
         except PackageInstallError as exc:
             raise InstallError(str(exc)) from exc
         self.configurer.configure_network_late(self.manifest)
+        self.configurer.configure_sshd(self.manifest)
+        self.configurer.configure_journal(self.manifest)
+        self.configurer.configure_cron_daemon(self.manifest)
+        self.configurer.add_late_groups(self.manifest)
         self.configurer.configure_services(self.manifest, self._plan(), phase="base")

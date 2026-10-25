@@ -137,9 +137,12 @@ def test_windows_next_to_linux_suggests_the_local_time_clock(make_window):
     window = make_window(info=info)
     window._show_page(5)
     page = window.accounts
+    assert page.rtc_local.isChecked()  # ticked for the user, once, because Windows was found
     assert page.clock_hint.isVisibleTo(page) and "Windows was found" in page.clock_hint.text()
-    page.rtc_local.setChecked(True)
+    page.rtc_local.setChecked(False)  # and the user can still undo it
     assert not page.clock_hint.isVisibleTo(page)
+    page.set_info(info)
+    assert not page.rtc_local.isChecked()  # looking again never ticks it a second time
     quiet = make_window(info=sample_info(hardware=fixture_dict("qemu-q35-virtio")))
     quiet._show_page(5)
     assert not quiet.accounts.clock_hint.isVisibleTo(quiet.accounts)

@@ -123,17 +123,26 @@ from .configure_hardware import (  # noqa: F401
     HardwareMixin,
 )
 from .configure_system import (  # noqa: F401
+    account_problems,
+    choice_problems,
+    generated_locales,
     live_input_problems,
     locale_gen_line,
+    option_problems,
+    normalised_locale,
     render_dconf_keyboard,
     render_hosts,
     render_kxkbrc,
+    render_sshd_config,
     render_xorg_keyboard,
     SystemMixin,
     _keyboard_is_default,
 )
 from .configure_accounts import (  # noqa: F401
     AccountsMixin,
+)
+from .configure_gaming import (  # noqa: F401
+    GamingMixin,
 )
 
 
@@ -144,5 +153,5 @@ def preview_files(*args: Any, **kwargs: Any) -> dict[str, str]:
     return render_previews(*args, **kwargs)
 
 
-class Configurer(FstabMixin, NetworkMixin, DesktopMixin, PackagesMixin, HardwareMixin, PortageMixin, BootMixin, SystemMixin, AccountsMixin):
+class Configurer(FstabMixin, NetworkMixin, DesktopMixin, GamingMixin, PackagesMixin, HardwareMixin, PortageMixin, BootMixin, SystemMixin, AccountsMixin):
     """The sum of the per-domain mixins; ConfigurerBase holds the shared plumbing."""

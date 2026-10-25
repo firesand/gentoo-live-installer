@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from pathlib import Path
 
 from gentoo_installer import desktops, keymaps
-from gentoo_installer.manifest import InstallManifest, System
+from gentoo_installer.manifest import Accounts, InstallManifest, System
 
 from .configure_base import _plan_list, ConfigurationError, ConfigurerBase, shell_value
 from .configure_boot import check_secure_boot_material
@@ -24,8 +25,42 @@ def locale_gen_line(locale: str, supported: str = "") -> str:
     return f"{locale} {codeset.group(1) if codeset else 'UTF-8'}"
 
 
-def render_hosts(hostname: str) -> str:
-    return f"127.0.0.1\tlocalhost\n::1\tlocalhost\n127.0.1.1\t{hostname}.localdomain {hostname}\n"
+# What each choice of the tools tab installs (an empty list: it is part of the stage3 or of systemd).
+PRIVILEGE_ATOMS = {"sudo": "app-admin/sudo", "doas": "app-admin/doas", "run0": "sys-auth/polkit"}  # su is part of sys-apps/shadow
+CRON_ATOMS = {"cronie": "sys-process/cronie", "dcron": "sys-process/dcron", "fcron": "sys-process/fcron", "bcron": "sys-process/bcron"}
+LOGGER_ATOMS = {"sysklogd": ["app-admin/sysklogd"], "syslog-ng": ["app-admin/syslog-ng", "app-admin/logrotate"], "metalog": ["app-admin/metalog"]}
+LOGGER_SERVICES = {"sysklogd": "sysklogd", "syslog-ng": "syslog-ng", "metalog": "metalog"}  # OpenRC only: systemd keeps its own journal
+
+
+def render_hosts(hostname: str, domain: str = "", extra: Sequence[str] = ()) -> str:
+    """/etc/hosts: the computer's own name (with its domain only when the user gave one) and any extra lines."""
+    own = f"{hostname}.{domain} {hostname}" if domain else hostname
+    text = f"127.0.0.1\tlocalhost\n::1\tlocalhost\n127.0.1.1\t{own}\n"
+    return text + "".join(" ".join(line.split()) + "\n" for line in extra if line.strip())
+
+
+def render_sshd_config(accounts: Accounts) -> str:
+    """/etc/ssh/sshd_config.d/10-installer.conf. Root never logs in remotely; "password login" means the PAM keyboard-interactive prompt
+    (Gentoo's own 9999999gentoo-pam.conf already turns PasswordAuthentication off and lets PAM ask)."""
+    lines = ["# Written by the Gentoo LiveCD installer. Change it here, then restart sshd.", "PermitRootLogin no"]
+    if not accounts.ssh_password_login:
+        lines.extend(("PasswordAuthentication no", "KbdInteractiveAuthentication no"))
+    return "\n".join(lines) + "\n"
+
+
+def normalised_locale(name: str) -> str:
+    """How `locale -a` spells a locale: en_US.UTF-8 is listed as en_US.utf8."""
+    base, dot, codeset = name.partition(".")
+    codeset, at, modifier = codeset.partition("@")
+    return base + (dot + codeset.lower().replace("-", "") if dot else "") + (at + modifier if at else "")
+
+
+def generated_locales(system: System) -> list[str]:
+    """The locales for /etc/locale.gen: the main one, the extra ones and en_US.UTF-8 (many programs and installers expect it)."""
+    wanted = [system.locale, *system.extra_locales]
+    if system.locale not in {"C", "C.UTF-8", "POSIX"}:
+        wanted.append("en_US.UTF-8")
+    return [name for name in dict.fromkeys(wanted) if name not in {"C", "C.UTF-8", "POSIX"}]
 
 
 # --- keyboard files ----------------------------------------------------------------------------
@@ -69,6 +104,40 @@ def render_dconf_keyboard(system: System) -> str:
     return "\n".join(lines) + "\n"
 
 
+def account_problems(manifest: InstallManifest) -> list[str]:
+    """Account choices that cannot be carried out (the GUI shows them on the Personalize page)."""
+    accounts = manifest.accounts
+    problems: list[str] = []
+    if accounts.ssh_root_login:
+        problems.append("Root login over SSH is not available: log in with your own account and use sudo (or su) for administrator rights")
+    if accounts.root_locked():
+        if "wheel" not in accounts.groups:
+            problems.append("Turning root login off needs an administrator account: the user must be in the wheel group")
+        if accounts.privilege == "su":
+            problems.append("su needs the root password, so it cannot be the administrator tool when root login is turned off: choose sudo, doas or run0")
+    return problems
+
+
+def choice_problems(manifest: InstallManifest) -> list[str]:
+    """Choices of the accounts and tools that cannot be carried out; a choice is refused here, never silently ignored."""
+    return [*account_problems(manifest), *option_problems(manifest)]
+
+
+def option_problems(manifest: InstallManifest) -> list[str]:
+    """Tool and gaming choices that cannot be carried out (the GUI shows them on the Customize page)."""
+    options, system = manifest.options, manifest.system
+    problems: list[str] = []
+    if options.cron == "bcron":
+        problems.append("bcron is not available yet: Gentoo's bcron package has no service script. Choose cronie, dcron or none")
+    if options.cron == "fcron" and system.init == "systemd":
+        problems.append("fcron is not available with systemd: it has no systemd service. Choose cronie or dcron")
+    if options.journal_persistent and system.init != "systemd":
+        problems.append("Keeping the journal across reboots needs systemd; OpenRC keeps its logs in /var/log")
+    if options.gaming == "native" and not options.gaming_accept_external:
+        problems.append("Native gaming downloads Steam from Valve and uses an outside repository and testing (~amd64) packages: tick the box that accepts this, or choose Flatpak gaming")
+    return problems
+
+
 def live_input_problems(manifest: InstallManifest, *, root: str | Path = "/", runner: Runner | None = None) -> list[str]:
     """Choices that this live system can already tell are unusable.
 
@@ -95,6 +164,7 @@ def live_input_problems(manifest: InstallManifest, *, root: str | Path = "/", ru
     fonts = base / "usr/share/consolefonts"
     if system.console_font and fonts.is_dir() and not list(fonts.glob(f"{system.console_font}.*")) and not system.console_font.startswith("ter-"):
         problems.append(f"The console font {system.console_font!r} is not installed")
+    problems.extend(choice_problems(manifest))
     if system.secure_boot and runner is not None:
         problems.extend(check_secure_boot_material(runner, system))
     if manifest.storage.mode == "manual" and runner is not None:
@@ -151,11 +221,10 @@ class SystemMixin(ConfigurerBase):
         keymap = self.resolve_console_keymap(manifest)
         self.write("etc/hostname", accounts.hostname + "\n")
         self.write("etc/conf.d/hostname", f'hostname="{accounts.hostname}"\n')
-        self.write("etc/hosts", render_hosts(accounts.hostname))
-        locales = [system.locale] if system.locale in {"C", "C.UTF-8", "POSIX"} else [system.locale, "en_US.UTF-8"]
+        self.write("etc/hosts", render_hosts(accounts.hostname, system.domain, system.hosts_extra))
+        locales = generated_locales(system)
         supported = "" if self.dry_run else self.read_text("usr/share/i18n/SUPPORTED")
-        self.write("etc/locale.gen", "".join(locale_gen_line(name, supported) + "\n" for name in dict.fromkeys(locales)
-                                            if name not in {"C", "C.UTF-8", "POSIX"}))
+        self.write("etc/locale.gen", "".join(locale_gen_line(name, supported) + "\n" for name in locales))
         self.write("etc/env.d/02locale", f"LANG={shell_value(system.locale)}\n")
         # systemd, its user manager and localed read /etc/locale.conf, not env.d.
         self.write("etc/locale.conf", f"LANG={system.locale}\n")
@@ -180,10 +249,108 @@ class SystemMixin(ConfigurerBase):
             localtime.symlink_to(f"/usr/share/zoneinfo/{system.timezone}")
         self.write("etc/timezone", system.timezone + "\n")
         self.chroot(("locale-gen",))
+        self.chroot(("env-update",))
+        self.check_locales(system, locales)
+
+    def check_locales(self, system: System, locales: Sequence[str]) -> None:
+        """After locale-gen, `locale -a` must list what was asked for. A problem is a warning: the system still installs."""
+        if system.locale in {"C", "POSIX"}:
+            self.notify(f"warning: the locale {system.locale} is not a language: programs show English text and cannot display accents or other scripts. Choose a UTF-8 locale for daily use")
+        if not locales:
+            return
+        try:
+            listed = self.chroot(("locale", "-a"), capture=True).stdout
+        except RunnerError as exc:
+            self.notify(f"warning: the generated locales could not be checked ({exc})")
+            return
+        have = {normalised_locale(line.strip()) for line in listed.splitlines() if line.strip()}
+        missing = [name for name in locales if normalised_locale(name) not in have]
+        if missing:
+            self.notify("warning: locale-gen did not produce " + ", ".join(missing) + "; those languages will not be available (see /etc/locale.gen)")
+
+    def configure_machine_id(self, manifest: InstallManifest) -> None:
+        """The Handbook's machine-id step (non-fatal): OpenRC uses dbus-uuidgen once dbus is there, systemd sets it up and applies its presets."""
+        if manifest.system.init == "openrc":
+            if not self.is_installed("sys-apps/dbus"):
+                return
+            steps: list[tuple[str, ...]] = [("dbus-uuidgen", "--ensure=/etc/machine-id")]
+        else:
+            steps = [("systemd-machine-id-setup",), ("systemctl", "preset-all", "--preset-mode=enable-only")]
+        if manifest.system.init == "systemd":
+            steps.extend(("systemctl", "disable", unit) for unit in self.preset_units_to_disable(manifest))
+        for step in steps:
+            try:
+                self.chroot(step)
+            except RunnerError as exc:
+                self.notify(f"warning: {' '.join(step)} failed ({exc}); the system sets this up by itself at first boot")
+
+    def preset_units_to_disable(self, manifest: InstallManifest) -> list[str]:
+        """Units the upstream systemd presets enable but the user's choices exclude (preset-all enables them regardless)."""
+        units: list[str] = []
+        if manifest.options.timesync != "timesyncd":
+            units.append("systemd-timesyncd.service")
+        if manifest.network.manager != "systemd-networkd":
+            units.extend(["systemd-networkd.service", "systemd-networkd-wait-online.service", "systemd-networkd.socket", "systemd-resolved.service"])
+        return units
+
+    def configure_sshd(self, manifest: InstallManifest) -> None:
+        """The remote-login policy, written only when the user wants SSH (the service itself is enabled with the other base services)."""
+        if manifest.options.ssh:
+            self.write("etc/ssh/sshd_config.d/10-installer.conf", render_sshd_config(manifest.accounts))
+
+    def configure_journal(self, manifest: InstallManifest) -> None:
+        """systemd: keep the journal across reboots (valuable for repair) by creating /var/log/journal."""
+        if manifest.system.init == "systemd" and manifest.options.journal_persistent and not self.dry_run:
+            self._mkdirs(self.path("var/log/journal"))
+
+    # ----- the system tools of the Handbook ---------------------------------------------------------
+
+    def cron_daemon(self, manifest: InstallManifest) -> str:
+        """The cron daemon to install ('' for none). An OpenRC syslog-ng needs one for logrotate even when none was chosen."""
+        options = manifest.options
+        if options.cron_enabled:
+            return options.cron
+        return "cronie" if self.wants_cron(manifest) else ""
+
+    def system_tool_atoms(self, manifest: InstallManifest) -> list[str]:
+        """Packages of the choices on the tools tab: administrator tool, ssh, time sync, cron, logger and the optional tools."""
+        system, options = manifest.system, manifest.options
+        atoms = [PRIVILEGE_ATOMS[manifest.accounts.privilege]] if manifest.accounts.privilege in PRIVILEGE_ATOMS else []
+        if options.ssh:
+            atoms.append("net-misc/openssh")
+        if options.timesync == "chrony":
+            atoms.append("net-misc/chrony")
+        cron = self.cron_daemon(manifest)
+        if cron:
+            atoms.append(CRON_ATOMS[cron])
+        if options.file_indexing or options.mlocate:
+            atoms.append("sys-apps/mlocate")
+        if options.shell_completion:
+            atoms.append("app-shells/bash-completion")
+        if options.gentoolkit:
+            atoms.append("app-portage/gentoolkit")
+        # eclean-kernel comes with the kernel tools (configure_boot.kernel_extra_atoms), for a distribution kernel.
+        if options.logger_enabled:
+            if system.init == "openrc":
+                atoms.extend(LOGGER_ATOMS[options.logger])
+            else:
+                atoms.append("sys-apps/systemd")
+        return atoms
+
+    def configure_cron_daemon(self, manifest: InstallManifest) -> None:
+        """The first-run step some cron daemons need (non-fatal): dcron reads /etc/crontab once, fcron builds its tables."""
+        step = {"dcron": ("crontab", "/etc/crontab"), "fcron": ("emerge", "--config", "sys-process/fcron")}.get(self.cron_daemon(manifest))
+        if step is None:
+            return
+        try:
+            self.chroot(step)
+        except RunnerError as exc:
+            self.notify(f"warning: {' '.join(step)} failed ({exc}); run it once after the first start")
 
     def wants_cron(self, manifest: InstallManifest) -> bool:
-        """cron runs logrotate, so a ticked OpenRC logger brings a cron daemon with it."""
-        return manifest.options.cron_enabled or (manifest.options.logger_enabled and manifest.system.init == "openrc")
+        """logrotate runs from cron, so an OpenRC syslog-ng brings a cron daemon with it (sysklogd and metalog rotate their own logs)."""
+        options = manifest.options
+        return options.cron_enabled or (options.logger == "syslog-ng" and manifest.system.init == "openrc")
 
     # ----- services ---------------------------------------------------------------------------------
 
@@ -201,12 +368,15 @@ class SystemMixin(ConfigurerBase):
             base.extend((("systemd-networkd", "default", False), ("systemd-resolved", "default", False)))
         if options.ssh:
             base.append(("sshd", "default", False))
-        if options.chrony:
+        if options.timesync == "chrony":
             base.append(("chronyd", "default", False))
-        if self.wants_cron(manifest):
-            base.append(("cronie", "default", False))
+        elif options.timesync == "timesyncd":
+            base.append(("systemd-timesyncd", "default", False))
+        cron = self.cron_daemon(manifest)
+        if cron:
+            base.append((cron, "default", False))
         if options.logger_enabled and system.init == "openrc":
-            base.append(("syslog-ng", "default", False))
+            base.append((LOGGER_SERVICES[options.logger], "default", False))
         if network.manager == "netifrc":
             interface = network.interface
             if not re.fullmatch(r"[A-Za-z0-9_]+", interface):
@@ -251,6 +421,8 @@ class SystemMixin(ConfigurerBase):
         """Enable services; returns warnings for optional services whose package is not installed."""
         system = manifest.system
         warnings: list[str] = []
+        if phase in {"all", "base"} or (phase == "desktop" and system.init == "openrc"):
+            self.configure_machine_id(manifest)  # before the installer's own enables; on OpenRC dbus may arrive with the desktop
         if phase in {"all", "desktop"} and system.desktop != "minimal":
             manager = desktops.display_manager(system.desktop)[0]
             if system.init == "openrc" and self.service_installed("display-manager", "openrc"):

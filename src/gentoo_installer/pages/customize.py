@@ -65,6 +65,7 @@ class CustomizePage(PortageTabMixin, NetworkTabMixin, ToolsTabMixin, Page):
         self.hardware.set_advanced(advanced)
         self.set_network_advanced(advanced)
         self.portage_advanced.set_advanced(advanced)
+        self.set_tools_advanced(advanced)
 
     def show_hardware(self) -> None:
         self.tabs.setCurrentWidget(self.hardware)
@@ -111,7 +112,7 @@ class CustomizePage(PortageTabMixin, NetworkTabMixin, ToolsTabMixin, Page):
             self.portage_advanced.set_open(True)
             return False, problem
         sections = self.manifest.validate_sections()
-        errors = [error for name in ("portage", "network", "options") for error in sections[name]]
+        errors = [error for name in ("portage", "network", "options") for error in sections[name]] or self.tools_problems()
         if errors:
             return False, errors[0]
         hardware = self.hardware.problems()

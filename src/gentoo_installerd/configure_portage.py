@@ -302,8 +302,8 @@ class PortageMixin(ConfigurerBase):
         if storage.lvm:
             # lvm2[-lvm] installs only device-mapper, without the tools needed to activate the root volume.
             _require_use(package_use, "sys-fs/lvm2", "lvm")
-        if options.install_portagehub and system.init == "systemd":
-            # PortageHub's polkit dependency needs systemd's policykit support even on the minimal profile.
+        if (options.install_portagehub or manifest.accounts.privilege == "run0") and system.init == "systemd":
+            # PortageHub's polkit dependency (and run0, which asks polkit) needs systemd's policykit support even on the minimal profile.
             _require_use(package_use, "sys-apps/systemd", "policykit")
         if system.init == "systemd" and storage.luks:
             # Dracut's systemd-cryptsetup module needs the helper installed by systemd[cryptsetup].
