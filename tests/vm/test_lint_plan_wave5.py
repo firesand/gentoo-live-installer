@@ -190,3 +190,35 @@ def test_resolve_gate_mounts_every_overlay_read_only_at_the_path_the_configurati
 def test_the_data_files_are_valid_json_with_the_keys_the_code_reads():
     assert set(lint.load_data("heavy-builds.json")["hours"]) >= {"dev-qt/qtwebengine", "www-client/firefox"}
     assert json.loads((ROOT / "scripts/lint-plan-data/desktop-baseline.json").read_text())["counts"]["gnome"] == [578, 579]
+
+
+EMERGE_OUTPUT = """
+[binary   R    ] dev-libs/openssl-3.4.1-r1::gentoo
+[ebuild  N     ] dev-qt/qtwebengine-6.8.2-r1:6/6.8::gentoo  USE="widgets" 0 KiB
+[ebuild  N     ] x11-libs/gtk+-3.24.43:3::gentoo  USE="X" 0 KiB
+[ebuild  N     ] www-client/firefox-153.5.1:rapid::gentoo  0 KiB
+
+Total: 412 packages (410 new, 2 reinstalls), Size of downloads: 1,201,334 KiB
+"""
+
+
+def test_a_finished_emerge_is_judged_for_heavy_builds_and_the_baseline():
+    lint_module = gate.load_lint()
+    cell = lint_module.Cell("kde-openrc", "openrc", "kde", forbid_heavy=True)
+    result = gate.CellResult("kde-openrc", "img", returncode=0)
+    gate.judge_output(result, EMERGE_OUTPUT, cell, lint_module)
+    assert result.total == 412
+    assert result.heavy == ["dev-qt/qtwebengine-6.8.2-r1 (about 3.0 h)", "www-client/firefox-153.5.1 (about 3.0 h)"], "binary packages and small compiles are not heavy"
+    assert not result.ok, "a cell that must not compile for hours fails when it would"
+    assert result.notes == ["412 packages in all, near the kde baseline"]
+    small = gate.CellResult("kde-openrc", "img", returncode=0)
+    gate.judge_output(small, EMERGE_OUTPUT.replace("Total: 412", "Total: 150"), cell, lint_module)
+    assert "524" in small.notes[0] and "150" in small.notes[0], small.notes
+    tolerant = gate.CellResult("kde-openrc", "img", returncode=0)
+    gate.judge_output(tolerant, EMERGE_OUTPUT, lint_module.Cell("kde-openrc", "openrc", "kde"), lint_module)
+    assert tolerant.ok and tolerant.heavy
+
+
+def test_resolve_gate_takes_the_heavy_flag_for_every_cell():
+    args = gate.build_parser().parse_args(["--fail-on-heavy"])
+    assert args.fail_on_heavy is True and gate.build_parser().parse_args([]).fail_on_heavy is False
