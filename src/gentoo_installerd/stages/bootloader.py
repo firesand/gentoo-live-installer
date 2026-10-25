@@ -9,7 +9,12 @@ from .storage import StorageStages
 class BootloaderStage(StorageStages):
     def _bootloader(self) -> None:
         self.configurer.notify = self.log
-        self.configurer.emerge(self.manifest, ("--noreplace", *self.configurer.bootloader_atoms(self.manifest)))
+        atoms = self.configurer.bootloader_atoms(self.manifest)
+        if atoms:  # "no boot loader" has none
+            self.configurer.emerge(self.manifest, ("--noreplace", *atoms))
+        else:
+            self.warnings.append("No boot loader was installed, as you asked: this PC will not start the new system until you set one up "
+                                 "(the kernel options are in /etc/kernel/cmdline).")
         root = self._root_device()
         efi = next((entry.device for entry in self.storage.layout if entry.mountpoint in {"/efi", "/boot/efi"}), None)
         self.configurer.configure_bootloader(self.manifest, root, efi, self._plan())
@@ -17,6 +22,8 @@ class BootloaderStage(StorageStages):
 
     def _verify_bootloader(self) -> bool:
         efi = self.configurer.efi_mountpoint(self.manifest).lstrip("/")
+        if self.manifest.system.bootloader == "none":
+            return bool(self._target_file(RECEIPT_PATH))  # the user installs the boot loader
         if self.manifest.system.uki and not self._target_file(f"{efi}/EFI/Linux/gentoo.efi"):
             return False
         if not self._target_file(RECEIPT_PATH):

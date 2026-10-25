@@ -69,6 +69,8 @@ WAVE5_FIELDS_WITHOUT_CONTROL: set[str] = set()
 
 def test_every_hardware_field_has_a_control_and_every_choice_a_label():
     assert covered_fields() == {field.name for field in dataclasses.fields(Hardware)} - WAVE5_FIELDS_WITHOUT_CONTROL
+    names = [spec.name for spec in hardware_page.SPECS]
+    assert len(names) == len(set(names)), "a field has two rows (two branches each added one)"
     for spec in hardware_page.SPECS:
         if spec.kind == "choice" and spec.name in HARDWARE_CHOICES:
             assert {value for value, _ in spec.choices} == HARDWARE_CHOICES[spec.name], spec.name

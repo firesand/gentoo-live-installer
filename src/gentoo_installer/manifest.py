@@ -63,6 +63,8 @@ GENKERNEL_MESSAGE = (
 F2FS_GRUB_MESSAGE = (
     "F2FS is meant for flash media such as USB sticks and SD cards (that is how the Gentoo Handbook describes it), and GRUB cannot "
     "reliably read /boot from it. Keep /boot on a separate ext4 partition, use systemd-boot or the EFI stub, or choose another root filesystem.")
+SHIM_NOT_YET_MESSAGE = ("Secure Boot through shim and MOK is not available yet. Choose “Create a signing key for me” or “Use my own key”, "
+                        "or turn Secure Boot off.")
 SERIAL_CONSOLE_RE = re.compile(r"tty(?:S|USB|AMA)[0-9]{1,2}(?:,[0-9]{3,7}(?:[noe][5-8])?)?")
 UUID_RE = re.compile(r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")
 LICENSE_TOKEN_RE = re.compile(r"-?@?[A-Za-z0-9][A-Za-z0-9_.+-]*")
@@ -472,12 +474,20 @@ class System(_Migrating):
     def __post_init__(self) -> None:
         if self.secure_boot and self.secure_boot_mode == "off":
             self.secure_boot_mode = "own-key"  # the only Secure Boot an old file could ask for: its own key and certificate
+        elif self.secure_boot_mode != "off" and not self.secure_boot and self.secure_boot_mode in SECURE_BOOT_MODES:
+            self.secure_boot = True  # a mode other than off is a request for Secure Boot
         object.__setattr__(self, "_ready", True)
 
     def __setattr__(self, name: str, value: Any) -> None:
         super().__setattr__(name, value)
         if name == "secure_boot" and value and self.secure_boot_mode == "off" and getattr(self, "_ready", False):
             object.__setattr__(self, "secure_boot_mode", "own-key")
+        elif name == "secure_boot" and not value and getattr(self, "_ready", False):
+            object.__setattr__(self, "secure_boot_mode", "off")
+        elif name == "secure_boot_mode" and getattr(self, "_ready", False) and value in ("own-key", "create", "shim"):
+            object.__setattr__(self, "secure_boot", True)
+        elif name == "secure_boot_mode" and getattr(self, "_ready", False) and value == "off":
+            object.__setattr__(self, "secure_boot", False)
 
 
 @dataclass
@@ -1000,6 +1010,7 @@ class InstallManifest:
         elif profile_problem(system.profile, system.init, system.stage_variant):
             errors.append(profile_problem(system.profile, system.init, system.stage_variant))
         errors.extend(self._secure_boot_errors())
+        errors.extend(self._boot_not_yet_errors())
         errors.extend(self._validate_system_wave5())
         extra = system.kernel_cmdline_extra
         if extra:
@@ -1040,22 +1051,42 @@ class InstallManifest:
         return errors
 
     def _secure_boot_errors(self) -> list[str]:
-        """Secure Boot needs a signed Unified Kernel Image booted by systemd-boot or the EFI stub."""
+        """Secure Boot needs a signed Unified Kernel Image booted by systemd-boot or the EFI stub, and a key the installer makes or the user gives."""
         system, storage = self.system, self.storage
         if not system.secure_boot:
             return []
         errors: list[str] = []
+        if system.secure_boot_mode == "shim":
+            errors.append(SHIM_NOT_YET_MESSAGE)
         if storage.firmware != "uefi":
             errors.append("Secure Boot requires UEFI firmware")
         if system.bootloader == "grub":
-            errors.append("Secure Boot is not supported with GRUB (it would need a signed shim chain); choose systemd-boot or the EFI stub with a Unified Kernel Image")
+            errors.append("Secure Boot is not supported with GRUB yet; choose systemd-boot or the EFI stub with a Unified Kernel Image")
+        elif system.bootloader == "none":
+            errors.append("Secure Boot needs a boot loader that the installer signs: choose systemd-boot or the EFI stub")
         elif not system.uki:
             errors.append("Secure Boot with systemd-boot or EFI stub requires a signed Unified Kernel Image (enable UKI)")
+        if system.secure_boot_mode == "create":
+            return errors
         if not system.secure_boot_key or not system.secure_boot_certificate:
             errors.append("Secure Boot needs both a signing key and certificate")
         elif not (system.secure_boot_key.startswith("/") and system.secure_boot_certificate.startswith("/")) \
                 or has_control_characters(system.secure_boot_key + system.secure_boot_certificate):
             errors.append("The Secure Boot key and certificate must be absolute file paths")
+        return errors
+
+    def _boot_not_yet_errors(self) -> list[str]:
+        """Boot settings the manifest accepts but no code acts on yet: refused with a plain message instead of being ignored."""
+        system = self.system
+        errors: list[str] = []
+        if system.kernel == "custom":
+            errors.append("A custom kernel is not available yet. Choose a Gentoo distribution kernel; the manual kernel works from the command-line installer.")
+        if system.initramfs == "ugrd":
+            errors.append("The ugrd initramfs is not available yet. Choose Dracut.")
+        if system.hostonly:
+            errors.append("A small initramfs for this PC only (hostonly) is not available yet; the installer builds a generic one that boots on any hardware.")
+        if system.generic_uki:
+            errors.append("The generic Unified Kernel Image is not available yet.")
         return errors
 
     def _validate_locale(self) -> list[str]:
@@ -1288,7 +1319,8 @@ class InstallManifest:
         if system.kernel == "manual":
             advice.append("A manual kernel: the installation stops after the boot configuration so you can install the kernel yourself with the command-line installer, then resume it.")
         if system.secure_boot:
-            advice.append("Secure Boot: new kernels are not signed automatically. After a kernel update, sign the new boot image by hand or the PC will refuse to start it.")
+            advice.append("Secure Boot: you must enroll the signing certificate in the firmware once (the finish page shows how). Kernel updates are signed "
+                          "automatically with the key kept in /etc/secureboot (readable by root only).")
         if system.dual_boot and system.bootloader != "grub":
             advice.append("Dual boot detection works with GRUB only: other systems will not be added to the boot menu automatically.")
         if self.network.import_live_profiles:

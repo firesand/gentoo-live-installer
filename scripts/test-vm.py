@@ -292,8 +292,10 @@ ALL_SCENARIOS = tuple(name for name, scenario in SCENARIO_MAP.items() if scenari
 DETECTED_FIELDS = ("storage.device", "storage.device_id", "storage.device_id_kind", "storage.firmware", "storage.table")
 # Fields the wizard seeds from the hardware report (recommend.defaults_for) when the manifest still holds the default: the swap size from
 # the memory, no Bluetooth without a radio, no microcode in a virtual machine, and the companions, which a machine too small for PySide
-# may not get. In detect mode the plan records them without asserting them, and the probes judge what the wizard chose.
-WIZARD_SEEDED = ("storage.swap_mib", "storage.swap_choice", "options.bluetooth", "options.microcode", "options.install_hwmonux", "options.install_portagehub")
+# may not get, and the stage3, which follows the desktop (a desktop preselects the Desktop stage3). In detect mode the plan records them
+# without asserting them, and the probes judge what the wizard chose.
+WIZARD_SEEDED = ("storage.swap_mib", "storage.swap_choice", "options.bluetooth", "options.microcode", "options.install_hwmonux",
+                 "options.install_portagehub", "system.stage_variant")
 
 
 @dataclass(frozen=True)

@@ -440,29 +440,40 @@ def test_profile_consistency_rules():
 # --- NOBS-7: the multilib box and the stage3 agree --------------------------------------------------------------------------------------------------------
 
 
-def test_unchecking_and_rechecking_multilib_returns_to_the_standard_stage(make_window):
+def test_unchecking_and_rechecking_pure_64_bit_returns_to_the_desktop_stage_chosen_for_the_desktop(make_window):
     window = make_window()
     page = window.system
     page.desktop_group.set_value("gnome")
     fresh = make_window().system
     fresh.desktop_group.set_value("gnome")
-    page.multilib.setChecked(False)
+    page.pure64.setChecked(True)
     assert page.stage.currentData() == "amd64-nomultilib-openrc" and page.profile.currentText().endswith("/no-multilib")
-    page.multilib.setChecked(True)
-    assert page.stage.currentData() == "amd64-openrc"
+    page.pure64.setChecked(False)
+    assert page.stage.currentData() == "amd64-desktop-openrc"  # a desktop preselects the Desktop stage3
     page.save_manifest()
-    assert window.manifest.system.multilib is True and window.manifest.system.stage_variant == "amd64-openrc"
+    assert window.manifest.system.multilib is True and window.manifest.system.stage_variant == "amd64-desktop-openrc"
     assert page.profile.currentText() == fresh.profile.currentText()
     assert window.manifest.validate_sections()["system"] == []
+
+
+def test_a_stage3_picked_by_hand_goes_back_to_the_standard_one_without_the_automatic_choice(make_window):
+    window = make_window()
+    page = window.system
+    page.stage.setCurrentIndex(page.stage.findData("amd64-openrc"))
+    assert not page.stage_auto.isChecked()
+    page.pure64.setChecked(True)
+    page.pure64.setChecked(False)
+    assert page.stage.currentData() == "amd64-openrc"
 
 
 def test_the_multilib_toggle_keeps_the_init_system(make_window):
     window = make_window()
     page = window.system
     page.init_group.set_value("systemd")
-    page.multilib.setChecked(False)
-    page.multilib.setChecked(True)
-    assert page.stage.currentData() == "amd64-systemd"
+    page.desktop_group.set_value("gnome")  # KDE cannot be built without 32-bit support and would be switched to Minimal
+    page.pure64.setChecked(True)
+    page.pure64.setChecked(False)
+    assert page.stage.currentData() == "amd64-desktop-systemd"
 
 
 # --- COMP-NEW-7: companions do not belong on a minimal system -----------------------------------------------------------------------------------------------

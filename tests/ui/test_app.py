@@ -127,10 +127,14 @@ def test_default_gui_manifest_selects_kde_profile_for_amd64_openrc():
 
 def test_kernel_guidance_explains_automatic_kernel_dracut_requirement(window):
     guidance = window.system.kernel_guidance.text()
-    assert "distribution kernels require Dracut" in guidance
+    assert "recommended start and updates automatically" in guidance
     assert "Manual kernel configuration" not in guidance
-    assert [window.system.kernel.itemData(i) for i in range(window.system.kernel.count())] == ["gentoo-kernel-bin", "gentoo-kernel"]
-    assert [window.system.initramfs.itemData(i) for i in range(window.system.initramfs.count())] == ["dracut"]
+    assert list(window.system.kernel.cards) == ["gentoo-kernel-bin", "gentoo-kernel"]
+    assert "ready-made" in window.system.kernel.cards["gentoo-kernel-bin"].title_label.text()
+    assert "Dracut (required by Gentoo kernels, automatic)" in window.system.boot_section.initramfs_line.text()
+    combo = window.system.initramfs  # the choice lives in the More options group; the unfinished ones are listed but cannot be picked
+    assert combo.isEnabled() and combo.currentData() == "dracut"
+    assert [combo.model().item(i).isEnabled() for i in range(combo.count())] == [True, False, False]
 
 
 def test_guided_choices_reach_a_valid_review(window):
@@ -181,6 +185,8 @@ def test_vm_harness_manifests_survive_real_wizard_roundtrip(qtbot, monkeypatch, 
     for expected_page in range(1, 7):
         widget.next.click()
         assert widget.current == expected_page, (scenario_name, expected_page)
+    if scenario_name == "defaults":  # KDE preselects the Desktop stage3 (the harness plan records the field as wizard-seeded)
+        expected_manifest["system"]["stage_variant"] = "amd64-desktop-openrc"
     assert widget.manifest.to_dict(redact=False) == expected_manifest
     assert widget.manifest.accounts.disable_root_login is (not scenario.defaults)  # the defaults scenario keeps root login
     assert widget.manifest.accounts.root_password == harness.TEST_ROOT_PASSWORD

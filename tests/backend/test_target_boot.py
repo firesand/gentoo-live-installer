@@ -202,28 +202,9 @@ class OtherBootloaderTests(unittest.TestCase):
             self.install(target_manifest(system={"bootloader": "efi-stub"}), failing)
 
 
-class SigningRunner(ScriptedRunner):
-    """Records what the signing key directory looks like while sbsign runs."""
-
-    def __init__(self, secret_dir: Path, cancel_on_sign: bool = False) -> None:
-        super().__init__()
-        self.secret_dir = secret_dir
-        self.cancel_on_sign = cancel_on_sign
-        self.during_signing: dict[str, object] = {}
-
-    def run(self, argv, **kwargs):
-        if len(argv) > 3 and argv[2] == "sbsign":
-            self.during_signing = {
-                "dir_mode": self.secret_dir.stat().st_mode & 0o777,
-                "key_mode": (self.secret_dir / "signing.key").stat().st_mode & 0o777,
-                "key": (self.secret_dir / "signing.key").read_text(),
-            }
-            if self.cancel_on_sign:
-                raise InstallCancelled("Installation cancelled")
-        return super().run(argv, **kwargs)
-
-
 class SecureBootTests(unittest.TestCase):
+    """BOOT-07: the signing key stays on the installed system (root only), so every kernel update is signed again."""
+
     KEY = "-----BEGIN PRIVATE KEY-----\nSECRET-KEY-MATERIAL\n-----END PRIVATE KEY-----\n"
 
     def setUp(self) -> None:
@@ -238,7 +219,7 @@ class SecureBootTests(unittest.TestCase):
         self.cert = self.base / "sb.crt"
         self.key.write_text(self.KEY)
         self.cert.write_text("-----BEGIN CERTIFICATE-----\nCERT\n-----END CERTIFICATE-----\n")
-        self.manifest = target_manifest(system={"bootloader": "systemd-boot", "uki": True, "secure_boot": True,
+        self.manifest = target_manifest(system={"bootloader": "systemd-boot", "uki": True, "secure_boot": True, "secure_boot_mode": "own-key",
                                                  "secure_boot_key": str(self.key), "secure_boot_certificate": str(self.cert)})
         (self.root / "efi/EFI/Linux").mkdir(parents=True)
 
@@ -248,28 +229,47 @@ class SecureBootTests(unittest.TestCase):
         c.notify = self.notes.append
         return c
 
-    def tree_text(self) -> str:
-        return "\n".join(path.read_text(errors="ignore") for path in self.root.rglob("*") if path.is_file())
-
-    def test_the_private_key_never_touches_the_target_disk(self) -> None:
-        runner = SigningRunner(self.secrets)
+    def matching_pair(self) -> ScriptedRunner:
+        runner = ScriptedRunner()
         runner.respond("openssl x509 -noout -pubkey", "PUBKEY")
         runner.respond("openssl pkey -pubout", "PUBKEY")
+        return runner
+
+    def test_the_users_own_key_is_kept_on_the_target_for_root_only(self) -> None:
+        runner = self.matching_pair()
         self.configure(runner).configure_bootloader(self.manifest, "/dev/sda3", "/dev/sda1")
-        self.assertNotIn("SECRET-KEY-MATERIAL", self.tree_text())
-        self.assertFalse((self.root / "root/secure-boot.key").exists())
+        stored = self.root / "etc/secureboot/gentoo.key"
+        self.assertEqual(stored.read_text(), self.KEY)
+        self.assertEqual(stored.stat().st_mode & 0o777, 0o600)
+        self.assertEqual((self.root / "etc/secureboot").stat().st_mode & 0o777, 0o700)
+        self.assertIn(("chroot", str(self.root), "chmod", "0600", "/etc/secureboot/gentoo.key"), runner.commands)
         sign = next(command for command in runner.commands if "sbsign" in command)
-        self.assertEqual(sign[sign.index("--key") + 1], "/run/gentoo-installer-sb/signing.key")
-        # during signing the key lives in a private directory of the live tmpfs, and is gone afterwards
-        self.assertEqual(runner.during_signing["dir_mode"], 0o700)
-        self.assertEqual(runner.during_signing["key_mode"], 0o600)
-        self.assertEqual(runner.during_signing["key"], self.KEY)
-        self.assertFalse(self.secrets.exists())
+        self.assertEqual(sign[sign.index("--key") + 1], "/etc/secureboot/gentoo.key")
+        self.assertEqual(sign[sign.index("--cert") + 1], "/etc/secureboot/gentoo.crt")
+
+    def test_a_key_made_by_the_installer_needs_no_files_from_the_user(self) -> None:
+        m = target_manifest(system={"bootloader": "systemd-boot", "uki": True, "secure_boot": True, "secure_boot_mode": "create"})
+        runner = ScriptedRunner()
+        c = self.configure(runner)
+        self.assertEqual(c.secure_boot_problems(m), [])
+        c.configure_bootloader(m, "/dev/sda3", "/dev/sda1")
+        make = next(command for command in runner.commands if "req" in command)
+        self.assertEqual(make[make.index("-keyout") + 1], "/etc/secureboot/gentoo.key")
+        self.assertIn("-nodes", make)
+        self.assertLess(runner.commands.index(make), next(i for i, command in enumerate(runner.commands) if "sbsign" in command))
+        self.assertIn("gentoo-secureboot.cer", "\n".join(self.notes))
+        self.assertIn("Setup Mode", (self.root / "etc/secureboot/ENROLL.txt").read_text())
+
+    def test_an_existing_generated_key_is_not_replaced(self) -> None:
+        m = target_manifest(system={"bootloader": "systemd-boot", "uki": True, "secure_boot": True, "secure_boot_mode": "create"})
+        (self.root / "etc/secureboot").mkdir(parents=True)
+        (self.root / "etc/secureboot/gentoo.key").write_text("already here")
+        runner = ScriptedRunner()
+        self.configure(runner).prepare_secure_boot(m)
+        self.assertFalse(any("req" in command for command in runner.commands))
 
     def test_every_boot_image_is_signed_and_verified(self) -> None:
-        runner = SigningRunner(self.secrets)
-        runner.respond("openssl x509 -noout -pubkey", "PUBKEY")
-        runner.respond("openssl pkey -pubout", "PUBKEY")
+        runner = self.matching_pair()
         self.configure(runner).configure_bootloader(self.manifest, "/dev/sda3", "/dev/sda1")
         signed = [command[command.index("--output") + 1].removesuffix(".signed") for command in runner.commands if "sbsign" in command]
         self.assertEqual(signed, ["/efi/EFI/Linux/gentoo.efi", "/efi/EFI/systemd/systemd-bootx64.efi", "/efi/EFI/BOOT/BOOTX64.EFI"])
@@ -278,7 +278,7 @@ class SecureBootTests(unittest.TestCase):
     def test_the_fallback_copy_of_an_efi_stub_uki_is_signed_too(self) -> None:
         for mode in ("erase", "manual"):  # a shared ESP only gets the copy when none exists, and it must still be signed
             with self.subTest(mode=mode):
-                m = target_manifest(storage={"mode": mode}, system={"bootloader": "efi-stub", "uki": True, "secure_boot": True,
+                m = target_manifest(storage={"mode": mode}, system={"bootloader": "efi-stub", "uki": True, "secure_boot": True, "secure_boot_mode": "own-key",
                                                                      "secure_boot_key": str(self.key), "secure_boot_certificate": str(self.cert)})
                 if mode == "manual":
                     from gentoo_installer.manifest import Partition
@@ -287,41 +287,36 @@ class SecureBootTests(unittest.TestCase):
                 (self.root / "efi/EFI/Linux/gentoo.efi").write_bytes(b"uki")
                 (self.root / "efi/EFI/BOOT").mkdir(parents=True, exist_ok=True)
                 (self.root / "efi/EFI/BOOT/BOOTX64.EFI").unlink(missing_ok=True)
-                runner = SigningRunner(self.secrets)
-                runner.respond("openssl x509 -noout -pubkey", "PUBKEY")
-                runner.respond("openssl pkey -pubout", "PUBKEY")
+                runner = self.matching_pair()
                 runner.respond("lsblk --noheadings --output PARTN", "1\n")
                 runner.respond("lsblk --noheadings --output PKNAME", "sda\n")
                 self.configure(runner).configure_bootloader(m, "/dev/sda3", "/dev/sda1")
                 signed = [command[command.index("--output") + 1].removesuffix(".signed") for command in runner.commands if "sbsign" in command]
                 self.assertEqual(signed, ["/efi/EFI/Linux/gentoo.efi", "/efi/EFI/BOOT/BOOTX64.EFI"])
 
-    def test_cancelling_during_signing_still_removes_the_key(self) -> None:
-        runner = SigningRunner(self.secrets, cancel_on_sign=True)
-        runner.respond("openssl x509 -noout -pubkey", "PUBKEY")
-        runner.respond("openssl pkey -pubout", "PUBKEY")
+    def test_cancelling_during_signing_leaves_no_copy_on_the_live_system(self) -> None:
+        runner = self.matching_pair()
+        runner.script("chroot " + str(self.root) + " sbsign", InstallCancelled("Installation cancelled"))
         with self.assertRaises(InstallCancelled):
             self.configure(runner).configure_bootloader(self.manifest, "/dev/sda3", "/dev/sda1")
         self.assertFalse(self.secrets.exists())
-        self.assertNotIn("SECRET-KEY-MATERIAL", self.tree_text())
 
-    def test_installer_cleanup_removes_staged_secrets(self) -> None:
+    def test_cleanup_removes_what_an_older_installer_staged_on_the_live_system(self) -> None:
         c = self.configure(ScriptedRunner())
-        c._stage_signing_material(self.manifest.system)
-        self.assertTrue((self.secrets / "signing.key").exists())
+        self.secrets.mkdir()
+        (self.secrets / "signing.key").write_text("old")
         c.cleanup_secrets()
         c.cleanup_secrets()  # nothing left: not an error
         self.assertFalse(self.secrets.exists())
 
-    def test_certificate_is_published_for_enrollment(self) -> None:
-        runner = SigningRunner(self.secrets)
-        runner.respond("openssl x509 -noout -pubkey", "PUBKEY")
-        runner.respond("openssl pkey -pubout", "PUBKEY")
+    def test_certificate_is_published_for_enrollment_with_the_steps(self) -> None:
+        runner = self.matching_pair()
         self.configure(runner).configure_bootloader(self.manifest, "/dev/sda3", "/dev/sda1")
-        convert = next(command for command in runner.commands if command[:3] == ("openssl", "x509", "-in"))
+        convert = next(command for command in runner.commands if command[2:5] == ("openssl", "x509", "-in"))
         self.assertIn("DER", convert)
-        self.assertEqual(convert[-1], str(self.root / "efi/EFI/enroll/gentoo-secureboot.cer"))
-        self.assertTrue(any("enroll" in note for note in self.notes))
+        self.assertEqual(convert[-1], "/efi/EFI/enroll/gentoo-secureboot.cer")
+        self.assertTrue((self.root / "efi/EFI/enroll").is_dir())
+        self.assertTrue(any("EFI/enroll/gentoo-secureboot.cer" in note for note in self.notes))
 
     def test_key_and_certificate_are_checked_before_anything_is_installed(self) -> None:
         runner = ScriptedRunner()
@@ -339,22 +334,23 @@ class SecureBootTests(unittest.TestCase):
         self.key.write_text(self.KEY)
         self.assertIn("cannot be parsed", self.configure(broken).secure_boot_problems(self.manifest)[0])
 
-    def test_grub_and_missing_uefi_are_refused(self) -> None:
+    def test_grub_shim_and_missing_uefi_are_refused(self) -> None:
         for sections, message in (({"system": {"bootloader": "grub"}}, "not supported with GRUB"),
+                                  ({"system": {"secure_boot_mode": "shim"}}, "not available yet"),
                                   ({"storage": {"firmware": "bios"}}, "requires UEFI")):
-            m = self.manifest
+            m = target_manifest(system={"bootloader": "systemd-boot", "uki": True, "secure_boot": True, "secure_boot_mode": "own-key"})
             for section, values in sections.items():
                 for name, value in values.items():
                     setattr(getattr(m, section), name, value)
             with self.subTest(message=message), self.assertRaisesRegex(ConfigurationError, message):
                 configurer(self.root, ScriptedRunner(), dry_run=True).configure_bootloader(m, "/dev/sda3")
 
-    def test_dry_run_signs_with_the_private_directory_path_and_leaves_nothing_behind(self) -> None:
+    def test_dry_run_signs_with_the_paths_on_the_target_and_writes_nothing(self) -> None:
         runner = ScriptedRunner()
         configurer(self.root, runner, dry_run=True, secret_dir=self.secrets).configure_bootloader(self.manifest, "/dev/sda3", "/dev/sda1")
         sign = next(command for command in runner.commands if "sbsign" in command)
-        self.assertEqual(sign[sign.index("--key") + 1], "/run/gentoo-installer-sb/signing.key")
-        self.assertFalse(self.secrets.exists())
+        self.assertEqual(sign[sign.index("--key") + 1], "/etc/secureboot/gentoo.key")
+        self.assertFalse((self.root / "etc/secureboot").exists())
 
 
 class EspSyncHookTests(unittest.TestCase):
@@ -480,9 +476,16 @@ class EspSyncInstallTests(unittest.TestCase):
         self.assertIn("UKI=1", text)
         self.assertIn("FALLBACK_COPY=1", text)
 
-    def test_secure_boot_installs_get_no_hook_because_updates_would_be_unsigned(self) -> None:
+    def test_secure_boot_installs_get_a_hook_that_signs_every_update(self) -> None:
         m = target_manifest(system={"bootloader": "systemd-boot", "uki": True, "secure_boot": True})
-        self.assertEqual(self.install(m), {})
+        installed = self.install(m)
+        self.assertEqual(set(installed), set(ESP_SYNC_HOOKS))
+        for text, _ in installed.values():
+            self.assertIn("SIGN=1", text)
+            self.assertIn("SIGN_LOADER=1", text)
+            self.assertIn('SB_KEY="/etc/secureboot/gentoo.key"', text)
+        efi_stub = self.install(target_manifest(system={"bootloader": "efi-stub", "uki": True, "secure_boot": True}))
+        self.assertIn("SIGN_LOADER=0", next(iter(efi_stub.values()))[0])
 
     def test_the_bootloader_stage_installs_it_for_non_grub_bootloaders_only(self) -> None:
         for bootloader, uki, expected in (("grub", False, False), ("grub", True, True), ("systemd-boot", False, True), ("efi-stub", False, True)):
