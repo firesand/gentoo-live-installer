@@ -1,0 +1,2 @@
+error: could not reach the server
+See the documentation: https://code.claude.com/docs/en/troubleshoot

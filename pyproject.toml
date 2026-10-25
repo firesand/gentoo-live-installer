@@ -20,9 +20,23 @@ gentoo-installer-text = "gentoo_installer.textui.cli:main"
 gentoo-rescue = "gentoo_installerd.rescue.cli:main"
 gentoo-rescue-gui = "gentoo_installer.rescue_app:main"
 gentoo-remote-access = "gentoo_installer.remote_cli:main"
+gentoo-rescue-agents = "gentoo_rescue_ai.agents:main"
+gentoo-rescue-login = "gentoo_rescue_ai.login:main"
+gentoo-rescue-ai = "gentoo_rescue_ai.launcher:main"
+gentoo-rescue-do = "gentoo_rescue_ai.do_client:main"
+gentoo-rescue-approver = "gentoo_rescue_ai.approver:main"
+gentoo-rescue-mount = "gentoo_rescue_ai.mount:main"
+gentoo-rescue-share = "gentoo_rescue_ai.share:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+# The pins, AGENTS.md, the agents' safe configs and the hook: the iso owner installs data/root as it is.
+gentoo_rescue_ai = [
+    "data/*.json", "data/root/etc/*/*", "data/root/etc/*/*/*",
+    "data/root/etc/skel-rescue-ai/.bashrc", "data/root/etc/skel-rescue-ai/.bash_profile", "data/root/etc/skel-rescue-ai/.codex/*", "data/root/etc/skel-rescue-ai/.config/opencode/*",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests", "apps/hwmonux/tests"]

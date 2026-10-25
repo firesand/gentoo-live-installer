@@ -1,0 +1,33 @@
+{
+  "_comment": "Pinned agent downloads, checked by gentoo-rescue-agents before anything is run. Update only with scripts/bump-ai-agents.py after review. Sums fetched 2026-10-25.",
+  "claude": {
+    "version": "2.1.310",
+    "url": "https://downloads.claude.ai/claude-code-releases/2.1.310/linux-x64/claude",
+    "kind": "binary",
+    "binary": "claude",
+    "sha256": "b73676430af12f97316a798b8371f81d640f90a58bdcb8f3ce56a835bb47df56",
+    "size": 291638640,
+    "source": "https://downloads.claude.ai/claude-code-releases/2.1.310/manifest.json (platforms.linux-x64.checksum and .size)",
+    "license": "proprietary: downloaded by the person from Anthropic, never redistributed (https://code.claude.com/docs/en/legal-and-compliance)"
+  },
+  "codex": {
+    "version": "0.164.0",
+    "url": "https://github.com/openai/codex/releases/download/rust-v0.164.0/codex-x86_64-unknown-linux-musl.tar.gz",
+    "kind": "tar.gz",
+    "binary": "codex",
+    "sha256": "90dd0b03b28afcb7fa733a4f73b413db2916a47347efd43fb669cc1c774ee8e4",
+    "size": 114979035,
+    "source": "GitHub release API for openai/codex tag rust-v0.164.0, asset codex-x86_64-unknown-linux-musl.tar.gz (the digest field)",
+    "license": "Apache-2.0"
+  },
+  "opencode": {
+    "version": "1.19.4",
+    "url": "https://github.com/anomalyco/opencode/releases/download/v1.19.4/opencode-linux-x64-baseline.tar.gz",
+    "kind": "tar.gz",
+    "binary": "opencode",
+    "sha256": "1697ef40558d378bd2f72efa8fafe1bed1f0e664f09247b9357556b95dbc7cbc",
+    "size": 79667571,
+    "source": "GitHub release API for anomalyco/opencode tag v1.19.4, asset opencode-linux-x64-baseline.tar.gz (the digest field); the baseline build needs no AVX2, so it starts on any PC a rescue stick meets",
+    "license": "MIT"
+  }
+}

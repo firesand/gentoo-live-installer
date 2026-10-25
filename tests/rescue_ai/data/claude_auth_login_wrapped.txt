@@ -1,0 +1,8 @@
+[?25l[2mBrowser didn't open? Use the url below to sign in[0m (c to copy)
+
+https://claude.com/cai/oauth/authorize?code=tr
+ue&client_id=9d1c250a-e61b-44d9-88ed-5944d1962
+f5e&response_type=code&scope=user%3Ainference&
+state=abc123
+
+Paste code here if prompted > 
