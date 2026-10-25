@@ -193,7 +193,7 @@ def test_look_only_opens_a_system_that_cannot_be_changed(qtbot, rescue_lab_facto
     qtbot.waitUntil(lambda: window.stack.currentIndex() == DIAGNOSE, timeout=20000)
     page = window.diagnose_page
     assert page.mode_label.text() == "LOOK ONLY" and not window.system.allow_write
-    assert "do not run" in page.terminal_text.text() and not page.writable_terminal_button.isVisibleTo(page)
+    assert "do not run" in page.terminal_text.text()
     repairs = [page.findChild(object, f"rescueAction:{name}") for name in ("boot.bootloader", "boot.initramfs", "fstab.fix")]
     assert all(button is not None and not button.isEnabled() for button in repairs)
     assert "inspection only" in "".join(label.text() for label in page.findChildren(type(page.summary)))  # the reason is written next to the button

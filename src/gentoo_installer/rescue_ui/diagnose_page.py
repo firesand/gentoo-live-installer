@@ -47,6 +47,20 @@ class DiagnosisPage(RescuePage):
         self.busy = Busy()
         self.content.addWidget(self.busy)
 
+        self.chroot_card = Card("Open a terminal in this system (chroot)", "A command line inside the installed system, the way the Gentoo Handbook's chroot works. It starts read-only; the prompt begins with (chroot).")
+        self.chroot_card.setObjectName("rescueChrootCard")
+        self.terminal_button = QPushButton("Open a &terminal in this system (chroot)…")
+        self.terminal_button.setObjectName("rescueTerminal")
+        self.terminal_button.setStyleSheet(primary_style())
+        self.terminal_button.clicked.connect(self._ask_terminal)
+        self.chroot_card.content.addWidget(self.terminal_button)
+        self.terminal_text = wrapped_label("", muted=True)
+        self.chroot_card.content.addWidget(self.terminal_text)
+        self.confirm = InlineConfirm()
+        self.confirm.confirmed.connect(self._terminal_confirmed)
+        self.chroot_card.content.addWidget(self.confirm)
+        self.content.addWidget(self.chroot_card)
+
         self.recommended_card = Card("Recommended repair")
         self.recommended_text = wrapped_label("")
         self.recommended_card.content.addWidget(self.recommended_text)
@@ -73,27 +87,13 @@ class DiagnosisPage(RescuePage):
         self.groups_box.setSpacing(10)
         self.content.addLayout(self.groups_box)
 
-        self.look_card = Card("Look around", "Read the logs of the system, or open a terminal inside it.")
+        self.look_card = Card("Look around", "Read the logs of the system.")
         self.logs_button = QPushButton("View the &logs…")
         self.logs_button.setObjectName("rescueLogs")
         self.logs_button.clicked.connect(self.logsRequested)
         self.look_card.content.addWidget(self.logs_button)
-        self.terminal_button = QPushButton("Open a &terminal in this system…")
-        self.terminal_button.setObjectName("rescueTerminal")
-        self.terminal_button.clicked.connect(lambda: self._ask_terminal(False))
-        self.look_card.content.addWidget(self.terminal_button)
-        self.terminal_text = wrapped_label("", muted=True)
-        self.look_card.content.addWidget(self.terminal_text)
-        self.writable_terminal_button = QPushButton("Open a terminal that can chan&ge files…")
-        self.writable_terminal_button.setObjectName("rescueTerminalWritable")
-        self.writable_terminal_button.clicked.connect(lambda: self._ask_terminal(True))
-        self.look_card.content.addWidget(self.writable_terminal_button)
-        self.confirm = InlineConfirm()
-        self.confirm.confirmed.connect(self._terminal_confirmed)
-        self.look_card.content.addWidget(self.confirm)
         self.content.addWidget(self.look_card)
         self.content.addStretch()
-        self._terminal_writable = False
 
         self.refresh_button = self.add_button("&Check again", "rescueRefresh", right=False, tip="Run the checks again")
         self.refresh_button.clicked.connect(self.refreshRequested)
@@ -212,9 +212,8 @@ class DiagnosisPage(RescuePage):
             self.terminal_button.setText("Open a &terminal in the mount folder…")
             self.terminal_text.setText("This system was opened for looking only, so its own programs do not run. The terminal is a shell of this live system in the folder where the system is mounted.")
         else:
-            self.terminal_button.setText("Open a &terminal in this system…")
-            self.terminal_text.setText("The terminal runs inside the system as the root user. It is read-only until you enable repairs.")
-        self.writable_terminal_button.setVisible(system.writable and system.allow_write)
+            self.terminal_button.setText("Open a &terminal in this system (chroot)…")
+            self.terminal_text.setText("The terminal runs inside the system as the root user. It can change files only if you tick the box in the question that follows.")
 
     # ---- actions --------------------------------------------------------------------------------------------------------------------
     def _request(self, action: str) -> None:
@@ -237,28 +236,30 @@ class DiagnosisPage(RescuePage):
             button.setEnabled(not text)
 
     # ---- the terminal ---------------------------------------------------------------------------------------------------------------
-    def _ask_terminal(self, writable: bool) -> None:
-        if self.system is None:
-            return
-        self._terminal_writable = writable
-        name = self.system.root_device.rsplit("/", 1)[-1]
-        if not self.system.allow_write:
-            body = "A terminal is a shell for the root user. Everything you type there is done for real. Only open it if you know what you want to do."
-        elif writable:
-            body = "This terminal can change files in the system. A wrong command can stop the system from starting. Make a backup first if you can."
-        else:
-            body = "The terminal runs the system's own shell as the root user. It starts read-only, but programs can still do harm. Only open it if you know what you want to do."
-        self.confirm.ask("Open a terminal?", body, "Open the &terminal", expected=name, phrase=model.BACKUP_PHRASE if writable else "", danger=writable)
-
-    def _terminal_confirmed(self, _typed: str, _phrase: str, _tick: bool) -> None:
+    def _ask_terminal(self) -> None:
+        """One clear question: which system (name and device), and whether the commands typed there may change it. No device name or phrase to type."""
         system = self.system
         if system is None:
             return
-        mode = "look only" if not system.allow_write else "read-write" if self._terminal_writable else "read-only"
+        where = f"{system.title} on {system.root_device}"
+        if not system.allow_write:
+            self.confirm.ask("Open a terminal?", f"{where}\n\nThis system was opened for looking only. The terminal is a shell of the live system in the folder where it is mounted; nothing of the system runs.",
+                             "Open the &terminal")
+            return
+        body = f"{where}\n\nThe terminal runs the system's own shell as the root user. It is read-only unless you tick the box below."
+        self.confirm.ask("Open a terminal in this system?", body, "Open the &terminal", tick="Commands I type here change the installed system", tick_optional=True, danger=False)
+
+    def _terminal_confirmed(self, _typed: str, _phrase: str, tick: bool) -> None:
+        system = self.system
+        if system is None:
+            return
+        writable = bool(tick) and system.allow_write
+        mode = "look only" if not system.allow_write else "read-write" if writable else "read-only"
         started, problem = launcher.open_terminal(self.client.socket_path, system.session_id, system.root_device, f"Repair: {system.title} ({mode})",
-                                                  writable=self._terminal_writable, host=not system.allow_write)
+                                                  writable=writable, host=not system.allow_write)
         if started:
-            self.notice.show_message("info", "A terminal window was opened. Type exit in it when you are done. Close the system with “Finish” when you leave the repair tool.")
+            extra = " The system is switched to read-write for it; press “Check again” to update this window." if writable and not system.writable else ""
+            self.notice.show_message("info", "A terminal window was opened. Type exit in it when you are done. Close the system with “Finish” when you leave the repair tool." + extra)
         else:
             self.notice.show_message("error", problem)
 

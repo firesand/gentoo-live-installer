@@ -188,46 +188,36 @@ def terminal_line(repair_kit) -> list[str]:
     return shlex.split(arguments[-1].split("; echo;")[0])
 
 
-def test_a_terminal_in_the_system_asks_for_the_disk_name_and_runs_the_terminal_tool_on_the_windows_socket(qtbot, gentoo_machine, repair_kit) -> None:
+def test_the_terminal_is_a_first_level_action_with_one_clear_question(qtbot, gentoo_machine, repair_kit) -> None:
+    daemon, _lab, _tree = gentoo_machine
+    window = repair_kit.open(daemon.path)
+    system = open_system(qtbot, window)
+    page = window.diagnose_page
+    assert page.chroot_card.isVisibleTo(page) and "(chroot)" in page.terminal_button.text()
+    assert page.content.indexOf(page.chroot_card) < page.content.indexOf(page.recommended_card)  # above every repair, not under "Look around"
+    page.terminal_button.click()
+    confirm = page.confirm
+    assert confirm.isVisibleTo(page) and system.root_device in confirm.body.text() and system.title in confirm.body.text()
+    assert confirm.check.isVisibleTo(page) and confirm.check.text() == "Commands I type here change the installed system"
+    assert not confirm.typed.isVisibleTo(page) and not confirm.phrase.isVisibleTo(page)  # no device name and no backup phrase to type
+    assert confirm.confirm_button.isEnabled() and not repair_kit.launched  # nothing opens before the answer
+    confirm.confirm_button.click()
+    assert terminal_line(repair_kit) == ["gentoo-rescue", "--socket", daemon.path, "shell", system.session_id, "--simple"]
+    assert "A terminal window was opened" in page.notice.text.text()
+    assert "Repair: Gentoo Linux (read-only)" == repair_kit.launched[-1][1][1]
+
+
+def test_the_tick_box_makes_the_terminal_one_that_can_change_files(qtbot, gentoo_machine, repair_kit) -> None:
     daemon, _lab, _tree = gentoo_machine
     window = repair_kit.open(daemon.path)
     system = open_system(qtbot, window)
     page = window.diagnose_page
     page.terminal_button.click()
-    assert page.confirm.isVisibleTo(page) and not page.confirm.confirm_button.isEnabled()
-    assert not repair_kit.launched  # nothing opens before the name is typed
-    page.confirm.typed.setText("nvme0n1")
-    assert not page.confirm.confirm_button.isEnabled()
-    page.confirm.typed.setText("nvme0n1p5")
+    page.confirm.check.setChecked(True)
     page.confirm.confirm_button.click()
-    assert terminal_line(repair_kit) == ["gentoo-rescue", "--socket", daemon.path, "shell", system.session_id, "--typed", "nvme0n1p5"]
-    assert "A terminal window was opened" in page.notice.text.text()
-    assert "Repair: Gentoo Linux (read-only)" == repair_kit.launched[-1][1][1]
-    assert not page.writable_terminal_button.isVisibleTo(page)  # a terminal that can change files needs repairs to be enabled first
-
-
-def test_a_terminal_that_can_change_files_also_needs_the_backup_phrase(qtbot, gentoo_machine, repair_kit) -> None:
-    daemon, lab, tree = gentoo_machine
-    (tree / "boot/grub/grub.cfg").unlink()
-    window = repair_kit.open(daemon.path)
-    system = open_system(qtbot, window)
-    page = window.diagnose_page
-    page.recommended_button.click()
-    qtbot.waitUntil(lambda: window.plan_page.state == "review", timeout=20000)
-    window.plan_page.reviewed.setChecked(True)
-    window.plan_page.run_button.click()
-    qtbot.waitUntil(lambda: window.plan_page.state == "result", timeout=30000)
-    window.plan_page.done_button.click()
-    qtbot.waitUntil(lambda: page.writable_terminal_button.isVisibleTo(page) and not page.busy.isVisibleTo(page), timeout=20000)
-    page.writable_terminal_button.click()
-    assert page.confirm.phrase.isVisibleTo(page)
-    page.confirm.typed.setText("nvme0n1p5")
-    assert not page.confirm.confirm_button.isEnabled()
-    page.confirm.phrase.setText("I HAVE A BACKUP")
-    page.confirm.confirm_button.click()
-    argv = terminal_line(repair_kit)
-    assert argv == ["gentoo-rescue", "--socket", daemon.path, "shell", system.session_id, "--typed", "nvme0n1p5", "--writable", "--i-have-a-backup"]
+    assert terminal_line(repair_kit) == ["gentoo-rescue", "--socket", daemon.path, "shell", system.session_id, "--simple", "--writable"]
     assert "Repair: Gentoo Linux (read-write)" == repair_kit.launched[-1][1][1]
+    assert "switched to read-write" in page.notice.text.text()  # the session was read-only: the daemon switches it for the terminal
 
 
 def test_a_terminal_for_a_look_only_session_is_a_shell_of_the_live_system(qtbot, gentoo_machine, repair_kit) -> None:
@@ -243,7 +233,7 @@ def test_a_terminal_for_a_look_only_session_is_a_shell_of_the_live_system(qtbot,
     qtbot.waitUntil(lambda: window.stack.currentIndex() == DIAGNOSE, timeout=20000)
     page = window.diagnose_page
     page.terminal_button.click()
-    page.confirm.typed.setText("nvme0n1p5")
+    assert not page.confirm.check.isVisibleTo(page)  # nothing of a look-only system can be changed
     page.confirm.confirm_button.click()
     assert terminal_line(repair_kit)[-1] == "--host" and "(look only)" in repair_kit.launched[-1][1][1]
 
@@ -255,7 +245,6 @@ def test_without_a_terminal_program_the_window_says_so(qtbot, gentoo_machine, re
     open_system(qtbot, window)
     page = window.diagnose_page
     page.terminal_button.click()
-    page.confirm.typed.setText("nvme0n1p5")
     page.confirm.confirm_button.click()
     assert not repair_kit.launched and "No terminal program" in page.notice.text.text() and page.notice.kind == "error"
 
@@ -267,7 +256,6 @@ def test_sudo_is_only_used_when_the_user_cannot_open_the_socket_itself(qtbot, ge
     window = repair_kit.open(daemon.path)
     open_system(qtbot, window)
     window.diagnose_page.terminal_button.click()
-    window.diagnose_page.confirm.typed.setText("nvme0n1p5")
     window.diagnose_page.confirm.confirm_button.click()
     assert terminal_line(repair_kit)[0] == "gentoo-rescue"
     monkeypatch.setattr(launcher.os, "access", lambda path, mode: False)

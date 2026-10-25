@@ -238,11 +238,12 @@ def test_a_rollback_is_noted() -> None:
 
 
 # ---- the terminal --------------------------------------------------------------------------------------------------------------------
-def test_the_terminal_command_uses_the_windows_own_socket_and_types_the_device_name() -> None:
+def test_the_terminal_command_uses_the_windows_own_socket_and_asks_nothing_again() -> None:
     assert model.terminal_argv("/run/gentoo-installer/server.sock", "r1a2b3c", "/dev/nvme0n1p5") == [
-        "gentoo-rescue", "--socket", "/run/gentoo-installer/server.sock", "shell", "r1a2b3c", "--typed", "nvme0n1p5"]
+        "gentoo-rescue", "--socket", "/run/gentoo-installer/server.sock", "shell", "r1a2b3c", "--simple"]  # no device name, no backup phrase: the window asked once
     writable = model.terminal_argv("/s", "r1", "/dev/sda2", writable=True, sudo=True)
-    assert writable[:2] == ["sudo", "gentoo-rescue"] and writable[-2:] == ["--writable", "--i-have-a-backup"]
+    assert writable[:2] == ["sudo", "gentoo-rescue"] and writable[-2:] == ["--simple", "--writable"]
+    assert model.terminal_argv("/s", "r1", host=True)[-2:] == ["--simple", "--host"]
 
 
 def test_the_shell_line_keeps_the_window_open_after_the_tool_ends() -> None:

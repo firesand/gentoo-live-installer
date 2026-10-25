@@ -368,13 +368,13 @@ class InlineConfirm(QFrame):
         self.phrase.returnPressed.connect(self._enter)
         self.hide()
 
-    def ask(self, title: str, body: str, confirm_text: str, *, expected: str = "", phrase: str = "", tick: str = "", danger: bool = False, cancel_text: str = "Cancel") -> None:
+    def ask(self, title: str, body: str, confirm_text: str, *, expected: str = "", phrase: str = "", tick: str = "", danger: bool = False, cancel_text: str = "Cancel", tick_optional: bool = False) -> None:
         self.title.setText(title)
         self.body.setText(soft_breaks(body))
         self.check.setText(tick)
         self.check.setChecked(False)
         self.check.setVisible(bool(tick))
-        self._expected, self._phrase, self._needs_tick = expected, phrase, bool(tick)
+        self._expected, self._phrase, self._needs_tick = expected, phrase, bool(tick) and not tick_optional  # an optional tick box is an answer, not a condition
         self.typed_label.setText(f"Type {expected} to continue:" if expected else "")
         self.typed_label.setVisible(bool(expected))
         self.typed.clear()
