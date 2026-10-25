@@ -135,7 +135,7 @@ def tmux_session_argv(agent_window: Launch, shell_window: Launch) -> list[str]:
     Both windows start in the home directory. No other window exists: in particular none that takes approvals."""
     return ["tmux", "-u", "new-session", "-A", "-s", TMUX_SESSION, "-n", "agent", "-c", agent_window.cwd, *agent_window.argv,
             ";", "new-window", "-n", "shell", "-c", shell_window.cwd, "/bin/bash", "-l",
-            ";", "select-window", "-t", f"{TMUX_SESSION}:1"]
+            ";", "select-window", "-t", f"{TMUX_SESSION}:agent"]  # by name: tmux numbers windows from 0 unless base-index is set
 
 
 def session_launches(agent: str | None, home: str, term: str) -> tuple[Launch, Launch]:
@@ -308,8 +308,12 @@ def main(argv: Sequence[str] | None = None, *, prompts: Prompts | None = None, r
     if agent is None:
         prompts.say("\nWindow 1 is a shell. Install an agent there: gentoo-rescue-agents install claude|codex|opencode, then log in: gentoo-rescue-login")
     agent_window, shell_window = session_launches(agent, home, os.environ.get("TERM", "linux"))
-    prompts.say("\nStarting the session as rescue-ai. Window 1: " + (agent or "shell") + ", window 2: shell (Ctrl-b then 2). Detach with Ctrl-b d.\n")
-    return run(drop_privileges(Launch(tmux_session_argv(agent_window, shell_window), home, agent_window.env)))
+    already = run(drop_privileges(Launch(["tmux", "has-session", "-t", TMUX_SESSION], home, agent_window.env))) == 0
+    prompts.say("\nStarting the session as rescue-ai. Window 'agent': " + (agent or "a shell") + ", window 'shell': a plain shell. Ctrl-b n switches, Ctrl-b w lists, Ctrl-b d detaches.\n")
+    command = ["tmux", "-u", "attach", "-t", TMUX_SESSION] if already else tmux_session_argv(agent_window, shell_window)
+    if already:
+        prompts.say("The rescue session was already running; joining it.")
+    return run(drop_privileges(Launch(command, home, agent_window.env)))
 
 
 if __name__ == "__main__":  # pragma: no cover

@@ -138,6 +138,12 @@ def run(ctx: cli.Context, args: argparse.Namespace, link: str = TARGET_LINK, bas
     sid = session["session_id"]
     info = ctx.client.result("rescue.session", session_id=sid)
     path = info.get("path") or str(Path(base_dir) / sid)
+    try:  # the agents (user rescue-ai) walk through the base folder to /mnt/gentoo: let them, and nothing more than that
+        mode = os.stat(base_dir).st_mode
+        if not mode & 0o001:
+            os.chmod(base_dir, (mode & 0o7777) | 0o005)
+    except OSError:
+        pass
     problem = make_link(link, path)
     if args.writable:
         say("Read-write needs the engine's own plan and a typed confirmation:")

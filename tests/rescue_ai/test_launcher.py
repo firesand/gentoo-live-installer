@@ -44,7 +44,7 @@ def run_main(tmp_path: Path, *argv: str, answers=None, secrets=None, net=None, p
         password_file.write_text(password)
     prompts = Scripted(answers, secrets)
     commands: list[list[str]] = []
-    code = launcher.main(list(argv), prompts=prompts, run=lambda c: commands.append(list(c)) or 0, net=net or (lambda a, p: {"ok": True, "online": True}), home=str(home),
+    code = launcher.main(list(argv), prompts=prompts, run=lambda c: commands.append(list(c)) or (1 if "has-session" in c else 0), net=net or (lambda a, p: {"ok": True, "online": True}), home=str(home),
                          password_file=str(password_file), require_root=False)
     return code, commands, prompts, home
 
@@ -124,7 +124,7 @@ def test_a_missing_agent_is_offered_for_download_as_rescue_ai_never_as_root(tmp_
     install = commands[0]
     assert install[:3] == ["setpriv", "--reuid=rescue-ai", "--regid=rescue-ai"] and install[-3:] == ["gentoo-rescue-agents", "install", "codex"]
     code, commands, prompts, home = run_main(tmp_path, "codex", answers=["", "n", "n"])
-    assert "Window 1 is a shell" in prompts.text and "claude" not in commands[-1] and commands[-1][-1] == f"{'rescue'}:1"
+    assert "Window 1 is a shell" in prompts.text and "claude" not in commands[-1] and commands[-1][-1] == "rescue:agent"
 
 
 def test_offline_and_not_installed_points_at_the_usb_way(tmp_path) -> None:
@@ -211,3 +211,21 @@ def test_claude_is_started_with_the_managed_guide_and_nothing_from_a_project(tmp
     # --setting-sources user: the project and local settings (and their hooks) of the working directory are not even read.
     argv = launcher.agent_launch("claude", HOME).argv
     assert argv[1:] == ["--setting-sources", "user"]
+
+
+def test_an_already_running_session_is_joined_not_extended(tmp_path) -> None:
+    home = tmp_path / "home"
+    commands: list[list[str]] = []
+    prompts = Scripted(["", "n"])
+    password_file = tmp_path / "pw"
+    password_file.write_text("pw-pw-pw-pw")
+    launcher.main(["shell"], prompts=prompts, run=lambda c: commands.append(list(c)) or 0, net=lambda a, p: {"ok": True, "online": True}, home=str(home),
+                  password_file=str(password_file), require_root=False)
+    tmux = commands[-1]
+    assert tmux[tmux.index("tmux"):] == ["tmux", "-u", "attach", "-t", "rescue"] and "new-window" not in tmux and "joining it" in prompts.text
+
+
+def test_the_agent_window_is_selected_by_name_not_by_a_number_that_depends_on_base_index() -> None:
+    launch = launcher.agent_launch("claude", HOME)
+    argv = launcher.tmux_session_argv(launch, launch)
+    assert argv[-2:] == ["-t", "rescue:agent"] and "-n" in argv and argv[argv.index("-n") + 1] == "agent"

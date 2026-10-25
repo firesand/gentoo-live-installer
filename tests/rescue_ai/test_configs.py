@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import tomllib
 from pathlib import Path
 
@@ -14,12 +15,15 @@ AGENTS_MD = ROOT / "etc" / "gentoo-rescue" / "AGENTS.md"
 MANAGED = ROOT / "etc" / "claude-code" / "managed-settings.json"
 
 
-def test_the_tree_mirrors_where_the_files_go_and_holds_no_sudo_rule_or_symlink() -> None:
-    files = sorted(str(p.relative_to(ROOT)) for p in ROOT.rglob("*") if p.is_file())
+def test_the_tree_mirrors_where_the_files_go_and_holds_no_sudo_rule() -> None:
+    files = sorted(str(p.relative_to(ROOT)) for p in ROOT.rglob("*") if p.is_file() and not p.is_symlink())
     assert files == sorted([
         "etc/claude-code/CLAUDE.md", "etc/claude-code/managed-settings.json", "etc/gentoo-rescue/AGENTS.md", "etc/gentoo-rescue/hooks/pretooluse-guard.py",
         "etc/skel-rescue-ai/.codex/config.toml", "etc/skel-rescue-ai/.config/opencode/opencode.json"])
-    assert not [p for p in ROOT.rglob("*") if p.is_symlink()]  # the AGENTS.md links are made by gentoo-rescue-ai (an absolute link would dangle in a build tree)
+    # The AGENTS.md links of Codex and OpenCode: absolute, so they dangle in the source tree (and setuptools leaves a dangling link out of a wheel);
+    # gentoo-rescue-ai makes them again at every start (prepare_home), so they exist whichever way the tree was installed.
+    links = {str(p.relative_to(ROOT)): os.readlink(p) for p in ROOT.rglob("*") if p.is_symlink()}
+    assert links == {"etc/skel-rescue-ai/.codex/AGENTS.md": "/etc/gentoo-rescue/AGENTS.md", "etc/skel-rescue-ai/.config/opencode/AGENTS.md": "/etc/gentoo-rescue/AGENTS.md"}
     assert not (ROOT / "etc" / "sudoers.d").exists()
 
 

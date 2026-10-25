@@ -247,7 +247,7 @@ def resolve_program(program: str) -> str:
     if "/" in program:
         if not program.startswith("/"):
             raise Refused("the program must be an absolute path or a bare name (not a relative path)")
-        resolved = program
+        resolved = os.path.normpath(program)
     else:
         for folder in FIXED_PATH.split(":"):
             candidate = os.path.join(folder, program)
@@ -281,17 +281,18 @@ def peer_groups(peer: "Peer") -> frozenset[int]:
 
 
 def changeable_by_peer(path: str, peer: "Peer") -> str:
-    """The first path component of ``path`` (itself or a folder above it) that ``peer`` can change, or ''. A symlink is followed."""
+    """The first path component that ``peer`` can change, or ''. Both the path as given (every link in it is looked at itself, with lstat:
+    a link in a folder the agent writes can be repointed after approval) and the real path it leads to are walked."""
     gids = peer_groups(peer)
-    real = os.path.realpath(path)
-    parts = real.split("/")
-    for depth in range(len(parts), 0, -1):
-        candidate = "/".join(parts[:depth]) or "/"
-        try:
-            if writable_by(os.stat(candidate), peer.uid, gids):
-                return candidate
-        except OSError:
-            continue
+    for walked, look in ((path, os.lstat), (os.path.realpath(path), os.stat)):
+        parts = walked.split("/")
+        for depth in range(len(parts), 0, -1):
+            candidate = "/".join(parts[:depth]) or "/"
+            try:
+                if writable_by(look(candidate), peer.uid, gids):
+                    return candidate
+            except OSError:
+                continue
     return ""
 
 
@@ -334,7 +335,7 @@ def check_request(request: Any) -> tuple[list[str], str]:
         raise Refused(f"{cwd} is not a folder")
     if below_target(cwd):
         raise Refused("commands never start inside the target disk (/mnt/gentoo, /mnt/rescue): use 'gentoo-rescue' for the target, or a full path from another folder")
-    return list(argv), cwd
+    return list(argv), os.path.realpath(cwd)  # the resolved folder is shown and used: a link the agent repoints later changes nothing
 
 
 Send = Callable[[dict[str, Any]], bool]
@@ -342,8 +343,8 @@ Send = Callable[[dict[str, Any]], bool]
 
 def run_command(argv: list[str], cwd: str, send: Send) -> int:
     """execve ``argv`` without a shell in a clean environment; relay its output as data. Returns the exit status (128+signal when killed)."""
-    program = resolve_program(argv[0])
-    process = subprocess.Popen([program, *argv[1:]], executable=program, cwd=cwd, env=dict(CLEAN_ENV), shell=False, stdin=subprocess.DEVNULL,
+    program = argv[0]  # already an absolute path chosen and checked by the service
+    process = subprocess.Popen([program, *argv[1:]], executable=os.path.realpath(program), cwd=cwd, env=dict(CLEAN_ENV), shell=False, stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, close_fds=True, start_new_session=True)
     selector = selectors.DefaultSelector()
     assert process.stdout is not None and process.stderr is not None

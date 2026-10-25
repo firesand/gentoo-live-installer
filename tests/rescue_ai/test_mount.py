@@ -108,3 +108,12 @@ def test_writable_goes_through_the_engines_own_plan_and_confirmation(lab_factory
     code, out, err, link = run_mount(lab, tmp_path, "--writable", answers=["y", "", "", ""])
     assert link.is_symlink() and "(read-only)" in out
     assert not lab.system.commands_with("mount", "remount")
+
+
+def test_the_base_folder_is_made_walkable_for_the_agents(lab_factory, tmp_path) -> None:
+    lab, _ = uefi_gentoo_lab(lab_factory)
+    base = Path(lab.session_env().base_dir)
+    base.mkdir(parents=True, exist_ok=True)
+    base.chmod(0o700)
+    code, *_ = run_mount(lab, tmp_path, answers=["y"])
+    assert code == 0 and base.stat().st_mode & 0o005 == 0o005

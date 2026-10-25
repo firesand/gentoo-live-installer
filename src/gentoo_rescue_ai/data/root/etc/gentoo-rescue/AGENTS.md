@@ -36,6 +36,7 @@ Actions include `boot.bootloader`, `boot.config`, `boot.initramfs`, `boot.kernel
 Always run `plan` first, show it, get a yes, then `run` with the digest `plan` printed (`--confirm-plan DIGEST`). The target stays read-only until a plan that needs writing is confirmed.
 `gentoo-chroot SESSION` opens the Handbook-style chroot for the person; you do not need it for diagnosis.
 
+If `/mnt/gentoo` is missing or a plain `ls /mnt/gentoo` says "Permission denied", do not work around it: tell the person to run `gentoo-rescue-mount` again on the console.
 Reading the mounted target as yourself works for files that are world-readable (`/mnt/gentoo/etc/portage/make.conf`, `/var/log/emerge.log`). Root-only files need `gentoo-rescue-do cat ...` and a typed approval, so prefer `gentoo-rescue ... logs`.
 
 ## 4. The storage stack (look at it before assuming)

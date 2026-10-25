@@ -7,6 +7,7 @@ import json
 import os
 import socket
 import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -265,13 +266,15 @@ def test_the_vt_console_reads_a_secret_with_echo_off_and_times_out(tmp_path) -> 
     console._fd = slave
     try:
         os.write(master, b"stale typing\n")
-        timer = threading.Timer(0.3, lambda: os.write(master, b"hunter22\n"))
+        time.sleep(0.3)  # let the terminal take the stale line into its input queue before the question flushes it
+        timer = threading.Timer(0.6, lambda: os.write(master, b"hunter22\n"))
         timer.start()
         # Anything typed before the question is thrown away; the answer typed after it is returned.
         typed = console.read_secret("Password: ", 5.0)
         assert typed == "hunter22"
         assert termios.tcgetattr(slave)[3] & termios.ECHO  # the terminal is put back as it was
         assert console.read_secret("Password: ", 0.2) is None
+        timer.join()
     finally:
         os.close(master)
         os.close(slave)
@@ -307,3 +310,32 @@ def test_a_file_argument_the_agent_can_still_change_is_flagged_on_the_screen(mak
     service.ask(["/bin/cat", str(notes_file), "/etc/hostname"], cwd=str(tmp_path))
     prompt = service.console.prompts[0]
     assert f"can still change {notes_file}" in prompt and prompt.count("!!") == 1
+
+
+def test_a_link_the_agent_can_repoint_is_refused_as_a_program(make, tmp_path) -> None:
+    link = tmp_path / "echo"
+    link.symlink_to("/bin/echo")  # the target is a system file, but the link itself lives in a folder the agent writes
+    service = make([PASSWORD], program_check=approver.program_problem)
+    code, out, _, notes = service.ask([str(link), "x"], cwd=str(tmp_path))
+    assert code == do_client.EXIT_REFUSED and out == b"" and service.console.prompts == []
+    assert any("can be changed by the rescue-ai user" in note for note in notes)
+
+
+def test_a_link_in_an_argument_is_flagged_and_a_link_as_the_folder_is_run_as_its_real_folder(make, tmp_path) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    seen: list[tuple[list[str], str]] = []
+    service = make([PASSWORD], runner=lambda argv, cwd, send: seen.append((argv, cwd)) or 0)
+    code, *_ = service.ask(["/bin/echo", "x"], cwd=str(link))
+    assert code == 0 and seen == [(["/bin/echo", "x"], os.path.realpath(real))]  # the folder that was approved is the folder that is used
+    assert os.path.realpath(real) in service.console.prompts[0]
+    assert approver.changeable_by_peer(str(link), approver.Peer(1, ME, ME, "me"))  # the link itself is in a folder this user writes
+
+
+def test_the_program_that_runs_is_the_checked_file_even_through_a_system_link(tmp_path) -> None:
+    seen: list[list[str]] = []
+    send_events: list[dict] = []
+    status = approver.run_command(["/bin/echo", "ok"], str(tmp_path), send_events.append)
+    assert status == 0 and any(e["event"] == "output" for e in send_events)
