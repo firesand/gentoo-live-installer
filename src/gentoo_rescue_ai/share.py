@@ -225,6 +225,15 @@ def stop_share(folder: Path, say: Callable[[str], None] = print, kill: Callable[
     return stopped
 
 
+def terminate_ttyd(pid: int, kill: Callable[[int, int], None] = os.kill) -> None:
+    """SIGTERM to ``pid`` when it still is ttyd (a pid alone could have been reused by then)."""
+    if alive(pid, "ttyd"):
+        try:
+            kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+
+
 # ---- supervisor ----------------------------------------------------------------------------------------------------------------------------------
 def supervise(state: State, *, ttyd_alive: Callable[[], bool], clients: Callable[[], list[tuple[str, float]]], stop: Callable[[str], None], now: Callable[[], float] = time.time,
               sleep: Callable[[float], None] = time.sleep, poll: float = POLL_SECONDS, tmux_up: Callable[[], bool] = lambda: True) -> str:
@@ -304,7 +313,9 @@ def start(args: argparse.Namespace, *, say: Callable[[str], None] = print, which
     try:
         state.supervisor = os.getpid()
         (folder / "state.json").write_text(json.dumps(asdict(state)), encoding="utf-8")
-        supervise(state, ttyd_alive=lambda: process.poll() is None, clients=lambda: tmux_clients(tmux), stop=lambda reason: process.terminate(),
+        # This forked supervisor is not ttyd's parent: Popen.poll() would get ECHILD here and report it ended (the first VM run left an
+        # orphaned ttyd, no state, no idle timeout and no working stop). ttyd is watched and stopped by its pid instead.
+        supervise(state, ttyd_alive=lambda: alive(process.pid, "ttyd"), clients=lambda: tmux_clients(tmux), stop=lambda reason: terminate_ttyd(process.pid),
                   tmux_up=lambda: subprocess.run([tmux, "has-session", "-t", TMUX_SESSION], capture_output=True, check=False).returncode == 0)
         cleanup(folder)
     finally:

@@ -263,3 +263,20 @@ def test_the_share_listens_on_a_local_network_only() -> None:
     with pytest.raises(share.ShareError, match="no LAN address"):
         share.pick_address([], None, None)
     assert share.lan_addresses("2: eth0    inet 203.0.113.7/24 brd 203.0.113.255 scope global eth0\n") == []
+
+
+def test_the_background_supervisor_watches_ttyd_by_its_pid(tmp_path, monkeypatch) -> None:
+    """The supervisor is forked after ttyd started, so it is not ttyd's parent and Popen.poll() would say "ended" at once (the first
+    VM run left ttyd running with no state and no way to stop it). It must use the pid and the command line instead."""
+    import inspect
+    import signal as signals
+
+    source = inspect.getsource(share.main) if hasattr(share, "main") else ""
+    body = "".join(inspect.getsource(f) for f in (getattr(share, n) for n in dir(share)) if inspect.isfunction(f) and "os.fork()" in inspect.getsource(f))
+    after_fork = body[body.index("os.fork()"):]
+    assert "process.poll()" not in after_fork and 'alive(process.pid, "ttyd")' in after_fork and "terminate_ttyd(process.pid)" in after_fork, source[:0]
+    killed = []
+    monkeypatch.setattr(share, "alive", lambda pid, needle: pid == 4242 and needle == "ttyd")
+    share.terminate_ttyd(4242, kill=lambda pid, sig: killed.append((pid, sig)))
+    share.terminate_ttyd(5151, kill=lambda pid, sig: killed.append((pid, sig)))  # not ttyd (any more): left alone
+    assert killed == [(4242, signals.SIGTERM)]

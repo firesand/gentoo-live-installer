@@ -17,7 +17,9 @@ sys-fs/lvm2 lvm thin
 # util-linux links mount to libcryptsetup, which cannot be merged before lvm2, while every
 # source build (lvm2 included) needs mount for Portage's namespace sandbox. Nothing on the
 # live image uses mount's dm-verity support; the cryptsetup tool itself is unaffected.
-sys-apps/util-linux -cryptsetup
+# caps builds setpriv, which gentoo-rescue-ai uses to start the agents as rescue-ai (groups reset, no new privileges).
+# The default -caps leaves it out: the first VM run of the AI rescue entry found no setpriv on the image.
+sys-apps/util-linux -cryptsetup caps
 # The live image keeps AIO cooler support in HWMonux (the ebuild leaves it off by default
 # because liquidctl is ~amd64) and Secure Boot signing tools for the installer's checks.
 app-misc/hwmonux liquidctl

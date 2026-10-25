@@ -83,3 +83,11 @@ def test_the_console_hint_names_the_ai_tool_only_when_the_disc_has_it(tmp_path) 
                             env={**base, "PATH": f"{tmp_path}:{base['PATH']}"}, check=False)
     assert "sudo gentoo-rescue-ai" in withit.stdout
     assert max(len(line) for line in withit.stdout.splitlines()) <= 80
+
+
+def test_util_linux_builds_setpriv_for_the_launcher() -> None:
+    """gentoo-rescue-ai starts the agents with setpriv (launcher.drop_privileges); util-linux builds it only with caps."""
+    use = (ROOT / "iso/portage/package.use/live-installer").read_text()
+    match = re.search(r"^sys-apps/util-linux\s+(.*)$", use, re.M)
+    assert match and "caps" in match.group(1).split() and "-cryptsetup" in match.group(1).split()
+    assert "setpriv" in (ROOT / "src/gentoo_rescue_ai/launcher.py").read_text()

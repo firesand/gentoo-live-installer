@@ -23,6 +23,9 @@ FORBIDDEN_GROUPS = frozenset({"tty", "wheel", "disk", "video", "input", "audio",
 DEFAULT_APPROVER_VT = 9
 # The password is typed on the keyboard: whoever can read or inject key events, read the screen buffers or memory could sniff or fake it.
 KEYBOARD_PATTERNS = ("/dev/input/*", "/dev/uinput", "/dev/vcs*", "/dev/vcsa*", "/dev/vcsu*", "/dev/mem", "/dev/kmem", "/dev/port", "/dev/kmsg")
+# Reading these is harmless (the kernel log never holds the password; everybody may read /dev/kmsg, mode 0644, unless
+# dmesg_restrict says no). Writing is not: a forged kernel message can be printed on the active console, the approval screen too.
+WRITE_ONLY_RISK = frozenset({"/dev/kmsg"})
 SHADOW = "/etc/shadow"
 YAMA = "/proc/sys/kernel/yama/ptrace_scope"
 VT_FILE = f"{STATE_DIR}/approver-vt"
@@ -41,18 +44,20 @@ class Facts:
     root_locked: bool | None = None  # None: not known (not checked)
 
 
-def can_open(info: os.stat_result | None, uid: int, gids: frozenset[int]) -> bool:
-    """Whether a process with this uid and groups could open the device for reading or writing, from its owner, group and mode."""
+def can_open(info: os.stat_result | None, uid: int, gids: frozenset[int], write_only: bool = False) -> bool:
+    """Whether a process with this uid and groups could open the device for reading or writing (``write_only``: for writing),
+    from its owner, group and mode."""
     if info is None:
         return False
     mode = stat.S_IMODE(info.st_mode)
     if uid == 0:
         return True
+    bits = 0o2 if write_only else 0o6
     if info.st_uid == uid:
-        return bool(mode & 0o600)
+        return bool(mode & (bits << 6))
     if info.st_gid in gids:
-        return bool(mode & 0o060)
-    return bool(mode & 0o006)
+        return bool(mode & (bits << 3))
+    return bool(mode & bits)
 
 
 def problems(facts: Facts, approver_vt: int = DEFAULT_APPROVER_VT) -> list[str]:
@@ -67,7 +72,10 @@ def problems(facts: Facts, approver_vt: int = DEFAULT_APPROVER_VT) -> list[str]:
     if facts.sudo_allows:
         found.append(f"sudo lets {AI_USER} run something. {AI_USER} must have no sudo rule at all; root commands go through gentoo-rescue-do.")
     for name, info in facts.devices.items():
-        if can_open(info, facts.uid, facts.gids):
+        if name in WRITE_ONLY_RISK:
+            if can_open(info, facts.uid, facts.gids, write_only=True):
+                found.append(f"{name} can be written by {AI_USER}: it could print forged kernel messages on the approval screen.")
+        elif can_open(info, facts.uid, facts.gids):
             found.append(f"{name} can be opened by {AI_USER}: the approval screen would not be private.")
     if facts.root_locked is False:
         found.append(f"The root account has a password ({SHADOW}); it must be locked (!) so that nothing can become root with 'su'. Root commands go through gentoo-rescue-do.")

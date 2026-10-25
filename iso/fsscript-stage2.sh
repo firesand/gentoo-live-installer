@@ -89,8 +89,8 @@ required_commands=(
 	# helpers
 	chronyd chronyc jq pv links gpg gpgv tar rsync gparted lsof lvs lscpu
 	# the AI rescue stick (wave 6): the share and the QR code of the login, the agents' search tool,
-	# the tmux session, the console switch of the approver, and the SystemRescue-style tools
-	tmux ttyd qrencode rg openssl chvt
+	# the tmux session, the console switch of the approver, the drop to rescue-ai, and the SystemRescue-style tools
+	tmux ttyd qrencode rg openssl chvt setpriv
 	snapper fsarchiver ncdu tcpdump mtr dd_rescue dislocker foremost memtester restic rclone mount.cifs vim mc
 	# the repair tool on the live side (hostenv.TOOLS_WANTED, fsprobe.CHECK_TOOLS and the
 	# host policy of src/gentoo_installerd/rescue; tests/iso/test_ebuilds.py keeps them in step)

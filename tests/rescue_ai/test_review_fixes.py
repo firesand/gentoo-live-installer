@@ -176,6 +176,18 @@ def test_f5_an_input_or_screen_buffer_device_the_agent_can_open_is_reported(devi
     assert any(device in line for line in preflight.problems(facts))
 
 
+def test_the_kernel_log_may_be_read_but_not_written() -> None:
+    """/dev/kmsg is 0644 root:root on every Linux: reading it is harmless, so the first VM run of the AI rescue entry must not stop
+    there. Writing could print forged kernel messages on the approval screen."""
+    readable = good_facts(devices={**good_facts().devices, "/dev/kmsg": fake_stat(0o644, 0, 0)})
+    assert not any("/dev/kmsg" in line for line in preflight.problems(readable))
+    writable = good_facts(devices={**good_facts().devices, "/dev/kmsg": fake_stat(0o646, 0, 0)})
+    assert any("/dev/kmsg can be written" in line for line in preflight.problems(writable))
+    # the other devices stay refused for reading too
+    vcs = good_facts(devices={**good_facts().devices, "/dev/vcs9": fake_stat(0o644, 0, 0)})
+    assert any("/dev/vcs9 can be opened" in line for line in preflight.problems(vcs))
+
+
 def test_f5_gather_lists_those_devices_and_skips_folders() -> None:
     assert {"/dev/uinput", "/dev/mem", "/dev/kmsg"} <= {p for p in ("/dev/uinput", "/dev/mem", "/dev/kmsg") if p in preflight.KEYBOARD_PATTERNS}
     assert "/dev/input/*" in preflight.KEYBOARD_PATTERNS and "/dev/vcsa*" in preflight.KEYBOARD_PATTERNS
@@ -241,3 +253,37 @@ def test_f7_a_command_running_too_long_is_stopped(tmp_path) -> None:
     status = approver.run_command(["/bin/sleep", "30"], str(tmp_path), lambda event: chunks.append(event) or True, max_seconds=0.5)
     assert status == 124 and time.monotonic() - start < 10
     assert any(event.get("stream") == "stderr" for event in chunks)
+
+
+def test_a_link_counts_by_its_folder_not_by_its_own_mode(tmp_path) -> None:
+    """On a merged-usr system /bin is a link (mode 0777, as every link) to usr/bin: /bin/true must not count as changeable."""
+    from gentoo_rescue_ai import approver
+
+    usr_bin = tmp_path / "usr" / "bin"
+    usr_bin.mkdir(parents=True)
+    program = usr_bin / "true"
+    program.write_text("#!/bin/sh\n")
+    program.chmod(0o755)
+    (tmp_path / "bin").symlink_to("usr/bin")
+    for folder in (tmp_path, tmp_path / "usr", usr_bin):
+        folder.chmod(0o755)
+    stranger = approver.Peer(pid=1, uid=os.getuid() + 4242, gid=os.getgid() + 4242, name="")  # not the owner of these files
+    assert approver.changeable_by_peer(str(tmp_path / "bin" / "true"), stranger) == ""
+    # but a link in a folder the agent can write is still caught (by its folder)
+    tmp_path.chmod(0o777)
+    try:
+        assert approver.changeable_by_peer(str(tmp_path / "bin" / "true"), stranger) == str(tmp_path)
+    finally:
+        tmp_path.chmod(0o755)
+
+
+def test_a_note_of_the_approver_is_not_shown_as_a_file_the_agent_can_change() -> None:
+    """The first VM run showed "The agent can still change the folder /home/rescue-ai can be changed by ...": the note about a
+    replaced folder went through the template for changeable files."""
+    from gentoo_rescue_ai import approver
+
+    note = "the folder /home/rescue-ai can be changed by the agent (/home/rescue-ai), so the command runs in / instead"
+    text = approver.prompt_text(approver.Peer(1, 999, 999, "rescue-ai"), ["/bin/true"], "/", [], "abcd-efgh-jkmn", [note])
+    assert f"Note: {note}." in text and "can still change the folder" not in text
+    text = approver.prompt_text(approver.Peer(1, 999, 999, "rescue-ai"), ["/bin/cat", "/home/rescue-ai/x"], "/", ["/home/rescue-ai/x"])
+    assert "The agent can still change /home/rescue-ai/x after you read this command" in text and "Note:" not in text

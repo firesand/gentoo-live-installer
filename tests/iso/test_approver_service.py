@@ -288,7 +288,7 @@ def test_the_metadata_documents_the_flag() -> None:
 def test_the_fsscript_and_the_contract_expect_the_programs_of_the_tools() -> None:
     block = re.search(r"required_commands=\(\n(.*?)\n\)", (ROOT / "iso/fsscript-stage2.sh").read_text(), re.S).group(1)
     in_script = set(re.sub(r"#.*", "", block).split())
-    for command in ("tmux", "ttyd", "qrencode", "rg", "openssl", "chvt", "snapper", "fsarchiver", "ncdu", "tcpdump", "mtr", "dd_rescue", "dislocker",
+    for command in ("tmux", "ttyd", "qrencode", "rg", "openssl", "chvt", "setpriv", "snapper", "fsarchiver", "ncdu", "tcpdump", "mtr", "dd_rescue", "dislocker",
                     "foremost", "memtester", "restic", "rclone", "mount.cifs", "vim", "mc"):
         assert command in in_script and command in CONTRACT["squashfs"]["commands"], command
 

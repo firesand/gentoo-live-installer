@@ -162,7 +162,7 @@
       "tar", "rsync", "gparted", "lsof", "lvs", "lscpu", "chronyc", "loadkeys", "nmtui", "nmcli",
       "blockdev", "mount", "umount", "dmesg", "script", "setsid", "chroot", "timeout", "sync", "modprobe",
       "dumpe2fs", "tune2fs", "xfs_db", "jfs_fsck", "lsinitrd", "pvs", "vgs", "vgchange", "zstd",
-      "tmux", "ttyd", "qrencode", "rg", "openssl", "chvt",
+      "tmux", "ttyd", "qrencode", "rg", "openssl", "chvt", "setpriv",
       "snapper", "fsarchiver", "ncdu", "tcpdump", "mtr", "dd_rescue", "dislocker", "foremost", "memtester", "restic", "rclone", "mount.cifs", "vim", "mc"
     ],
     "implicit_services": [["autoconfig", "default"], ["xdm", "default"], ["fixinittab", "default"], ["syslog-ng", "default"], ["sysctl", "boot"]],
