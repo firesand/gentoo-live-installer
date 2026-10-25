@@ -3,6 +3,7 @@ from __future__ import annotations
 import functools
 import json
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import Qt, Signal
@@ -11,17 +12,20 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QFileDialog,
     QFormLayout,
+    QGridLayout,
+    QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
-    QTableWidget,
-    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
 )
 
 from .. import diagnostics, layout
 from ..manifest import InstallManifest
 from ..system_info import DiskInfo, SystemInfo, tools_for_selection
 from ..widgets import Card, FlowLayout, Page, wrapped_label
+from .help import AdvancedSection
 from .hardware import CAPACITY_CODES, blocking_findings, hardware_plan, plan_lines
 from .system import FAMILY_DESKTOP_SUPPORT, FAMILY_LABELS, UNVERIFIED_FAMILIES, stage_family
 
@@ -214,26 +218,210 @@ def save_redacted_copy(manifest: InstallManifest, path: str | Path) -> None:
     target.chmod(0o600)
 
 
+# --- plain names for the summary ---------------------------------------------------------------------------------
+
+INIT_NAMES = {"openrc": "OpenRC", "systemd": "systemd"}
+KERNEL_NAMES = {
+    "gentoo-kernel-bin": "Gentoo prebuilt kernel",
+    "gentoo-kernel": "Gentoo kernel, built on this computer",
+    "manual": "No kernel (you install one by hand)",
+    "custom": "Your own kernel configuration",
+}
+INITRAMFS_NAMES = {"dracut": "Dracut", "ugrd": "ugrd", "none": "None"}
+BOOTLOADER_NAMES = {
+    "grub": "GRUB", "systemd-boot": "systemd-boot", "refind": "rEFInd", "limine": "Limine",
+    "efi-stub": "Direct EFI boot entry", "none": "None (you set up a boot loader yourself)",
+}
+SECURE_BOOT_NAMES = {"off": "Off", "own-key": "On, signed with your own key", "create": "On, a new key is created for you", "shim": "On, through shim"}
+PRIVILEGE_NAMES = {"sudo": "sudo", "doas": "doas", "run0": "run0", "su": "su (the root password)"}
+FILESYSTEM_TOOLS = {"ext4": "e2fsprogs", "xfs": "xfsprogs", "btrfs": "btrfs-progs", "f2fs": "f2fs-tools", "vfat": "dosfstools"}
+
+STEP_STORAGE, STEP_SYSTEM, STEP_CUSTOM, STEP_ACCOUNTS, STEP_OTHER = "storage", "system", "customization", "accounts", "other"
+# Labels of manifest.summary() that core_rows() covers with plainer words; anything else it returns is listed under "Other settings".
+LEGACY_SUMMARY_LABELS = {"Disk", "Firmware", "Encryption", "Base", "Desktop", "Kernel", "Bootloader", "Portage", "Network", "Account", "Companion apps"}
+
+
+@dataclass(frozen=True)
+class ReviewSource:
+    """One wizard step the review lists: its key (where core_rows puts rows), its place in the wizard and the page whose summary_rows() it asks."""
+
+    key: str
+    index: int
+    title: str
+    page: QWidget | None = None
+
+
+def filesystem_tools(manifest: InstallManifest) -> str:
+    storage = manifest.storage
+    names = {storage.filesystem} if storage.mode == "erase" else {row.filesystem for row in storage.partitions if row.filesystem not in {"swap", "none"}}
+    if storage.firmware == "uefi":
+        names.add("vfat")
+    if storage.luks:
+        names.add("ext4")  # the separate /boot
+    packages = sorted({FILESYSTEM_TOOLS[name] for name in names if name in FILESYSTEM_TOOLS})
+    if storage.luks:
+        packages.append("cryptsetup")
+    if storage.lvm:
+        packages.append("lvm2")
+    if storage.raid_level:
+        packages.append("mdadm")
+    return ", ".join(packages)
+
+
+def swap_text(manifest: InstallManifest) -> str:
+    storage = manifest.storage
+    if storage.mode != "erase":
+        return "As set in your partition rows"
+    if not storage.swap_mib:
+        return "None"
+    kind = {"file": " (a swap file)", "partition": " (a swap partition)", "zram": " (compressed memory)"}.get(storage.swap_kind, "")
+    return f"{storage.swap_mib:,} MiB{kind}"
+
+
+def root_login_text(manifest: InstallManifest) -> str:
+    accounts = manifest.accounts
+    if accounts.root_locked():
+        return "Locked: nobody logs in as root; use " + PRIVILEGE_NAMES.get(accounts.privilege, accounts.privilege) + " from your account"
+    return "Uses your own password" if accounts.root_mode == "same" else "Has a password of its own"
+
+
+def hardware_lines(manifest: InstallManifest, info: SystemInfo | None) -> list[tuple[str, str]]:
+    """Microcode, firmware and sound-firmware lines from the hardware plan (nothing without detection data)."""
+    plan = hardware_plan(manifest, info.hardware) if info is not None and info.hardware else None
+    if plan is None:
+        return []
+    scalars = plan.scalars
+    rows: list[tuple[str, str]] = []
+    microcode = scalars.get("microcode")
+    if microcode:
+        rows.append(("CPU microcode", {"intel": "Intel", "amd": "AMD", "both": "Intel and AMD", "none": "Not installed"}.get(str(microcode), str(microcode))))
+    rows.append(("Hardware firmware", "Installed (linux-firmware)" if manifest.options.firmware or scalars.get("firmware_forced") else "Not installed"))
+    if scalars.get("sof_firmware") in ("yes", "no"):
+        rows.append(("Sound firmware (SOF)", "Installed" if scalars["sof_firmware"] == "yes" else "Not needed"))
+    return rows
+
+
+def core_rows(manifest: InstallManifest, info: SystemInfo | None = None) -> dict[str, list[tuple[str, str]]]:
+    """The settings every installation has, in plain words, grouped by the wizard step that changes them."""
+    storage, system, accounts, options, portage = manifest.storage, manifest.system, manifest.accounts, manifest.options, manifest.portage
+    disk = info.find_disk(storage.device) if info is not None else None
+    disk_text = f"{disk.describe() if disk is not None else storage.device} · {storage.mode} · {storage.filesystem}"
+    rows: dict[str, list[tuple[str, str]]] = {STEP_STORAGE: [], STEP_SYSTEM: [], STEP_CUSTOM: [], STEP_ACCOUNTS: [], STEP_OTHER: []}
+    rows[STEP_STORAGE] += [
+        ("Disk", disk_text),
+        ("Boot mode", "UEFI" if storage.firmware == "uefi" else "Legacy BIOS"),
+        ("Encryption", storage.encryption_summary()),
+        ("Swap", swap_text(manifest)),
+    ]
+    tools = filesystem_tools(manifest)
+    if tools:
+        rows[STEP_STORAGE].append(("Filesystem tools", tools))
+    rows[STEP_STORAGE].append(("Installed for", "A portable disk (other computers)" if manifest.hardware.target == "portable" else "This computer"))
+    boot = BOOTLOADER_NAMES.get(system.bootloader, system.bootloader) + (" (other systems are added to the menu)" if system.dual_boot and system.bootloader == "grub" else "")
+    rows[STEP_SYSTEM] += [
+        ("Init system", INIT_NAMES.get(system.init, system.init)),
+        ("Base", f"{system.stage_variant} · {manifest.effective_profile()}"),
+        ("Kernel", KERNEL_NAMES.get(system.kernel, system.kernel)),
+        ("Initramfs", INITRAMFS_NAMES.get(system.initramfs, system.initramfs)),
+        ("Desktop", system.desktop.upper() if system.desktop != "minimal" else "Minimal (no desktop)"),
+        ("Boot menu", boot),
+        ("Secure Boot", SECURE_BOOT_NAMES.get(system.secure_boot_mode, system.secure_boot_mode)),
+    ]
+    companions = ", ".join(name for name, enabled in (("HWMonux", options.install_hwmonux), ("PortageHub", options.install_portagehub)) if enabled)
+    rows[STEP_CUSTOM] += [
+        ("Graphics driver", graphics_driver_text(manifest, info)),
+        *hardware_lines(manifest, info),
+        ("Software source", "Binary packages preferred" if portage.binhost else "Build from source"),
+        ("Network", {"networkmanager": "NetworkManager", "dhcpcd": "dhcpcd", "systemd-networkd": "systemd-networkd"}.get(manifest.network.manager, manifest.network.manager)),
+        ("Remote login (SSH)", "On" if options.ssh else "Off"),
+        ("HWMonux and PortageHub", companions or "Not installed"),
+    ]
+    variant = f" ({system.keyboard_variant})" if system.keyboard_variant else ""
+    rows[STEP_ACCOUNTS] += [
+        ("Account", f"{accounts.username}@{accounts.hostname}"),
+        ("Administrator tool", PRIVILEGE_NAMES.get(accounts.privilege, accounts.privilege)),
+        ("Groups", ", ".join(accounts.groups) or "None"),
+        ("Root login", root_login_text(manifest)),
+        ("Language", system.locale),
+        ("Time zone", system.timezone),
+        ("Keyboard", f"{system.keyboard_layout}{variant} · console {system.keymap}"),
+    ]
+    rows[STEP_OTHER] += [(label, value) for label, value in manifest.summary() if label not in LEGACY_SUMMARY_LABELS]
+    return rows
+
+
+def preview_texts(manifest: InstallManifest, info: SystemInfo | None) -> list[tuple[str, str]]:
+    """(title, text) of the read-only file previews; empty when the planner or the daemon code is not available."""
+    try:
+        from gentoo_installerd import preview
+        from gentoo_installerd.configure import preview_files
+
+        plan = hardware_plan(manifest, info.hardware) if info is not None and info.hardware else None
+        files = preview_files(manifest, plan, storage_plan=storage_plan(manifest, info))
+    except Exception:  # noqa: BLE001 - a preview must never stop the review
+        LOG.exception("The file previews could not be built")
+        return []
+    groups: list[tuple[str, list[str]]] = [
+        (preview.PARTITIONS, [preview.PARTITIONS]),
+        ("/etc/fstab", [preview.FSTAB]),
+        ("make.conf and package.use", [preview.MAKE_CONF, preview.PACKAGE_USE, preview.PACKAGE_USE_HARDWARE]),
+        ("binrepos.conf", [preview.BINREPOS]),
+    ]
+    result = []
+    for title, names in groups:
+        present = [name for name in names if name in files]
+        if not present:
+            continue
+        if len(present) == 1:
+            result.append((title, files[present[0]]))
+        else:
+            result.append((title, "\n".join(f"# ===== {name} =====\n{files[name]}" for name in present)))
+    return result
+
+
 class ReviewPage(Page):
     exportRequested = Signal()
     importRequested = Signal()
+    editRequested = Signal(int)  # the wizard step (index) whose settings the user wants to change
+    readyChanged = Signal(bool)  # the typed disk names now match (True) or no longer do
+
+    START_HINT = "Type the disk name to enable"
 
     def __init__(self, manifest: InstallManifest, info: SystemInfo | None = None):
         super().__init__("Review your installation", "Nothing has been changed yet. Check your choices carefully—especially the target disk—before starting.")
         self.manifest = manifest
         self.info = info
-        summary_card = Card("Installation summary")
-        self.summary = QTableWidget(0, 2)
-        self.summary.setHorizontalHeaderLabels(["Setting", "Selection"])
-        self.summary.verticalHeader().setVisible(False)
-        self.summary.horizontalHeader().setStretchLastSection(True)
-        self.summary.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        self.summary.setWordWrap(True)
-        self.summary.setMinimumHeight(350)
-        summary_card.content.addWidget(self.summary)
-        self.content.addWidget(summary_card)
+        self.sources: list[ReviewSource] = []
+        self._rows: list[tuple[str, str, str]] = []
+        self._ready = False
+        # Directly under the title: what will be erased, and the typed confirmation that unlocks Start.
+        self.warning = QLabel()
+        self.warning.setObjectName("eraseWarning")
+        self.warning.setWordWrap(True)
+        self.warning.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.warning.setStyleSheet("background: #fff1f2; color: #8d2636; border: 1px solid #f0c5cb; border-radius: 9px; padding: 14px;")
+        self.content.addWidget(self.warning)
+        self.confirm_card = Card("Final confirmation", "Type the target device path exactly to enable installation. This is the last step before disk changes begin.")
+        self.confirm_form = QFormLayout()
+        self.confirmation = QLineEdit()
+        self.confirmation.setClearButtonEnabled(True)
+        self.confirmation.setAccessibleName("Target disk confirmation")
+        self.confirm_form.addRow("Target disk", self.confirmation)
+        self.extra_confirmations: list[tuple[str, QLineEdit]] = []
+        self.confirm_card.content.addLayout(self.confirm_form)
+        self.content.addWidget(self.confirm_card)
+        self.confirmation.textChanged.connect(self._confirmation_edited)
+        self.resume_check = QCheckBox("Resume the interrupted installation instead of erasing the disk again")
+        self.resume_check.setToolTip("An earlier installation stopped after the disk was prepared. Resuming needs exactly the same settings, and re-uses the disk as it is.")
+        self.resume_check.hide()
+        self.content.addWidget(self.resume_check)
 
-        plan_card = Card("What will happen to your disks", "Nothing is changed before you confirm below.")
+        # One card per wizard step, each with an Edit link; no scroll area of its own (the page scrolls).
+        self.groups = QVBoxLayout()
+        self.groups.setSpacing(14)
+        self.content.addLayout(self.groups)
+
+        plan_card = Card("What will happen to your disks", "Nothing is changed before you confirm above.")
         self.storage_plan = wrapped_label("", selectable=True)
         self.storage_plan.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         self.storage_plan.setAccessibleName("Storage plan")
@@ -244,28 +432,16 @@ class ReviewPage(Page):
         self.hardware_plan.setAccessibleName("Hardware set-up")
         self.hardware_card.content.addWidget(self.hardware_plan)
         self.content.addWidget(self.hardware_card)
-
-        self.warning = QLabel()
-        self.warning.setWordWrap(True)
-        self.warning.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
-        self.warning.setStyleSheet("background: #fff1f2; color: #8d2636; border: 1px solid #f0c5cb; border-radius: 9px; padding: 14px;")
-        self.content.addWidget(self.warning)
         self.notes = wrapped_label("", muted=True, selectable=True)
         self.notes.hide()
         self.content.addWidget(self.notes)
-        self.resume_check = QCheckBox("Resume the interrupted installation instead of erasing the disk again")
-        self.resume_check.setToolTip("An earlier installation stopped after the disk was prepared. Resuming needs exactly the same settings, and re-uses the disk as it is.")
-        self.resume_check.hide()
-        self.content.addWidget(self.resume_check)
-        self.confirm_card = Card("Final confirmation", "Type the target device path exactly to enable installation. This is the last step before disk changes begin.")
-        self.confirm_form = QFormLayout()
-        self.confirmation = QLineEdit()
-        self.confirmation.setClearButtonEnabled(True)
-        self.confirmation.setAccessibleName("Target disk confirmation")
-        self.confirm_form.addRow("Target disk", self.confirmation)
-        self.extra_confirmations: list[tuple[str, QLineEdit]] = []
-        self.confirm_card.content.addLayout(self.confirm_form)
-        self.content.addWidget(self.confirm_card)
+
+        self.previews_box = QVBoxLayout()
+        self.previews_box.setSpacing(6)
+        self.content.addLayout(self.previews_box)
+        self.previews: list[AdvancedSection] = []
+        self._advanced = False
+
         buttons = FlowLayout()
         export = QPushButton("Save a redacted copy of these settings")
         export.clicked.connect(self._export)
@@ -275,6 +451,92 @@ class ReviewPage(Page):
         buttons.addWidget(importer)
         self.content.addLayout(buttons)
         self.advance_on_enter(self.confirmation)
+
+    # --- the Review protocol (docs/contracts.md) ---------------------------------------------------------------
+
+    def set_sources(self, sources: list[ReviewSource]) -> None:
+        """The wizard steps to list, in order; each page's summary_rows() is asked when the review loads."""
+        self.sources = list(sources)
+
+    def rows(self) -> list[tuple[str, str, str]]:
+        """[(step title, label, value)] as the review shows them (a label that a page and the core both give is listed once)."""
+        return list(self._rows)
+
+    def _collect_rows(self) -> list[tuple[str, str, str]]:
+        core = core_rows(self.manifest, self.info)
+        collected: list[tuple[str, str, str]] = []
+        seen: set[str] = set()
+        for source in self.sources:
+            own = list(source.page.summary_rows()) if isinstance(source.page, Page) else []
+            overridden = {label for label, _ in own}
+            merged = [(label, value) for label, value in core.get(source.key, []) if label not in overridden] + own
+            for label, value in merged:
+                if label in seen:
+                    continue
+                seen.add(label)
+                collected.append((source.title, label, value))
+        collected += [("Other settings", label, value) for label, value in core[STEP_OTHER] if label not in seen]
+        return collected
+
+    def _rebuild_groups(self) -> None:
+        while self.groups.count():
+            item = self.groups.takeAt(0)
+            widget = item.widget() if item is not None else None
+            if widget is not None:
+                widget.hide()
+                widget.setParent(None)
+                widget.deleteLater()
+        by_title: dict[str, list[tuple[str, str]]] = {}
+        for title, label, value in self._rows:
+            by_title.setdefault(title, []).append((label, value))
+        index_of = {source.title: source.index for source in self.sources}
+        for title, entries in by_title.items():
+            card = Card()
+            card.setAccessibleName(title)
+            header = QHBoxLayout()
+            heading = QLabel(title)
+            heading.setObjectName("cardTitle")
+            header.addWidget(heading, 1)
+            if title in index_of:
+                edit = QPushButton("Edit")
+                edit.setObjectName("linkButton")
+                edit.setAccessibleName(f"Edit {title}")
+                edit.clicked.connect(lambda _=False, step=index_of[title]: self.editRequested.emit(step))
+                header.addWidget(edit)
+            card.content.addLayout(header)
+            grid = QGridLayout()
+            grid.setHorizontalSpacing(18)
+            grid.setVerticalSpacing(6)
+            grid.setColumnStretch(1, 1)
+            for row, (label, value) in enumerate(entries):
+                name = QLabel(label)
+                name.setProperty("muted", True)
+                grid.addWidget(name, row, 0, Qt.AlignmentFlag.AlignTop)
+                grid.addWidget(wrapped_label(value, selectable=True), row, 1)
+            card.content.addLayout(grid)
+            self.groups.addWidget(card)
+
+    def _rebuild_previews(self) -> None:
+        for section in self.previews:
+            section.hide()
+            self.previews_box.removeWidget(section)
+            section.setParent(None)
+            section.deleteLater()
+        self.previews = []
+        for title, text in preview_texts(self.manifest, self.info):
+            section = AdvancedSection("review", title)
+            body = wrapped_label(text, selectable=True)
+            body.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
+            body.setAccessibleName(f"{title} (read only)")
+            section.add_widget(body)
+            section.set_advanced(self._advanced)
+            self.previews_box.addWidget(section)
+            self.previews.append(section)
+
+    def set_advanced(self, advanced: bool) -> None:
+        self._advanced = advanced
+        for section in self.previews:
+            section.set_advanced(advanced)
 
     def set_info(self, info: SystemInfo) -> None:
         self.info = info
@@ -287,30 +549,26 @@ class ReviewPage(Page):
             edit = QLineEdit()
             edit.setPlaceholderText(path)
             edit.setAccessibleName(f"Confirmation for {path}")
+            edit.textChanged.connect(self._confirmation_edited)
             self.confirm_form.addRow(f"Also changes {path}", edit)
             self.extra_confirmations.append((path, edit))
 
+    def confirmation_matches(self) -> bool:
+        """The target disk (and every other disk a manual layout changes) was typed exactly."""
+        wanted = required_confirmations(self.manifest, self.info)
+        typed = [self.confirmation.text().strip()] + [edit.text().strip() for _, edit in self.extra_confirmations]
+        return len(typed) >= len(wanted) and all(got == expected for expected, got in zip(wanted, typed))
+
+    def _confirmation_edited(self) -> None:
+        ready = self.confirmation_matches()
+        if ready != self._ready:
+            self._ready = ready
+            self.readyChanged.emit(ready)
+
     def load_manifest(self) -> None:
         storage = self.manifest.storage
-        values = self.manifest.summary()
-        disk = self.info.find_disk(storage.device) if self.info is not None else None
-        rich = []
-        for name, value in values:
-            if name == "Disk" and disk is not None:
-                value = f"{disk.describe()} · {storage.mode} · {storage.filesystem}"
-            elif name == "Encryption":
-                value = storage.encryption_summary()  # says what is and is not encrypted, not just "enabled"
-            rich.append((name, value))
-        if storage.mode == "erase":
-            rich.append(("Swap", f"{storage.swap_mib} MiB" if storage.swap_mib else "None"))
-        rich.append(("Installed for", "A portable disk (other computers)" if self.manifest.hardware.target == "portable" else "This computer"))
-        rich.append(("Graphics driver", graphics_driver_text(self.manifest, self.info)))
-        rich.append(("Region", f"{self.manifest.system.locale} · {self.manifest.system.timezone} · keyboard {self.manifest.system.keyboard_layout} (console {self.manifest.system.keymap})"))
-        self.summary.setRowCount(len(rich))
-        for row, (name, value) in enumerate(rich):
-            self.summary.setItem(row, 0, QTableWidgetItem(name))
-            self.summary.setItem(row, 1, QTableWidgetItem(value))
-        self.summary.resizeRowsToContents()
+        self._rows = self._collect_rows()
+        self._rebuild_groups()
         self.warning.setText(disk_warning(self.manifest, self.info))
         self.storage_plan.setText(storage_plan_text(self.manifest, self.info))
         hardware = self.info.hardware if self.info is not None else {}
@@ -324,10 +582,12 @@ class ReviewPage(Page):
         self.confirmation.setPlaceholderText(storage.device)
         self.confirmation.clear()
         self._rebuild_confirmations(wanted)
+        self._confirmation_edited()
         daemon = self.info.daemon if self.info is not None else None
         resumable = bool(daemon is not None and daemon.reachable and daemon.status.get("resumable") and not daemon.job_running)
         self.resume_check.setVisible(resumable)
         self.resume_check.setChecked(False)
+        self._rebuild_previews()
 
     def resume_requested(self) -> bool:
         return self.resume_check.isVisibleTo(self) and self.resume_check.isChecked()

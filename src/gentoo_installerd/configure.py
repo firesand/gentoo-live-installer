@@ -6,6 +6,8 @@ the code lives in the module of the team that owns it (see docs/contracts.md, "M
 
 from __future__ import annotations
 
+from typing import Any
+
 from .configure_base import (  # noqa: F401
     ConfigurationError,
     ConfigurerBase,
@@ -133,6 +135,13 @@ from .configure_system import (  # noqa: F401
 from .configure_accounts import (  # noqa: F401
     AccountsMixin,
 )
+
+
+def preview_files(*args: Any, **kwargs: Any) -> dict[str, str]:
+    """The files an installation will write, rendered without touching anything (see preview.py)."""
+    from .preview import preview_files as render_previews  # imported late: preview.py builds on this module
+
+    return render_previews(*args, **kwargs)
 
 
 class Configurer(FstabMixin, NetworkMixin, DesktopMixin, PackagesMixin, HardwareMixin, PortageMixin, BootMixin, SystemMixin, AccountsMixin):

@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any, Callable
 from urllib.parse import urlsplit
 
+from gentoo_installer import first_steps
 from gentoo_installer.manifest import InstallManifest
 
 from . import __version__
@@ -31,6 +32,7 @@ from .storage import LayoutEntry, StorageManager
 from .stages.base import BaseStage
 from .stages.bootloader import BootloaderStage
 from .stages.context import InstallError, _chown_root, _timestamp, _write_private  # noqa: F401
+from .stages import finish as finish_stage
 from .stages.desktop import DesktopStage
 from .stages.kernel import KernelStage
 from .stages.plan import PlanMixin
@@ -376,6 +378,9 @@ class Installer(Stage3Stage, RepositoryStage, PortageStage, KernelStage, Bootloa
         self._stage3_archive: Path | None = None
         # Texts for completed.data.warnings: things that went wrong after the installation itself succeeded.
         self.warnings: list[str] = []
+        # For the finish page (completed.data): the boot check line, unread Gentoo news (None when unknown).
+        self.boot_check = ""
+        self.news_unread: int | None = None
 
     # ------------------------------------------------------------------ events and log
 
@@ -519,7 +524,7 @@ class Installer(Stage3Stage, RepositoryStage, PortageStage, KernelStage, Bootloa
             message = "Installation cancelled" if cancelled else "Installation completed successfully" if success else "Installation failed"
             self.emit("completed", message=message, progress=100.0 if success else None, success=success,
                       resumable=bool(self._resumable()) if not success else None, bootable=self._bootable,
-                      degraded=list(self.degraded), warnings=list(self.warnings))
+                      degraded=list(self.degraded), warnings=list(self.warnings), **self._finish_data(success))
             LOG.info("Install job %s finished: %s", self.job_id, "success" if success else self._outcome)
             self._release_run_lock()
             if self._log_file:
@@ -707,13 +712,31 @@ class Installer(Stage3Stage, RepositoryStage, PortageStage, KernelStage, Bootloa
             raise
         except Exception:
             # The bootloader stage set this flag. A system that does not pass its final checks is not one the
-            # clients may call bootable: they would offer "Restart" and hide "Start over".
+            # clients may call bootable: they would offer "Restart" and hide "Erase again".
             self._bootable = False
             raise
         if self.manifest.system.desktop != "minimal":
             self.log("Desktop packages installed; graphical session will be available after reboot")
         # Last: nothing after this point needs name resolution inside the target.
         cfg.finalize_network(self.manifest)
+        finish_stage.finish(self)  # non-fatal warnings and the first-steps file
+
+    def _finish_data(self, success: bool) -> dict[str, Any]:
+        """What the finish page shows beyond the outcome: the boot check, unread news and the hardware first steps."""
+        if not success:
+            return {}
+        steps = first_steps.from_manifest(self.manifest)
+        data: dict[str, Any] = {
+            "first_steps": list(self.hardware_plan.first_steps) if self.hardware_plan is not None else [],
+            # What the finish page needs to build its card without a manifest (a GUI that attached to the job has none).
+            "login": {"username": steps.username, "hostname": steps.hostname, "privilege": steps.privilege, "ssh": steps.ssh,
+                      "minimal": steps.minimal, "bootloader": steps.bootloader},
+        }
+        if self.boot_check:
+            data["boot_check"] = self.boot_check
+        if self.news_unread is not None:
+            data["news_unread"] = self.news_unread
+        return data
 
     def _cleanup(self) -> None:
         if self._cleanup_done:

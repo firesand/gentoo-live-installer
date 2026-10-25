@@ -5,14 +5,17 @@ from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QPushButton, QVB
 
 from ..keyboard import KeyboardChooser
 from ..manifest import InstallManifest
-from ..widgets import Card, FlowLayout, Page
+from ..widgets import Card, FlowLayout, Page, wrapped_label
+
+
+WILL_DO_TEXT = ("It takes about 1 hour with binary packages (longer if you choose to compile), it needs an internet connection, "
+                "and it erases only the disk you choose, after you confirm it at the end.")
 
 
 class WelcomePage(Page):
     tryLiveRequested = Signal()
     applicationRequested = Signal(str)
     handbookRequested = Signal()
-    installRequested = Signal()
     repairRequested = Signal()
     importRequested = Signal()
     keyboardChanged = Signal(str, str, str)  # XKB layout, variant, console keymap
@@ -33,16 +36,17 @@ class WelcomePage(Page):
         self.content.addLayout(hero)
         self.content.addSpacing(8)
 
+        will_do = Card("What this will do", "")
+        self.will_do = wrapped_label(WILL_DO_TEXT, selectable=True)
+        self.will_do.setAccessibleName("What this will do")
+        will_do.content.addWidget(self.will_do)
+        self.content.addWidget(will_do)
+
         choices = QHBoxLayout()
         choices.setSpacing(14)
-        install = Card("Install Gentoo", "Put Gentoo on this computer's disk. The installer checks your hardware, explains every choice and only changes a disk after your final confirmation. Works on desktops, laptops and virtual machines.")
-        self.install_button = QPushButton("Install Gentoo")
-        self.install_button.setObjectName("primaryButton")
-        self.install_button.setAccessibleDescription("Start the installation wizard")
-        self.install_button.clicked.connect(self.installRequested)
-        install.content.addWidget(self.install_button)
+        install = Card("Install Gentoo", "Put Gentoo on this computer's disk. The installer checks your hardware, explains every choice and only changes a disk after your final confirmation. Works on desktops, laptops and virtual machines. Press Continue to begin.")
         choices.addWidget(install, 1)
-        repair = Card("Repair a Gentoo system that does not start", "Fix a Gentoo system that will not boot: reinstall the bootloader, rebuild the initramfs, repair /etc/fstab, reset a password or look at the logs. Other Linux distributions are not supported.")
+        repair = Card("Fix a Gentoo system that will not boot", "Reinstall the bootloader, rebuild the initramfs, repair /etc/fstab, reset a password or look at the logs. This tool works on Gentoo systems only.")
         self.repair_button = QPushButton("Repair a Gentoo system")
         self.repair_button.setAccessibleDescription("Open the repair tools for a Gentoo system that does not start")
         self.repair_button.clicked.connect(self.repairRequested)
@@ -50,9 +54,21 @@ class WelcomePage(Page):
         choices.addWidget(repair, 1)
         self.content.addLayout(choices)
 
-        keyboard_card = Card("Language and keyboard", "Pick your keyboard layout first: it is applied to this live session immediately, so passwords and disk passphrases are typed the way you expect, and it becomes the layout of the installed system.")
+        keyboard_card = Card("Keyboard", "It is applied to this live session at once, so passwords and disk passphrases are typed the way you expect, and it becomes the layout of the installed system.")
+        line = QHBoxLayout()
+        self.keyboard_line = QLabel()
+        self.keyboard_line.setAccessibleName("Current keyboard")
+        line.addWidget(self.keyboard_line, 1)
+        self.keyboard_button = QPushButton("Change")
+        self.keyboard_button.setCheckable(True)
+        self.keyboard_button.setAccessibleDescription("Choose another keyboard layout")
+        self.keyboard_button.toggled.connect(self._keyboard_chooser_toggled)
+        line.addWidget(self.keyboard_button)
+        keyboard_card.content.addLayout(line)
         self.keyboard = KeyboardChooser()
         self.keyboard.layoutChanged.connect(self.keyboardChanged)
+        self.keyboard.layoutChanged.connect(lambda *_: self._update_keyboard_line())
+        self.keyboard.hide()
         keyboard_card.content.addWidget(self.keyboard)
         self.content.addWidget(keyboard_card)
 
@@ -95,9 +111,21 @@ class WelcomePage(Page):
         self.load_manifest()
         self.finish_layout()
 
+    def _keyboard_chooser_toggled(self, shown: bool) -> None:
+        self.keyboard.setVisible(shown)
+        self.keyboard_button.setText("Done" if shown else "Change")
+
+    def _update_keyboard_line(self) -> None:
+        name = self.keyboard.layout_box.currentText().rsplit("  (", 1)[0].strip() or "English (US)"
+        self.keyboard_line.setText(f"Keyboard: {name}")
+
     def load_manifest(self) -> None:
         if self.manifest is not None:
             self.keyboard.set_selection(self.manifest.system.keyboard_layout, self.manifest.system.keyboard_variant)
+        self._update_keyboard_line()
+
+    def summary_rows(self) -> list[tuple[str, str]]:
+        return []
 
     def focus_first(self) -> None:
-        self.install_button.setFocus()
+        self.keyboard_button.setFocus()

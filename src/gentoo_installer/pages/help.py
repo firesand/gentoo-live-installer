@@ -143,8 +143,9 @@ class Badge(QLabel):
     def apply_theme(self) -> None:
         """Colour the badge from the theme tokens of the current colour scheme."""
         foreground, background = theme.badge_colors(self.kind)
+        outline = theme.badge_outline(self.kind)
         self.setStyleSheet(
-            f"QLabel#badge {{ color: {foreground}; background: {background}; border-radius: 9px; padding: 2px 9px; font-size: 12px; font-weight: 600; }}")
+            f"QLabel#badge {{ color: {foreground}; background: {background}; border: 1px solid {outline}; border-radius: 9px; padding: 1px 9px; font-size: 12px; font-weight: 600; }}")
 
 
 class AdvancedSection(QWidget):

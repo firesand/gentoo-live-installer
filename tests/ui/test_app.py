@@ -139,7 +139,7 @@ def test_guided_choices_reach_a_valid_review(window):
     window._show_page(6)
     window.review.confirmation.setText("/dev/sda")
     assert window.review.validate_page() == (True, "")
-    assert window.review.summary.rowCount() >= 8
+    assert len(window.review.rows()) >= 8
 
 
 def test_continue_buttons_traverse_full_wizard_before_starting_install(window, monkeypatch):

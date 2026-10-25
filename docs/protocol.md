@@ -93,6 +93,14 @@ the table of the current job, `capabilities.stages` the default one):
   differ from what was asked (the proprietary driver does not fit this PC) and a cleanup
   that failed after a finished installation. Such a run is `success: true`: the system is
   installed, and the warning says which commands release the disks before a restart.
+  On success `data` also carries what the finish page shows: `first_steps` (at most six lines of the
+  hardware plan, possibly empty), `boot_check` (one line, e.g. "Boot check passed: GRUB found the
+  kernel and initramfs"; absent when unknown), `news_unread` (number of unread Gentoo news items;
+  absent when unknown) and `login` (`username`, `hostname`, `privilege`, `ssh`, `minimal`, `bootloader`:
+  enough to build the "Your first steps in Gentoo" text without a manifest, e.g. after an attach).
+  The validation stage adds plain-sentence entries to `warnings` for an empty `/etc/machine-id` (OpenRC),
+  a `ping` that lost its file capabilities and an initramfs without the early microcode. The same text
+  is written to `/home/<user>/FIRST-STEPS.txt` (mode 0644, owned by the user).
 * The install log (`install.log` in the state directory, copied into the new system under
   `/var/log/gentoo-installer/`) holds one JSON object per line: `ts`, `job_id`, `type`, and
   `stage`, `message`, `error`, `code`, ... when they apply. The hardware plan of the job is a

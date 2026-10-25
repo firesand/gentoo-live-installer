@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -36,11 +37,12 @@ from .pages.customize import CustomizePage
 from .pages.dialogs import ask_utc_time
 from .pages.progress import ProgressPage
 from .pages.readiness import ReadinessPage
-from .pages.review import ReviewPage, blocking_problems, disk_description, format_lines, storage_plan_details
+from .pages.review import ReviewPage, ReviewSource, blocking_problems, disk_description, format_lines, storage_plan_details
 from .pages.storage import StoragePage
 from .pages.system import SystemPage
 from .pages.welcome import WelcomePage
 from .system_info import SystemInfo, inspect_system
+from . import theme
 from .theme import apply_theme
 from .widgets import Banner
 
@@ -215,6 +217,7 @@ class InstallerWindow(QMainWindow):
         self.background_inspection = background_inspection
         self.settings = QSettings("GentooLive", "Installer")
         self.current = 0
+        self.rail = False  # the sidebar is a numbered rail in a narrow window
         self.install_started = False
         self._install_succeeded = False
         self._close_after_worker = False
@@ -264,10 +267,10 @@ class InstallerWindow(QMainWindow):
         for page in self.pages:
             self.stack.addWidget(page)
             page.advanceRequested.connect(self._advance_requested)
+            page.problemChanged.connect(lambda shown, target=page: self._mark_problem(target, shown))
         self.welcome.tryLiveRequested.connect(self.close)
         self.welcome.applicationRequested.connect(self.launch_application)
         self.welcome.handbookRequested.connect(self.open_handbook)
-        self.welcome.installRequested.connect(lambda: self._show_page(READINESS))
         self.welcome.repairRequested.connect(self.open_repair)
         self.welcome.importRequested.connect(self.import_settings)
         self.welcome.keyboardChanged.connect(self._keyboard_changed)
@@ -277,6 +280,11 @@ class InstallerWindow(QMainWindow):
         self.readiness.clockSyncRequested.connect(self.run_hardware_action)
         self.readiness.hardwareActionRequested.connect(self.run_hardware_action)
         self.review.importRequested.connect(self.import_settings)
+        self.review.set_sources([
+            ReviewSource("storage", STORAGE, STEPS[STORAGE][0], self.storage), ReviewSource("system", SYSTEM, STEPS[SYSTEM][0], self.system),
+            ReviewSource("customization", CUSTOMIZE, STEPS[CUSTOMIZE][0], self.customize), ReviewSource("accounts", ACCOUNTS, STEPS[ACCOUNTS][0], self.accounts)])
+        self.review.editRequested.connect(self.go_to)
+        self.review.readyChanged.connect(lambda _: self._update_navigation())
         self.storage.manual_editor.rescanRequested.connect(self.refresh_readiness)
         self.storage.rescanRequested.connect(self.refresh_readiness)
         self.accounts.keyboardChangeRequested.connect(lambda: self.go_to(WELCOME))
@@ -289,6 +297,7 @@ class InstallerWindow(QMainWindow):
         self.progress.retryRequested.connect(self.start_installation)
         self.progress.settingsRequested.connect(self._return_to_settings)
         self.progress.quitRequested.connect(self.close)
+        self.progress.repairRequested.connect(self.open_repair)
         self.progress.diagnosticsRequested.connect(lambda: self.save_diagnostics("installation failed"))
         self.progress.logSaved.connect(self._export_saved)
         content_layout.addWidget(self._navigation())
@@ -323,7 +332,8 @@ class InstallerWindow(QMainWindow):
     def _sidebar(self) -> QFrame:
         sidebar = QFrame()
         sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(230)
+        self.sidebar = sidebar
+        sidebar.setFixedWidth(theme.SIDEBAR_WIDTH)
         layout = QVBoxLayout(sidebar)
         layout.setContentsMargins(20, 24, 20, 20)
         layout.setSpacing(4)
@@ -335,6 +345,7 @@ class InstallerWindow(QMainWindow):
         brand_row.addWidget(mark)
         brand = QLabel("Gentoo\nInstaller")
         brand.setObjectName("brand")
+        self.brand_label = brand
         brand_row.addWidget(brand)
         brand_row.addStretch()
         layout.addLayout(brand_row)
@@ -343,7 +354,10 @@ class InstallerWindow(QMainWindow):
         for index, (name, _) in enumerate(STEPS):
             button = QPushButton(f"{index + 1}   {name}")
             button.setObjectName("stepButton")
+            button.setToolTip(f"{name}: {STEPS[index][1]}")
+            button.setAccessibleName(name)
             button.setProperty("current", False)
+            button.setProperty("problem", False)
             button.setCursor(Qt.CursorShape.PointingHandCursor)
             button.clicked.connect(lambda _=False, target=index: self.go_to(target))
             layout.addWidget(button)
@@ -351,10 +365,13 @@ class InstallerWindow(QMainWindow):
         layout.addStretch()
         help_label = QLabel("Based on the official\nAMD64 Gentoo Handbook")
         help_label.setWordWrap(True)
+        self.help_label = help_label
         layout.addWidget(help_label)
         handbook = QPushButton("Handbook  ↗")
         handbook.setObjectName("stepButton")
+        handbook.setAccessibleName("Open the Handbook")
         handbook.clicked.connect(self.open_handbook)
+        self.handbook_button = handbook
         layout.addWidget(handbook)
         return sidebar
 
@@ -362,16 +379,19 @@ class InstallerWindow(QMainWindow):
         header = QFrame()
         header.setObjectName("contentHeader")
         layout = QHBoxLayout(header)
-        layout.setContentsMargins(32, 20, 32, 18)
-        titles = QVBoxLayout()
+        layout.setContentsMargins(32, 14, 32, 12)
+        # One line: the title, then the subtitle in the muted colour; a subtitle that does not fit is cut off, never wrapped.
+        titles = QHBoxLayout()
+        titles.setSpacing(14)
         self.header_title = QLabel()
         self.header_title.setObjectName("pageTitle")
         titles.addWidget(self.header_title)
         self.header_subtitle = QLabel()
         self.header_subtitle.setObjectName("pageSubtitle")
-        titles.addWidget(self.header_subtitle)
-        layout.addLayout(titles)
-        layout.addStretch()
+        self.header_subtitle.setMinimumWidth(0)
+        self.header_subtitle.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
+        titles.addWidget(self.header_subtitle, 1)
+        layout.addLayout(titles, 1)
         mode_label = QLabel("&Detail level")
         mode_label.setProperty("muted", True)
         layout.addWidget(mode_label)
@@ -416,6 +436,48 @@ class InstallerWindow(QMainWindow):
         self._update_navigation()
         self.pages[index].focus_first()
 
+    def _step_text(self, index: int) -> str:
+        """The sidebar caption of a step: number and name, or only the number in the narrow rail; a red dot marks a problem."""
+        marked = bool(self.step_buttons[index].property("problem"))
+        if self.rail:
+            return f"{index + 1}" + ("●" if marked else "")
+        return f"{index + 1}   {STEPS[index][0]}" + ("   ●" if marked else "")
+
+    def _apply_rail(self, rail: bool) -> None:
+        """Below 1100 px the sidebar is a numbered rail (under 80 px wide) so the page keeps the width."""
+        if rail == self.rail:
+            return
+        self.rail = rail
+        self.sidebar.setFixedWidth(theme.RAIL_WIDTH if rail else theme.SIDEBAR_WIDTH)
+        self.brand_label.setVisible(not rail)
+        self.help_label.setVisible(not rail)
+        self.handbook_button.setText("↗" if rail else "Handbook  ↗")
+        for index, button in enumerate(self.step_buttons):
+            button.setProperty("rail", rail)
+            button.setText(self._step_text(index))
+            button.style().unpolish(button)
+            button.style().polish(button)
+        self.handbook_button.setProperty("rail", rail)
+        self.handbook_button.style().unpolish(self.handbook_button)
+        self.handbook_button.style().polish(self.handbook_button)
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._apply_rail(self.width() < theme.RAIL_BELOW)
+
+    def _mark_problem(self, page: QWidget, shown: bool) -> None:
+        """CORE-09: a red dot on the sidebar step whose page shows a problem."""
+        if page not in self.pages:
+            return
+        index = self.pages.index(page)
+        button = self.step_buttons[index]
+        name = STEPS[index][0]
+        button.setProperty("problem", shown)
+        button.setText(self._step_text(index))
+        button.setAccessibleName(f"{name}: needs attention" if shown else name)
+        button.style().unpolish(button)
+        button.style().polish(button)
+
     def _update_navigation(self) -> None:
         index = self.current
         locked = self.install_started or self._install_succeeded
@@ -426,12 +488,18 @@ class InstallerWindow(QMainWindow):
             button.style().polish(button)
         self.back.setVisible(index > 0 and index < INSTALL and not self.install_started)
         self.next.setVisible(index < INSTALL)
-        self.next.setText("&Start installation" if index == REVIEW else "&Continue")
-        self.next.setObjectName("dangerButton" if index == REVIEW else "primaryButton")
+        # The last step: Start stays grey, and says what is missing, until the disk name was typed (CORE-06).
+        start_ready = index == REVIEW and self.review.confirmation_matches()
+        if index == REVIEW:
+            self.next.setText("&Start installation" if start_ready else self.review.START_HINT)
+            self.next.setObjectName("dangerButton" if start_ready else "startWaiting")
+        else:
+            self.next.setText("&Continue")
+            self.next.setObjectName("primaryButton")
         self.next.style().unpolish(self.next)
         self.next.style().polish(self.next)
         # Page 1 needs the finished inspection; Continue waits for it.
-        self.next.setEnabled(not (index == READINESS and not self.info.inspected))
+        self.next.setEnabled(start_ready if index == REVIEW else not (index == READINESS and not self.info.inspected))
         self.mode.setEnabled(index < INSTALL and not self.install_started)
 
     def go_to(self, index: int) -> None:
@@ -448,8 +516,9 @@ class InstallerWindow(QMainWindow):
         page = self.pages[self.current]
         valid, message = page.validate_page()
         if not valid:
-            QMessageBox.warning(self, "Check this step", message)
+            page.set_problem(message)  # inline, beside the step; the sidebar marks it (CORE-09)
             return
+        page.set_problem("")
         page.save_manifest()
         if self.current == REVIEW:
             self.start_installation()
@@ -459,13 +528,13 @@ class InstallerWindow(QMainWindow):
                 earlier.save_manifest()
             section, error = self._first_section_error()
             if error:
-                QMessageBox.warning(self, "Installation settings", error)
                 owner = self._page_for_section(section)
                 if owner != self.current:
                     self._show_page(owner)
                     reveal = getattr(self.pages[owner], "reveal_section", None)
                     if callable(reveal):
                         reveal(section)
+                self.pages[owner].set_problem(error)
                 return
         self._show_page(self.current + 1)
 
@@ -672,7 +741,7 @@ class InstallerWindow(QMainWindow):
             return
         problems = blocking_problems(self.manifest, self.info)
         if problems:
-            QMessageBox.warning(self, "Cannot start", problems[0][1])
+            self.pages[self._page_for_section(problems[0][0])].set_problem(problems[0][1])
             return
         resume = self.review.resume_requested() and self.current == REVIEW
         if not resume and storage.mode == "erase":

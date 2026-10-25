@@ -46,6 +46,9 @@ class Card(QFrame):
             self.content.addWidget(label)
 
 
+RADIO_ON, RADIO_OFF = "◉", "○"
+
+
 class ChoiceCard(Card):
     """One option of a ChoiceGroup. Behaves as a radio button for keyboard and
     assistive technology: it is checkable, has a focus ring, and the arrow keys
@@ -62,13 +65,19 @@ class ChoiceCard(Card):
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._checked = False
         row = QHBoxLayout()
+        self.mark = QLabel(RADIO_OFF)  # a filled radio mark says "chosen" without relying on the border colour alone
+        self.mark.setObjectName("cardMark")
+        self.mark.setProperty("selected", False)
+        self.mark.setAccessibleName("")
+        row.addWidget(self.mark, 0, Qt.AlignmentFlag.AlignTop)
         self.title_label = QLabel(title)
         self.title_label.setObjectName("cardTitle")
         self.title_label.setWordWrap(True)
         row.addWidget(self.title_label, 1)
         if recommended:
             badge = QLabel("Recommended")
-            badge.setStyleSheet(f"color: {theme.ACCENT_DARK}; background: #eee9ff; border-radius: 7px; padding: 3px 7px; font-size: 11px;")
+            text, fill = theme.badge_colors("Recommended")
+            badge.setStyleSheet(f"color: {text}; background: {fill}; border: 1px solid {theme.badge_outline('Recommended')}; border-radius: 7px; padding: 2px 7px; font-size: 11px;")
             row.addWidget(badge)
         self.content.addLayout(row)
         self.description_label = QLabel(description)
@@ -86,8 +95,11 @@ class ChoiceCard(Card):
             return
         self._checked = checked
         self.setProperty("selected", checked)
-        self.style().unpolish(self)
-        self.style().polish(self)
+        self.mark.setText(RADIO_ON if checked else RADIO_OFF)
+        self.mark.setProperty("selected", checked)
+        for widget in (self, self.mark):
+            widget.style().unpolish(widget)
+            widget.style().polish(widget)
         QAccessible.updateAccessibility(_state_change_event(self))
         self.toggled.emit(checked)
 
@@ -112,6 +124,9 @@ class ChoiceCard(Card):
             event.accept()
             return
         super().keyPressEvent(event)
+
+
+SelectableCard = ChoiceCard  # the shared card style of STOR and BOOT: filled radio mark, 2 px accent border when chosen
 
 
 def _state_change_event(card: ChoiceCard) -> QAccessibleStateChangeEvent:
@@ -236,6 +251,7 @@ def shrinkable_combos(root: QWidget, width: int = 120) -> None:
 
 class Page(QWidget):
     advanceRequested = Signal()
+    problemChanged = Signal(bool)  # an inline problem message appeared (True) or was cleared (False): the sidebar marks the step
 
     def __init__(self, title: str, subtitle: str = "", parent: QWidget | None = None):
         super().__init__(parent)
@@ -261,6 +277,33 @@ class Page(QWidget):
             text.setWordWrap(True)
             text.setProperty("muted", True)
             self.content.addWidget(text)
+        # CORE-09: a Continue that fails shows its reason here, in red, instead of in a dialog.
+        self.problem_label = QLabel()
+        self.problem_label.setObjectName("problemLabel")
+        self.problem_label.setWordWrap(True)
+        self.problem_label.setAccessibleName("Problem on this step")
+        self.problem_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.problem_label.hide()
+        self.content.addWidget(self.problem_label)
+
+    def set_problem(self, text: str) -> None:
+        """Show (or, with "", clear) the page's inline problem message: a plain sentence, then the technical detail."""
+        shown = bool(text)
+        was_shown = not self.problem_label.isHidden()
+        self.problem_label.setText(text)
+        self.problem_label.setVisible(shown)
+        if shown:
+            self.scroll_area.ensureVisible(0, 0)
+        if shown != was_shown:
+            self.problemChanged.emit(shown)
+
+    def has_problem(self) -> bool:
+        return not self.problem_label.isHidden()
+
+    def summary_rows(self) -> list[tuple[str, str]]:
+        """Review protocol (docs/contracts.md): (plain label, plain value) for every setting of this page that
+        the Review page should list, in reading order. The default is none; the review adds the core rows itself."""
+        return []
 
     def finish_layout(self) -> None:
         """Called at the end of a page's constructor: narrow-window rules for the widgets the page has built."""

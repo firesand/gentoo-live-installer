@@ -1,3 +1,5 @@
+from typing import Any
+
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPalette
 from PySide6.QtWidgets import QApplication
@@ -28,13 +30,23 @@ BADGE_COLORS = {
         "Optional": ("#4f4b5c", "#efeef3"),
         "Recommended": ("#14573a", "#d9f0e4"),
     },
+    # Dark scheme: an outline pill (the card colour inside, an accent line around it) reads better than a filled one.
     "dark": {
-        "Default": ("#e4defa", "#3b3351"),
-        "Alternative": ("#dcd8e6", "#3a3743"),
-        "Optional": ("#cbc6d6", "#2f2c38"),
-        "Recommended": ("#a8e6c6", "#1f4a36"),
+        "Default": ("#e4defa", "#292631"),
+        "Alternative": ("#dcd8e6", "#292631"),
+        "Optional": ("#cbc6d6", "#292631"),
+        "Recommended": ("#a8e6c6", "#292631"),
     },
 }
+BADGE_OUTLINES = {
+    "light": {"Default": "#e8e5f1", "Alternative": "#e9e8ee", "Optional": "#efeef3", "Recommended": "#d9f0e4"},
+    "dark": {"Default": "#8b7cf6", "Alternative": "#8f8aa0", "Optional": "#7a7589", "Recommended": "#4fb98a"},
+}
+SIDEBAR_WIDTH, RAIL_WIDTH, RAIL_BELOW = 230, 64, 1100  # the sidebar becomes a numbered rail in a window narrower than RAIL_BELOW
+FONT_FAMILY = "'Fira Sans', 'Noto Sans', 'DejaVu Sans', sans-serif"  # the live image ships media-fonts/fira-sans
+ACCENT_ON_SURFACE = ACCENT_DARK  # accent text on a card: the darker accent in the light scheme, the lighter one in the dark scheme
+PROBLEM_TEXT, PROBLEM_BG, PROBLEM_BORDER = "#8d2636", "#fff1f2", "#f0c5cb"  # inline problem messages (light scheme)
+SEVERITY = {"ok": "#14573a", "warning": "#8a5a00", "error": "#a82a3c"}  # headline colours, 4.5:1 or better on the card
 DARK = False  # set by apply_theme from the colour scheme
 
 
@@ -48,20 +60,34 @@ def badge_colors(kind: str, dark: bool | None = None) -> tuple[str, str]:
     return scheme.get(kind, scheme["Default"])
 
 
+def badge_outline(kind: str, dark: bool | None = None) -> str:
+    """Colour of the badge's border: the pill's own background in the light scheme, an accent line in the dark one."""
+    scheme = BADGE_OUTLINES["dark" if (DARK if dark is None else dark) else "light"]
+    return scheme.get(kind, scheme["Default"])
+
+
 def status_color(status: str) -> str:
     """Colour of a StatusRow indicator; read lazily so dark mode is honoured."""
     return STATUS_COLORS.get(status, MUTED)
 
 
-def apply_theme(app: QApplication) -> None:
-    global TEXT, MUTED, SURFACE, BACKGROUND, BORDER, DARK
-    if app.styleHints().colorScheme() == Qt.ColorScheme.Dark:
-        DARK = True
-        TEXT = "#ece9f2"
-        MUTED = "#aaa4b5"
-        SURFACE = "#292631"
-        BACKGROUND = "#1d1b23"
-        BORDER = "#45404f"
+SCHEMES: dict[bool, dict[str, Any]] = {
+    False: {"TEXT": "#24222c", "MUTED": "#6d6979", "SURFACE": "#ffffff", "BACKGROUND": "#f5f4f8", "BORDER": "#dfdce7", "ACCENT_ON_SURFACE": "#6554c0",
+            "PROBLEM": ("#8d2636", "#fff1f2", "#f0c5cb"), "SEVERITY": {"ok": "#14573a", "warning": "#8a5a00", "error": "#a82a3c"}},
+    True: {"TEXT": "#ece9f2", "MUTED": "#aaa4b5", "SURFACE": "#292631", "BACKGROUND": "#1d1b23", "BORDER": "#45404f", "ACCENT_ON_SURFACE": "#b9aefc",
+           "PROBLEM": ("#ffc9d0", "#4a2530", "#8d3a4b"), "SEVERITY": {"ok": "#a8e6c6", "warning": "#f0c066", "error": "#ff9aa6"}},
+}
+
+
+def apply_theme(app: QApplication, dark: bool | None = None) -> None:
+    """Colour the application. ``dark`` forces a scheme (tests, and a desktop that does not report one); by default the desktop's is used."""
+    global TEXT, MUTED, SURFACE, BACKGROUND, BORDER, DARK, ACCENT_ON_SURFACE, PROBLEM_TEXT, PROBLEM_BG, PROBLEM_BORDER
+    DARK = (app.styleHints().colorScheme() == Qt.ColorScheme.Dark) if dark is None else dark
+    colours = SCHEMES[DARK]
+    TEXT, MUTED, SURFACE, BACKGROUND, BORDER = (colours[name] for name in ("TEXT", "MUTED", "SURFACE", "BACKGROUND", "BORDER"))
+    ACCENT_ON_SURFACE = colours["ACCENT_ON_SURFACE"]
+    PROBLEM_TEXT, PROBLEM_BG, PROBLEM_BORDER = colours["PROBLEM"]
+    SEVERITY.update(dict(colours["SEVERITY"]))
     app.setStyle("Fusion")
     palette = QPalette()
     palette.setColor(QPalette.ColorRole.Window, QColor(BACKGROUND))
@@ -79,9 +105,10 @@ def apply_theme(app: QApplication) -> None:
     # rule: any border/background rule makes Qt drop Fusion's native arrows and
     # spin buttons, and they follow the palette above anyway.
     app.setStyleSheet(f"""
-        QWidget {{ color: {TEXT}; font-family: 'Noto Sans', 'DejaVu Sans', sans-serif; font-size: 13px; }}
+        QWidget {{ color: {TEXT}; font-family: {FONT_FAMILY}; font-size: 13px; }}
         QMainWindow, QWidget#appRoot {{ background: {BACKGROUND}; }}
         QFrame#sidebar {{ background: {SIDEBAR}; border: 0; }}
+        QPushButton#stepButton[rail=true] {{ padding: 10px 0; text-align: center; }}
         QFrame#sidebar QLabel {{ color: #c9c4d8; }}
         QFrame#sidebar QLabel#brand {{ color: white; font-size: 20px; font-weight: 700; }}
         QFrame#sidebar QLabel#brandMark {{ color: white; background: {ACCENT_DARK}; border-radius: 20px; font-size: 22px; font-weight: 700; }}
@@ -90,17 +117,23 @@ def apply_theme(app: QApplication) -> None:
         QPushButton#stepButton[current=true] {{ background: {SIDEBAR_CURRENT}; color: white; font-weight: 600; }}
         QPushButton#stepButton:disabled {{ color: {SIDEBAR_DISABLED}; }}
         QPushButton#stepButton[current=true]:disabled {{ color: white; background: {SIDEBAR_CURRENT}; }}
+        QPushButton#stepButton[problem=true] {{ color: #ffb3bb; }}
         QPushButton#stepButton:focus {{ border: 2px solid {ACCENT}; padding: 8px 10px; }}
         QFrame#contentHeader {{ background: {BACKGROUND}; border-bottom: 1px solid {BORDER}; }}
         QFrame#banner {{ background: {SURFACE}; border: 1px solid {ACCENT}; border-radius: 10px; }}
         QFrame#bannerError {{ background: {SURFACE}; border: 1px solid #c33d50; border-radius: 10px; }}
         QLabel#pageTitle {{ font-size: 25px; font-weight: 700; }}
         QLabel#pageSubtitle, QLabel[muted=true] {{ color: {MUTED}; }}
+        QLabel#problemLabel {{ color: {PROBLEM_TEXT}; background: {PROBLEM_BG}; border: 1px solid {PROBLEM_BORDER}; border-radius: 9px; padding: 12px 14px; font-weight: 600; }}
+        QLabel#cardTitle[severity="ok"] {{ color: {SEVERITY['ok']}; }}
+        QLabel#cardTitle[severity="warning"] {{ color: {SEVERITY['warning']}; }}
+        QLabel#cardTitle[severity="error"] {{ color: {SEVERITY['error']}; }}
         QLabel#sectionTitle {{ font-size: 17px; font-weight: 650; }}
         QLabel#heroTitle {{ font-size: 32px; font-weight: 750; }}
         QLabel#heroText {{ font-size: 16px; color: {MUTED}; }}
         QFrame#card, QFrame#choiceCard, QFrame#statusCard {{ background: {SURFACE}; border: 1px solid {BORDER}; border-radius: 12px; }}
         QFrame#choiceCard[selected=true] {{ border: 2px solid {ACCENT}; background: {BACKGROUND}; }}
+        QFrame#choiceCard[selected=false] {{ border: 1px solid {BORDER}; }}
         QFrame#choiceCard:hover {{ border-color: {ACCENT}; }}
         QFrame#choiceCard:focus {{ border: 2px solid {ACCENT_DARK}; }}
         QFrame#choiceCard:disabled {{ background: {BACKGROUND}; }}
@@ -127,6 +160,10 @@ def apply_theme(app: QApplication) -> None:
         QScrollBar::handle:vertical {{ background: #c9c4d2; border-radius: 4px; min-height: 30px; }}
         QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height: 0; }}
         QToolTip {{ color: white; background: #302b3a; border: 0; padding: 6px; }}
-        QTabBar::tab {{ padding: 9px 14px; }}
-        QTabBar::tab:selected {{ color: {ACCENT_DARK}; font-weight: 600; }}
+        QTabWidget::pane {{ border: 1px solid {BORDER}; border-radius: 10px; top: -1px; background: {SURFACE}; }}
+        QTabBar::tab {{ padding: 8px 14px; margin: 0 4px 4px 0; background: {SURFACE}; border: 1px solid {BORDER}; border-radius: 9px; }}
+        QTabBar::tab:hover {{ border-color: {ACCENT}; }}
+        QTabBar::tab:selected {{ color: {ACCENT_ON_SURFACE}; font-weight: 600; border: 2px solid {ACCENT}; padding: 7px 13px; }}
+        QLabel#cardMark {{ color: {MUTED}; font-size: 16px; }}
+        QLabel#cardMark[selected=true] {{ color: {ACCENT_ON_SURFACE}; }}
     """)

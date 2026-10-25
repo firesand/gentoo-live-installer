@@ -422,6 +422,10 @@ def main(argv: list[str] | None = None) -> int:
         later(100, fail_modal)
         watchdog.arm(args.navigation_timeout, f"page {current} did not advance")
         window.next.click()
+        shown = window.pages[current]
+        if window.current == current and shown.has_problem():  # a page now shows its problem inline instead of in a dialog
+            fail(shown.problem_label.text(), dialog="Check this step")
+            return
         if window.current != current + 1:
             # A validation dialog is handled by fail_modal; if navigation
             # stopped without one, fail closed instead of bypassing a page.

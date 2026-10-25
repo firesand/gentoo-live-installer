@@ -7,25 +7,30 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
-from PySide6.QtCore import QThread, QTimer, Qt, Signal
-from PySide6.QtGui import QFontDatabase
+from PySide6.QtCore import QObject, QThread, QTimer, Qt, Signal
+from PySide6.QtGui import QAction, QFontDatabase
 from PySide6.QtWidgets import (
     QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
     QSizePolicy,
+    QToolButton,
     QVBoxLayout,
+    QWidget,
+    QWidgetAction,
 )
 
-from .. import daemon_client, diagnostics
+from .. import daemon_client, diagnostics, first_steps, theme
 from ..backend import BackendWorker
 from ..manifest import InstallManifest
 from ..widgets import Card, FlowLayout, Page, wrapped_label
+from .help import open_url
 
 LOG = logging.getLogger("gentoo_installer.progress")
 
@@ -43,7 +48,7 @@ STAGE_ORDER = (
 STAGE_LABELS = {
     "preflight": "Checking the installation environment",
     "storage": "Preparing disks and filesystems",
-    "stage3": "Downloading and verifying Gentoo",
+    "stage3": "Downloading Gentoo and checking that the download is genuine",
     "mounts": "Preparing the new system",
     "repository": "Fetching the Portage tree",
     "portage": "Configuring Portage",
@@ -56,6 +61,26 @@ STAGE_LABELS = {
     "cleanup": "Finishing and unmounting",
     "packages": "Installing applications",  # daemons that still have one packages stage
 }
+# The checklist shows the Handbook names of the 12 stages (cleanup is part of the last one).
+CHECKLIST_STAGES = tuple(name for name in STAGE_ORDER if name != "cleanup")
+CHECKLIST_NAMES = {
+    "preflight": "Checking the installation environment",
+    "storage": "Preparing the disks",
+    "stage3": "Unpacking the stage file",
+    "mounts": "Mounting the necessary filesystems",
+    "repository": "Setting up binary package signatures and the Portage tree",
+    "portage": "Configuring Portage",
+    "kernel": "Installing the kernel",
+    "target": "Setting up accounts and the network",
+    "base": "Installing the base system",
+    "bootloader": "Installing the bootloader",
+    "desktop": "Installing the desktop and applications",
+    "validation": "Checking the installed system",
+}
+LONG_STEPS_HINT = "The long steps are the kernel and the desktop; the others take a few minutes."
+CANCEL_WARNING = "Cancelling after the disk was changed leaves a partly installed system that cannot start; you can resume or start over later."
+GENTOO_NEWS_URL = "https://www.gentoo.org/support/news-items/"
+ERASE_AGAIN = "Erase again and restart installation"
 # Share of the overall bar per stage (sum 100, cleanup 0). Used when the
 # daemon does not send an overall percentage with its events.
 STAGE_WEIGHTS = {
@@ -224,13 +249,167 @@ class DiagnosticsExporter(_FileJob):
         return f"Saved diagnostics to {self.path}. Review it before sharing; serial numbers and other identifiers are shortened or removed, and passwords are removed."
 
 
+class PanelCommand(QObject):
+    """A command of the result panel. It reads like a button for the rest of the code (text(), setText(), isVisible(), setVisible(),
+    click(), clicked) and is shown as the one primary button, as a quiet button next to it, or as an entry of the "More" menu:
+    the panel decides (ProgressPage._arrange_commands), the command only says whether it is available."""
+
+    clicked = Signal()
+
+    def __init__(self, text: str, *, quiet: bool = False, danger: bool = False, parent: QObject | None = None):
+        super().__init__(parent)
+        self._text = text
+        self.quiet = quiet  # a command that stays a visible quiet button (Save log) instead of going into the menu
+        self.danger = danger  # never the primary button; its menu entry is drawn as a danger button
+        self.available = False
+        self.presentation = "hidden"  # primary | secondary | menu | hidden
+        self.changed: Callable[[], None] = lambda: None
+        self.button = QPushButton(text)
+        self.button.hide()
+        self.button.clicked.connect(self.clicked)
+        self.entry_button: QPushButton | None = None
+        self.entry: QAction | QWidgetAction | None = None
+
+    def attach_menu(self, menu: QMenu) -> None:
+        if self.danger:
+            widget_action = QWidgetAction(menu)
+            self.entry_button = QPushButton(self._text)
+            self.entry_button.setObjectName("dangerButton")
+            self.entry_button.clicked.connect(menu.close)
+            self.entry_button.clicked.connect(self.clicked)
+            widget_action.setDefaultWidget(self.entry_button)
+            self.entry = widget_action
+            menu.addAction(widget_action)
+        else:
+            self.entry = menu.addAction(self._text)
+            self.entry.triggered.connect(lambda _=False: self.clicked.emit())
+        self.entry.setVisible(False)
+
+    def text(self) -> str:
+        return self._text
+
+    def setText(self, text: str) -> None:
+        self._text = text
+        self.button.setText(text)
+        if self.entry_button is not None:
+            self.entry_button.setText(text)
+        elif self.entry is not None:
+            self.entry.setText(text)
+
+    def isVisible(self) -> bool:
+        return self.available
+
+    def isVisibleTo(self, _parent: QWidget | None = None) -> bool:
+        return self.available
+
+    def setVisible(self, visible: bool) -> None:
+        if visible != self.available:
+            self.available = visible
+            self.changed()
+
+    def click(self) -> None:
+        self.clicked.emit()
+
+    def present(self, how: str) -> None:
+        """Show this command as "primary", "secondary" or "menu" ("hidden" when it is not available)."""
+        self.presentation = how if self.available else "hidden"
+        shown = self.presentation in {"primary", "secondary"}
+        self.button.setObjectName("primaryButton" if self.presentation == "primary" else "")
+        self.button.style().unpolish(self.button)
+        self.button.style().polish(self.button)
+        self.button.setVisible(shown)
+        if self.entry is not None:
+            self.entry.setVisible(self.presentation == "menu")
+
+
+class StageChecklist(QFrame):
+    """The stages of the installation as a vertical checklist: done, running, waiting, or the one that failed."""
+
+    SYMBOLS = {"done": "✓", "running": "▶", "pending": "○", "failed": "✗"}
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setObjectName("card")
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(18, 14, 18, 14)
+        outer.setSpacing(4)
+        title = QLabel("What the installer does")
+        title.setObjectName("cardTitle")
+        outer.addWidget(title)
+        self.hint = wrapped_label(LONG_STEPS_HINT, muted=True)
+        outer.addWidget(self.hint)
+        self.states: dict[str, str] = {}
+        self.icons: dict[str, QLabel] = {}
+        self.names: dict[str, QLabel] = {}
+        for stage in CHECKLIST_STAGES:
+            row = QHBoxLayout()
+            icon = QLabel()
+            icon.setMinimumWidth(18)
+            icon.setAccessibleName("State")
+            name = QLabel(CHECKLIST_NAMES[stage])
+            row.addWidget(icon)
+            row.addWidget(name, 1)
+            outer.addLayout(row)
+            self.icons[stage], self.names[stage] = icon, name
+        self.reset()
+
+    def reset(self) -> None:
+        for stage in CHECKLIST_STAGES:
+            self.set_state(stage, "pending")
+
+    def set_state(self, stage: str, state: str) -> None:
+        if stage not in self.icons:
+            return
+        self.states[stage] = state
+        icon = self.icons[stage]
+        icon.setText(self.SYMBOLS[state])
+        colour = {"done": theme.status_color("ok"), "running": theme.ACCENT, "failed": theme.status_color("error")}.get(state, theme.MUTED)
+        icon.setStyleSheet(f"color: {colour}; font-weight: 700;")
+        name = self.names[stage]
+        font = name.font()
+        font.setBold(state in {"running", "failed"})
+        name.setFont(font)
+        name.setAccessibleDescription({"done": "done", "running": "in progress", "pending": "waiting", "failed": "did not finish"}[state])
+
+    def stage_event(self, stage: str, status: str) -> None:
+        """A stage began (running), finished (completed/skipped); every stage before it is done."""
+        if stage not in CHECKLIST_STAGES:
+            return
+        position = CHECKLIST_STAGES.index(stage)
+        for earlier in CHECKLIST_STAGES[:position]:
+            if self.states.get(earlier) != "done":
+                self.set_state(earlier, "done")
+        self.set_state(stage, "done" if status in {"completed", "skipped"} else "running")
+
+    def fail(self, stage: str) -> None:
+        if stage in self.icons and self.states.get(stage) != "done":
+            self.set_state(stage, "failed")
+        else:  # the failing stage is unknown: mark the one that was running
+            for name, state in self.states.items():
+                if state == "running":
+                    self.set_state(name, "failed")
+
+    def finish(self) -> None:
+        for stage in CHECKLIST_STAGES:
+            self.set_state(stage, "done")
+
+
+def linkify(text: str) -> str:
+    """HTML for a plain text with web addresses: escaped, newlines kept, addresses clickable."""
+    import html
+
+    escaped = html.escape(text)
+    return re.sub(r"(https?://[^\s<)]+)", r'<a href="\1">\1</a>', escaped).replace("\n", "<br>")
+
+
 class ProgressPage(Page):
     cancelRequested = Signal()
     finished = Signal(bool)
     workerStopped = Signal()
     rebootRequested = Signal()
     started = Signal()  # a run (start, resume or attach) began: navigation must stay locked
-    retryRequested = Signal()  # "Try again"/"Start over": a fresh start through the usual confirmations
+    retryRequested = Signal()  # "Try again"/"Erase again and restart installation": a fresh start through the usual confirmations
+    repairRequested = Signal()  # open the repair tool (the system on the disk does not start)
     settingsRequested = Signal()
     quitRequested = Signal()
     diagnosticsRequested = Signal()
@@ -252,6 +431,8 @@ class ProgressPage(Page):
         self._bootable = False  # the bootloader step finished: the new system starts even though a later step failed
         self._degraded: list[str] = []  # optional parts that could not be installed
         self._warnings: list[str] = []  # things that went wrong after the install itself succeeded (cleanup)
+        self._restart_offered = False
+        self._finish: dict[str, Any] = {}  # the success data of the completed event: boot check, news, login, hardware first steps
         self._cancelled = False
         self._busy = False
         self._blocked = False  # a repair session holds the disks: the start was refused, no installation is running
@@ -279,6 +460,7 @@ class ProgressPage(Page):
         self.stage = QLabel("Preparing to start…")
         self.stage.setObjectName("cardTitle")
         self.stage.setWordWrap(True)
+        self.stage.setProperty("severity", "")
         status_card.content.addWidget(self.stage)
         self.progress = QProgressBar()
         self.progress.setRange(0, 0)
@@ -291,6 +473,7 @@ class ProgressPage(Page):
         self.detail.setSizePolicy(policy)  # the label follows the window, never the other way round
         row.addWidget(self.detail, 1)
         self.elapsed = QLabel(format_elapsed(0))
+        self.elapsed.setAccessibleName("Elapsed time")
         row.addWidget(self.elapsed, 0, Qt.AlignmentFlag.AlignTop)
         status_card.content.addLayout(row)
         self.secondary = wrapped_label("", muted=True)
@@ -298,6 +481,7 @@ class ProgressPage(Page):
         status_card.content.addWidget(self.secondary)
         self.content.addWidget(status_card)
 
+        # The result panel sits right under the status: Restart now must never be below the fold.
         self.result_panel = QFrame()
         self.result_panel.setObjectName("card")
         panel = QVBoxLayout(self.result_panel)
@@ -309,17 +493,34 @@ class ProgressPage(Page):
         self.outcome_details.hide()
         panel.addWidget(self.outcome_details)
         buttons = FlowLayout()
-        self.retry_button = QPushButton("Try again")
-        self.resume_button = QPushButton("Resume installation")
-        self.resume_button.setObjectName("primaryButton")
-        self.reconnect_button = QPushButton("Reconnect")
-        self.reconnect_button.setObjectName("primaryButton")
-        self.settings_button = QPushButton("Back to settings")
-        self.save_log_button = QPushButton("Save log…")
-        self.diagnostics_button = QPushButton("Save diagnostics…")
-        self.quit_button = QPushButton("Quit")
-        for button in (self.reconnect_button, self.resume_button, self.retry_button, self.settings_button, self.save_log_button, self.diagnostics_button, self.quit_button):
-            buttons.addWidget(button)
+        self.more_menu = QMenu(self)
+        self.reconnect_button = PanelCommand("Reconnect", parent=self)
+        self.resume_button = PanelCommand("Resume installation", parent=self)
+        self.retry_button = PanelCommand("Try again", parent=self)
+        self.settings_button = PanelCommand("Back to settings", parent=self)
+        self.save_log_button = PanelCommand("Save log…", quiet=True, parent=self)
+        self.repair_button = PanelCommand("Open the repair tool", parent=self)
+        self.diagnostics_button = PanelCommand("Save diagnostics…", parent=self)
+        self.quit_button = PanelCommand("Quit", parent=self)
+        self.reboot = QPushButton("Restart now")
+        self.reboot.setObjectName("primaryButton")
+        self.reboot.setVisible(False)
+        self.reboot.clicked.connect(self.rebootRequested)
+        # Priority when no restart is offered: the first available command is the one primary button.
+        self.commands = [self.reconnect_button, self.resume_button, self.retry_button, self.settings_button, self.save_log_button,
+                         self.repair_button, self.diagnostics_button, self.quit_button]
+        buttons.addWidget(self.reboot)
+        for command in self.commands:
+            buttons.addWidget(command.button)
+            command.attach_menu(self.more_menu)
+            command.changed = self._arrange_commands
+        self.more_button = QToolButton()
+        self.more_button.setText("More")
+        self.more_button.setMenu(self.more_menu)
+        self.more_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        self.more_button.setAccessibleName("More actions")
+        self.more_button.hide()
+        buttons.addWidget(self.more_button)
         panel.addLayout(buttons)
         self.notice = wrapped_label("", muted=True, selectable=True)
         self.notice.hide()
@@ -327,6 +528,41 @@ class ProgressPage(Page):
         self.result_panel.hide()
         self.content.addWidget(self.result_panel)
 
+        # CORE-08: what to do next, after a successful installation.
+        self.first_steps_card = Card("Your first steps in Gentoo")
+        self.first_steps_checks = wrapped_label("", selectable=True)
+        self.first_steps_checks.setAccessibleName("Checks of the new system")
+        self.first_steps_card.content.addWidget(self.first_steps_checks)
+        self.first_steps_text = wrapped_label("", selectable=True)
+        self.first_steps_text.setTextFormat(Qt.TextFormat.RichText)
+        self.first_steps_text.setOpenExternalLinks(True)
+        self.first_steps_text.setAccessibleName("First steps")
+        self.first_steps_card.content.addWidget(self.first_steps_text)
+        self.first_steps_hardware = wrapped_label("", selectable=True)
+        self.first_steps_hardware.setAccessibleName("First steps for this computer")
+        self.first_steps_card.content.addWidget(self.first_steps_hardware)
+        self.news_button = QPushButton("Read Gentoo news")
+        self.news_button.setToolTip("Open the Gentoo news page in the browser. In the new system, `eselect news read` shows the news that applies to it.")
+        self.news_button.clicked.connect(lambda: open_url(GENTOO_NEWS_URL))
+        self.news_button.hide()
+        self.first_steps_card.content.addWidget(self.news_button, 0, Qt.AlignmentFlag.AlignLeft)
+        self.first_steps_note = wrapped_label("", muted=True, selectable=True)
+        self.first_steps_card.content.addWidget(self.first_steps_note)
+        self.first_steps_card.hide()
+        self.content.addWidget(self.first_steps_card)
+
+        self.checklist = StageChecklist()
+        self.content.addWidget(self.checklist)
+
+        self.details_button = QToolButton()
+        self.details_button.setText("Details")
+        self.details_button.setCheckable(True)
+        self.details_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.details_button.setArrowType(Qt.ArrowType.RightArrow)
+        self.details_button.setAutoRaise(True)
+        self.details_button.setAccessibleName("Details: the installation log")
+        self.details_button.toggled.connect(self._details_toggled)
+        self.content.addWidget(self.details_button, 0, Qt.AlignmentFlag.AlignLeft)
         self.truncated_label = wrapped_label("Showing the newest lines only. " + TRUNCATED_NOTE, muted=True)
         self.truncated_label.hide()
         self.content.addWidget(self.truncated_label)
@@ -338,26 +574,52 @@ class ProgressPage(Page):
         self.log.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.FixedFont))
         self.log.setMinimumHeight(280)
         self.log.setAccessibleName("Installation log")
+        self.log.hide()
         self.content.addWidget(self.log)
         actions = QHBoxLayout()
         self.cancel = QPushButton("Cancel installation")
+        self.cancel.setObjectName("linkButton")
+        self.cancel.setToolTip(CANCEL_WARNING)
         self.cancel.clicked.connect(self._cancel)
         actions.addWidget(self.cancel)
-        actions.addStretch()
-        self.reboot = QPushButton("Restart now")
-        self.reboot.setObjectName("primaryButton")
-        self.reboot.setVisible(False)
-        self.reboot.clicked.connect(self.rebootRequested)
-        actions.addWidget(self.reboot)
+        self.cancel_note = wrapped_label(CANCEL_WARNING, muted=True)
+        actions.addWidget(self.cancel_note, 1)
         self.content.addLayout(actions)
 
         self.retry_button.clicked.connect(self.retryRequested)
         self.resume_button.clicked.connect(self.resume)
         self.reconnect_button.clicked.connect(self.reconnect)
         self.settings_button.clicked.connect(self.settingsRequested)
+        self.repair_button.clicked.connect(self.repairRequested)
         self.save_log_button.clicked.connect(self.save_log)
         self.diagnostics_button.clicked.connect(self.diagnosticsRequested)
         self.quit_button.clicked.connect(self.quitRequested)
+
+    def _details_toggled(self, shown: bool) -> None:
+        self.log.setVisible(shown)
+        self.truncated_label.setVisible(shown and self._truncated)
+        self.details_button.setArrowType(Qt.ArrowType.DownArrow if shown else Qt.ArrowType.RightArrow)
+
+    def _arrange_commands(self) -> None:
+        """Exactly one primary button; Save log stays a quiet button; everything else is in the More menu."""
+        available = [command for command in self.commands if command.available]
+        primary: PanelCommand | None = None
+        secondary: PanelCommand | None = None
+        candidates = [command for command in available if not command.danger and not command.quiet]
+        if self._restart_offered:
+            secondary = next((command for command in candidates if command in (self.reconnect_button, self.resume_button, self.retry_button)), None)
+        else:
+            primary = candidates[0] if candidates else None
+        for command in self.commands:
+            quiet_button = command is secondary or (command.quiet and command.available)
+            command.present("primary" if command is primary else "secondary" if quiet_button else "menu")
+        self.more_button.setVisible(any(command.presentation == "menu" for command in self.commands))
+
+    def set_restart_offered(self, offered: bool) -> None:
+        """Restart now is the primary button while the new system can start."""
+        self._restart_offered = offered
+        self.reboot.setVisible(offered)
+        self._arrange_commands()
 
     # --- runs -------------------------------------------------------------------------------
 
@@ -429,7 +691,14 @@ class ProgressPage(Page):
         self.secondary.setProperty("package", False)
         self.cancel.setEnabled(True)
         self.cancel.setVisible(True)
-        self.reboot.setVisible(False)
+        self.cancel_note.setVisible(True)
+        self._finish = {}
+        self.checklist.reset()
+        self.first_steps_card.hide()
+        self._set_severity("")
+        for command in self.commands:
+            command.available = False
+        self.set_restart_offered(False)
         self.result_panel.hide()
         self.notice.hide()
 
@@ -499,6 +768,8 @@ class ProgressPage(Page):
             else:
                 self._storage_started = True
         self.stage.setText(STAGE_LABELS.get(stage, stage.replace("_", " ").title() or "Working…"))
+        if kind == "stage" and stage:
+            self.checklist.stage_event(stage, status)
         if message:
             self._base_detail = message
             if kind == "stage" and status == "running":
@@ -512,6 +783,12 @@ class ProgressPage(Page):
         else:
             self.model.progress_event(stage, percent, stage_progress)
         self._show_progress()
+
+    def _set_severity(self, severity: str) -> None:
+        """Colour of the headline: "" (normal), "ok", "warning" (amber) or "error" (red)."""
+        self.stage.setProperty("severity", severity)
+        self.stage.style().unpolish(self.stage)
+        self.stage.style().polish(self.stage)
 
     def _show_progress(self) -> None:
         self.progress.setRange(0, 100)
@@ -633,16 +910,21 @@ class ProgressPage(Page):
             self.model.finish()
             self.progress.setRange(0, 100)
             self.progress.setValue(100)
-            self.stage.setText("Installation finished: remove the USB stick, then restart")
-            self.detail.setText(f"{message or 'Gentoo is installed.'} Remove the installation medium (the USB stick or disc) and restart the computer to start Gentoo.")
+            self.stage.setText("Installation finished: remove the USB stick, then restart.")
+            self._set_severity("ok")
+            self.checklist.finish()
+            sentence = (message or "Gentoo is installed").strip()
+            sentence += "" if sentence.endswith((".", "!", "?")) else "."
+            self.detail.setText(f"{sentence} Remove the installation medium (the USB stick or disc) and restart the computer to start Gentoo.")
             self.secondary.hide()
             self.cancel.setVisible(False)
-            self.reboot.setVisible(True)
+            self.cancel_note.setVisible(False)
+            self._show_first_steps(data)
             self.result_hint.setText(
                 "The new system passed its final checks. You can save the log for your records."
                 if not self._degraded else "The new system works, but some optional parts are missing (see below). You can save the log for your records.")
             self.resume_button.setText("Resume installation")
-            self._set_buttons(save=True)
+            self._set_buttons(save=True, diagnostics=True, quit_=True, restart=True)
             self.result_panel.show()
             self.timer.stop()
             self._finished_emitted = True
@@ -680,6 +962,8 @@ class ProgressPage(Page):
         self.progress.setRange(0, 100)
         self.progress.setValue(min(100, round(self.model.overall)))  # keep how far it got
         label = STAGE_LABELS.get(failing, "")
+        self.checklist.fail(failing if failing in CHECKLIST_STAGES else "")
+        self._set_severity("warning" if self._cancelled or self._busy or self._blocked or self._bootable else "error")
         if self._cancelled:
             self.stage.setText("Installation cancelled")
             if not self._storage_started:
@@ -687,7 +971,7 @@ class ProgressPage(Page):
             elif self._can_resume():
                 self.detail.setText("The disk is partially installed; choose Resume or Back to settings.")
             else:
-                self.detail.setText("The disk is partially installed; choose Start over or Back to settings.")
+                self.detail.setText(f"The disk is partially installed; choose “{ERASE_AGAIN}” or Back to settings.")
         elif self._busy:
             self.stage.setText("An installation is already running")
             self.detail.setText("Another installation is in progress on this computer. Reconnect to follow it.")
@@ -701,6 +985,7 @@ class ProgressPage(Page):
             self.stage.setText(f"Installation needs attention · {label}" if label and failing != "cleanup" else "Installation needs attention")
             self.detail.setText(summarize(message))
         self.cancel.setVisible(False)
+        self.cancel_note.setVisible(False)
         self.timer.stop()
         self.secondary.hide()
         self._show_result_panel()
@@ -724,38 +1009,71 @@ class ProgressPage(Page):
                     f"You can restart now and fix that from the installed system, or retry {step} first.")
             resumable = self._resumable is not False and self._retryable is not False and self._manifest is not None
             self.resume_button.setText("Retry the desktop step" if self._failure_stage == "desktop" else "Retry the last step")
-            self.reboot.setVisible(True)
         elif self._cancelled:
             hint = "The installation was cancelled. " + (
                 "Your disk was already modified, so the system on it is incomplete. "
                 + ("Resume continues where it stopped without formatting again; " if resumable else "")
-                + "Start over erases the disk again."
+                + f"“{ERASE_AGAIN}” erases the disk again."
                 if changed else "Nothing on your disks was changed."
             )
         elif changed:
             hint = (
                 "Your disk was already modified, so the system on it is incomplete. "
                 + ("Resume continues where it stopped without formatting again. " if resumable else "")
-                + "Start over erases and installs again; Back to settings lets you change your choices."
+                + f"“{ERASE_AGAIN}” erases and installs again; Back to settings lets you change your choices."
             )
         else:
             hint = "Nothing on your disks was changed. Fix the problem described above and try again, or go back to change your settings."
         self.result_hint.setText(hint)
-        self.retry_button.setText("Start over" if changed else "Try again")
+        self.retry_button.setText(ERASE_AGAIN if changed else "Try again")
+        self.retry_button.danger = changed
         self._set_buttons(
             retry=not self._busy and not bootable, resume=resumable, reconnect=self._busy, settings=not bootable, save=not self._busy,
-            diagnostics=not self._busy, quit_=True,
+            diagnostics=not self._busy, quit_=True, restart=bootable,
+            repair=changed and not bootable and not self._busy and not self._blocked,
         )
         self.result_panel.show()
 
-    def _set_buttons(self, *, retry: bool = False, resume: bool = False, reconnect: bool = False, settings: bool = False, save: bool = False, diagnostics: bool = False, quit_: bool = False) -> None:
-        self.retry_button.setVisible(retry)
-        self.resume_button.setVisible(resume)
-        self.reconnect_button.setVisible(reconnect)
-        self.settings_button.setVisible(settings)
-        self.save_log_button.setVisible(save)
-        self.diagnostics_button.setVisible(diagnostics)
-        self.quit_button.setVisible(quit_)
+    def _set_buttons(self, *, retry: bool = False, resume: bool = False, reconnect: bool = False, settings: bool = False, save: bool = False,
+                     diagnostics: bool = False, quit_: bool = False, restart: bool = False, repair: bool = False) -> None:
+        for command, available in ((self.retry_button, retry), (self.resume_button, resume), (self.reconnect_button, reconnect),
+                                   (self.settings_button, settings), (self.save_log_button, save), (self.diagnostics_button, diagnostics),
+                                   (self.quit_button, quit_), (self.repair_button, repair)):
+            command.available = available
+        self.set_restart_offered(restart)
+
+    def _show_first_steps(self, data: dict) -> None:
+        """CORE-08 / G04: the card "Your first steps in Gentoo" with the boot check, the news count and the hardware lines."""
+        for key in ("boot_check", "news_unread", "first_steps", "login"):
+            if key in data:
+                self._finish[key] = data[key]
+        steps = self.first_steps_model()
+        checks = first_steps.checks_lines(steps)
+        self.first_steps_checks.setText("\n".join(checks))
+        self.first_steps_checks.setVisible(bool(checks))
+        self.news_button.setVisible(steps.news_unread is not None and steps.news_unread > 0)
+        numbered = [f"{number}. {line}" for number, line in enumerate(first_steps.steps_lines(steps), 1)]
+        self.first_steps_text.setText(linkify("\n".join(numbered + first_steps.help_lines())))
+        extra = first_steps.hardware_lines(steps.hardware)
+        self.first_steps_hardware.setText("For this computer:\n" + "\n".join(f"• {line}" for line in extra) if extra else "")
+        self.first_steps_hardware.setVisible(bool(extra))
+        where = f"/home/{steps.username}/{first_steps.FIRST_STEPS_FILE}"
+        self.first_steps_note.setText(f"The same list is saved in the new system as {where}.")
+        self.first_steps_card.show()
+
+    def first_steps_model(self) -> first_steps.FirstSteps:
+        """What the finish page tells the user: from the completed event (it also works after an attach), else from the settings."""
+        raw_login = self._finish.get("login")
+        login: dict = raw_login if isinstance(raw_login, dict) else {}
+        manifest = self._manifest
+        base = first_steps.from_manifest(manifest) if manifest is not None else first_steps.FirstSteps()
+        news = self._finish.get("news_unread")
+        return first_steps.FirstSteps(
+            username=str(login.get("username") or base.username), hostname=str(login.get("hostname") or base.hostname),
+            privilege=str(login.get("privilege") or base.privilege), ssh=bool(login.get("ssh", base.ssh)),
+            minimal=bool(login.get("minimal", base.minimal)), bootloader=str(login.get("bootloader") or base.bootloader),
+            boot_check=str(self._finish.get("boot_check") or ""), news_unread=news if isinstance(news, int) else None,
+            hardware=tuple(str(line) for line in (self._finish.get("first_steps") or ()) if isinstance(line, str)))
 
     def _connection_failed(self, message: str) -> None:
         self._connection_lost("Could not connect to the privileged installer backend. " + message)
@@ -782,6 +1100,8 @@ class ProgressPage(Page):
             self.progress.setRange(0, 100)
             self.progress.setValue(min(100, round(self.model.overall)))
             self.cancel.setVisible(False)
+            self.cancel_note.setVisible(False)
+            self._set_severity("warning")
             self.timer.stop()
             self.result_hint.setText("Nothing was lost: the installer service keeps working while this window is disconnected.")
             self._set_buttons(reconnect=can_attach, save=True, diagnostics=True, quit_=True)
