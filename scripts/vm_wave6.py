@@ -174,9 +174,10 @@ SESSION_CLIENTS = "tmux list-clients -t {session} -F '#{{client_tty}} #{{client_
 # own and relays it to tty1, so the console's client sits on /dev/pts/N with a root sudo on tty1 above it (the first real run).
 CLIENT_CHAIN = ('while read -r tty pid; do chain=""; c="$pid"; while [ -n "$c" ] && [ "$c" -gt 1 ] 2>/dev/null; do '
                 'chain="$chain $(ps -o tty= -p "$c" | tr -d " ")"; c="$(ps -o ppid= -p "$c" | tr -d " ")"; done; echo "$tty$chain"; done')
-# -C: by program name, so the shell that runs this check (its command line holds "tmux list-clients") is not counted;
+# By program name (comm), so the shell that runs this check (its command line holds "tmux list-clients") is not counted. tmux
+# renames its processes ("tmux: server", "tmux: client"), so ps -C tmux finds none: the name must start with "tmux".
 # user:32: ps cuts longer names to 8 characters ("rescue-+") by default.
-TMUX_PS_COMMAND = "ps -C tmux -o user:32=,args="
+TMUX_PS_COMMAND = "ps -eo user:32=,comm=,args= | awk '$2 ~ /^tmux/'"
 
 
 def session_command(home: str = AI_HOME) -> str:

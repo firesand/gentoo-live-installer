@@ -446,8 +446,8 @@ REAL_SESSION = """1 agent /dev/pts/1 /home/rescue-ai
 ---
 /dev/pts/0 pts/0 pts/0 tty1 tty1 tty1
 ---
-rescue-ai tmux -u new-session -A -s rescue -n agent
-rescue-ai tmux: server (/tmp/tmux-999/default)
+rescue-ai                        tmux: client    tmux -u new-session -A -s rescue -n agent
+rescue-ai                        tmux: server    tmux -u new-session -A -s rescue -n agent
 """
 
 
@@ -458,6 +458,6 @@ def test_the_console_client_may_sit_on_sudos_pty_above_tty1() -> None:
 
 
 def test_the_process_checks_count_tmux_and_ttyd_by_name_with_whole_user_names() -> None:
-    assert w6.TMUX_PS_COMMAND == "ps -C tmux -o user:32=,args=" and w6.SHARE_PS_COMMAND == "ps -C ttyd -o user:32=,args="
+    assert w6.TMUX_PS_COMMAND.startswith("ps -eo user:32=,comm=") and w6.SHARE_PS_COMMAND == "ps -C ttyd -o user:32=,args="
     assert w6.TMUX_PS_COMMAND in w6.session_command() and "#{client_pid}" in w6.session_command()
-    assert not w6.parse_session_probe(0, REAL_SESSION.replace("rescue-ai tmux: server", "root tmux: server")).success
+    assert not w6.parse_session_probe(0, REAL_SESSION.replace("rescue-ai                        tmux: server", "root                             tmux: server")).success
