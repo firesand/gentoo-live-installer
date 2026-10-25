@@ -1,7 +1,9 @@
 """A terminal inside the system, with a transcript, started from the daemon or directly on the console.
 
-The command is ``setsid --ctty script ... --command '<chroot wrapper> /bin/bash -l'``: the wrapper is the same fixed form
-every chroot command uses (root:root, no supplementary groups, umask 022, clean environment). The terminal is the user's
+The command is ``setsid --ctty script ... --command '<chroot wrapper> /bin/bash --rcfile /run/gentoo-rescue/bashrc -i'``: the
+wrapper is the same fixed form every chroot command uses (root:root, no supplementary groups, umask 022, clean environment).
+The rcfile (written by ``chroot_help`` into the session's own fresh /run) gives the "(chroot) " prompt like the Handbook; a
+system whose shell is not bash gets ``SHELL -l`` as before. The terminal is the user's
 own shell, so it is outside the command policy; its start and end are audited and the output (not the typed keys, so
 password prompts stay unrecorded) is kept as a transcript. A read-write terminal is the most dangerous action there is.
 """
@@ -21,6 +23,7 @@ import time
 from pathlib import Path
 from typing import Any, Callable
 
+from . import chroot_help
 from .errors import NeedsConfirmation, RescueError
 from .plan import BACKUP_PHRASE
 from .runner import DEFAULT_CHROOT_ENV
@@ -31,17 +34,31 @@ TERM_RE = re.compile(r"^[A-Za-z0-9._+-]{1,40}$")
 SHELLS = ("/bin/bash", "/usr/bin/bash", "/bin/ash", "/bin/sh", "/usr/bin/sh")
 
 
-def requirement(writable: bool, root_device: str) -> dict[str, Any]:
-    """What the client must collect before a terminal opens (read-only: high risk, read-write: dangerous)."""
+class Terminated(Exception):
+    """SIGHUP or SIGTERM reached the tool that owns a terminal: unwind so the terminal is hung up and the system is released."""
+
+
+def requirement(writable: bool, root_device: str, *, simple: bool = False) -> dict[str, Any]:
+    """What the client must collect before a terminal opens (read-only: high risk, read-write: dangerous).
+
+    ``simple`` is the one-question form of the repair window and of ``gentoo-chroot``: a read-write terminal needs one clear
+    acknowledgement ("Commands I type here change the installed system"); the typed device name and the backup phrase are dropped.
+    The audit record and the transcript stay.
+    """
     name = root_device.rsplit("/", 1)[-1]
+    if simple:
+        return {"risk": "dangerous" if writable else "high", "required": True, "review": True, "typed": "", "phrase": "", "acknowledge": writable}
     return {"risk": "dangerous" if writable else "high", "required": True, "review": True, "typed": name, "phrase": BACKUP_PHRASE if writable else ""}
 
 
 def check_confirmation(session: RescueSession, writable: bool, params: dict[str, Any]) -> None:
-    need = requirement(writable, session.plan.root.device)
+    simple = bool(params.get("simple"))
+    need = requirement(writable, session.plan.root.device, simple=simple)
     if not params.get("confirm"):
         raise NeedsConfirmation("A terminal runs the system's own shell as root and needs confirmation", missing="confirm")
-    if params.get("typed") != need["typed"]:
+    if need.get("acknowledge") and not params.get("acknowledged"):
+        raise NeedsConfirmation("Confirm that the commands you type in this terminal change the installed system", missing="acknowledged")
+    if not simple and params.get("typed") != need["typed"]:
         raise NeedsConfirmation(f"Type {need['typed']} to confirm", missing="typed", expected=need["typed"])
     if need["phrase"] and params.get("phrase") != need["phrase"]:
         raise NeedsConfirmation(f"Type {need['phrase']} to confirm", missing="phrase", expected=need["phrase"])
@@ -56,12 +73,13 @@ def find_shell(session: RescueSession) -> str:
     raise RescueError("tool_missing", "This system has no shell (bash, ash or sh)")
 
 
-def chroot_command(session: RescueSession, term: str, shell: str) -> list[str]:
-    """The fixed wrapper plus a clean environment and a login shell; validated by the host policy before it is used."""
+def chroot_command(session: RescueSession, term: str, shell: str, *, rcfile: bool = False) -> list[str]:
+    """The fixed wrapper plus a clean environment and an interactive shell (a login shell without the rcfile); validated by the host policy before it is used."""
     env = dict(DEFAULT_CHROOT_ENV)
     env.update({"TERM": term, "LANG": "C.UTF-8", "SHELL": shell, "RESCUE_SESSION": session.sid, "PATH": CHROOT_PATH})
     pairs = [f"{key}={value}" for key, value in env.items()]
-    argv = [*CHROOT_WRAPPER_ARGV, *CHROOT_CREDENTIALS, session.root, "/usr/bin/env", "-i", *pairs, shell, "-l"]
+    start = [shell, "--rcfile", chroot_help.BASHRC_PATH, "-i"] if rcfile else [shell, "-l"]  # a login shell ignores --rcfile
+    argv = [*CHROOT_WRAPPER_ARGV, *CHROOT_CREDENTIALS, session.root, "/usr/bin/env", "-i", *pairs, *start]
     session.runner.host.validate(argv)
     return argv
 
@@ -79,9 +97,18 @@ def script_command(inner: list[str], transcript: Path) -> list[str]:
     return ["setsid", "--ctty", "script", "--quiet", "--return", "--flush", "--output-limit", TRANSCRIPT_LIMIT, "--log-out", str(transcript), "--command", shlex.join(inner)]
 
 
+def _stdin_is_tty() -> bool:
+    try:
+        return os.isatty(0)
+    except OSError:
+        return False
+
+
 class ShellManager:
-    def __init__(self, session: RescueSession, *, spawn: Callable[..., subprocess.Popen[bytes]] | None = None, clock: Callable[[], float] = time.time) -> None:
+    def __init__(self, session: RescueSession, *, spawn: Callable[..., subprocess.Popen[bytes]] | None = None, clock: Callable[[], float] = time.time,
+                 view: Callable[[], Any] | None = None) -> None:
         self.session = session
+        self.view = view
         self.spawn = spawn or subprocess.Popen
         self.clock = clock
         self.counter = 0
@@ -110,16 +137,29 @@ class ShellManager:
         else:
             if not session.ensure_virtual():
                 raise RescueError("chroot_broken", "The system could not be prepared to run programs: " + "; ".join(session.warnings[-2:]))
-            inner = chroot_command(session, term, find_shell(session))
+            shell = find_shell(session)
+            rcfile = chroot_help.uses_bash(shell) and chroot_help.write_bashrc(session)
+            inner = chroot_command(session, term, shell, rcfile=rcfile)
             mode = "chroot-rw" if writable else "chroot-ro"
         argv = script_command(inner, transcript)
-        return argv, {"mode": mode, "transcript": str(transcript), "writable": writable, "host": host_only, "term": term, "banner": self.banner(writable, host_only)}
+        return argv, {"mode": mode, "transcript": str(transcript), "writable": writable, "host": host_only, "term": term, "banner": self.banner(writable, host_only, params)}
 
-    def banner(self, writable: bool, host_only: bool) -> str:
+    def banner(self, writable: bool, host_only: bool, params: dict[str, Any] | None = None) -> str:
         session = self.session
-        where = "the live system, in the directory of the mounted system" if host_only else "the system"
+        name = session.candidate.get("os", {}).get("pretty_name", session.plan.root.device)
         state = "READ-WRITE: changes are real" if writable else "READ-ONLY"
-        return f"\nGentoo Live rescue: a shell in {where} ({session.candidate.get('os', {}).get('pretty_name', session.plan.root.device)}), {state}.\nType 'exit' to leave. Unmount the system from the repair tool when you are done.\n\n"
+        if host_only:
+            return (f"\nGentoo Live rescue: a shell in the live system, in the directory of the mounted system ({name}), {state}.\n"
+                    "Type 'exit' to leave. Unmount the system from the repair tool when you are done.\n\n")
+        view = None
+        if self.view is not None:
+            try:
+                view = self.view()
+            except (RescueError, OSError, LookupError, ValueError):
+                view = None
+        has_dns = any(entry.data.get("virtual_name") == "resolv" for entry in session.ledger.entries)
+        leave = chroot_help.LEAVE_UNMOUNTED if (params or {}).get("unmount_on_exit") else chroot_help.LEAVE_SESSION
+        return chroot_help.banner(title=str(name), state=state, view=view, dns=has_dns, leave=leave)
 
     # ---- starting ----------------------------------------------------------------------------------------------------------------------------------
     def open_pty(self, params: dict[str, Any]) -> tuple[int, dict[str, Any]]:
@@ -143,13 +183,21 @@ class ShellManager:
         """Console form: the terminal shares the current tty until the shell exits; returns its exit status."""
         argv, info = self.prepare(params)
         info["_inline"] = True
+        if not _stdin_is_tty():  # commands piped in (a script, a test): setsid --ctty needs a terminal; script makes its own
+            argv = [item for item in argv if item != "--ctty"]
         print(info["banner"], end="", flush=True)
         process = self.spawn(argv, cwd="/")
         self._track(process, info)
         try:
             return process.wait()
-        except KeyboardInterrupt:
+        except (KeyboardInterrupt, Terminated) as exc:
             self._hangup(process)
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self._hangup(process, signal.SIGKILL)
+            if isinstance(exc, Terminated):
+                raise
             return 130
         finally:
             self._finished(process, info)
@@ -174,9 +222,9 @@ class ShellManager:
         self.session.audit.record("shell_end", pid=process.pid, status=process.returncode, transcript=info["transcript"], sync=True)
 
     @staticmethod
-    def _hangup(process: subprocess.Popen[bytes]) -> None:
+    def _hangup(process: subprocess.Popen[bytes], sig: int = signal.SIGHUP) -> None:
         try:
-            os.killpg(process.pid, signal.SIGHUP)
+            os.killpg(process.pid, sig)
         except OSError:
             pass
 

@@ -29,7 +29,7 @@ def test_chroot_terminal_command_shape(lab_factory) -> None:
     assert argv[:9] == ["setsid", "--ctty", "script", "--quiet", "--return", "--flush", "--output-limit", "64MiB", "--log-out"]  # the transcript has a size limit (review R12)
     inner = argv[argv.index("--command") + 1]
     assert inner.startswith("sh -c 'umask 022 && exec chroot \"$@\"' rescue-chroot --userspec=0:0 --groups= " + session.root + " /usr/bin/env -i ")
-    assert "TERM=xterm-256color" in inner and "RESCUE_SESSION=" + sid in inner and "SHELL=/usr/bin/bash" in inner and inner.endswith("/usr/bin/bash -l")
+    assert "TERM=xterm-256color" in inner and "RESCUE_SESSION=" + sid in inner and "SHELL=/usr/bin/bash" in inner and inner.endswith("/usr/bin/bash --rcfile /run/gentoo-rescue/bashrc -i")
     assert "PYTHONPATH" not in inner and "DISPLAY" not in inner and "SUDO_USER" not in inner
     assert info["mode"] == "chroot-ro" and oct(Path(info["transcript"]).parent.stat().st_mode & 0o777) == "0o700"
     assert "READ-ONLY" in info["banner"]
@@ -145,3 +145,115 @@ def test_the_shell_command_is_checked_by_the_host_policy() -> None:
             policy.validate(bad)
     with pytest.raises(SafetyViolation):
         policy.validate(["setsid", "--ctty", "script"])  # script/setsid are only used by the terminal launcher itself
+
+
+# ---- Wave 5, interface I12: the "(chroot) " prompt, the banner, the one-question confirmation ---------------------------------------------------
+def test_the_prompt_comes_from_an_rcfile_in_the_sessions_own_run(lab_factory) -> None:
+    lab, tree = uefi_gentoo_lab(lab_factory)
+    manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    session = manager.session(sid)
+    argv, _info = manager.shell_for(session).prepare({"session_id": sid, **confirm()})
+    inner = argv[argv.index("--command") + 1]
+    assert "--rcfile /run/gentoo-rescue/bashrc -i" in inner and " -l" not in inner  # a login shell would ignore the rcfile
+    rcfile = (Path(session.root) / "run/gentoo-rescue/bashrc").read_text()
+    assert ". /etc/profile" in rcfile and "[ -f ~/.bashrc ] && . ~/.bashrc" in rcfile and 'PS1="(chroot) ' in rcfile
+
+
+def test_a_system_whose_shell_is_not_bash_keeps_the_login_shell(lab_factory) -> None:
+    lab, tree = uefi_gentoo_lab(lab_factory)
+    manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    session = manager.session(sid)
+    for directory in ("usr/bin", "bin"):
+        (Path(session.root) / directory / "bash").unlink(missing_ok=True)
+    (Path(session.root) / "usr/bin/ash").write_bytes(b"#!/bin/sh\n")
+    (Path(session.root) / "usr/bin/ash").chmod(0o755)
+    argv, _info = manager.shell_for(session).prepare({"session_id": sid, **confirm()})
+    inner = argv[argv.index("--command") + 1]
+    assert inner.endswith("/ash -l") and "--rcfile" not in inner
+    assert not (Path(session.root) / "run/gentoo-rescue").exists()
+
+
+def test_the_banner_lists_fixes_that_fit_this_system(lab_factory) -> None:
+    lab, _ = uefi_gentoo_lab(lab_factory)
+    manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    _argv, info = manager.shell_for(manager.session(sid)).prepare({"session_id": sid, **confirm()})
+    text = info["banner"]
+    assert "READ-ONLY" in text and "Common fixes:" in text and "emerge --sync" in text and "--newuse @world" in text
+    assert "emerge --ask --oneshot sys-kernel/gentoo-kernel" in text
+    assert "grub-install --target=x86_64-efi --efi-directory=/efi" in text and "grub-mkconfig -o /boot/grub/grub.cfg" in text
+    assert "passwd user" in text and "/etc/fstab" in text
+    assert "Unmount the system from the repair tool" in text  # a session that stays mounted; gentoo-chroot says the system is unmounted for you
+    _argv, info = manager.shell_for(manager.session(sid)).prepare({"session_id": sid, **confirm(), "unmount_on_exit": True})
+    assert "the system is unmounted for you" in info["banner"]
+
+
+def test_the_one_question_form_drops_the_typed_name_and_the_phrase(lab_factory) -> None:
+    lab, _ = uefi_gentoo_lab(lab_factory)
+    manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    shell = manager.shell_for(manager.session(sid))
+    with pytest.raises(RescueError) as info:
+        shell.prepare({"session_id": sid, "simple": True})
+    assert info.value.short == "needs_confirmation" and info.value.details["missing"] == "confirm"
+    _argv, meta = shell.prepare({"session_id": sid, "simple": True, "confirm": True})  # read-only: one confirmation, no device name
+    assert meta["mode"] == "chroot-ro"
+    plan_and_run(manager, sid, "session.enter_write")
+    with pytest.raises(RescueError) as info:
+        shell.prepare({"session_id": sid, "simple": True, "confirm": True, "writable": True})
+    assert info.value.details["missing"] == "acknowledged"
+    _argv, meta = shell.prepare({"session_id": sid, "simple": True, "confirm": True, "acknowledged": True, "writable": True})
+    assert meta["mode"] == "chroot-rw" and "READ-WRITE" in meta["banner"]
+    assert shellmod.requirement(True, "/dev/sda2", simple=True) == {"risk": "dangerous", "required": True, "review": True, "typed": "", "phrase": "", "acknowledge": True}
+
+
+def test_acknowledging_a_read_write_terminal_enables_repairs_first(lab_factory) -> None:
+    lab, _ = uefi_gentoo_lab(lab_factory)
+    manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    session = manager.session(sid)
+    assert session.mode == "ro"
+    manager.shell_spawn = lambda argv, **kwargs: subprocess.Popen(["/bin/sh", "-c", "exit 0"], **kwargs)
+    master, info = manager.open_shell({"session_id": sid, "simple": True, "confirm": True, "acknowledged": True, "writable": True})
+    os.close(master)
+    assert session.mode == "rw" and info["mode"] == "chroot-rw"
+    assert any(r["kind"] == "shell_start" for r in session.audit.records)
+    deadline = time.time() + 5
+    while session.shells and time.time() < deadline:
+        time.sleep(0.05)
+    unmount(manager, sid)
+
+
+def test_a_hangup_unwinds_the_console_terminal_and_hangs_up_the_shell(lab_factory) -> None:
+    import signal
+    import threading
+
+    lab, _ = uefi_gentoo_lab(lab_factory)
+    manager, sid, _ = mount_through_the_manager(lab, candidate_device="/dev/nvme0n1p5")
+    session = manager.session(sid)
+    children = []
+
+    def spawn(argv, **kwargs):
+        child = subprocess.Popen(["/bin/sleep", "30"], start_new_session=True)
+        children.append(child)
+        return child
+
+    manager.shell_spawn = spawn
+
+    def interrupt():
+        time.sleep(0.3)
+        os.kill(os.getpid(), signal.SIGTERM)
+
+    def handler(*_args):
+        raise shellmod.Terminated()
+
+    previous = signal.signal(signal.SIGTERM, handler)
+    threading.Thread(target=interrupt, daemon=True).start()
+    try:
+        with pytest.raises(shellmod.Terminated):
+            manager.run_shell_here({"session_id": sid, "simple": True, "confirm": True})
+    finally:
+        signal.signal(signal.SIGTERM, previous)
+        for child in children:
+            child.kill()
+            child.wait()
+    assert children[0].returncode is not None and not session.shells
+    assert [r for r in session.audit.records if r["kind"] == "shell_end"]
+    assert manager.unmount(None, {"session_id": sid})["leftovers"] == []

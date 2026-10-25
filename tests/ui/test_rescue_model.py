@@ -128,6 +128,16 @@ def test_actions_are_grouped_for_a_person_and_the_recommended_repair_stands_alon
     assert "repair.recommended" not in {item["id"] for group in groups for item in group.actions}
 
 
+def test_the_nvidia_group_only_appears_when_a_repair_in_it_can_be_used() -> None:
+    names = ("gfx.nvidia_rebuild", "gfx.nvidia_fbdev_off", "gfx.nouveau_switch")
+    off = [{"id": name, "title": name, "available": False, "reason": "no NVIDIA driver"} for name in names]
+    groups = model.group_actions(specs("boot.config") + off)
+    assert [group.key for group in groups] == ["boot"] and not any(item["id"] in names for group in groups for item in group.actions)  # greyed-out buttons would only be noise
+    on = specs("boot.config") + off[:2] + [{"id": names[2], "title": "x", "available": True}]
+    graphics = next(group for group in model.group_actions(on) if group.key == "graphics")
+    assert [item["id"] for item in graphics.actions] == list(names)
+
+
 def test_options_come_first_only_when_a_value_is_needed_or_a_choice_matters() -> None:
     catalogue = {item["id"]: item for item in [
         {"id": "boot.bootloader", "params": [{"name": "loader", "type": "enum", "choices": ["grub"], "default": ""}]},
@@ -238,11 +248,12 @@ def test_a_rollback_is_noted() -> None:
 
 
 # ---- the terminal --------------------------------------------------------------------------------------------------------------------
-def test_the_terminal_command_uses_the_windows_own_socket_and_types_the_device_name() -> None:
+def test_the_terminal_command_uses_the_windows_own_socket_and_asks_nothing_again() -> None:
     assert model.terminal_argv("/run/gentoo-installer/server.sock", "r1a2b3c", "/dev/nvme0n1p5") == [
-        "gentoo-rescue", "--socket", "/run/gentoo-installer/server.sock", "shell", "r1a2b3c", "--typed", "nvme0n1p5"]
+        "gentoo-rescue", "--socket", "/run/gentoo-installer/server.sock", "shell", "r1a2b3c", "--simple"]  # no device name, no backup phrase: the window asked once
     writable = model.terminal_argv("/s", "r1", "/dev/sda2", writable=True, sudo=True)
-    assert writable[:2] == ["sudo", "gentoo-rescue"] and writable[-2:] == ["--writable", "--i-have-a-backup"]
+    assert writable[:2] == ["sudo", "gentoo-rescue"] and writable[-2:] == ["--simple", "--writable"]
+    assert model.terminal_argv("/s", "r1", host=True)[-2:] == ["--simple", "--host"]
 
 
 def test_the_shell_line_keeps_the_window_open_after_the_tool_ends() -> None:

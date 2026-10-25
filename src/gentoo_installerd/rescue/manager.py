@@ -748,15 +748,33 @@ class RescueManager:
         from .shell import ShellManager
 
         if session.sid not in self._shell_managers:
-            self._shell_managers[session.sid] = ShellManager(session, spawn=self.shell_spawn, clock=self.env.clock) if self.shell_spawn else ShellManager(session, clock=self.env.clock)
+            view = (lambda: self.view_for(session))
+            self._shell_managers[session.sid] = (ShellManager(session, spawn=self.shell_spawn, clock=self.env.clock, view=view) if self.shell_spawn
+                                                 else ShellManager(session, clock=self.env.clock, view=view))
         return self._shell_managers[session.sid]
 
     def open_shell(self, params: dict[str, Any]) -> tuple[int, dict[str, Any]]:
         self.check_not_busy()
         session = self.session(str(params.get("session_id", "")))
+        self._terminal_write_mode(session, params)
         return self.shell_for(session).open_pty(params)
 
     def run_shell_here(self, params: dict[str, Any]) -> int:
         self.check_not_busy()
         session = self.session(str(params.get("session_id", "")))
+        self._terminal_write_mode(session, params)
         return self.shell_for(session).run_here(params)
+
+    def _terminal_write_mode(self, session: RescueSession, params: dict[str, Any]) -> None:
+        """The one-question terminal: when the person acknowledged that the terminal changes the system, switch a read-only session to read-write first.
+
+        It is the plan "Enable repairs" shows (unmount, mount read-write), run with the confirmation its own block asks for, because the
+        acknowledgement of the terminal is the confirmation. It is audited like any plan."""
+        if not (params.get("simple") and params.get("writable") and params.get("acknowledged")) or params.get("host"):
+            return
+        if not session.mounted or session.mode == "rw" or not session.allow_write:
+            return
+        plan = self.plan({"session_id": session.sid, "action_id": "session.enter_write", "params": {}})
+        confirm = plan["confirm"]
+        self.run_plan(self.new_op("run", session.sid), {"session_id": session.sid, "plan_id": plan["plan_id"], "digest": plan["digest"], "confirm": True,
+                                                       "typed": confirm["typed"], "phrase": confirm["phrase"]})

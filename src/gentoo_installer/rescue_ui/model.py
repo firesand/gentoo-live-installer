@@ -31,9 +31,12 @@ ACTION_GROUPS: tuple[tuple[str, str, str, tuple[str, ...]], ...] = (
      ("efi.add", "efi.delete", "efi.order", "efi.next")),
     ("filesystem", "File system check", "Looks for errors in the file system. A check changes nothing.", ("fs.check",)),
     ("accounts", "Passwords and accounts", "Set a new password or unlock an account that cannot log in.", ("acct.password", "acct.unlock")),
+    ("graphics", "NVIDIA graphics", "Repairs for a black screen or a driver that does not match the kernel. They are only shown when this system uses the NVIDIA driver.",
+     ("gfx.nvidia_rebuild", "gfx.nvidia_fbdev_off", "gfx.nouveau_switch")),
     ("packages", "Software packages", "Finish what Portage was doing when the computer stopped.", ("pkg.finish",)),
     ("advanced", "Advanced", "Switch between looking only and being allowed to change files.", ("session.enter_write", "session.leave_write")),
 )
+HIDDEN_UNLESS_USABLE = frozenset({"graphics"})  # a group that would only show greyed-out buttons on most computers
 RECOMMENDED_ACTION = "repair.recommended"
 # Actions that always ask for options before the plan is made (the others use the engine's defaults).
 FORM_FIRST = frozenset({"fs.check"})
@@ -333,6 +336,9 @@ def group_actions(actions: list[dict[str, Any]]) -> list[ActionGroup]:
     used: set[str] = set()
     for key, title, help_text, ids in ACTION_GROUPS:
         members = [by_id[name] for name in ids if name in by_id]
+        if key in HIDDEN_UNLESS_USABLE and not any(item.get("available", True) for item in members):
+            used.update(name for name in ids if name in by_id)
+            continue
         used.update(name for name in ids if name in by_id)
         if members:
             groups.append(ActionGroup(key, title, help_text, members))
@@ -534,17 +540,18 @@ class RunTracker:
 
 
 # ---- the terminal --------------------------------------------------------------------------------------------------------------------
-def terminal_argv(socket_path: str, session_id: str, root_device: str, *, writable: bool = False, host: bool = False, sudo: bool = False) -> list[str]:
+def terminal_argv(socket_path: str, session_id: str, root_device: str = "", *, writable: bool = False, host: bool = False, sudo: bool = False) -> list[str]:
     """The command that opens a terminal inside the repaired system: ``gentoo-rescue shell`` hands the daemon's PTY to the terminal window.
 
-    The device name is typed for the person (the window asked them to), so the command never waits for a question the window
-    already asked. Read-write terminals also carry the backup phrase that the window collected.
+    The window asked once (the system and device it names, and the tick "Commands I type here change the installed system"), so the
+    command carries ``--simple``: no device name and no backup phrase are asked again. The audit record and the transcript stay.
+    ``root_device`` is only kept for callers of the old form.
     """
-    argv = ["gentoo-rescue", "--socket", socket_path, "shell", session_id, "--typed", root_device.rsplit("/", 1)[-1]]
+    argv = ["gentoo-rescue", "--socket", socket_path, "shell", session_id, "--simple"]
     if host:
         argv.append("--host")  # inspect-only sessions: a shell of the live system in the mount folder, nothing of the system runs
     elif writable:
-        argv += ["--writable", "--i-have-a-backup"]
+        argv.append("--writable")  # the daemon switches the session to read-write first
     return (["sudo", *argv]) if sudo else argv
 
 
