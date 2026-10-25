@@ -206,6 +206,14 @@ def guest_rules(vm, scenario_name: str, *, guard: str = "vm_disk_guard", install
         {"user": "^vmtest$", "match": r"sshd -T$", "stdout": sshd_t(scenario_manifest(vm, scenario_name, firmware))},
         {"user": "^root$", "match": r"network_status", "stdout": NETWORK_STATUS_ANSWER},
     ]
+    desktop = scenario_manifest(vm, scenario_name, firmware).system.desktop
+    if desktop != "minimal":  # Wave 5 (H04): the display manager, the greeter, a session file, and PipeWire's pactl
+        import vm_session
+
+        started = "active\n" if scenario.init == "systemd" else " * status: started\n"
+        sessions = f"/usr/share/xsessions:\n{vm_session.DESKTOPS[desktop]['session']}.desktop\n"
+        rules += [{"user": "^vmtest$", "match": r"/usr/share/xsessions", "stdout": f"{sessions}\n---\n{started}\n---\nsystemd\nXorg\nsddm\nbash\n"},
+                  {"user": "^vmtest$", "match": r"pactl info", "stdout": "Server Name: PulseAudio (on PipeWire 1.6.8)\n"}]
     if companions == "portagehub":  # HWMonux is switched off: its absence is what the probe looks for
         rules.append({"user": "^vmtest$", "match": r"app-misc.*glob.*hwmonux-", "stdout": "absent\n"})
     rules.append({"user": "^vmtest$", "match": r"/var/db/pkg/", "stdout": "plasma-meta\n"})

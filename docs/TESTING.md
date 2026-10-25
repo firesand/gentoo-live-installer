@@ -158,6 +158,10 @@ them and even when the harness is killed with SIGKILL (the kernel sends QEMU SIG
 | `uefi-manual-two-disks` | a manual layout across two disks (ESP and root on the first, swap and `/home` on the second) next to a third disk that must stay byte for byte as it was |
 | `text-install` | the console installer: the ISO's text entry, then `gentoo-installer-text` with a device confirmation |
 | `rescue-gentoo` | a minimal Gentoo installed first, then broken and repaired three times (menu file, initramfs, fstab) |
+| `dmi-asus-rog`, `dmi-razer-blade`, `dmi-lenovo-legion` | the live ISO only, with the DMI strings of an ASUS ROG laptop, a Razer Blade or a Lenovo Legion: the installer's hardware report (`python3 -m gentoo_installer.hardware --json`, run in the live system) must read the vendor, product and (once the probe has it) `vendor_family` |
+| `safe-graphics-grub`, `safe-graphics-systemd-boot`, `safe-graphics-efi-stub` | the NVIDIA driver is requested, so the installed boot menu must list Safe graphics (`nomodeset`, the graphics modules blacklisted); the entry is chosen once and booted (needs backlog items B04 and B05; compiles the NVIDIA driver) |
+| `secure-boot-modules` | systemd-boot with a UKI signed by the test key, booted under OVMF's Secure Boot build; an unsigned and a signed dummy module are loaded on `gentoo-kernel-bin`; the verdict is the evidence B07 step 2 waits for |
+| `desktop-kde-openrc`, `desktop-kde-systemd`, `desktop-gnome-openrc`, `desktop-gnome-systemd`, `desktop-xfce-openrc`, `desktop-xfce-systemd`, `desktop-cinnamon-openrc`, `desktop-cinnamon-systemd`, `desktop-mate-openrc`, `desktop-mate-systemd`, `desktop-lxqt-openrc`, `desktop-lxqt-systemd`, `desktop-gnome-light-openrc`, `desktop-gnome-light-systemd`, `desktop-sway-openrc`, `desktop-sway-systemd`, `desktop-i3-openrc`, `desktop-i3-systemd` | one scenario per Guided desktop and init system: the desktop's package is installed, the display manager runs with its greeter, the desktop's session file exists, and `pactl info` answers with PipeWire in a login session. Hours each: run with `--memory 12288 --build-jobs 1 --swap-mib 4096 --companions none` |
 | `ssh-keys-only` | `accounts.ssh_password_login=false`: `sshd -T` of the installed system must show password and keyboard-interactive login off and root login off (interface I10) |
 | `live-remote-access` | the live ISO only: sshd runs at boot, `gentoo-remote-access status/on/off` with a password login as `gentoo` from the host, fresh SSH host keys on a second boot (interface I9) |
 | `rescue-chroot` | a minimal Gentoo installed first, then `gentoo-chroot` run non-interactively from the live ISO: it finds the system, mounts it, runs commands with working DNS and leaves nothing mounted (interface I12) |
@@ -278,6 +282,52 @@ python3 scripts/test-vm.py --scenario ssh-keys-only      --iso build/test-dist/<
 python3 scripts/test-vm.py --scenario rescue-chroot      --iso build/test-dist/<iso> --ssh-host 127.0.0.1 --ssh-port 40222 --ssh-private-key "$testkey" --no-world-probe
 ```
 
+### Desktop sessions, the Safe graphics entry, Secure Boot (Wave 5, hardware backlog H04)
+
+**Desktop login.** A VM cannot type into a greeter reliably, so the scenarios check what is broken when a desktop does not come up
+(`scripts/vm_session.py`): `desktop-session` reads `/usr/share/xsessions` and `/usr/share/wayland-sessions` for the desktop's session
+file, asks `rc-service display-manager status` or `systemctl is-active display-manager`, and looks for the greeter or X server in the
+process list (Sway and i3 may have no display manager). `audio-pactl` runs `pactl info` in the test user's SSH login (it has
+`/run/user/UID`): on systemd the user units start PipeWire by socket activation; on OpenRC the desktop's autostart does, which an SSH
+login does not run, so the probe starts `gentoo-pipewire-launcher` itself (that proves the packages, not the autostart). The table of
+desktops in `vm_session.DESKTOPS` is checked against the tree by `tests/hardware/test_tree_evidence.py`; the backend's desktop registry
+(B14) will replace it.
+
+**Safe graphics.** `safe-graphics-*` install with the NVIDIA driver requested. The harness lists the installed boot menu (GRUB:
+`/boot/grub/grub.cfg`; systemd-boot: `loader/entries/*.conf`; EFI stub: `efibootmgr`), finds the entry titled "Safe graphics", checks its
+own arguments (`nomodeset`, `module_blacklist=` with nvidia, nvidia_drm, nvidia_modeset, nvidia_uvm, nouveau), chooses it for one boot
+(`grub-reboot`, `bootctl set-oneshot`, `efibootmgr --bootnext`), restarts the VM and requires the arguments in `/proc/cmdline` and none of
+those modules in `/proc/modules`. GRUB needs `GRUB_DEFAULT=saved` for `grub-reboot` to work; if the installer's GRUB configuration does
+not set it, the scenario fails at the one-shot step, which is a finding for B05. The VM has no NVIDIA card, so this proves the entry
+and the boot, not NVIDIA (real hardware only).
+
+**Secure Boot and out-of-tree modules** (`secure-boot-modules`; evidence for B07 step 2). Prepare once (the key is test-only and not a secret):
+
+```sh
+mkdir -p build/sb-test && cd build/sb-test
+openssl req -new -x509 -newkey rsa:2048 -nodes -days 3650 -sha256 -subj "/CN=Gentoo installer VM test key (test only, not a secret)" -keyout db.key -out db.crt
+# a copy of OVMF's variable store with db.crt as PK, KEK and db (python-virt-firmware; check `virt-fw-vars --help` for your version):
+virt-fw-vars --input /usr/share/edk2-ovmf/OVMF_VARS.fd --output vars.fd --set-pk 00000000-0000-0000-0000-000000000000 db.crt \
+  --add-kek 00000000-0000-0000-0000-000000000000 db.crt --add-db 00000000-0000-0000-0000-000000000000 db.crt --secure-boot
+cd ../..
+python3 scripts/test-vm.py --scenario secure-boot-modules --iso build/test-dist/<iso> --ssh-host 127.0.0.1 --ssh-port 40222 \
+  --ssh-private-key "$testkey" --sb-key build/sb-test/db.key --sb-cert build/sb-test/db.crt --ovmf-vars-file build/sb-test/vars.fd \
+  --companions none --no-world-probe --memory 4096
+```
+
+`vm_secureboot.key_generation_command` and `enrol_command` are those two calls. The harness uploads the pair to the live system
+(`/run/gentoo-vm-secure-boot/`, the manifest names the paths, the daemon reads them there), installs systemd-boot with a UKI signed by it, and boots
+under the Secure Boot build of OVMF (`OVMF_CODE.secboot.fd`, SMM on). In the installed system, as root, a Python program builds a
+dummy module against `/lib/modules/$(uname -r)/build`, loads it unsigned, signs it with the same key (`scripts/sign-file`) and loads it
+again, and reports `SecureBoot`, the lockdown mode, `module.sig_enforce`, the kernel keyrings, the kernel messages and the taint flags.
+The verdict goes to `result.json` (`secure_boot_modules`) and to the console line `SECURE BOOT ...`:
+`unsigned-modules-load` (B07 step 2 may allow NVIDIA with a warning, still refusing when lockdown is on), `unsigned-modules-refused`
+(keep refusing), `only-signed-modules-load` (keep refusing in Guided mode, a signed path is possible), or `inconclusive` (Secure Boot was not
+active, or the kernel has no build tree: the scenario fails, nothing is decided). The test certificate is the owner of this variable
+store; no Microsoft key and no shim are involved, matching `manifest.py` (Secure Boot only with systemd-boot or the EFI stub and a UKI).
+I could not run any of this where it was written: the first real run may need small corrections to the `virt-fw-vars` call or to the
+dummy module build (the report says which step failed).
+
 ### Making the machine different
 
 Every option has a default that reproduces the original machine (q35, one virtio-blk disk with a
@@ -294,11 +344,12 @@ serial number, virtio NIC and display). An option left out keeps the scenario's 
 | `--vga` | `virtio`, `std`, `qxl`, `cirrus`, `vmware`, `none` (not with `--install-mode gui`) |
 | `--cpu` | any QEMU model: `Haswell`, `EPYC`, `host` (KVM only) |
 | `--machine` | `q35`, `pc` (i440FX) |
-| `--smbios` | `qemu`, `laptop-lenovo`, `laptop-dell`, `laptop-hp`, `desktop-asus`, `vmware`, `virtualbox`, `hyperv` |
+| `--smbios` | `qemu`, `laptop-lenovo`, `laptop-dell`, `laptop-hp`, `desktop-asus`, `laptop-asus-rog`, `laptop-razer-blade`, `laptop-lenovo-legion`, `vmware`, `virtualbox`, `hyperv` (the Razer strings are modelled on public reports, not read from a real Blade) |
 | `--extra-disk SIZE` | another empty raw disk (`256M`, `2G`); repeatable |
 | `--secure-boot` | OVMF's Secure Boot build (setup mode unless `--ovmf-vars-file` enrols keys) |
 | `--ovmf-vars` | `persist` (default), `fresh-on-target`, `readonly` |
 | `--ovmf-vars-file` | seed the NVRAM from a file (a kept `OVMF_VARS.fd`, or one with enrolled keys) |
+| `--sb-key`, `--sb-cert` | `secure-boot-modules` only: the test-only key that signs the UKI and the dummy module, and its certificate (see below) |
 | `--rtc` | `utc`, `localtime` |
 
 Examples:

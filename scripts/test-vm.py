@@ -48,6 +48,8 @@ import vm_iso  # noqa: E402
 import vm_matrix  # noqa: E402
 import vm_probes  # noqa: E402
 import vm_rescue  # noqa: E402
+import vm_secureboot  # noqa: E402
+import vm_session  # noqa: E402
 import vm_wave5  # noqa: E402
 from vm_hw import VMHardware  # noqa: E402
 from vm_probes import ANSI_RE, ProbeResult, parse_probe_result, parse_receipt_probe, parse_swap_probe  # noqa: E402, F401
@@ -206,6 +208,11 @@ class Scenario:
     chroot: bool = False             # after the install, boot the live ISO and run gentoo-chroot non-interactively against the disk
     live_only: bool = False          # install nothing: boot the live ISO (as --live-only does)
     live_checks: bool = False        # live_only: remote access (gentoo-remote-access on/off, password login) and fresh SSH host keys on a second boot
+    # --- Wave 5, hardware backlog H04 ---------------------------------------------------------------------------
+    desktop: str = ""                # a Guided desktop to install ("" = minimal); desktops need --memory 12288 --build-jobs 1 --swap-mib 4096 --companions none
+    safe_graphics: bool = False      # the manifest asks for the NVIDIA driver; the installed system's Safe graphics boot entry is booted once
+    secure_boot_install: bool = False   # systemd-boot + a UKI signed with the test key (--sb-key, --sb-cert), booted under OVMF Secure Boot; module-load experiment
+    live_expect: tuple[tuple[str, Any], ...] = ()   # live_only: dotted paths into the installer's hardware report and the values they must have
 
     @property
     def hostname(self) -> str:
@@ -298,6 +305,34 @@ SCENARIO_MAP = {
     "rescue-gentoo": Scenario("rescue-gentoo", "openrc", "uefi", breaks=("grub-cfg", "initramfs", "fstab-uuid"), repair="cli", in_all=False,
                               note="a minimal Gentoo installed first, then broken and repaired three times (menu file, initramfs, fstab)"),
 }
+# --- Wave 5, hardware backlog H04: vendors by DMI, the Safe graphics entry, Secure Boot, every Guided desktop ---------------------------------------
+_VENDOR_NOTE = "the live ISO only, on a VM that shows {vendor}'s DMI strings: the installer's hardware report must read them (the hardware probe, not the daemon)"
+SCENARIO_MAP.update({
+    "dmi-asus-rog": Scenario("dmi-asus-rog", "openrc", "uefi", live_only=True, in_all=False, hardware=_hw(smbios="laptop-asus-rog", vga="none"),
+                             live_expect=(("machine.sys_vendor", "ASUSTeK COMPUTER INC."), ("machine.product_name", "re:ROG Zephyrus"),
+                                          ("machine.vendor_family", "re:(?i)asus")),
+                             note=_VENDOR_NOTE.format(vendor="an ASUS ROG laptop")),
+    "dmi-razer-blade": Scenario("dmi-razer-blade", "openrc", "uefi", live_only=True, in_all=False, hardware=_hw(smbios="laptop-razer-blade", vga="none"),
+                                live_expect=(("machine.sys_vendor", "Razer"), ("machine.product_name", "re:Blade"), ("machine.vendor_family", "re:(?i)razer")),
+                                note=_VENDOR_NOTE.format(vendor="a Razer Blade") + " (the Razer strings are not read from a real device)"),
+    "dmi-lenovo-legion": Scenario("dmi-lenovo-legion", "openrc", "uefi", live_only=True, in_all=False, hardware=_hw(smbios="laptop-lenovo-legion", vga="none"),
+                                  live_expect=(("machine.sys_vendor", "LENOVO"), ("machine.product_version", "re:Legion"), ("machine.vendor_family", "re:(?i)lenovo")),
+                                  note=_VENDOR_NOTE.format(vendor="a Lenovo Legion")),
+    "safe-graphics-grub": Scenario("safe-graphics-grub", "openrc", "uefi", safe_graphics=True, in_all=False,
+                                   note="the NVIDIA driver is requested; the GRUB menu of the installed system must list Safe graphics (nomodeset, graphics modules blacklisted) and booting it must work"),
+    "safe-graphics-systemd-boot": Scenario("safe-graphics-systemd-boot", "systemd", "uefi", bootloader="systemd-boot", safe_graphics=True, in_all=False,
+                                           note="the same for systemd-boot: a Safe graphics loader entry, selected once with bootctl set-oneshot"),
+    "safe-graphics-efi-stub": Scenario("safe-graphics-efi-stub", "openrc", "uefi", bootloader="efi-stub", safe_graphics=True, in_all=False,
+                                       note="the same for the EFI stub: a Safe graphics boot option, selected once with efibootmgr --bootnext"),
+    "secure-boot-modules": Scenario("secure-boot-modules", "systemd", "uefi", bootloader="systemd-boot", secure_boot_install=True, in_all=False,
+                                    hardware=_hw(secure_boot=True),
+                                    note="systemd-boot with a UKI signed by the test key, booted under OVMF Secure Boot; an unsigned and a signed dummy module are loaded on gentoo-kernel-bin (evidence for B07 step 2)"),
+})
+for _desktop in vm_session.GUIDED_DESKTOPS:
+    for _init in ("openrc", "systemd"):
+        SCENARIO_MAP[f"desktop-{_desktop}-{_init}"] = Scenario(
+            f"desktop-{_desktop}-{_init}", _init, "uefi", desktop=_desktop, in_all=False,
+            note=f"{_desktop} on {_init}: the display manager, its greeter and a session file; pactl info (hours; --memory 12288 --build-jobs 1 --swap-mib 4096 --companions none)")
 SCENARIOS = tuple(SCENARIO_MAP)
 # What --all runs: the fast scenarios whose installs have passed on real QEMU.
 ALL_SCENARIOS = tuple(name for name, scenario in SCENARIO_MAP.items() if scenario.in_all)
@@ -409,8 +444,8 @@ def build_manifest(scenario: Scenario, ssh_public_key: str, companions: str = "b
     manifest.storage.luks_passphrase = TEST_LUKS_PASSPHRASE if scenario.luks else ""
     manifest.system.init = scenario.init
     manifest.system.stage_variant = f"amd64-{scenario.init}"
-    manifest.system.profile = "default/linux/amd64/23.0" + ("/systemd" if scenario.init == "systemd" else "")
-    manifest.system.desktop = "minimal"
+    manifest.system.profile = "" if scenario.desktop else "default/linux/amd64/23.0" + ("/systemd" if scenario.init == "systemd" else "")
+    manifest.system.desktop = scenario.desktop or "minimal"
     manifest.system.kernel = "gentoo-kernel-bin"
     manifest.system.initramfs = "dracut"
     manifest.system.bootloader = scenario.bootloader
@@ -422,6 +457,11 @@ def build_manifest(scenario: Scenario, ssh_public_key: str, companions: str = "b
     manifest.portage.binhost = True
     manifest.portage.features = ["getbinpkg"]
     manifest.portage.make_opts = f"-j{build_jobs}"
+    if scenario.safe_graphics:  # the entry is made when the NVIDIA driver is active
+        manifest.hardware.gpu_driver, manifest.hardware.nvidia_license_accepted, manifest.hardware.safe_graphics_entry = "nvidia", True, True
+    if scenario.secure_boot_install:
+        manifest.system.uki, manifest.system.secure_boot, manifest.system.secure_boot_mode = True, True, "own-key"
+        manifest.system.secure_boot_key, manifest.system.secure_boot_certificate = vm_secureboot.REMOTE_KEY, vm_secureboot.REMOTE_CERT
     manifest.accounts.hostname = scenario.hostname
     manifest.accounts.username = TEST_USERNAME
     manifest.accounts.full_name = "Disposable VM test user"
@@ -433,7 +473,7 @@ def build_manifest(scenario: Scenario, ssh_public_key: str, companions: str = "b
     manifest.options.install_hwmonux = companions == "both"
     manifest.options.install_portagehub = companions in {"both", "portagehub"}
     manifest.options.ssh = True
-    manifest.options.pipewire = False
+    manifest.options.pipewire = bool(scenario.desktop)  # the desktop scenarios judge the sound server (audio-pactl)
     manifest.options.bluetooth = False
     manifest.options.printing = False
     manifest.options.microcode = False
@@ -1065,10 +1105,19 @@ DESKTOP_PACKAGES = {
     "gnome": ("gnome-base", "gnome", "gdm"),
     "xfce": ("xfce-base", "xfce4-meta", "lightdm"),
 }
+# The desktops of Wave 5: the display manager is whatever the installer chose (vm_session.parse_desktop_session_probe), so only the package is fixed here.
+EXTRA_DESKTOP_PACKAGES = {name: tuple(str(info["package"]).split("/")) for name, info in vm_session.DESKTOPS.items() if name not in DESKTOP_PACKAGES}
 
 
 def desktop_probe_plan(manifest: InstallManifest) -> list[tuple[str, str, Callable[[int, str], ProbeResult]]]:
     """Check that the selected desktop and its display manager were installed and enabled."""
+    if manifest.system.desktop in EXTRA_DESKTOP_PACKAGES:
+        category, package = EXTRA_DESKTOP_PACKAGES[manifest.system.desktop]
+        installed = f"ls -d /var/db/pkg/{category}/{package}-[0-9]*"
+        return [("desktop", installed, lambda code, output: parse_probe_result("desktop", code, output)),
+                ("desktop-session", vm_session.desktop_session_command(manifest.system.init),
+                 lambda code, output: vm_session.parse_desktop_session_probe(code, output, manifest.system.desktop, manifest.system.init))] \
+            + audio_probe_plan(manifest)
     if manifest.system.desktop not in DESKTOP_PACKAGES:
         return []
     category, package, manager = DESKTOP_PACKAGES[manifest.system.desktop]
@@ -1078,7 +1127,16 @@ def desktop_probe_plan(manifest: InstallManifest) -> list[tuple[str, str, Callab
         enabled = f"test -e /etc/runlevels/default/display-manager && grep -qxF {expected} /etc/conf.d/display-manager"
     else:
         enabled = f"systemctl is-enabled {manager}.service"
-    return [("desktop", f"{installed} && {enabled}", lambda code, output: parse_probe_result("desktop", code, output))]
+    return [("desktop", f"{installed} && {enabled}", lambda code, output: parse_probe_result("desktop", code, output)),
+            ("desktop-session", vm_session.desktop_session_command(manifest.system.init),
+             lambda code, output: vm_session.parse_desktop_session_probe(code, output, manifest.system.desktop, manifest.system.init))] + audio_probe_plan(manifest)
+
+
+def audio_probe_plan(manifest: InstallManifest) -> list[tuple[str, str, Callable[[int, str], ProbeResult]]]:
+    """pactl info in a login session: PipeWire's PulseAudio server (only when the manifest installs PipeWire)."""
+    if not manifest.options.pipewire:
+        return []
+    return [("audio-pactl", vm_session.pactl_command(manifest.system.init), vm_session.parse_pactl_probe)]
 
 
 def parse_static_network_probe(returncode: int, output: str, expected: Mapping[str, object]) -> ProbeResult:
@@ -1328,7 +1386,8 @@ def parse_root_lock_probe(returncode: int, output: str, manifest: InstallManifes
 
 
 def installed_system_probes(manifest: InstallManifest, scenario: Scenario, *, world: bool = False, world_timeout: int = 1800,
-                            hardware_plan: Mapping[str, Any] | None = None, degraded: Sequence[str] = ()) -> list[tuple]:
+                            hardware_plan: Mapping[str, Any] | None = None, degraded: Sequence[str] = (),
+                            secure_boot_keys: tuple[bytes, bytes] | None = None) -> list[tuple]:
     """Probes of what the installer produced, beyond 'it boots': (name, command, parser[, stdin[, timeout]]).
 
     ``world`` adds ``emerge -pvuDN @world`` (minutes on a desktop); ``hardware_plan`` is the plan the daemon
@@ -1358,6 +1417,10 @@ def installed_system_probes(manifest: InstallManifest, scenario: Scenario, *, wo
         probes.append(("dmi", "cat /sys/class/dmi/id/sys_vendor /sys/class/dmi/id/chassis_type",
                        lambda c, o: parse_dmi_probe(c, o, preset)))
     probes.extend(vm_wave5.sshd_probes(manifest, scenario.init, password))
+    if scenario.secure_boot_install:  # B07 step 2: what does the kernel do with an unsigned and a signed module under Secure Boot?
+        key, cert = secure_boot_keys or (b"", b"")
+        probes.append(("secure-boot-modules", vm_secureboot.module_experiment_command(), vm_secureboot.parse_module_experiment_probe,
+                       vm_secureboot.module_experiment_input(TEST_PASSWORD, key, cert), 900))
     if hardware_plan is not None:
         plan = dict(hardware_plan)
         atoms = [vm_probes.INTEL_MICROCODE, *vm_probes.GUEST_TOOL_ATOMS]
@@ -2101,6 +2164,8 @@ class ScenarioRunner:
             "manifest": str(manifest_path), "companions": selection,
         }, indent=2) + "\n")
         remote_manifest = "/run/gentoo-installer-vm-manifest.json"
+        if self.scenario.secure_boot_install and not reinstall:
+            self.upload_secure_boot_key()
         code, log = self.ssh(
             self.args.ssh_user, f"cat > {remote_manifest}", "ssh-upload.log",
             self.args.command_timeout, stdin=manifest_path.read_bytes(),
@@ -2313,7 +2378,8 @@ class ScenarioRunner:
         plan = self.hardware_plan()
         degraded = self.install_degraded()
         probes.extend(installed_system_probes(manifest, self.scenario, world=not getattr(self.args, "no_world_probe", False),
-                                              world_timeout=getattr(self.args, "world_timeout", 1800), hardware_plan=plan, degraded=degraded))
+                                              world_timeout=getattr(self.args, "world_timeout", 1800), hardware_plan=plan, degraded=degraded,
+                                              secure_boot_keys=self.secure_boot_keys() if self.scenario.secure_boot_install else None))
         results: list[ProbeResult] = []
         if "install_artifacts" in self.__dict__:  # this run installed the system: what the installer said about itself can be judged
             results.append(self.install_completion_probe(manifest, plan))
@@ -2396,6 +2462,10 @@ class ScenarioRunner:
         result["advisory_findings"] = [probe.record() for probe in probes if not probe.success and probe.advisory]
         # What Portage would still change right after the install: information, kept from the first round of probes.
         result["world_drift"] = result.get("world_drift") or next((probe.data for probe in probes if probe.name == "world-drift"), None)
+        experiment = next((probe for probe in probes if probe.name == "secure-boot-modules" and probe.data), None)
+        if experiment is not None:  # the evidence B07 step 2 waits for: kept in result.json and printed
+            result["secure_boot_modules"] = experiment.data
+            print(f"SECURE BOOT {self.scenario.name}: {experiment.output}")
         for probe in probes:
             if not probe.success and probe.advisory:
                 print(f"WARNING {self.scenario.name}: advisory probe {probe.name} failed: {probe.error}", file=sys.stderr)
@@ -2483,6 +2553,60 @@ class ScenarioRunner:
         live_result["host_keys"] = {"boot_1": first, "boot_2": second, "problems": mismatch}
         problems += [f"host keys: {problem}" for problem in mismatch]
         return live, problems
+
+    def secure_boot_keys(self) -> tuple[bytes, bytes]:
+        """The test-only key pair given with --sb-key and --sb-cert (the certificate is enrolled in the variable store of --ovmf-vars-file)."""
+        return Path(self.args.sb_key).read_bytes(), Path(self.args.sb_cert).read_bytes()
+
+    def upload_secure_boot_key(self) -> None:
+        """The manifest names the signing key and certificate by path on the live system (the daemon reads them there): put the test pair there."""
+        key, cert = self.secure_boot_keys()
+        script = (f"umask 077 && mkdir -p {vm_secureboot.REMOTE_KEY_DIR} && cat > {vm_secureboot.REMOTE_KEY} && "
+                  f"chmod 600 {vm_secureboot.REMOTE_KEY}")
+        for remote, content, name in ((script, key, "key"),
+                                      (f"umask 077 && cat > {vm_secureboot.REMOTE_CERT}", cert, "certificate")):
+            code, log = self.ssh(self.args.ssh_user, remote, f"ssh-upload-secure-boot-{name}.log", self.args.command_timeout, stdin=content)
+            if code != 0:
+                raise HarnessError(f"Could not upload the Secure Boot test {name}; see {log}")
+
+    def loader_of_install(self) -> str:
+        return {"grub": "grub", "systemd-boot": "systemd-boot", "efi-stub": "efi-stub"}[self.scenario.bootloader]
+
+    def safe_graphics_check(self, result: dict, target: VMProcess) -> VMProcess:
+        """List the installed boot menu, find Safe graphics, boot it once, and check the kernel command line and the modules."""
+        loader = self.loader_of_install()
+        evidence: dict = {"loader": loader}
+        result["safe_graphics"] = evidence
+        password = (TEST_PASSWORD + "\n").encode()
+        code, log = self.ssh(TEST_USERNAME, vm_session.safe_entry_listing_command(loader), "safe-graphics-entries.log", self.args.command_timeout,
+                             stdin=password if "sudo" in vm_session.safe_entry_listing_command(loader) else None)
+        entry = vm_session.find_safe_entry(loader, log.read_text(errors="replace")) if code == 0 else {}
+        evidence["entry"] = entry
+        if not entry:
+            raise HarnessError(f"The {loader} menu of the installed system has no Safe graphics entry (exit {code}); see {log}")
+        problems = vm_session.safe_entry_problems(entry)
+        if problems:
+            raise HarnessError("Safe graphics entry: " + "; ".join(problems))
+        code, log = self.ssh(TEST_USERNAME, vm_session.oneshot_command(loader, entry), "safe-graphics-oneshot.log", self.args.command_timeout, stdin=password)
+        if code != 0:
+            raise HarnessError(f"Could not select the Safe graphics entry for the next boot; see {log}")
+        self.stop_vm(target)  # the choice lives in the firmware variables (bootctl, efibootmgr) or on the disk (grub-reboot): a restart of QEMU keeps both
+        booted = self.start_vm(live=False)
+        self.wait_for_ssh(TEST_USERNAME, "target", booted)
+        code, log = self.ssh(TEST_USERNAME, vm_session.SAFE_BOOT_COMMAND, "safe-graphics-boot.log", self.args.command_timeout)
+        probe = vm_session.parse_safe_boot_probe(code, log.read_text(errors="replace"))
+        evidence["boot"] = probe.record()
+        if not probe.success:
+            raise HarnessError(f"Safe graphics boot: {probe.error}; see {log}")
+        return booted
+
+    def hardware_report(self, result_live: dict) -> dict:
+        """The installer's hardware report of this (virtual) machine, read in the live system: what the planner is given."""
+        code, log = self.ssh(self.args.ssh_user, vm_wave5.HARDWARE_REPORT_COMMAND, "live-hardware-report.log", self.args.command_timeout)
+        report = vm_wave5.parse_hardware_report(code, log.read_text(errors="replace"))
+        (self.run_dir / "live-hardware-report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+        result_live["hardware_report"] = {key: report.get(key) for key in ("machine", "firmware")}
+        return report
 
     def chroot_check(self, result: dict, target: VMProcess) -> None:
         """Stop the installed system, boot the live ISO and run gentoo-chroot with its commands on standard input; nothing may stay mounted."""
@@ -2865,6 +2989,8 @@ class ScenarioRunner:
                 target = self.rescue_cycles(result, target, modes, command)
             if self.fresh_nvram_wanted():
                 target = self.fresh_nvram_check(result, target)
+            if self.scenario.safe_graphics:
+                target = self.safe_graphics_check(result, target)
             if self.scenario.chroot:
                 self.chroot_check(result, target)
             if decoys:
@@ -2902,6 +3028,9 @@ class ScenarioRunner:
                 live_result["gui"] = {"environment": sorted(self.gui_environment())}
             except HarnessError as exc:
                 problems.append(f"the graphical live session did not start on this display adapter: {exc}")
+        if self.scenario.live_expect:
+            wanted = {path: value for path, value in self.scenario.live_expect}
+            problems += [f"hardware report: {problem}" for problem in check_expectations(self.hardware_report(live_result), wanted)]
         if self.scenario.live_checks:
             live, extra = self.live_remote_and_host_keys(live, live_result)
             problems += extra
@@ -3119,6 +3248,13 @@ def rescue_problems(scenario: Scenario, args: argparse.Namespace) -> list[str]:
         problems.append("--target-image takes one --rescue-break at a time")
     if scenario.luks and (breaks or getattr(args, "rescue_command", None) or getattr(args, "rescue_repair", False)):
         problems.append("rescue runs support unencrypted installs only")
+    if scenario.secure_boot_install:
+        for option, value in (("--sb-key", getattr(args, "sb_key", None)), ("--sb-cert", getattr(args, "sb_cert", None)),
+                              ("--ovmf-vars-file", getattr(args, "ovmf_vars_file", None))):
+            if value is None:
+                problems.append(f"{scenario.name} needs {option} (docs/TESTING.md, \"Secure Boot and out-of-tree modules\")")
+            elif not Path(value).is_file():
+                problems.append(f"{option} {value} does not exist")
     return [f"{scenario.name}: {problem}" for problem in problems]
 
 
@@ -3286,6 +3422,10 @@ def build_parser() -> argparse.ArgumentParser:
                           help="persist: both boots share one NVRAM; fresh-on-target: the installed disk boots with an empty one; "
                                "readonly: the firmware cannot save boot entries")
     hardware.add_argument("--ovmf-vars-file", type=Path, help="Seed the NVRAM from this file instead of the firmware package's pristine one")
+    hardware.add_argument("--sb-key", type=Path, metavar="FILE",
+                          help="secure-boot-modules: the test-only private key that signs the UKI and the dummy module (docs/TESTING.md says how to make it)")
+    hardware.add_argument("--sb-cert", type=Path, metavar="FILE",
+                          help="secure-boot-modules: its certificate, which the variable store of --ovmf-vars-file must enrol as PK, KEK and db")
     hardware.add_argument("--rtc", choices=vm_hw.RTC_MODES, help="Hardware clock in UTC (default) or local time")
     parser.add_argument("--qemu-binary", default="qemu-system-x86_64")
     parser.add_argument("--qemu-img", default="qemu-img")

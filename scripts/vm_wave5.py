@@ -404,3 +404,21 @@ def chroot_problems(returncode: int, output: str, bootloader: str = "grub") -> l
     if returncode != 0:
         problems.append(f"gentoo-chroot ended with status {returncode}")
     return problems
+
+
+# --- the installer's hardware report of the VM (DMI vendors) ------------------------------------------------------------
+
+HARDWARE_REPORT_COMMAND = "python3 -m gentoo_installer.hardware --json --redact"
+
+
+def parse_hardware_report(returncode: int, output: str) -> dict[str, Any]:
+    """The profile ``python -m gentoo_installer.hardware --json`` prints (the same data the wizard and the planner get); {} when there is none."""
+    text = ANSI_RE.sub("", output).strip()
+    start = text.find("{")
+    if returncode != 0 or start < 0:
+        return {}
+    try:
+        report = json.loads(text[start:])
+    except json.JSONDecodeError:
+        return {}
+    return report if isinstance(report, dict) else {}

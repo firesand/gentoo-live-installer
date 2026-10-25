@@ -98,6 +98,13 @@ SMBIOS_PRESETS: dict[str, SmbiosPreset] = {
                               "HP", 31, "HP"),
     "desktop-asus": SmbiosPreset("An ASUS desktop board", "ASUSTeK COMPUTER INC.", "System Product Name", "System Version",
                                  "American Megatrends Inc.", 3, "Default string"),
+    # Wave 5: the vendors whose laptops get their own tools. The strings follow public dmidecode reports (and the tests/hardware fixtures of the same
+    # names); the Razer ones are NOT verified against a real Blade.
+    "laptop-asus-rog": SmbiosPreset("An ASUS ROG Zephyrus laptop (asusctl, supergfxctl offers)", "ASUSTeK COMPUTER INC.", "ROG Zephyrus M16 GU603ZW_GU603ZW", "1.0",
+                                    "American Megatrends International, LLC.", 10, "ASUSTeK COMPUTER INC."),
+    "laptop-razer-blade": SmbiosPreset("A Razer Blade laptop (OpenRazer offers; the strings are unverified)", "Razer", "Blade 15 Base Model (Early 2020) - RZ09-0328",
+                                       "8.04", "Razer", 10, "Razer"),
+    "laptop-lenovo-legion": SmbiosPreset("A Lenovo Legion laptop (platform profiles, battery conservation)", "LENOVO", "82JW", "Legion 5 15ACH6H", "LENOVO", 10, "LENOVO"),
     "vmware": SmbiosPreset("VMware's strings (hypervisor detection)", "VMware, Inc.", "VMware Virtual Platform",
                            "None", "Phoenix Technologies LTD"),
     "virtualbox": SmbiosPreset("VirtualBox's strings (hypervisor detection)", "innotek GmbH", "VirtualBox",
