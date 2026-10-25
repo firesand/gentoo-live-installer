@@ -56,7 +56,7 @@ Do not use tools that unpack the files onto the stick: that stick does not boot.
 ## 4. Start it
 
 1. Boot the stick and choose **AI rescue (text console)**. It asks for a keyboard layout first: you will type disk passphrases and the approval password.
-2. On the first console, as root, the stick shows the **approval password for this boot**. It is made fresh at every boot and kept only in memory. Write it down or remember it: you will type it later, on a different screen.
+2. On the first console, as root, the stick shows the **approval password for this boot**. It is made fresh at every boot and kept only in memory. It is also shown on the approval screen itself, so you cannot lose it; but write it down if you like, because you will type it later on that other screen.
 3. If the stick has no network yet, `gentoo-rescue-ai` offers to connect to Wi-Fi (the same questions as in the installer, [USER-GUIDE.md](USER-GUIDE.md) section 5).
 4. It then offers to mount your system (section 7) and opens the tmux session.
 

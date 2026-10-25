@@ -631,13 +631,13 @@ test-vm.py --matrix wave3 --matrix-parallel 1 ...                          # one
 exit status of the matrix is 0 only when every job passed. Interrupting it asks every child to
 clean up its own QEMU. `--matrix-parallel` cannot exceed 2.
 
-## The AI rescue stick and the console installer (Wave 6): what is tested, and what you must try yourself
+## The AI rescue stick and the console installer (Wave 6): the test plan, and what you must try yourself
 
-The user-facing description is [RESCUE-AI.md](RESCUE-AI.md). This section says how it is tested.
+The user-facing description is [RESCUE-AI.md](RESCUE-AI.md). This section is the **test plan** that the Wave 6 work has to satisfy, written before that work was merged: check each item against the tests that really exist (`tests/`) before you rely on it.
 
 **Unit and fixture tests (no network, no AI, no root):**
 
-* The helpers of `src/gentoo_rescue_ai/` run against fakes: the pinned download table and the checksum check (a wrong checksum must install nothing; a good one from a local fake mirror or from `--from DIR` installs as `rescue-ai`), the login helpers against recorded outputs of each assistant (the QR code step must fail soft to the plain link), the mount wrapper against the rescue tests' laboratory, the phone share's command line (TLS, one-time password, one client, the chosen interface, no start without a LAN address, `stop`).
+* The helpers of `src/gentoo_rescue_ai/` are tested against fakes: the pinned download table and the checksum check (a wrong checksum must install nothing; a good one from a local fake mirror or from `--from DIR` installs as `rescue-ai`), the login helpers against recorded outputs of each assistant (the QR code step must fail soft to the plain link), the mount wrapper against the rescue tests' laboratory, the phone share's command line (TLS, one-time password, one client, the chosen interface, no start without a LAN address, `stop`).
 * **The approval design is tested as a property of the files and of the program:** the approver reads its answer only from its own console device; `rescue-ai` has no sudoers rule and is in none of the privileged groups; the approver runs the command with `execve`, a clean environment and a fixed PATH; the audit log records every request. The text of the managed settings, the AGENTS.md size limit (32 KiB) and the Codex and OpenCode settings are checked.
 * **Planted project config:** a fake target holds `CLAUDE.md`, `AGENTS.md`, `opencode.json` and a `.claude/settings.json` with a hook. The launcher must start every assistant in `~rescue-ai` and load none of them.
 * **The text installer** (`tests/textui`): scripted console input for every new question with defaults only (Enter accepts the recommended choice), the NVIDIA, desktop, SSH and Firefox choices against the same defaults as the wizard, and the shared help strings.
