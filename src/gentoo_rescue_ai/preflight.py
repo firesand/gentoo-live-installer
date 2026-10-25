@@ -116,10 +116,10 @@ def gather(user: str = AI_USER, approver_vt: int | None = None, run: Callable[..
         except (OSError, ValueError):
             approver_vt = DEFAULT_APPROVER_VT
     devices: dict[str, os.stat_result | None] = {}
-    names = ["/dev/tty1", f"/dev/tty{approver_vt}", "/dev/tty0", "/dev/console"]
+    nodes = ["/dev/tty1", f"/dev/tty{approver_vt}", "/dev/tty0", "/dev/console"]
     for pattern in KEYBOARD_PATTERNS:
-        names.extend(sorted(glob.glob(pattern)) or [pattern])
-    for device in names:
+        nodes.extend(sorted(glob.glob(pattern)) or [pattern])
+    for device in nodes:
         try:
             info_dev = os.stat(device)
             devices[device] = None if stat.S_ISDIR(info_dev.st_mode) else info_dev  # /dev/input/by-path and the like are folders, not devices
