@@ -257,7 +257,7 @@ On the **Personalize** step, *Allow remote login over SSH* is **ticked by defaul
 * **Root can never log in over SSH.** Your own account can, with its password, or with a public key you paste in the box *SSH authorized keys*.
 * *More options* has **Keys only: do not allow logging in with a password** (safer on a network you do not trust). Add at least one public key first, or you lock yourself out of SSH.
 * Untick the box if you do not want an SSH server. It is a service that listens on port 22 of your network; anyone who knows your password can try it, so use a strong password.
-* The last screen of the installer and the file `FIRST-STEPS.txt` in your home directory show the line to type, for example `ssh yourname@yourhostname`. Use the IP address if your network does not know the host name (`ip addr` shows it).
+* The last screen of the installer ("Your first steps in Gentoo") and the file `FIRST-STEPS.txt` in your home directory show the line to type, for example `ssh yourname@yourhostname`. Use the IP address if your network does not know the host name (`ip addr` shows it). A second file, `first-steps.txt`, holds the notes the installer made for your hardware.
 * The SSH default and the keys-only setting are checked in tests and by the VM harness (it checks that sshd runs at boot and that root login and, for keys only, password login are off). No real PC has been tested.
 
 ### Windows on the same disk
