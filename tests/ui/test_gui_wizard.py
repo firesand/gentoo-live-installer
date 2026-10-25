@@ -185,7 +185,7 @@ def test_customize_validates_the_same_proxy_syntax(make_window):
     assert window.customize.validate_page() == (True, "")
     window.customize.proxy.setText("ftp://nope")
     assert window.customize.validate_page() == (False, "Download proxy must look like http://host:3128")
-    assert "not stored on the installed system" in window.customize.proxy.toolTip()
+    assert "used for the installation only" in window.customize.proxy.toolTip()
 
 
 # --- G6: the window does not wait for the inspection -------------------------------------------------------------------

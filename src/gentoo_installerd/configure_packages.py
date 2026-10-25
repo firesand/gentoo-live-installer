@@ -376,6 +376,7 @@ class PackagesMixin(PortageMixin):
                            "netifrc": "net-misc/netifrc"}.get(manifest.network.manager)
         if network_package:
             atoms.append(network_package)
+        atoms.extend(self.network_atoms(manifest))
         atoms.extend(self.early_boot_atoms(manifest, plan))
         atoms.append("app-admin/sudo" if manifest.accounts.privilege == "sudo" else "app-admin/doas")
         if options.ssh:

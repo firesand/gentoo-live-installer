@@ -9,7 +9,7 @@ from __future__ import annotations
 import os  # noqa: F401 - tests patch customize.os
 from typing import Any
 
-from PySide6.QtWidgets import QCompleter, QTabWidget
+from PySide6.QtWidgets import QTabWidget
 
 from .. import system_info  # noqa: F401 - tests patch customize.system_info
 from ..manifest import InstallManifest
@@ -56,10 +56,11 @@ class CustomizePage(PortageTabMixin, NetworkTabMixin, ToolsTabMixin, Page):
         self._update_hwmonux_note()
         names = sorted({nic.iface for nic in info.profile.nics if nic.iface})
         if names:
-            self.interface.setCompleter(QCompleter(names, self.interface))
+            self.interface.set_names(names)
 
     def set_advanced(self, advanced: bool) -> None:
         self.hardware.set_advanced(advanced)
+        self.set_network_advanced(advanced)
 
     def show_hardware(self) -> None:
         self.tabs.setCurrentWidget(self.hardware)

@@ -59,7 +59,8 @@ SHUTDOWN_HOOK_SECONDS = 30.0
 # Socket parents that must never be taken over (chown/chmod) as a private directory.
 FORBIDDEN_SOCKET_PARENTS = frozenset({"/", "/run", "/var/run", "/tmp", "/var/tmp", "/etc", "/usr", "/var", "/home", "/root", "/dev", "/dev/shm", "/mnt", "/opt", "/srv"})
 # Optional modules that add actions: (module, function). Each is called with the registry.
-OPTIONAL_PLUGINS = (("gentoo_installerd.hwactions", "register"), ("gentoo_installerd.rescue.api", "register"))
+OPTIONAL_PLUGINS = (("gentoo_installerd.hwactions", "register"), ("gentoo_installerd.netactions", "register"),
+                    ("gentoo_installerd.remote", "register"), ("gentoo_installerd.rescue.api", "register"))
 
 
 # ------------------------------------------------------------------ errors
@@ -853,6 +854,15 @@ def handle_cancel(request: dict, channel: Channel) -> None:
     channel.send(Event("status", message="Cancellation requested", data={"status": "cancelling"}))
 
 
+def _apply_live_static(manifest: InstallManifest) -> None:
+    """network.live_static is applied to the live connection before the install starts (the netactions plugin does the work)."""
+    try:
+        from .netactions import apply_live_static
+    except ImportError:
+        raise ActionError("A fixed address for the live session is not available in this installer service.", ErrorCode.BAD_REQUEST) from None
+    apply_live_static(manifest.network.live_static)
+
+
 def handle_start(request: dict, channel: Channel) -> None:
     manager = _manager(channel)
     raw = request.get("manifest")
@@ -864,6 +874,8 @@ def handle_start(request: dict, channel: Channel) -> None:
     except ManifestError as exc:
         raise ActionError(str(exc), ErrorCode.INVALID_MANIFEST) from exc
     resume = bool(request.get("resume", False))
+    if not resume and manifest.network.live_static.is_set():
+        _apply_live_static(manifest)
     listener = manager.start(manifest, resume)
     job_id = getattr(getattr(manager, "installer", None), "job_id", "") or ""
     LOG.info("Installation started by uid %s (job %s, resume=%s)", _peer_uid(channel), job_id, resume)

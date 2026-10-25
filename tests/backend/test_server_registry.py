@@ -125,7 +125,9 @@ class RegistryTests(unittest.TestCase):
 
 
 # Import of either name raises ModuleNotFoundError, also when another test already imported the real module.
-ABSENT_RESCUE = {"gentoo_installerd.rescue": None, "gentoo_installerd.rescue.api": None}
+# The network and remote-access actions exist for real too; these tests are about the other plugins.
+OTHER_PLUGINS = {"gentoo_installerd.netactions": None, "gentoo_installerd.remote": None}
+ABSENT_RESCUE = {"gentoo_installerd.rescue": None, "gentoo_installerd.rescue.api": None, **OTHER_PLUGINS}
 
 
 class PluginTests(unittest.TestCase):
@@ -155,7 +157,7 @@ class PluginTests(unittest.TestCase):
 
     def test_rescue_is_not_loaded_with_no_rescue(self) -> None:
         registry = ActionRegistry()
-        patcher = patch.dict(sys.modules, {"gentoo_installerd.hwactions": None})  # the real hardware actions exist now; this test is about rescue
+        patcher = patch.dict(sys.modules, {"gentoo_installerd.hwactions": None, **OTHER_PLUGINS})  # the real hardware actions exist now; this test is about rescue
         patcher.start()
         self.addCleanup(patcher.stop)
         self.install_module("gentoo_installerd.rescue.api", register=lambda reg: reg.register_action("rescue.scan", lambda request, channel: None, feature="rescue.v1"))
@@ -173,7 +175,7 @@ class PluginTests(unittest.TestCase):
         registry = ActionRegistry()
         self.install_module("gentoo_installerd.rescue.api", register=lambda reg: Api())
         self.install_module("gentoo_installerd.rescue")
-        with patch.dict(sys.modules, {"gentoo_installerd.hwactions": None}):
+        with patch.dict(sys.modules, {"gentoo_installerd.hwactions": None, **OTHER_PLUGINS}):
             load_plugins(registry)
         capabilities = registry.capabilities()
         self.assertEqual(capabilities["rescue"], {"api": 1, "families": ["gentoo"]})

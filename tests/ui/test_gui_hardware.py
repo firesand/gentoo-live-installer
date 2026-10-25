@@ -448,8 +448,8 @@ def test_warnings_are_listed_errors_first_with_the_fix_the_daemon_offers(make_wi
     assert boot.action is not None and boot.action.text() == "Restart into firmware settings"
     clock = next(row for row in rows if "not been checked against the network" in row.detail.text())
     assert clock.action is not None and clock.action.text() == "Set clock from network"
-    charger = next(row for row in rows if "charger" in row.detail.text())
-    assert charger.action is None and "Connect the charger" in charger.detail.text()
+    assert not any("charger" in row.detail.text() for row in rows)  # NET-06: the charger is an amber banner, not one more row
+    assert not page.charger_banner.isHidden() and "charger" in page.charger_banner.text()
 
 
 def test_without_the_action_the_row_explains_what_to_do(make_window):

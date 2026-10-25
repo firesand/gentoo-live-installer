@@ -153,7 +153,7 @@ def render_make_conf(manifest: InstallManifest, plan: object | None = None, *, m
     ]
     if p.binhost:
         values.append(("PORTAGE_BINHOST", p.binhost_url))
-    values.extend(sorted(make_conf_settings(manifest.network.proxy).items()))
+    values.extend(sorted(make_conf_settings(manifest.network.proxy, manifest.network.keep_proxy).items()))
     plan_values.pop("MAKEOPTS", None)
     lines: list[str] = []
     emitted: set[str] = set()

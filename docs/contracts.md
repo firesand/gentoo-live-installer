@@ -446,6 +446,9 @@ bootloader, hardware), ACCT (accounts, tools, text installer).
 | `gentoo_installer/pages/customize.py` | CORE | the tab host and the Hardware tab embedding |
 | `gentoo_installer/pages/portage_tab.py` | PORT | Portage tab (mixin of `CustomizePage`; `load_portage`, `save_portage`) |
 | `gentoo_installer/pages/network_tab.py` | NET | Network tab (`load_network`, `save_network`) |
+| `gentoo_installer/pages/network_card.py`, `remote_dialog.py` | NET | the Readiness page's connection card (adapters, Wi-Fi, fixed address, Wi-Fi carry-over) and the Remote access (SSH) dialog |
+| `gentoo_installer/netdiag.py`, `netclient.py`, `remote_cli.py` | NET | the Handbook's network tests (`diagnose`, `validate_static`), the GUI side of the daemon's network actions, and the `gentoo-remote-access` command |
+| `gentoo_installerd/netactions.py`, `remote.py` | NET | daemon actions of features `network.v1` and `remote.v1` (docs/protocol.md) |
 | `gentoo_installer/pages/tools_tab.py` | ACCT | Applications && tools tab (`load_tools`, `save_tools`) |
 | `gentoo_installer/pages/system.py` | CORE | init system, stage3 and profile, and the layout that embeds the two sections |
 | `gentoo_installer/pages/desktop_section.py` | PORT | desktop cards, stage3 family rules (`load`, `collect`, `set_advanced`) |
