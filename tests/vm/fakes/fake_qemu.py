@@ -128,6 +128,11 @@ def qmp_client(client: socket.socket) -> None:
                 Path(arguments["filename"]).write_bytes(b"P6\n%d %d\n255\n" % (width, height) + b"\x00" * (3 * width * height))
             elif command == "input-send-event":
                 append("fake-qmp-keys.jsonl", json.dumps(arguments) + "\n")
+            elif command == "human-monitor-command":
+                append("fake-qmp-hmp.jsonl", json.dumps(arguments) + "\n")
+                stream.write(json.dumps({"return": CONFIG.get("hmp_answer", "")}).encode() + b"\r\n")
+                stream.flush()
+                continue
             stream.write(json.dumps({"return": {}}).encode() + b"\r\n")
             stream.flush()
             if command in ("quit", "system_powerdown"):  # a powered-down guest ends the QEMU process
