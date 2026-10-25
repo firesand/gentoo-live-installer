@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- Window manager look: Arc-Dark frames and a compositor with shadows. The compositor also runs
+     on a virtual machine without 3D (xfwm4 then composites with XRender; vblank_mode auto uses
+     whatever the machine has). -->
+<channel name="xfwm4" version="1.0">
+  <property name="general" type="empty">
+    <property name="theme" type="string" value="Arc-Dark"/>
+    <property name="title_font" type="string" value="Fira Sans Bold 10"/>
+    <property name="button_layout" type="string" value="O|HMC"/>
+    <property name="title_alignment" type="string" value="center"/>
+    <property name="use_compositing" type="bool" value="true"/>
+    <property name="show_frame_shadow" type="bool" value="true"/>
+    <property name="show_popup_shadow" type="bool" value="true"/>
+    <property name="show_dock_shadow" type="bool" value="true"/>
+    <property name="vblank_mode" type="string" value="auto"/>
+    <property name="workspace_count" type="int" value="1"/>
+    <property name="snap_to_border" type="bool" value="true"/>
+  </property>
+</channel>

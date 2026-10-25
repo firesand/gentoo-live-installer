@@ -187,24 +187,10 @@ def stage1_packages() -> set[str]:
 
 
 def test_panel_launchers_have_programs_and_a_browser() -> None:
-    panel = ElementTree.fromstring(read("etc/xdg/xfce4/panel/default.xml"))
-    plugins = {p.get("name"): p for p in panel.find("property[@name='plugins']").findall("property")}
-    launchers = [
-        v.get("value") for p in plugins.values() if p.get("value") == "launcher"
-        for v in p.iter("value") if (v.get("value") or "").endswith(".desktop")
-    ]
-    # launcher -> package that provides its program (xfce4-meta pulls the Xfce applications)
-    provides = {
-        "xfce4-terminal-emulator.desktop": "x11-terms/xfce4-terminal",
-        "xfce4-file-manager.desktop": "xfce-base/xfce4-meta",
-        "xfce4-appfinder.desktop": "xfce-base/xfce4-meta",
-        "xfce4-web-browser.desktop": "www-client/links",
-    }
-    assert set(launchers) == set(provides)
-    for package in provides.values():
-        assert package in stage1_packages(), package
+    """The launcher files and the browser helper are checked in detail by test_desktop_look.py."""
     helpers = dict(l.split("=", 1) for l in read("etc/xfce4/helpers.rc").splitlines() if "=" in l)
-    assert helpers["WebBrowser"] == "links", "an empty WebBrowser opens the Preferred Applications dialog"
+    assert helpers["WebBrowser"] == "gentoo-live-browser", "an empty WebBrowser opens the Preferred Applications dialog"
+    assert "www-client/firefox-bin" in stage1_packages() and "www-client/links" in stage1_packages(), "links stays for the text console"
 
 
 def test_panel_has_the_keyboard_layout_plugin() -> None:
@@ -238,6 +224,11 @@ def test_every_overlay_file_is_covered_by_the_image_contract() -> None:
         "mnt/gentoo", "mnt/rescue", "home/gentoo", "usr/lib/modules", "usr/lib/firmware",
         "usr/bin/gentoo-installer-text", "usr/bin/gentoo-chroot", "usr/libexec/polkit-gnome-authentication-agent-1",
         "usr/lib/grub/i386-pc", "usr/lib/grub/x86_64-efi", "usr/bin/gentoo-remote-access",
+        # the desktop look: files of the packages arc-theme, papirus-icon-theme, firefox-bin, xfdesktop, thunar, gparted
+        # and xfce4-terminal (test_desktop_look.py checks them against the tree)
+        "usr/share/backgrounds/xfce/xfce-x.svg", "usr/share/themes/Arc-Dark/gtk-3.0/gtk.css", "usr/share/themes/Arc-Dark/xfwm4/themerc",
+        "usr/share/icons/Papirus-Dark/index.theme", "usr/bin/firefox-bin", "usr/share/applications/xfce4-terminal.desktop",
+        "usr/share/applications/thunar.desktop", "usr/share/applications/gparted.desktop",
     }
     for path in listed - package_provided:
         assert (OVERLAY / path).exists(), f"{path} is in the contract but neither in the overlay nor provided by a package"

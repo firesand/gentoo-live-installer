@@ -87,9 +87,8 @@ were tested.
 Wired networks connect by themselves. For Wi-Fi click the network icon in
 the panel or run "nmtui" in a terminal. The clock is corrected automatically
 once the network is up. On a network with a login page (hotel, campus) open
-the web browser launcher in the panel: it starts the text browser Links in a
-terminal, which handles simple login pages (pages that need JavaScript
-cannot be completed with it).
+Firefox from the application menu (the Handbook button in the panel opens it
+too). On the text console the text browser Links does simple login pages.
 
 5. KEYBOARD LAYOUT
 ------------------

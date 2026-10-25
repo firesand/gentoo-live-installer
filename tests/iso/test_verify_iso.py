@@ -437,7 +437,7 @@ def image_entries(flavor: str, live_make_conf: str) -> dict[str, tuple[str, int,
         if path not in entries:
             kind = item.get("type", "file").split("|")[0]
             mode = int(item["mode"], 8) if item.get("mode") else 0o755 if item.get("executable") or kind == "dir" else 0o644
-            add(path, kind, mode)
+            add(path, kind, mode, extra="/target" if kind == "slink" else "")
     for command in CONTRACT["squashfs"]["commands"]:
         add(f"usr/bin/{command}", mode=0o755)
     for package in CONTRACT["squashfs"]["required_packages"]:
