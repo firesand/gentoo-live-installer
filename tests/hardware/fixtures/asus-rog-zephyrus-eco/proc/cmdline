@@ -1,0 +1,1 @@
+BOOT_IMAGE=/boot/gentoo root=live:CDLABEL=GENTOO_INSTALLER_AMD64 rd.live.dir=/ rd.live.squashimg=image.squashfs cdroot nodhcp secureconsole

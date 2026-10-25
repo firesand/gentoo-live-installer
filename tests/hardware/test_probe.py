@@ -314,9 +314,11 @@ def test_fixtures_contain_no_serials_macs_or_uuids():
 
 
 def test_tpm_detection():
-    assert {name: fixture_dict(name)["firmware"]["tpm"] for name in FIXTURE_NAMES} == {
-        "asus-desktop-rtx4090": "2.0", "desktop-igpu-idle": "2.0", "qemu-q35-virtio": "", "old-bios-sata-radeon": "", "thinkpad-intel-nvidia-hybrid": "2.0",
-        "amd-laptop-sof": "2.0", "vmware-guest": "", "intel-rst-hidden-nvme": "1.2"}
+    expected = {"asus-desktop-rtx4090": "2.0", "desktop-igpu-idle": "2.0", "qemu-q35-virtio": "", "old-bios-sata-radeon": "", "thinkpad-intel-nvidia-hybrid": "2.0",
+                "amd-laptop-sof": "2.0", "vmware-guest": "", "intel-rst-hidden-nvme": "1.2"}
+    assert {name: fixture_dict(name)["firmware"]["tpm"] for name in expected} == expected
+    # every machine added later has a TPM 2.0 (the Wave 5 fixtures are all modern PCs)
+    assert {fixture_dict(name)["firmware"]["tpm"] for name in FIXTURE_NAMES if name not in expected} == {"2.0"}
 
 
 def test_lsblk_output_with_a_warning_in_front_of_the_json_is_still_used():

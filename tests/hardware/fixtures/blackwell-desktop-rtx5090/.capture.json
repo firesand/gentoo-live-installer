@@ -1,0 +1,10 @@
+{
+ "note": "synthesized for the tests, not captured from a real machine; identifiers are plausible, serials and MACs do not exist; GB202 RTX 5090 (10de:2b85): only the open kernel modules of the newest branch can drive it",
+ "now": 1792800000,
+ "redacted": true,
+ "schema": 1,
+ "summary": "AMD Ryzen 9 9950X 16-Core Processor - 16 threads - 61 GiB - NVIDIA GeForce RTX 5090 - NVMe SSD - UEFI 64-bit",
+ "synthetic": true,
+ "tool": "synthetic",
+ "tool_version": 1
+}

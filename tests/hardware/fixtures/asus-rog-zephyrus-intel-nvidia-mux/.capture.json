@@ -1,0 +1,15 @@
+{
+ "note": "synthesized for the tests, not captured from a real machine; identifiers are plausible, serials and MACs do not exist; replace by a volunteer's capture. 0b05:19b6 is named in the asusctl README; the sysfs attribute names follow the asus-nb-wmi and asus-armoury drivers",
+ "now": 1792800000,
+ "redacted": true,
+ "schema": 1,
+ "summary": "12th Gen Intel Core i9-12900H - 20 threads - 29 GiB - Intel Iris Xe Graphics + NVIDIA Geforce RTX 3070 Ti Laptop GPU - NVMe SSD - UEFI 64-bit",
+ "synthetic": true,
+ "tool": "synthetic",
+ "tool_version": 1,
+ "unverified": [
+  "dmi strings",
+  "usb product string",
+  "firmware-attributes names"
+ ]
+}

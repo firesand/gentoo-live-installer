@@ -1,0 +1,2 @@
+Architecture:                            x86_64
+Model name:                              12th Gen Intel(R) Core(TM) i9-12900H

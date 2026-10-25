@@ -1,0 +1,14 @@
+{
+ "note": "synthesized for the tests, not captured from a real machine; identifiers are plausible, serials and MACs do not exist; the DMI strings follow public dmidecode reports and were not read from the device itself",
+ "now": 1792800000,
+ "redacted": true,
+ "schema": 1,
+ "summary": "AMD Ryzen 7 4800H with Radeon Graphics - 16 threads - 15 GiB - NVIDIA GeForce RTX 3050 Ti Mobile + AMD Radeon Vega Series / Radeon Vega Mobile Series - NVMe SSD - UEFI 64-bit",
+ "synthetic": true,
+ "tool": "synthetic",
+ "tool_version": 1,
+ "unverified": [
+  "dmi strings",
+  "usb product string"
+ ]
+}

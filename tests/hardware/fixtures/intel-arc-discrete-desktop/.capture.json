@@ -1,0 +1,10 @@
+{
+ "note": "synthesized for the tests, not captured from a real machine; identifiers are plausible, serials and MACs do not exist; DG2 Arc A770 (8086:56a0) is a discrete card: no iGPU fix applies",
+ "now": 1792800000,
+ "redacted": true,
+ "schema": 1,
+ "summary": "13th Gen Intel Core i5-13400F - 16 threads - 30 GiB - Intel Arc A770 - NVMe SSD - UEFI 64-bit",
+ "synthetic": true,
+ "tool": "synthetic",
+ "tool_version": 1
+}

@@ -1,0 +1,10 @@
+{
+ "note": "synthesized for the tests, not captured from a real machine; identifiers are plausible, serials and MACs do not exist; GP106 GTX 1060 (10de:1c03) is on the 580 branch's supported list: closed 580 modules, newer branches masked",
+ "now": 1792800000,
+ "redacted": true,
+ "schema": 1,
+ "summary": "Intel Core i7-6700K CPU @ 4.00GHz - 16 threads - 30 GiB - NVIDIA GeForce GTX 1060 6GB - NVMe SSD - UEFI 64-bit",
+ "synthetic": true,
+ "tool": "synthetic",
+ "tool_version": 1
+}

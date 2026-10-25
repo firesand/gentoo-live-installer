@@ -14,7 +14,7 @@ HERE = Path(__file__).resolve().parent
 FIXTURES = HERE / "fixtures"
 EXPECTED = HERE / "expected"
 # Fixtures that are derived from a committed one when the tests start (see synthetic.py).
-DERIVED = ("desktop-igpu-idle",)
+DERIVED = ("desktop-igpu-idle", "asus-desktop-rtx4090-secureboot")
 _derived_root: Path | None = None
 
 # Fixture name -> short description (the machines the planner is exercised on).
@@ -27,6 +27,18 @@ FIXTURE_NAMES = (
     "amd-laptop-sof",
     "vmware-guest",
     "intel-rst-hidden-nvme",
+    # Wave 5. Synthesized machines carry "synthetic": true and a note (plus the list of unverified details) in .capture.json.
+    "asus-desktop-rtx4090-secureboot",
+    "pascal-desktop-gtx1060",
+    "kepler-desktop-gtx680",
+    "blackwell-desktop-rtx5090",
+    "asus-rog-zephyrus-intel-nvidia-mux",
+    "asus-rog-zephyrus-eco",
+    "razer-blade-intel-nvidia",
+    "lenovo-legion-amd-nvidia",
+    "amd-laptop-nvidia",
+    "intel-arc-discrete-desktop",
+    "intel-core-ultra-laptop-arc-igpu",
 )
 
 
@@ -42,7 +54,7 @@ def fixture_path(name: str) -> Path:
     if not target.exists():
         from tests.hardware import synthetic
 
-        synthetic.desktop_igpu_idle(target)
+        {"desktop-igpu-idle": synthetic.desktop_igpu_idle, "asus-desktop-rtx4090-secureboot": synthetic.desktop_secureboot}[name](target)
     return target
 
 
