@@ -457,9 +457,9 @@ def check_grub(
         found = [e for e in linux_entries if e.title.lower().startswith(safe["title_prefix"].lower())]
         report.expect(bool(found), "grub.safe_graphics", "", f"the boot menu has no '{safe['title_prefix']}' entry")
         for entry in found:
-            words = {w for line in entry.linux for w in line.split()}
-            lacking = [a for a in safe.get("required_arguments", []) if a not in words]
-            extra = [a for a in safe.get("forbidden_arguments", []) if a in words]
+            entry_words = {w for line in entry.linux for w in line.split()}
+            lacking = [a for a in safe.get("required_arguments", []) if a not in entry_words]
+            extra = [a for a in safe.get("forbidden_arguments", []) if a in entry_words]
             report.expect(
                 not lacking and not extra,
                 "grub.safe_graphics_arguments",
