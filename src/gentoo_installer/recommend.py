@@ -241,10 +241,9 @@ def recommend(profile: HardwareProfile | Mapping[str, Any] | None, manifest: Ins
             modules = "closed kernel modules" if branch == "580" else "open kernel modules"
             card = gpu_label(nvidia[0]) if nvidia[0].name else "your NVIDIA card"
             out.append(Recommendation("rec.nvidia_proprietary", "info",
-                                      f"The NVIDIA driver (version {branch}, {modules}) fits {card}. It gives the best 3D and games, but it is non-free software: "
+                                      f"The NVIDIA proprietary driver (version {branch}, {modules}) fits {card}. It gives the best 3D and games, but it is non-free software: "
                                       "accept NVIDIA's licence on the Hardware page to use it, otherwise the open nouveau driver is used.",
-                                      "hardware.nvidia_license_accepted" if hardware.gpu_driver == "auto" else "hardware.gpu_driver",
-                                      "true" if hardware.gpu_driver == "auto" else "auto"))
+                                      "hardware.gpu_driver", "auto" if hardware.gpu_driver == "nouveau" else ""))
         elif nvidia[0].generation in ("kepler", "fermi", "older"):
             out.append(Recommendation("rec.nvidia_legacy", "info", "This NVIDIA card is too old for a supported proprietary driver; the open nouveau driver will be used."))
     if any(gpu.vendor == "intel" and gpu.generation == "gen3" for gpu in hw.gpus) and manifest.portage.binhost:

@@ -46,6 +46,7 @@ class DevicePlanMixin:
     mobile: bool
     vm: bool
     offers: list[devices.DeviceOffer]
+    note: Any  # the other helpers (use, keyword, file, post, warn, first_step, service) come from hwplan._Planner
 
     # -- what is wanted -----------------------------------------------------------------------------------------
 

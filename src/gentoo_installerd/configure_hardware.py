@@ -35,7 +35,6 @@ def repo_specs(plan: object | None) -> list[tuple[str, str, str]]:
 
 class HardwareMixin(PortageMixin):
     if TYPE_CHECKING:
-        def emerge(self, manifest: InstallManifest, arguments: Sequence[str], **options: object) -> object: ...  # configure_packages
         def group_exists(self, name: str) -> bool: ...  # configure_accounts
 
     def run_plan_steps(self, plan: object | None = None) -> list[str]:
@@ -104,7 +103,7 @@ class HardwareMixin(PortageMixin):
         if not specs:
             return []
         try:
-            self.emerge(manifest, ("--noreplace", "dev-vcs/git"))
+            self.emerge(manifest, ("--noreplace", "dev-vcs/git"))  # type: ignore[attr-defined]  # configure_packages
             for name, _sync_type, _uri in specs:
                 self.chroot(("emaint", "sync", "-r", name))
         except RunnerError as exc:

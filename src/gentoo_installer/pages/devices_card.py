@@ -90,9 +90,9 @@ class DevicesCard(Card):
         shown = 0
         hidden_more = False
         for offer in offers:
-            line = self.lines.get(offer.key)
-            if line is None:
-                line = _Line(offer)
+            existing = self.lines.get(offer.key)
+            line = existing if existing is not None else _Line(offer)
+            if existing is None:
                 line.check.toggled.connect(lambda checked, name=offer.key: self._clicked(name, checked))
                 self.lines[offer.key] = line
                 self.content.insertWidget(self.content.indexOf(self.more), line)
