@@ -3,4 +3,5 @@ Gentoo installer and rescue disc (\n \s \r \m)
 Log in as "gentoo" (no password).
   Install Gentoo: gentoo-installer   (text mode: sudo gentoo-installer-text)
   Repair a Gentoo system that does not start: sudo gentoo-rescue
+  Log in from another computer over SSH: sudo gentoo-remote-access on
 

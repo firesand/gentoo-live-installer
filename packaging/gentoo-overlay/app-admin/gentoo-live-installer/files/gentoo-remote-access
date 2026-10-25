@@ -1,0 +1,135 @@
+#!/bin/bash
+# Log in to the live disc from another computer (I9, console form).
+#
+#     sudo gentoo-remote-access on [PASSWORD]   give the user "gentoo" a password (a readable one is
+#                                               made when none is given) and make sure sshd runs
+#     sudo gentoo-remote-access off             remove the password again (the state at boot)
+#     gentoo-remote-access status               what is running, the addresses, the key fingerprints
+#
+# sshd already runs on this disc, but nobody can log in until a password is set on purpose: root is
+# locked and "gentoo" has an empty password, which sshd refuses (PermitEmptyPasswords no). The
+# Handbook's way works too: "sudo passwd root", then "ssh root@ADDRESS".
+# The live disc only. The installed system is never touched.
+set -u
+
+USER_NAME=gentoo
+SERVICE=sshd
+WORDS=(red blue green gold gray pink oak elm fox owl cat dog bee ant sun moon star rain snow wind sea lake hill rock sand leaf rose pine fern wolf bear deer duck fish frog crow swan lion seal moth)
+
+say() { printf '%s\n' "$*"; }
+die() { printf 'gentoo-remote-access: %s\n' "$*" >&2; exit 1; }
+
+usage() {
+	say "Usage: gentoo-remote-access [on [PASSWORD] | off | status]"
+	say "  on      give the user ${USER_NAME} a password and start sshd if it is not running"
+	say "  off     remove that password again (sshd keeps running; nobody can log in)"
+	say "  status  show the addresses, whether a password is set and the key fingerprints"
+}
+
+need_root() {
+	if [ "$(id -u)" -ne 0 ]; then
+		die "this needs administrator rights: sudo gentoo-remote-access $*"
+	fi
+}
+
+sshd_running() {
+	rc-service "${SERVICE}" status >/dev/null 2>&1
+}
+
+# One address per line (IPv4 first, global scope; the live disc is not a server for the internet).
+addresses() {
+	ip -o -4 addr show scope global 2>/dev/null | awk '{ sub(/\/.*/, "", $4); print $4 }'
+}
+
+# passwd -S: "gentoo NP ..." no password, "P" a password, "L" locked.
+password_state() {
+	local state
+	state=$(passwd -S "${USER_NAME}" 2>/dev/null | awk '{ print $2 }')
+	case ${state} in
+		P | PS) say set ;;
+		NP) say none ;;
+		L | LK) say locked ;;
+		*) say unknown ;;
+	esac
+}
+
+fingerprints() {
+	local key found=0
+	for key in /etc/ssh/ssh_host_*_key.pub; do
+		[ -f "${key}" ] || continue
+		found=1
+		ssh-keygen -l -E sha256 -f "${key}" 2>/dev/null | awk '{ printf "  %s  %s\n", $4, $2 }' | sed 's/[()]//g'
+	done
+	[ "${found}" -eq 1 ] || say "  (no host keys yet: sshd makes them when it starts)"
+}
+
+# Three short words and two digits, easy to read aloud: fox-oak-sun42.
+make_password() {
+	local count=${#WORDS[@]} n a b c
+	n=$(od -An -N8 -tu4 /dev/urandom | tr -s ' ' | sed 's/^ //')
+	a=${n%% *}
+	b=${n##* }
+	c=$(od -An -N2 -tu2 /dev/urandom | tr -d ' ')
+	printf '%s-%s-%s%02d\n' "${WORDS[a % count]}" "${WORDS[b % count]}" "${WORDS[(a + b + c) % count]}" "$((c % 100))"
+}
+
+show() {
+	local state address any=0
+	state=$(password_state)
+	if sshd_running; then say "sshd:      running"; else say "sshd:      not running (sudo rc-service ${SERVICE} start)"; fi
+	case ${state} in
+		set) say "password:  set for ${USER_NAME}" ;;
+		*) say "password:  none for ${USER_NAME}, so nobody can log in yet (sudo gentoo-remote-access on)" ;;
+	esac
+	say "log in with:"
+	while read -r address; do
+		[ -n "${address}" ] || continue
+		any=1
+		say "  ssh ${USER_NAME}@${address}"
+	done < <(addresses)
+	[ "${any}" -eq 1 ] || say "  (no network address yet: connect to Wi-Fi or a cable first; nmtui helps)"
+	say "host key fingerprints (SHA256), to compare when ssh asks \"Are you sure?\":"
+	fingerprints
+}
+
+action=${1:-status}
+case ${action} in
+	-h | --help | help)
+		usage
+		;;
+	status)
+		show
+		;;
+	on)
+		need_root on
+		password=${2:-}
+		generated=0
+		if [ -z "${password}" ]; then
+			password=$(make_password)
+			generated=1
+		fi
+		case ${password} in
+			*$'\n'*) die "the password must be a single line" ;;
+		esac
+		printf '%s:%s\n' "${USER_NAME}" "${password}" | chpasswd || die "could not set the password of ${USER_NAME}"
+		if ! sshd_running; then
+			rc-service "${SERVICE}" start >/dev/null 2>&1 || die "sshd could not be started (rc-service ${SERVICE} start shows why)"
+		fi
+		show
+		if [ "${generated}" -eq 1 ]; then
+			say "password:  ${password}"
+		else
+			say "password:  the one you typed"
+		fi
+		say "Turn it off again with: sudo gentoo-remote-access off"
+		;;
+	off)
+		need_root off
+		passwd -d "${USER_NAME}" >/dev/null 2>&1 || die "could not remove the password of ${USER_NAME}"
+		say "The password of ${USER_NAME} is removed: nobody can log in over SSH (sshd keeps running)."
+		;;
+	*)
+		usage >&2
+		exit 2
+		;;
+esac

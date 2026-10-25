@@ -35,9 +35,11 @@ RDEPEND="
 	app-crypt/gnupg
 	app-portage/cpuid2cpuflags
 	dev-python/pyside[gui,widgets,${PYTHON_USEDEP}]
+	net-misc/openssh
 	sec-keys/openpgp-keys-gentoo-release
 	sys-apps/coreutils
 	sys-apps/gptfdisk
+	sys-apps/iproute2
 	sys-apps/kmod
 	sys-apps/nvme-cli
 	sys-apps/pciutils
@@ -93,6 +95,9 @@ src_install() {
 		domenu "${S}/data/gentoo-rescue.desktop"
 		dobin "${FILESDIR}/gentoo-chroot"
 	fi
+	# Console form of the live disc's remote access (I9): sshd runs at boot, this sets or
+	# removes the password of the live user and prints the addresses and key fingerprints.
+	dobin "${FILESDIR}/gentoo-remote-access"
 	newinitd "${FILESDIR}/gentoo-installerd.initd" gentoo-installerd
 	newconfd "${FILESDIR}/gentoo-installerd.confd" gentoo-installerd
 	systemd_dounit "${FILESDIR}/gentoo-installerd.service"

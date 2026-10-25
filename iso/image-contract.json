@@ -84,6 +84,8 @@
       {"path": "usr/libexec/portagehub-helper", "type": "file"},
       {"path": "usr/libexec/polkit-gnome-authentication-agent-1", "type": "file|slink", "executable": true},
       {"path": "usr/share/applications/gentoo-installer.desktop", "type": "file"},
+      {"path": "etc/ssh/sshd_config.d/10-gentoo-live.conf", "type": "file"},
+      {"path": "usr/bin/gentoo-remote-access", "type": "file|slink", "executable": true},
       {"path": "usr/bin/gentoo-rescue", "type": "file|slink", "when_source": {"path": "pyproject.toml", "contains": "gentoo-rescue ="}},
       {"path": "usr/bin/gentoo-rescue-gui", "type": "file|slink", "when_source": {"path": "pyproject.toml", "contains": "gentoo-rescue-gui ="}},
       {"path": "usr/bin/gentoo-installer-text", "type": "file|slink", "when_source": {"path": "pyproject.toml", "contains": "gentoo-installer-text ="}},
@@ -122,8 +124,13 @@
       "etc/portage/make.conf.extra",
       "etc/portage/make.conf.old",
       "var/db/repos/*",
-      "usr/src/*"
+      "usr/src/*",
+      "etc/ssh/ssh_host_*"
     ],
+    "sshd_first_values": {
+      "release": {"PermitEmptyPasswords": "no"},
+      "testkey": {"PermitEmptyPasswords": "no", "PermitRootLogin": "prohibit-password"}
+    },
     "owner_exceptions": ["home/gentoo", "home/gentoo/*", "var/spool/mail/gentoo"],
     "required_packages": [
       "app-admin/gentoo-live-installer", "app-misc/hwmonux", "app-portage/portagehub",
@@ -161,8 +168,10 @@
        "must_match": ["^VIDEO_CARDS="],
        "must_not_match": ["^MAKEOPTS=", "^NINJAOPTS=", "^EMERGE_DEFAULT_OPTS=", "^DISTDIR=", "^PKGDIR=", "^FEATURES=.*\\bbuildpkg\\b", "^ACCEPT_LICENSE=\"\\*\""],
        "why": "the builder's job counts, caches and licence wildcard must not leak onto somebody's PC"},
-      {"path": "etc/motd", "must_match": ["gentoo-rescue", "gentoo-installer"], "why": "first-time users need to know where repair is"},
-      {"path": "etc/issue", "must_match": ["gentoo-rescue"], "why": "first-time users need to know where repair is"},
+      {"path": "etc/ssh/sshd_config.d/10-gentoo-live.conf", "must_match": ["^PermitEmptyPasswords no$"], "must_not_match": ["^\\s*PermitRootLogin", "^\\s*PasswordAuthentication"],
+       "why": "sshd runs at boot on the live disc; the live user has an empty password, which must never work over SSH, and root login stays as on the official media"},
+      {"path": "etc/motd", "must_match": ["gentoo-rescue", "gentoo-installer", "gentoo-remote-access", "passwd root"], "why": "first-time users need to know where repair is and how to log in from another computer"},
+      {"path": "etc/issue", "must_match": ["gentoo-rescue", "gentoo-remote-access"], "why": "first-time users need to know where repair is and how to log in from another computer"},
       {"path": "etc/motd", "must_match": ["gentoo-installer-text"], "when_source": {"path": "pyproject.toml", "contains": "gentoo-installer-text ="},
        "why": "the text installer is advertised on a text console only when the package has it"},
       {"path": "etc/profile.d/20-gentoo-autostart.sh", "must_match": ["gentoo\\.autostart=rescue ", "gentoo\\.autostart=installer-text ", "sudo"],
@@ -177,13 +186,12 @@
       "root/.ssh/authorized_keys",
       "etc/gentoo-installer-vm-test",
       "etc/ssh/sshd_config.d/90-installer-vm-test.conf",
-      "etc/runlevels/*/sshd"
+      "etc/ssh/ssh_host_*"
     ],
     "testkey_required": [
       "root/.ssh/authorized_keys",
       "etc/gentoo-installer-vm-test",
-      "etc/ssh/sshd_config.d/90-installer-vm-test.conf",
-      "etc/runlevels/default/sshd"
+      "etc/ssh/sshd_config.d/90-installer-vm-test.conf"
     ]
   }
 }

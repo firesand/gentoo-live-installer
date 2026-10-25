@@ -141,7 +141,9 @@ prepare_portage() {
 }
 
 # A test ISO carries a temporary root SSH key for the VM harness. Its name, its volume
-# label and its login screens say so; scripts/verify-iso.py insists on all of it.
+# label and its login screens say so; scripts/verify-iso.py insists on all of it. sshd itself
+# is in livecd/rcadd of the spec on every flavour; the test drop-in 90-installer-vm-test.conf
+# sorts before the live image's own 9999999gentoo-livecd.conf and wins (sshd takes the first value).
 configure_test_access() {
 	local key="${GENTOO_TEST_SSH_PUBLIC_KEY:-}" banner file
 	[[ -n ${key} ]] || return 0
@@ -165,16 +167,6 @@ EOF
 		install -m 0644 "${BUILD_DIR}/${file}.banner" "${BUILD_DIR}/root_overlay/etc/${file}"
 		rm -f "${BUILD_DIR}/${file}.banner"
 	done
-	python3 - "${BUILD_DIR}/livecd-stage2.spec" <<'PY'
-import pathlib
-import sys
-path = pathlib.Path(sys.argv[1])
-text = path.read_text()
-needle = "\tgentoo-installerd|default\n"
-if needle not in text:
-    raise SystemExit("cannot find the live service list")
-path.write_text(text.replace(needle, needle + "\tsshd|default\n", 1))
-PY
 }
 
 fetch_and_verify_seed() {

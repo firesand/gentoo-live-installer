@@ -237,7 +237,7 @@ def test_every_overlay_file_is_covered_by_the_image_contract() -> None:
         "etc/modules-load.d/hwmonux.conf", "boot/memtest86plus/memtest64.bios", "boot/memtest86plus/memtest.efi64",
         "mnt/gentoo", "mnt/rescue", "home/gentoo", "usr/lib/modules", "usr/lib/firmware",
         "usr/bin/gentoo-installer-text", "usr/bin/gentoo-chroot", "usr/libexec/polkit-gnome-authentication-agent-1",
-        "usr/lib/grub/i386-pc", "usr/lib/grub/x86_64-efi",
+        "usr/lib/grub/i386-pc", "usr/lib/grub/x86_64-efi", "usr/bin/gentoo-remote-access",
     }
     for path in listed - package_provided:
         assert (OVERLAY / path).exists(), f"{path} is in the contract but neither in the overlay nor provided by a package"

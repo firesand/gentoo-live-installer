@@ -36,6 +36,7 @@ for command_path in \
 	/usr/bin/gentoo-installer \
 	/usr/bin/gentoo-installerd \
 	/usr/bin/hwmonux \
+	/usr/bin/gentoo-remote-access \
 	/usr/bin/portagehub \
 	/usr/libexec/portagehub-helper \
 	/usr/libexec/polkit-gnome-authentication-agent-1; do
@@ -89,6 +90,8 @@ grep -q '^[[:space:]]*event_activation[[:space:]]*=[[:space:]]*0' /etc/lvm/lvmlo
 	|| fail "/etc/lvm/lvmlocal.conf must disable event activation"
 grep -q '^AUTO -all$' /etc/mdadm.conf || fail "/etc/mdadm.conf must contain 'AUTO -all'"
 grep -q '^ACPI="no"$' /etc/conf.d/autoconfig || fail "/etc/conf.d/autoconfig must keep acpid off"
+[[ -x /etc/init.d/sshd ]] || fail "sshd is not installed"
+[[ -f /etc/ssh/sshd_config.d/10-gentoo-live.conf ]] || fail "the sshd drop-in that refuses empty passwords is missing"
 [[ -x /etc/init.d/chronyd ]] || fail "chronyd is not installed"
 [[ -f /etc/elogind/logind.conf.d/50-gentoo-live.conf ]] || fail "the logind lid/idle drop-in is missing"
 [[ -f /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/thunar-volman.xml ]] || fail "the thunar-volman defaults are missing"

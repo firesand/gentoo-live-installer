@@ -5,13 +5,17 @@
    Install in text mode ......  sudo gentoo-installer-text
    Repair a Gentoo system that does not start
                                 sudo gentoo-rescue  (finds, mounts and repairs)
+   Log in from another computer over SSH (sshd is already running)
+                                sudo gentoo-remote-access on
+                                or the Handbook's way: sudo passwd root,
+                                then ssh root@ADDRESS from the other computer
    Network ...................  nmtui             (text menu) or nmcli
    Hardware report ...........  sudo lshw -short ; sudo dmidecode -t system
    Disk health ...............  sudo smartctl -a /dev/sda
                                 sudo nvme smart-log /dev/nvme0
 
  You are the user "gentoo" (no password, sudo works). Nothing on your disks
- is changed until you start an installation or a repair. This disc is for
- 64-bit x86 PCs; Secure Boot has to be off (see SECURE-BOOT-OFF.txt).
- Browser for the handbook: links https://wiki.gentoo.org/wiki/Handbook
-
+ is changed until you start an installation or a repair. Nobody can log in
+ over SSH until a password is set on purpose. This disc is for 64-bit x86
+ PCs; Secure Boot has to be off (see SECURE-BOOT-OFF.txt).
+ Browser for the handbook: links https://wiki.gentoo.org/wiki/Handbook:AMD64

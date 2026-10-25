@@ -17,7 +17,10 @@ script opens the ISO read-only and checks what a user's PC will depend on:
   * image.squashfs: the required files and commands, every service in livecd/rcadd as a
     runlevel link plus init script, no builder-owned files (uid/gid 1000), a locked root
     account, no builder make.conf settings, and in a release no test-access artifacts;
-  * the installed package list, written to --packages-out.
+  * the installed package list, written to --packages-out;
+  * sshd (I9): in the default runlevel of every flavour, no host keys in the image, and the first
+    PermitEmptyPasswords of the sshd drop-ins in name order is `no` (a test image also needs
+    PermitRootLogin prohibit-password first).
 
 The rules live in iso/image-contract.json. The ISO is read with xorriso/isoinfo and
 rdsquashfs (squashfs-tools-ng); nothing is mounted. Exit status: 0 all checks passed,
@@ -603,6 +606,26 @@ def _command_paths(name: str) -> list[str]:
     return [f"usr/bin/{name}", f"usr/sbin/{name}", f"bin/{name}", f"sbin/{name}"]
 
 
+def sshd_first_value(entries: Mapping[str, Entry], read_file: Callable[[str], bytes], keyword: str) -> tuple[str | None, str]:
+    """(value, file) of the first active `keyword` line in the sshd drop-ins, read in name order.
+
+    sshd takes the first value of most keywords and reads /etc/ssh/sshd_config.d/*.conf in name
+    order (Gentoo's sshd_config has no active setting before its Include line). Lines after a
+    Match line belong to that block and are skipped. (None, "") when no drop-in sets it."""
+    prefix = "etc/ssh/sshd_config.d/"
+    names = sorted(p for p, e in entries.items() if p.startswith(prefix) and p.endswith(".conf") and e.kind == "file" and "/" not in p[len(prefix):])
+    for path in names:
+        for line in read_file("/" + path).decode(errors="replace").splitlines():
+            words = line.split("#", 1)[0].split()
+            if not words:
+                continue
+            if words[0].lower() == "match":
+                break
+            if words[0].lower() == keyword.lower() and len(words) > 1:
+                return words[1], path
+    return None, ""
+
+
 def check_squashfs(
     report: Report,
     entries: Mapping[str, Entry],
@@ -718,6 +741,22 @@ def check_squashfs(
         for pattern in rule.get("must_not_match", []):
             report.expect(not re.search(pattern, body, re.M), "squashfs.content", f"{path} !~ {pattern}", f"{path} contains {pattern!r}: {rule.get('why', '')}".strip())
 
+    # sshd runs on every flavour (I9). It must not accept an empty password (the live user has none),
+    # and the image must carry no host keys: each boot makes its own, so no two discs share a key.
+    for keyword, wanted in rules.get("sshd_first_values", {}).get(flavor, {}).items():
+        try:
+            value, where = sshd_first_value(entries, read_file, keyword)
+        except VerifyError as exc:
+            report.failed("squashfs.sshd", f"the sshd drop-ins cannot be read: {exc}")
+            continue
+        report.expect(
+            value is not None and value.lower() == wanted,
+            "squashfs.sshd",
+            f"{keyword} {wanted} ({where})",
+            f"the first {keyword} in /etc/ssh/sshd_config.d is {value if value is not None else 'not set'}"
+            + (f" ({where})" if where else "") + f", this {flavor} image needs {wanted}",
+        )
+
     # Packages.
     names = package_names(installed_packages(entries))
     for key, wanted in (("required_packages", True), ("forbidden_packages", False)):
@@ -777,9 +816,7 @@ def verify(
     spec = parse_spec((spec_path or workspace / "iso/specs/livecd-stage2.spec").read_text(encoding="utf-8"))
     expected_volid = flavor_volume_id(volume_id or pins["ISO_VOLID"], flavor)
     args = list(bootargs) if bootargs is not None else pins.get("ISO_BOOTARGS", "").split()
-    rcadd = spec_list(spec, "livecd/rcadd")
-    if flavor == "testkey" and not any(item.startswith("sshd|") for item in rcadd):
-        rcadd.append("sshd|default")  # added by the builder next to gentoo-installerd
+    rcadd = spec_list(spec, "livecd/rcadd")  # sshd is in the spec itself, on every flavour (I9)
 
     # A rendered spec must agree with the pins; the unrendered template holds tokens.
     spec_volid = spec.get("livecd/volid")

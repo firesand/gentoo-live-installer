@@ -215,6 +215,9 @@ def test_release_flavour_refuses_test_access_and_needs_a_locked_root() -> None:
     release_with_key = LISTING + "file root/.ssh/authorized_keys 0600 0 0\n"
     assert "flavor.release" in failed(squashfs_report(release_with_key, flavor="release", files=shadow))
     assert "flavor.release" not in failed(squashfs_report(LISTING.replace("etc/runlevels/default/sshd", "x/y"), flavor="release", files=shadow))
+    # I9: sshd itself is on every flavour now; only the test key, its drop-in and host keys are test access
+    assert "flavor.release" not in failed(squashfs_report(LISTING, flavor="release", files=shadow))
+    assert "flavor.release" in failed(squashfs_report(LISTING + "file etc/ssh/ssh_host_ed25519_key 0600 0 0\n", flavor="release", files=shadow))
     unlocked = {"/etc/shadow": "root::20000::::::\n"}
     assert "flavor.root_locked" in failed(squashfs_report(LISTING, flavor="release", files=unlocked))
     assert "flavor.root_locked" not in failed(squashfs_report(LISTING, flavor="release", files=shadow))
@@ -423,8 +426,6 @@ def image_entries(flavor: str, live_make_conf: str) -> dict[str, tuple[str, int,
         add(relative, mode=0o755 if os.access(file, os.X_OK) else 0o644, extra=file.read_text())
     spec = verify.parse_spec((ROOT / "iso/specs/livecd-stage2.spec").read_text())
     services = verify.spec_list(spec, "livecd/rcadd") + [f"{s}|{l}" for s, l in CONTRACT["squashfs"]["implicit_services"]]
-    if flavor == "testkey":
-        services.append("sshd|default")
     for item in services:
         service, _, level = item.partition("|")
         add(f"etc/init.d/{service}", mode=0o755, extra="#!/sbin/openrc-run\n")
@@ -454,7 +455,7 @@ def image_entries(flavor: str, live_make_conf: str) -> dict[str, tuple[str, int,
     if flavor == "testkey":
         add("root/.ssh/authorized_keys", mode=0o600, extra="ssh-ed25519 AAAA\n")
         add("etc/gentoo-installer-vm-test")
-        add("etc/ssh/sshd_config.d/90-installer-vm-test.conf")
+        add("etc/ssh/sshd_config.d/90-installer-vm-test.conf", extra="PermitRootLogin prohibit-password\nPasswordAuthentication no\n")
     return entries
 
 
@@ -588,3 +589,61 @@ def test_growth_over_the_previous_build_is_a_warning(tmp_path: Path, live_make_c
     assert "[WARN] iso.size" in grown.stdout and "1 warnings" in grown.stdout
     same = run(iso.stat().st_size)
     assert same.returncode == 0 and "[ok  ] iso.size" in same.stdout and "0 warnings" in same.stdout
+
+
+# --- I9: sshd on every flavour, no host keys, the first value in name order -------------------------
+
+SSH_LISTING = (
+    "dir etc/ssh 0755 0 0\ndir etc/ssh/sshd_config.d 0755 0 0\n"
+    "file etc/ssh/sshd_config.d/10-gentoo-live.conf 0644 0 0\n"
+    "file etc/ssh/sshd_config.d/9999999gentoo-livecd.conf 0644 0 0\n"
+    "file etc/ssh/sshd_config.d/9999999gentoo-pam.conf 0644 0 0\n"
+)
+SSH_FILES = {
+    "/etc/ssh/sshd_config.d/10-gentoo-live.conf": "# live\nPermitEmptyPasswords no\n",
+    "/etc/ssh/sshd_config.d/9999999gentoo-livecd.conf": "PermitRootLogin Yes\n",
+    "/etc/ssh/sshd_config.d/9999999gentoo-pam.conf": "UsePAM yes\nPasswordAuthentication no\n",
+}
+
+
+def sshd_failed(listing: str, files: dict[str, str], flavor: str = "release") -> bool:
+    shadow = {"/etc/shadow": "root:!:20000::::::\n"}
+    return "squashfs.sshd" in failed(squashfs_report(LISTING + listing, flavor=flavor, files={**shadow, **files}))
+
+
+def test_release_sshd_refuses_empty_passwords_first() -> None:
+    assert not sshd_failed(SSH_LISTING, SSH_FILES)
+    # a drop-in that sorts before and allows empty passwords wins over ours
+    early = SSH_LISTING + "file etc/ssh/sshd_config.d/05-open.conf 0644 0 0\n"
+    assert sshd_failed(early, {**SSH_FILES, "/etc/ssh/sshd_config.d/05-open.conf": "PermitEmptyPasswords yes\n"})
+    # no drop-in sets it at all
+    assert sshd_failed(SSH_LISTING, {**SSH_FILES, "/etc/ssh/sshd_config.d/10-gentoo-live.conf": "# nothing\n"})
+    # a setting inside a Match block is not the global one
+    assert sshd_failed(SSH_LISTING, {**SSH_FILES, "/etc/ssh/sshd_config.d/10-gentoo-live.conf": "Match User x\nPermitEmptyPasswords no\n"})
+    assert sshd_failed("", {})  # no drop-in directory in the image
+
+
+def test_testkey_sshd_needs_the_key_only_root_login_first() -> None:
+    files = {**SSH_FILES, "/etc/ssh/sshd_config.d/90-installer-vm-test.conf": "PermitRootLogin prohibit-password\n"}
+    listing = SSH_LISTING + "file etc/ssh/sshd_config.d/90-installer-vm-test.conf 0644 0 0\n"
+    assert not sshd_failed(listing, files, "testkey")
+    # without the test drop-in the live package's PermitRootLogin Yes would be the first value
+    assert sshd_failed(SSH_LISTING, SSH_FILES, "testkey")
+
+
+def test_sshd_first_value_reads_in_name_order_and_ignores_comments() -> None:
+    entries = verify.parse_description(SSH_LISTING + "file etc/ssh/sshd_config.d/00-a.conf 0644 0 0\n")
+    files = {**SSH_FILES, "/etc/ssh/sshd_config.d/00-a.conf": "# PermitEmptyPasswords yes\n  permitemptypasswords no # why\n"}
+    value, where = verify.sshd_first_value(entries, lambda path: files[path].encode(), "PermitEmptyPasswords")
+    assert (value, where) == ("no", "etc/ssh/sshd_config.d/00-a.conf")
+    assert verify.sshd_first_value(entries, lambda path: files[path].encode(), "PermitRootLogin")[0] == "Yes"
+
+
+def test_the_contract_requires_sshd_everywhere_and_no_host_keys() -> None:
+    contract = json.loads((ROOT / "iso/image-contract.json").read_text())
+    assert not [p for p in contract["flavor"]["testkey_required"] if p.endswith("/sshd")]
+    assert "etc/ssh/ssh_host_*" in contract["squashfs"]["forbidden"]
+    assert contract["squashfs"]["sshd_first_values"]["release"] == {"PermitEmptyPasswords": "no"}
+    assert "sshd|default" in verify.spec_list(verify.parse_spec((ROOT / "iso/specs/livecd-stage2.spec").read_text()), "livecd/rcadd")
+    report = squashfs_report(LISTING + SSH_LISTING + "file etc/ssh/ssh_host_rsa_key.pub 0644 0 0\n", files=SSH_FILES)
+    assert "squashfs.forbidden" in failed(report)

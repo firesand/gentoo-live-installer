@@ -238,7 +238,8 @@ def test_test_access_is_configured_and_announced(sandbox) -> None:
         text = (build / "etc" / name).read_text()
         assert "TEST BUILD" in text.splitlines()[1] and text.endswith(f"{name} text\n")
     spec = (sandbox.dirs["build"] / "livecd-stage2.spec").read_text()
-    assert "\tgentoo-installerd|default\n\tsshd|default\n" in spec
+    # I9: sshd is in the spec of every flavour; the test flavour must not add it a second time
+    assert "sshd" not in spec
 
 
 def test_without_a_key_nothing_changes(sandbox) -> None:
@@ -256,10 +257,11 @@ def test_bad_test_keys_stop_the_build(sandbox, key: str) -> None:
     assert result.returncode != 0 and "one public key line" in result.stderr
 
 
-def test_the_rcadd_needle_is_in_the_real_spec(pins: dict[str, str]) -> None:
-    """configure_test_access inserts sshd after this exact line of the rendered spec."""
+def test_sshd_is_started_once_by_the_real_spec_on_every_flavour(pins: dict[str, str]) -> None:
+    """I9: sshd|default is in the release spec itself; configure_test_access no longer edits the spec."""
     text = (ROOT / "iso/specs/livecd-stage2.spec").read_text()
-    assert "\tgentoo-installerd|default\n" in text
+    assert text.count("\tsshd|default\n") == 1
+    assert "livecd-stage2.spec" not in (ROOT / "iso/builder-entrypoint.sh").read_text().split("configure_test_access() {")[1].split("\n}\n")[0]
 
 
 # --- I10: the overlay is root-owned and has sane modes ------------------------------------------
