@@ -609,7 +609,7 @@ class AccountsPage(Page):
         self._extra_groups = extra
 
     def _chosen_groups(self) -> list[str]:
-        chosen = {group for group, check in self.group_checks.items() if check.isChecked() and (group != "cron" or self.cron_installed())}
+        chosen = {group for group, check in self.group_checks.items() if check.isChecked() and (group != "cron" or self.cron_installed())} | {"wheel"}  # wheel is locked on
         kept = [group for group in self.manifest.accounts.groups if group in chosen or group in self._extra_groups]  # the order of the loaded list stays
         return list(dict.fromkeys([*kept, *(group for group, _, _ in GROUPS if group in chosen)]))
 
@@ -706,7 +706,7 @@ class AccountsPage(Page):
         if accounts.root_locked() and "wheel" not in accounts.groups:
             return False, "Turning root login off needs an administrator account in the wheel group."
         sections = self.manifest.validate_sections()
-        errors = sections["accounts"] + sections["locale"]
+        errors = sections["accounts"] + sections["locale"] + [e for e in sections["system"] if e.startswith(("Extra hosts", "The domain name"))]
         if not errors:
             from gentoo_installerd.configure_system import account_problems  # lazy: the daemon's own list of choices it cannot carry out
 

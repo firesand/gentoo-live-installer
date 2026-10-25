@@ -14,7 +14,7 @@ import copy
 from dataclasses import dataclass
 from typing import Callable, Sequence
 
-from .. import blockdev, hardware, keymaps, layout, recommend
+from .. import account_text, blockdev, hardware, keymaps, layout, recommend
 from ..daemon_client import DaemonState
 from ..diagnostics import redact_url_userinfo
 from ..hardware import NicInfo
@@ -705,7 +705,7 @@ class Wizard:
     def _ask_hostname(self) -> bool:
         accounts = self.manifest.accounts
         accounts.hostname = self.console.ask(
-            "Computer name (hostname)", default=accounts.hostname, help="The name of this computer on the network. Letters, digits and hyphens only.",
+            "Computer name (hostname)", default=accounts.hostname, help=account_text.HOSTNAME_HELP,
             validate=lambda value: first_problem(field_errors("accounts", lambda m: setattr(m.accounts, "hostname", value))),
         )
         return True
@@ -719,7 +719,7 @@ class Wizard:
             return first_problem(field_errors("accounts", lambda m: setattr(m.accounts, "username", value)))
 
         accounts.username = self.console.ask("Your user name", default=accounts.username, validate=check,
-                                             help="The name you log in with. Lowercase letters, digits, - and _ ; it must start with a letter.")
+                                             help=account_text.USERNAME_HELP)
         return True
 
     def _ask_password(self, prompt: str, current: str, label: str) -> str:
@@ -757,14 +757,10 @@ class Wizard:
             self.root_mode = "off"
         elif accounts.root_password and accounts.root_password != accounts.password:
             self.root_mode = "separate"
+        tool = accounts.privilege
         choice = self.console.menu(
-            [
-                Option("Use the same password for the administrator (root) account"),
-                Option("Choose a separate password for root"),
-                Option("Turn the root login off", detail=f"You administer the system with sudo from the account {accounts.username}."),
-            ],
-            title="How should the administrator (root) account work?", default=modes.index(self.root_mode),
-            help="root is the all-powerful administrator account. With the third choice nobody can log in as root directly; use sudo.",
+            [Option(*account_text.root_choice_text(key, tool)) for key in modes],  # the same sentences as the graphical installer
+            title=account_text.ROOT_TITLE, default=modes.index(self.root_mode), help=account_text.ROOT_HELP,
         )
         self.root_mode = modes[choice.index]
         return True
