@@ -65,14 +65,8 @@ REASON_RE = re.compile(
 
 
 def parse_setting(text: str) -> tuple[str, Any]:
-    """'section.field=value' with true/false and integers converted, as lint-plan's Cell.overrides expects."""
-    key, separator, raw = text.partition("=")
-    if not separator or key.count(".") != 1:
-        raise ValueError(f"--set needs SECTION.FIELD=VALUE, not {text!r}")
-    value: Any = {"true": True, "false": False}.get(raw.lower(), raw)
-    if isinstance(value, str) and re.fullmatch(r"-?[0-9]+", value):
-        value = int(value)
-    return key, value
+    """'section.field=value' with true/false and integers converted (lint-plan's own parser: one source)."""
+    return load_lint().parse_setting(text)
 
 
 def load_lint() -> Any:
@@ -86,14 +80,8 @@ def load_lint() -> Any:
 
 
 def hardware_plan(fixture: str, manifest: Any) -> Any:
-    """The hardware plan the installer would build on the fixture machine."""
-    from gentoo_installer import hardware
-    from gentoo_installerd import hwplan
-
-    root = ROOT / "tests" / "hardware" / "fixtures" / fixture
-    if not root.is_dir():
-        raise SystemExit(f"No hardware fixture {fixture!r} in tests/hardware/fixtures")
-    return hwplan.plan(manifest, hardware.probe(root).to_dict())
+    """The hardware plan the installer would build on the fixture machine (lint-plan's own function)."""
+    return load_lint().hardware_plan(fixture, manifest)
 
 
 def docker(*args: str, timeout: float | None = None, capture: bool = True) -> subprocess.CompletedProcess[str]:
@@ -172,8 +160,9 @@ def run_cell(lint: Any, cell: Any, args: argparse.Namespace, images: dict[str, s
     result = CellResult(cell.name, image, binhost=manifest.portage.binhost and not args.no_binhost, hardware=args.hardware or "")
     scratch = out / "cells" / cell.name
     try:
-        plan = hardware_plan(args.hardware, manifest) if args.hardware else None
-        rendered = lint.render_cell(cell, CONTAINER_TREE, out / "render", plan)
+        fixture = args.hardware or cell.hardware
+        plan = hardware_plan(fixture, manifest) if fixture else None
+        rendered = lint.render_cell(cell, CONTAINER_TREE, out / "render", plan, [(lint.overlay_name(path), Path(f"/overlays/{index}")) for index, path in enumerate(args.overlay)])
     except Exception as exc:  # noqa: BLE001 - a broken cell must not stop the others
         result.error = f"Could not render the installer configuration: {type(exc).__name__}: {exc}"
         return result
@@ -196,6 +185,8 @@ def run_cell(lint: Any, cell: Any, args: argparse.Namespace, images: dict[str, s
         # The rendered overlay and companion bundle live below the report and the repository.
         "--volume", f"{out}:{out}:ro", "--volume", f"{ROOT}:{ROOT}:ro",
     ]
+    for index, overlay in enumerate(args.overlay):  # lint-plan's repos.conf names them /overlays/N: the same paths inside the container
+        docker_args += ["--volume", f"{overlay.resolve()}:/overlays/{index}:ro"]
     if not result.binhost:
         docker_args += ["--network", "none"]
     docker_args += [image, *command]
@@ -222,6 +213,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cells", default="default", help="'default', 'all' or comma-separated cell names (see scripts/lint-plan.py --list)")
     parser.add_argument("--tree", type=Path, default=Path("/var/db/repos/gentoo"), help="Gentoo tree to resolve against (read-only)")
     parser.add_argument("--hardware", default="", help="build the hardware plan from tests/hardware/fixtures/NAME")
+    parser.add_argument("--overlay", action="append", default=[], type=Path, metavar="DIR",
+                        help="add this repository (edorp, GURU) next to ::gentoo, mounted read-only into the container; repeatable")
     parser.add_argument("--no-binhost", action="store_true", help="resolve source-only even when the manifest uses the binary host")
     parser.add_argument("--set", action="append", default=[], metavar="SECTION.FIELD=VALUE",
                         help="change a manifest field in every cell, e.g. hardware.gpu_driver=nvidia (true/false/numbers are converted)")

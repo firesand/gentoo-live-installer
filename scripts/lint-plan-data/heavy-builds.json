@@ -1,0 +1,20 @@
+{
+  "source": "rough build times on 8 threads from the Gentoo wiki and the build logs of this project; the point is the order of magnitude, not the number",
+  "hours": {
+    "dev-qt/qtwebengine": 3.0,
+    "www-client/firefox": 3.0,
+    "www-client/chromium": 6.0,
+    "net-libs/webkit-gtk": 3.0,
+    "app-office/libreoffice": 4.0,
+    "dev-lang/rust": 2.0,
+    "sys-devel/llvm": 1.5,
+    "llvm-core/llvm": 1.5,
+    "llvm-core/clang": 1.5,
+    "sys-devel/gcc": 3.0,
+    "dev-qt/qtdeclarative": 1.0,
+    "app-emulation/wine-staging": 1.5,
+    "app-emulation/wine-vanilla": 1.5,
+    "dev-python/pyside6": 1.5
+  },
+  "threshold": "packages that take at least an hour"
+}

@@ -1,0 +1,12 @@
+{
+  "source": "build/plan/research/desktops.md (simulated emerge -p totals per desktop in the stage3 containers); pairs are [OpenRC, systemd]",
+  "note": "Only the desktop's own atoms are counted (the meta package, X or Wayland, the display manager), with the stage3's packages treated as installed. Cinnamon is measured on the desktop/gnome profile. Sway and i3 were not measured.",
+  "counts": {
+    "kde": [524, 512],
+    "gnome": [578, 579],
+    "xfce": [343, 334],
+    "cinnamon": [485, 474],
+    "mate": [422, 409],
+    "lxqt": [392, 371]
+  }
+}
