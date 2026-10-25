@@ -62,7 +62,7 @@ def test_an_explicit_choice_beats_the_locale():
 
 def test_orca_and_the_speech_voice_are_installed_when_ticked_and_not_otherwise():
     on = plan_for(options={"accessibility": True})
-    assert {"app-accessibility/orca", "app-accessibility/speech-dispatcher", "app-accessibility/espeak-ng", "dev-libs/at-spi2-core"} <= set(on.optional_atoms)
+    assert {"app-accessibility/orca", "app-accessibility/speech-dispatcher", "app-accessibility/espeak-ng", "app-accessibility/at-spi2-core"} <= set(on.optional_atoms)
     assert on.package_use["app-accessibility/speech-dispatcher"] == ["pipewire"] and any("Orca" in line for line in on.first_steps)
     assert "*/*" not in on.package_use and "USE" not in on.make_conf                  # never the global accessibility flag
     off = plan_for()

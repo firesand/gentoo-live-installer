@@ -44,8 +44,10 @@ def make_conf(m, result) -> str:
 
 def case_for(case_id: str, m, machine) -> dict:
     result = hwplan.plan(m, machine)
-    return {"id": case_id, "profile": m.system.profile, "make_conf": make_conf(m, result), "package_use": result.package_use,
-            "package_license": result.package_license, "package_mask": result.package_mask, "atoms": result.all_atoms(), "plan": result.to_dict()}
+    overlay = {"sys-power/asusctl", "sys-power/supergfxctl", "gnome-extra/iio-sensor-proxy"}      # edorp and GURU: see test_tree_evidence_w5.py
+    return {"id": case_id, "profile": m.system.profile, "make_conf": make_conf(m, result), "package_use": {k: v for k, v in result.package_use.items() if k not in overlay},
+            "package_license": result.package_license, "package_mask": result.package_mask, "package_keywords": result.package_keywords,
+            "atoms": [atom for atom in result.all_atoms() if atom not in overlay], "plan": result.to_dict()}
 
 
 def uefi_32_machine() -> dict:
@@ -70,6 +72,13 @@ def cases() -> list[dict]:
         "nvidia-580-turing-gnome": (manifest(system={"desktop": "gnome", "kernel": "gentoo-kernel", "profile": "default/linux/amd64/23.0/desktop/gnome"},
                                              hardware={"gpu_driver": "nvidia", "nvidia_license_accepted": True, "nvidia_branch": "580"}),
                                     profile(gpus=(gpu("nvidia", "turing+"),))),
+        "devices-and-addons": (manifest(hardware={"devices": {"openrazer": True, "razer_frontend": True, "openrgb": True, "game_rules": True, "solaar": True, "bolt": True, "wacom": True,
+                                                              "fingerprint": True, "asus_tools": True, "iio_sensors": True, "thinkfan": True}, "fwupd": True,
+                                                  "gpu_driver": "nvidia", "nvidia_license_accepted": True, "nvidia_extras": ["vaapi", "nvtop", "persistenced", "cuda"],
+                                                  "nvidia_cuda_license_accepted": True},
+                                         options={"accessibility": True, "input_method": "fcitx5"}), fixture_dict("asus-rog-laptop")),
+        "devices-xfce-systemd": (systemd(system={"desktop": "xfce"}, hardware={"devices": {"openrazer": True, "razer_frontend": True, "wacom": True, "bolt": True}}),
+                                 fixture_dict("razer-blade-laptop")),
         "gcn-source": (manifest(portage={"binhost": False}), amd),
         "terascale-source": (manifest(portage={"binhost": False}), profile(vendor="amd", gpus=(gpu("amd", "terascale"),))),
         "r300-source": (manifest(portage={"binhost": False}), profile(vendor="amd", gpus=(gpu("amd", "r300"),))),
@@ -108,8 +117,10 @@ def test_every_atom_use_flag_and_licence_resolves_against_the_pinned_tree(tmp_pa
             if outcome["visible"] is None:
                 problems.append(f"{request['id']}: {atom} is not installable under ACCEPT_LICENSE=@FREE and stable keywords: {outcome['why']}")
                 continue
-            if "amd64" not in outcome["keywords"].split():
-                problems.append(f"{request['id']}: {atom}-{outcome['visible']} is not stable on amd64")
+            package = atom.split("/")[1]
+            exact = f"={atom}-{outcome['visible'].removeprefix(package + '-')}"
+            if "amd64" not in outcome["keywords"].split() and not ("~amd64" in outcome["keywords"].split() and exact in request["package_keywords"]):
+                problems.append(f"{request['id']}: {atom}-{outcome['visible']} is not stable on amd64 and has no exact-version keyword")
             if outcome["unknown_flags"]:
                 problems.append(f"{request['id']}: {atom} has no USE flag(s) {outcome['unknown_flags']}")
             if not outcome["required_use_ok"]:
@@ -189,6 +200,8 @@ SERVICE_EVIDENCE = {
     "virtualbox-guest-additions": ("app-emulation/virtualbox-guest-additions", r"newinitd\s+.*\$\{PN\}"),
     "cronie": ("sys-process/cronie", r'newinitd\s+"[^"]*"\s+\$\{PN\}'),
     "zram-init": ("sys-block/zram-init", r"rc-update add zram-init default"),
+    "fwupd": ("sys-apps/fwupd", r"newinitd\s+.*\$\{PN\}"),
+    "boltd": ("sys-apps/bolt", r"newinitd\s+\S+\s+boltd"),
     # systemd units that the ebuild installs by name
     "vmtoolsd": ("app-emulation/open-vm-tools", r"vmtoolsd\.service"),
     "vgauthd": ("app-emulation/open-vm-tools", r"vgauthd\.service"),
@@ -206,7 +219,7 @@ def test_service_names_exist_in_the_packages_ebuilds(service):
 
 @needs_tree
 def test_every_service_the_planner_emits_has_evidence_or_is_a_known_upstream_unit():
-    upstream_units = {"fstrim.timer", "spice-vdagentd.socket", "qemu-guest-agent", "power-profiles-daemon", "switcheroo-control", "thermald", "tlp", "tlp-pd",
+    upstream_units = {"nvidia-persistenced", "iio-sensor-proxy", "asusd", "asus-shutdown", "supergfxd", "fstrim.timer", "spice-vdagentd.socket", "qemu-guest-agent", "power-profiles-daemon", "switcheroo-control", "thermald", "tlp", "tlp-pd",
                       "virtualbox-guest-additions", "cronie", "cups", "cupsd"}
     emitted: set[str] = set()
     for request in cases():
@@ -229,4 +242,24 @@ def test_licence_names_the_plan_can_emit_are_these_three():
         for scenario in SCENARIOS:
             for items in hwplan.plan(scenario_manifest(scenario, machine), machine).package_license.values():
                 emitted |= set(items)
-    assert emitted <= {"linux-fw-redistributable", "intel-ucode", "NVIDIA-2025"}
+    assert emitted <= {"linux-fw-redistributable", "intel-ucode", "NVIDIA-2025", "NVIDIA-CUDA"}
+
+
+# Every non-free licence a plan can need, by atom: a plan that installs the atom must carry the licence line itself (ACCEPT_LICENSE stays @FREE).
+NONFREE = {"sys-kernel/linux-firmware": "linux-fw-redistributable", "sys-firmware/intel-microcode": "intel-ucode", data.NVIDIA_ATOM: "NVIDIA-2025",
+           "dev-util/nvidia-cuda-toolkit": "NVIDIA-CUDA"}
+
+
+def test_every_nonfree_package_in_a_plan_has_its_licence_line():
+    checked = 0
+    for name in FIXTURE_NAMES:
+        machine = fixture_dict(name)
+        for scenario in SCENARIOS:
+            m = scenario_manifest(scenario, machine)
+            m.hardware.nvidia_extras, m.hardware.nvidia_cuda_license_accepted = ["cuda"], True
+            result = hwplan.plan(m, machine)
+            for atom, licence in NONFREE.items():
+                if atom in result.all_atoms():
+                    checked += 1
+                    assert licence in result.package_license.get(atom, []), (name, scenario, atom)
+    assert checked > 20

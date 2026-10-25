@@ -21,7 +21,7 @@ ENGINES = {
 }
 ENV_FILE = "/etc/env.d/90installer-input-method"
 GTK_DESKTOPS_WITHOUT_WAYLAND_INPUT = ("xfce", "i3", "lxqt", "mate", "cinnamon")  # X11 sessions: the GTK module is what lets GTK programs reach the input method
-ACCESSIBILITY_ATOMS = ("app-accessibility/orca", "app-accessibility/speech-dispatcher", "app-accessibility/espeak-ng", "dev-libs/at-spi2-core")
+ACCESSIBILITY_ATOMS = ("app-accessibility/orca", "app-accessibility/speech-dispatcher", "app-accessibility/espeak-ng", "app-accessibility/at-spi2-core")
 
 
 def input_method_for(manifest: InstallManifest) -> str:
