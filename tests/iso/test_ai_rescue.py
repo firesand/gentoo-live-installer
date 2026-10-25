@@ -45,6 +45,27 @@ def test_ttyd_needs_no_keyword_while_the_pinned_tree_has_a_stable_version() -> N
     assert "ttyd" not in keywords
 
 
+def test_cifs_utils_is_built_without_kerberos_and_python() -> None:
+    """mount.cifs copies data to a share; the default ads flag would add krb5 and keyutils to a build nobody can test here."""
+    use = (ROOT / "iso/portage/package.use/live-installer").read_text()
+    match = re.search(r"^net-fs/cifs-utils\s+(.*)$", use, re.M)
+    assert match and {"-ads", "-python"} <= set(match.group(1).split())
+
+
+def test_the_docs_describe_the_entry_the_account_and_the_approver() -> None:
+    text = (ROOT / "docs/ISO.md").read_text()
+    for needle in ("AI rescue (text console)", "gentoo.autostart=ai-rescue", "rescue-ai", "gentoo-rescue-approver", "ptrace_scope", "00-gentoo-rescue-ai.rules",
+                   "kerncache", "claude-code", "ttyd"):
+        assert needle in text, needle
+
+
+def test_the_disc_readme_explains_how_to_write_the_stick() -> None:
+    text = (ROOT / "iso/README-live.txt").read_text()
+    assert text.isascii()
+    for needle in ("dd if=", "caligula", "Rufus", "DD Image", "balenaEtcher", "AI rescue (text console)", "gentoo-rescue-do", "docs/RESCUE-AI.md"):
+        assert needle in text, needle
+
+
 def test_the_console_hint_names_the_ai_tool_only_when_the_disc_has_it(tmp_path) -> None:
     import os
     import subprocess

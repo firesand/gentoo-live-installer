@@ -29,3 +29,6 @@ x11-themes/arc-theme xfce -gtk2
 # The AI rescue stick (wave 6): ttyd shares the rescue session to a phone over TLS, so it needs
 # libwebsockets with libuv and OpenSSL support (the ttyd ebuild requires [libuv,ssl]).
 net-libs/libwebsockets libuv ssl
+# mount.cifs is there to copy data off a broken PC to a network share. Kerberos mounts (ads: cifs.upcall,
+# krb5, keyutils) and the Python helpers are not needed for that and would add packages to a build.
+net-fs/cifs-utils -ads -python
