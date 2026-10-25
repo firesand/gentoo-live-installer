@@ -482,6 +482,6 @@ The same disc has one more boot entry, **AI rescue (text console)**. It starts a
 
 * You do not need it. The normal repair tool (section 9) needs no account, no network and no AI, and it is the better choice when your disk holds secrets you must not send to a cloud service: **whatever the assistant reads is sent to its maker's servers.**
 * The assistants are not on the disc. You download them the first time (`gentoo-rescue-agents install`), at a fixed version with a checked checksum, and log in with your own account by scanning a QR code with your phone (`gentoo-rescue-login`).
-* Your system is mounted read-only at `/mnt/gentoo` (`gentoo-rescue-mount`). The assistant runs as an ordinary user with no way to root. To run a command as root it asks, and **you type a password on the PC's own keyboard, on a separate console, for that one command.**
-* `gentoo-rescue-share` shows the session in your phone's browser. It is encrypted, needs a one-time password and accepts one client; the phone can never approve a command.
+* Your system is mounted read-only at `/mnt/gentoo` (`gentoo-rescue-mount`). The assistant runs as an ordinary user with no way to root. To run a command as root it asks, and **you type the password of that boot on the PC's own keyboard, on a separate console, for that one command.**
+* `gentoo-rescue-share` shows the session in your phone's browser. It is encrypted, needs a password that is new for every share, and accepts one client at a time; the phone can never approve a command.
 * Read the whole page before you use it: [RESCUE-AI.md](RESCUE-AI.md). It explains the risks, the approval, Claude Code's terms, and what has not been tested on real hardware (none of it has run on a real PC yet).

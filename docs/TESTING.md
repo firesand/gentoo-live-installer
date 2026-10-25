@@ -692,7 +692,7 @@ The user-facing description is [RESCUE-AI.md](RESCUE-AI.md). This section is the
 
 1. Boot the written stick (written with `dd`, then once with caligula, Etcher or Rufus in DD mode) in BIOS and in UEFI mode, with Secure Boot off.
 2. Choose *AI rescue (text console)*. The approval password is shown on the first console. The approval console exists and `Alt+F9` (or the named console) shows it.
-3. `gentoo-rescue-agents install claude` (and codex, opencode) on a real network. Compare the sizes with the table on the disc.
+3. `gentoo-rescue-agents install claude` (and codex, opencode) on a real network. Compare the sizes and checksums with `data/pins.json` of the `gentoo_rescue_ai` package (about 292 MB, 115 MB and 80 MB).
 4. `gentoo-rescue-login` for each assistant: the QR code is readable on the PC's real console font, the phone login works, and `claude` itself takes the code.
 5. Mount a real broken Gentoo system (also an encrypted one) with `gentoo-rescue-mount`. It is read-only.
 6. In the assistant's pane, try to read `/dev/tty9`, to `chvt 9`, and to inject keystrokes into the approval console. All must fail.
