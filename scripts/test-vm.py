@@ -1114,10 +1114,7 @@ def desktop_probe_plan(manifest: InstallManifest) -> list[tuple[str, str, Callab
     if manifest.system.desktop in EXTRA_DESKTOP_PACKAGES:
         category, package = EXTRA_DESKTOP_PACKAGES[manifest.system.desktop]
         installed = f"ls -d /var/db/pkg/{category}/{package}-[0-9]*"
-        return [("desktop", installed, lambda code, output: parse_probe_result("desktop", code, output)),
-                ("desktop-session", vm_session.desktop_session_command(manifest.system.init),
-                 lambda code, output: vm_session.parse_desktop_session_probe(code, output, manifest.system.desktop, manifest.system.init))] \
-            + audio_probe_plan(manifest)
+        return [("desktop", installed, lambda code, output: parse_probe_result("desktop", code, output))]
     if manifest.system.desktop not in DESKTOP_PACKAGES:
         return []
     category, package, manager = DESKTOP_PACKAGES[manifest.system.desktop]
@@ -1127,16 +1124,18 @@ def desktop_probe_plan(manifest: InstallManifest) -> list[tuple[str, str, Callab
         enabled = f"test -e /etc/runlevels/default/display-manager && grep -qxF {expected} /etc/conf.d/display-manager"
     else:
         enabled = f"systemctl is-enabled {manager}.service"
-    return [("desktop", f"{installed} && {enabled}", lambda code, output: parse_probe_result("desktop", code, output)),
-            ("desktop-session", vm_session.desktop_session_command(manifest.system.init),
-             lambda code, output: vm_session.parse_desktop_session_probe(code, output, manifest.system.desktop, manifest.system.init))] + audio_probe_plan(manifest)
+    return [("desktop", f"{installed} && {enabled}", lambda code, output: parse_probe_result("desktop", code, output))]
 
 
-def audio_probe_plan(manifest: InstallManifest) -> list[tuple[str, str, Callable[[int, str], ProbeResult]]]:
-    """pactl info in a login session: PipeWire's PulseAudio server (only when the manifest installs PipeWire)."""
-    if not manifest.options.pipewire:
+def session_probe_plan(manifest: InstallManifest) -> list[tuple[str, str, Callable[[int, str], ProbeResult]]]:
+    """The graphical session of any desktop but minimal: display manager, greeter, session file; and pactl info when PipeWire is installed (Wave 5, H04)."""
+    desktop, init = manifest.system.desktop, manifest.system.init
+    if desktop not in vm_session.DESKTOPS:
         return []
-    return [("audio-pactl", vm_session.pactl_command(manifest.system.init), vm_session.parse_pactl_probe)]
+    plan = [("desktop-session", vm_session.desktop_session_command(init), lambda code, output: vm_session.parse_desktop_session_probe(code, output, desktop, init))]
+    if manifest.options.pipewire:
+        plan.append(("audio-pactl", vm_session.pactl_command(init), vm_session.parse_pactl_probe))
+    return plan
 
 
 def parse_static_network_probe(returncode: int, output: str, expected: Mapping[str, object]) -> ProbeResult:
@@ -2371,6 +2370,7 @@ class ScenarioRunner:
         manifest = InstallManifest.load(manifest_path)
         probes.extend(companion_probe_plan(manifest))
         probes.extend(desktop_probe_plan(manifest))
+        probes.extend(session_probe_plan(manifest))
         static_probe = static_network_probe(manifest)
         if static_probe is not None:
             command, parser = static_probe

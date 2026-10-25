@@ -78,15 +78,17 @@ def test_every_guided_desktop_has_a_package_and_a_scenario_per_init():
             manifest = vm.build_manifest(scenario, PUBLIC_KEY, "none")
             assert manifest.system.desktop == desktop and manifest.options.pipewire and manifest.system.profile == ""
             assert ("/systemd" in manifest.effective_profile()) == (init == "systemd")
-            names = [probe[0] for probe in vm.desktop_probe_plan(manifest)]
-            assert names == ["desktop", "desktop-session", "audio-pactl"]
+            assert [probe[0] for probe in vm.desktop_probe_plan(manifest)] == ["desktop"]
+            assert [probe[0] for probe in vm.session_probe_plan(manifest)] == ["desktop-session", "audio-pactl"]
 
 
 def test_the_old_desktops_keep_their_package_probe_and_gain_the_session_probes():
     manifest = vm.build_manifest(vm.SCENARIO_MAP["desktop-kde-openrc"], PUBLIC_KEY, "none")
     plan = {probe[0]: probe for probe in vm.desktop_probe_plan(manifest)}
-    assert "plasma-meta" in plan["desktop"][1] and "DISPLAYMANAGER" in plan["desktop"][1]
-    assert vm.desktop_probe_plan(vm.build_manifest(vm.SCENARIO_MAP["openrc"], PUBLIC_KEY)) == []
+    assert list(plan) == ["desktop"] and "plasma-meta" in plan["desktop"][1] and "DISPLAYMANAGER" in plan["desktop"][1]
+    assert [probe[0] for probe in vm.session_probe_plan(manifest)] == ["desktop-session", "audio-pactl"]
+    minimal = vm.build_manifest(vm.SCENARIO_MAP["openrc"], PUBLIC_KEY)
+    assert vm.desktop_probe_plan(minimal) == [] and vm.session_probe_plan(minimal) == []
 
 
 # --- the Safe graphics entry --------------------------------------------------------------------------------------------------
