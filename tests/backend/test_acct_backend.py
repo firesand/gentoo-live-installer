@@ -384,3 +384,9 @@ def test_dry_run_writes_nothing_for_the_new_steps(tmp_path):
 def test_preflight_lists_the_choice_problems(tmp_path):
     m = target_manifest(accounts={"ssh_root_login": True})
     assert any("Root login over SSH" in p for p in live_input_problems(m, root=tmp_path))
+
+
+def test_cron_daemons_without_a_service_script_are_refused_not_ignored():
+    assert any("bcron is not available yet" in p for p in choice_problems(target_manifest(options={"cron": "bcron"})))
+    assert any("fcron is not available with systemd" in p for p in choice_problems(target_manifest(options={"cron": "fcron"}, system={"init": "systemd", "stage_variant": "amd64-systemd"})))
+    assert choice_problems(target_manifest(options={"cron": "fcron"})) == []

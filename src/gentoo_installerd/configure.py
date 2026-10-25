@@ -137,7 +137,10 @@ from .configure_system import (  # noqa: F401
 from .configure_accounts import (  # noqa: F401
     AccountsMixin,
 )
+from .configure_gaming import (  # noqa: F401
+    GamingMixin,
+)
 
 
-class Configurer(FstabMixin, NetworkMixin, DesktopMixin, PackagesMixin, HardwareMixin, PortageMixin, BootMixin, SystemMixin, AccountsMixin):
+class Configurer(FstabMixin, NetworkMixin, DesktopMixin, GamingMixin, PackagesMixin, HardwareMixin, PortageMixin, BootMixin, SystemMixin, AccountsMixin):
     """The sum of the per-domain mixins; ConfigurerBase holds the shared plumbing."""

@@ -115,6 +115,10 @@ def choice_problems(manifest: InstallManifest) -> list[str]:
             problems.append("Turning root login off needs an administrator account: the user must be in the wheel group")
         if accounts.privilege == "su":
             problems.append("su needs the root password, so it cannot be the administrator tool when root login is turned off: choose sudo, doas or run0")
+    if options.cron == "bcron":
+        problems.append("bcron is not available yet: Gentoo's bcron package has no service script. Choose cronie, dcron or none")
+    if options.cron == "fcron" and system.init == "systemd":
+        problems.append("fcron is not available with systemd: it has no systemd service. Choose cronie or dcron")
     if options.journal_persistent and system.init != "systemd":
         problems.append("Keeping the journal across reboots needs systemd; OpenRC keeps its logs in /var/log")
     if options.gaming == "native" and not options.gaming_accept_external:
@@ -347,7 +351,7 @@ class SystemMixin(ConfigurerBase):
             base.append(("systemd-timesyncd", "default", False))
         cron = self.cron_daemon(manifest)
         if cron:
-            base.append((cron, "default", cron == "bcron"))  # bcron's service name is not verified: a miss is a warning
+            base.append((cron, "default", False))
         if options.logger_enabled and system.init == "openrc":
             base.append((LOGGER_SERVICES[options.logger], "default", False))
         if network.manager == "netifrc":
