@@ -377,23 +377,7 @@ class PackagesMixin(PortageMixin):
         if network_package:
             atoms.append(network_package)
         atoms.extend(self.early_boot_atoms(manifest, plan))
-        atoms.append("app-admin/sudo" if manifest.accounts.privilege == "sudo" else "app-admin/doas")
-        if options.ssh:
-            atoms.append("net-misc/openssh")
-        if options.chrony:
-            atoms.append("net-misc/chrony")
-        if self.wants_cron(manifest):
-            atoms.append("sys-process/cronie")
-        if options.file_indexing:
-            atoms.append("sys-apps/mlocate")
-        if options.shell_completion:
-            atoms.append("app-shells/bash-completion")
-        if options.logger_enabled:
-            if system.init == "openrc":
-                # syslog-ng writes /var/log/messages forever without a rotator.
-                atoms.extend(("app-admin/syslog-ng", "app-admin/logrotate"))
-            else:
-                atoms.append("sys-apps/systemd")
+        atoms.extend(self.system_tool_atoms(manifest))  # configure_system: administrator tool, ssh, time sync, cron, logger, optional tools
         if system.console_font.startswith("ter-"):
             atoms.append("media-fonts/terminus-font")
         return list(dict.fromkeys(atoms))
