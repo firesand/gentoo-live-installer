@@ -1,0 +1,2 @@
+Boot0000* Windows Boot Manager
+Boot0001* ubuntu

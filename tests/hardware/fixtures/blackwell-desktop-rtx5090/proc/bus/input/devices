@@ -1,0 +1,5 @@
+I: Bus=0003 Vendor=046d Product=c31c Version=ab41
+N: Name="Logitech USB Keyboard"
+H: Handlers=sysrq kbd leds event0
+B: PROP=0
+B: EV=120013

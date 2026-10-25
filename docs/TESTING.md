@@ -158,6 +158,14 @@ them and even when the harness is killed with SIGKILL (the kernel sends QEMU SIG
 | `uefi-manual-two-disks` | a manual layout across two disks (ESP and root on the first, swap and `/home` on the second) next to a third disk that must stay byte for byte as it was |
 | `text-install` | the console installer: the ISO's text entry, then `gentoo-installer-text` with a device confirmation |
 | `rescue-gentoo` | a minimal Gentoo installed first, then broken and repaired three times (menu file, initramfs, fstab) |
+| `screenshots` | the live ISO only: a picture of the live desktop and of every installer page, Guided and Advanced, at 1366x768 and 1920x1080 (see below) |
+| `dmi-asus-rog`, `dmi-razer-blade`, `dmi-lenovo-legion` | the live ISO only, with the DMI strings of an ASUS ROG laptop, a Razer Blade or a Lenovo Legion: the installer's hardware report (`python3 -m gentoo_installer.hardware --json`, run in the live system) must read the vendor, product and (once the probe has it) `vendor_family` |
+| `safe-graphics-grub`, `safe-graphics-systemd-boot`, `safe-graphics-efi-stub` | the NVIDIA driver is requested, so the installed boot menu must list Safe graphics (`nomodeset`, the graphics modules blacklisted); the entry is chosen once and booted (needs backlog items B04 and B05; compiles the NVIDIA driver) |
+| `secure-boot-modules` | systemd-boot with a UKI signed by the test key, booted under OVMF's Secure Boot build; an unsigned and a signed dummy module are loaded on `gentoo-kernel-bin`; the verdict is the evidence B07 step 2 waits for |
+| `desktop-kde-openrc`, `desktop-kde-systemd`, `desktop-gnome-openrc`, `desktop-gnome-systemd`, `desktop-xfce-openrc`, `desktop-xfce-systemd`, `desktop-cinnamon-openrc`, `desktop-cinnamon-systemd`, `desktop-mate-openrc`, `desktop-mate-systemd`, `desktop-lxqt-openrc`, `desktop-lxqt-systemd`, `desktop-gnome-light-openrc`, `desktop-gnome-light-systemd`, `desktop-sway-openrc`, `desktop-sway-systemd`, `desktop-i3-openrc`, `desktop-i3-systemd` | one scenario per Guided desktop and init system: the desktop's package is installed, the display manager runs with its greeter, the desktop's session file exists, and `pactl info` answers with PipeWire in a login session. Hours each: run with `--memory 12288 --build-jobs 1 --swap-mib 4096 --companions none` |
+| `ssh-keys-only` | `accounts.ssh_password_login=false`: `sshd -T` of the installed system must show password and keyboard-interactive login off and root login off (interface I10) |
+| `live-remote-access` | the live ISO only: sshd runs at boot, `gentoo-remote-access status/on/off` with a password login as `gentoo` from the host, fresh SSH host keys on a second boot (interface I9) |
+| `rescue-chroot` | a minimal Gentoo installed first, then `gentoo-chroot` run non-interactively from the live ISO: it finds the system, mounts it, runs commands with working DNS and leaves nothing mounted (interface I12) |
 
 The validated four set `hardware.guest_tools=none`, explicit build jobs and no microcode so that
 nothing automatic changes their configuration; the new scenarios use the installer's `auto`
@@ -224,6 +232,7 @@ Information (`world-drift`) is kept in `result.json` and is neither.
 | `world-drift` | nothing: the same command's upgrades, new packages and reinstalls are only counted and listed (`world_drift` in `result.json`). Right after an install they come from a tree that is newer than the stage3 (new versions, changed USE defaults), not from the installer | information: never a finding, never a failure, also under `--strict-probes` |
 | `install-degraded` | the installer's final event reports no `degraded` parts (a desktop package or the NVIDIA driver that failed) and no `warnings` (a cleanup that failed after a good install). The finding carries the installer's own reasons, whole (also `install.completed` in `result.json`) | finding; a failure under `--strict-probes`: a part that did not install is a real problem |
 | `dmi` | the VM shows the DMI identity the scenario asked for | failure |
+| `sshd-service`, `sshd-config` | sshd runs and is enabled at boot (`rc-service sshd status` and `rc-update show default`, or `systemctl is-active` and `is-enabled`); `sudo sshd -T` says `permitrootlogin no`, no empty passwords, and a password login is possible exactly when `accounts.ssh_password_login` is true (password authentication, or keyboard-interactive with PAM, which is how Gentoo's own drop-in asks for passwords) | failure; no sudo: finding |
 | `sudo`, `root-lock` | the new user can use sudo with the password; root's password is locked as asked | finding |
 
 `--no-world-probe` skips the world probe (minutes on a desktop); `--world-timeout` bounds it.
@@ -235,6 +244,139 @@ After the install the harness copies two files out of the live system, also when
 failed: `daemon-stderr.log` (`/var/log/gentoo-installerd.log`) and `hardware-plan.json`;
 `install-artifacts.json` says what was found. A completed event with `bootable: false` makes a
 "successful" install a failure.
+
+### The live medium and the rescue chroot (Wave 5, interface I13)
+
+`scripts/vm_wave5.py` holds the commands and the parsers; the orchestration is in `ScenarioRunner` (`check_live_network`,
+`check_live_remote_access`, `live_remote_and_host_keys`, `chroot_check`). The text of `gentoo-remote-access` and `gentoo-chroot`
+is read tolerantly (an `ssh gentoo@ADDRESS` line, a `Password:` line, `SHA256:` fingerprints, a `Remote access (SSH): enabled`
+line); a format the parsers cannot read is reported as "could not tell", never as a pass. If the iso owner words it differently,
+change `STATE_LINE_RE` and friends in `vm_wave5.py` and the recorded text in `tests/vm/test_vm_wave5.py`.
+
+* **`network_status` in every VM.** Every `boot_live` asks the live daemon for `network_status` (a short Python program that speaks the
+  daemon's socket protocol; no client library is needed in the guest). The VM is wired, so the answer must be `online`, `default_route`
+  and `dns` true, a connected ethernet device and no problem code. A daemon without `network.v1` (answer `proto.unsupported_action`) is
+  a warning on stderr and an advisory record in `result.json` (`live.network_status`), not a failure. The live system answers SSH before the daemon has made its
+  socket and before DHCP has finished, so a failed answer is asked again every 3 seconds for up to 90 seconds (`attempts` in the record) before it counts.
+  An unreachable mirror is shown in the record but is not a failure (the installer cannot fix a host without internet).
+* **`live-remote-access`** (use `--live-only`-style runs; the scenario implies it, with no display):
+  `rc-service sshd status` must say started at boot; `gentoo-remote-access status` must show remote access off; `on` must print the
+  password, an `ssh gentoo@ADDRESS` line and key fingerprints, and a password login as `gentoo` must work from the host; `off` must
+  make the same password fail with "Permission denied" (any other failure, such as a refused connection, is "inconclusive" and fails);
+  sshd keeps running. The host login uses plain `ssh` with `PubkeyAuthentication=no` and the password through `SSH_ASKPASS` with
+  `SSH_ASKPASS_REQUIRE=force` (OpenSSH 8.4 or newer on the host, no `sshpass`): the harness key cannot answer for the password, and the
+  password is on no command line and in no record (the generated password of a throw-away live medium does appear in the per-step logs
+  `live-remote-NN.log`, like everything else the guest prints). The ISO is then shut down and booted a second time: the fingerprints of
+  `/etc/ssh/ssh_host_*_key.pub` must differ per key type between the two boots (`live.host_keys` in `result.json`).
+  Needs the **testkey ISO** (root key login for the harness) built from the tree that has `gentoo-remote-access`.
+* **`rescue-chroot`**: after the install and the usual probes the installed VM is stopped, the live ISO is booted and `gentoo-chroot` (no session argument) is run
+  twice with this on standard input, once as `gentoo-chroot --read-only` (no question to answer, so the check does not depend on how the tool reads its prompt)
+  and once as plain `gentoo-chroot` (the first line is `y`, the answer to its one read-write question; a tool that does not ask just gets an unknown command):
+  marker commands (`echo "CHROOT-FOUND-$((6*7))"`; the number is computed, so the echo of a typed command cannot pass for its output), `getent hosts distfiles.gentoo.org`,
+  `emerge --info >/dev/null`, `grub-mkconfig -o /dev/null` (GRUB installs only), in the writable session `touch /root/.gentoo-vm-chroot-write`, and `exit`.
+  Required: all markers, `/etc/gentoo-release` read inside, exit status 0, and after each session the cleanup check of the rescue runs
+  (`vm_rescue.cleanup_command`): nothing mounted below `/mnt/rescue`, no session file left behind, no read-only flag, no `rescue-*` device-mapper volume.
+  Encrypted installs are refused (the passphrase prompt is on the console). `result.json` has both sessions under `chroot.sessions`.
+
+Commands for the lead (each needs the testkey ISO and its private key; see "Running a scenario"):
+
+```sh
+python3 scripts/test-vm.py --scenario live-remote-access --iso build/test-dist/<iso> --ssh-host 127.0.0.1 --ssh-port 40222 --ssh-private-key "$testkey" --memory 2048
+python3 scripts/test-vm.py --scenario ssh-keys-only      --iso build/test-dist/<iso> --ssh-host 127.0.0.1 --ssh-port 40222 --ssh-private-key "$testkey" --no-world-probe
+python3 scripts/test-vm.py --scenario rescue-chroot      --iso build/test-dist/<iso> --ssh-host 127.0.0.1 --ssh-port 40222 --ssh-private-key "$testkey" --no-world-probe
+```
+
+### Desktop sessions, the Safe graphics entry, Secure Boot (Wave 5, hardware backlog H04)
+
+**Desktop login.** A VM cannot type into a greeter reliably, so the scenarios check what is broken when a desktop does not come up
+(`scripts/vm_session.py`): `desktop-session` reads `/usr/share/xsessions` and `/usr/share/wayland-sessions` for the desktop's session
+file, asks `rc-service display-manager status` or `systemctl is-active display-manager`, and looks for the greeter or X server in the
+process list (Sway and i3 may have no display manager). `audio-pactl` runs `pactl info` in the test user's SSH login (it has
+`/run/user/UID`): on systemd the user units start PipeWire by socket activation; on OpenRC the desktop's autostart does, which an SSH
+login does not run, so the probe starts `gentoo-pipewire-launcher` itself (that proves the packages, not the autostart). The table of
+desktops in `vm_session.DESKTOPS` is checked against the tree by `tests/hardware/test_tree_evidence.py`; the backend's desktop registry
+(B14) will replace it.
+
+**Safe graphics.** `safe-graphics-*` install with the NVIDIA driver requested. The harness lists the installed boot menu (GRUB:
+`/boot/grub/grub.cfg`; systemd-boot: `loader/entries/*.conf`; EFI stub: `efibootmgr`), finds the entry titled "Safe graphics", checks its
+own arguments (`nomodeset`, `module_blacklist=` with nvidia, nvidia_drm, nvidia_modeset, nvidia_uvm, nouveau), chooses it for one boot
+(`grub-reboot`, `bootctl set-oneshot`, `efibootmgr --bootnext`), restarts the VM and requires the arguments in `/proc/cmdline` and none of
+those modules in `/proc/modules`. GRUB needs `GRUB_DEFAULT=saved` for `grub-reboot` to work; if the installer's GRUB configuration does
+not set it, the scenario fails at the one-shot step, which is a finding for B05. The VM has no NVIDIA card, so this proves the entry
+and the boot, not NVIDIA (real hardware only).
+
+**Secure Boot and out-of-tree modules** (`secure-boot-modules`; evidence for B07 step 2). Prepare once (the key is test-only and not a secret):
+
+```sh
+mkdir -p build/sb-test && cd build/sb-test
+openssl req -new -x509 -newkey rsa:2048 -nodes -days 3650 -sha256 -subj "/CN=Gentoo installer VM test key (test only, not a secret)" -keyout db.key -out db.crt
+# a copy of OVMF's variable store with db.crt as PK, KEK and db (python-virt-firmware; check `virt-fw-vars --help` for your version):
+virt-fw-vars --input /usr/share/edk2-ovmf/OVMF_VARS.fd --output vars.fd --set-pk 00000000-0000-0000-0000-000000000000 db.crt \
+  --add-kek 00000000-0000-0000-0000-000000000000 db.crt --add-db 00000000-0000-0000-0000-000000000000 db.crt --secure-boot
+cd ../..
+python3 scripts/test-vm.py --scenario secure-boot-modules --iso build/test-dist/<iso> --ssh-host 127.0.0.1 --ssh-port 40222 \
+  --ssh-private-key "$testkey" --sb-key build/sb-test/db.key --sb-cert build/sb-test/db.crt --ovmf-vars-file build/sb-test/vars.fd \
+  --companions none --no-world-probe --memory 4096
+```
+
+`vm_secureboot.key_generation_command` and `enrol_command` are those two calls. The harness uploads the pair to the live system
+(`/run/gentoo-vm-secure-boot/`, the manifest names the paths, the daemon reads them there), installs systemd-boot with a UKI signed by it, and boots
+under the Secure Boot build of OVMF (`OVMF_CODE.secboot.fd`, SMM on). In the installed system, as root, a Python program builds a
+dummy module against `/lib/modules/$(uname -r)/build`, loads it unsigned, signs it with the same key (`scripts/sign-file`) and loads it
+again, and reports `SecureBoot`, the lockdown mode, `module.sig_enforce`, the kernel keyrings, the kernel messages and the taint flags.
+The verdict goes to `result.json` (`secure_boot_modules`) and to the console line `SECURE BOOT ...`:
+`unsigned-modules-load` (B07 step 2 may allow NVIDIA with a warning, still refusing when lockdown is on), `unsigned-modules-refused`
+(keep refusing), `only-signed-modules-load` (keep refusing in Guided mode, a signed path is possible), or `inconclusive` (Secure Boot was not
+active, or the kernel has no build tree: the scenario fails, nothing is decided). The test certificate is the owner of this variable
+store; no Microsoft key and no shim are involved, matching `manifest.py` (Secure Boot only with systemd-boot or the EFI stub and a UKI).
+I could not run any of this where it was written: the first real run may need small corrections to the `virt-fw-vars` call or to the
+dummy module build (the report says which step failed).
+
+### Screenshots of the live desktop and of every installer page
+
+```sh
+python3 scripts/test-vm.py --scenario screenshots --iso build/test-dist/<iso> --ssh-host 127.0.0.1 --ssh-port 40222 \
+  --ssh-private-key "$testkey" --memory 4096 --screenshots build/screenshots/$(date +%Y%m%d)
+```
+
+The scenario boots the live ISO once per display size (`--screenshot-sizes`, default `1366x768,1920x1080`) on a VM whose graphics card announces exactly that
+size (`--resolution`), waits for the XFCE session (`--gui-timeout`) and the installer window that starts by itself (`--screenshot-settle`), and then:
+
+1. takes a picture of the whole screen through QMP (what a person sees after the ISO has booted), converted from PPM to PNG without any tool on the host:
+   `<size>/live-desktop.png`;
+2. uploads `scripts/vm-gui-shots.py` and runs it as the live user in the live X session. It opens the real installer window, shows each page of
+   `window.pages` (so a page added later is photographed too) with the mode switch in each position, waits for the page to settle and saves
+   `<size>/page-NN-<page>-guided.png` and `...-advanced.png`; a page with a scroll bar also gets `...-full.png`, the whole content in one tall picture. It never
+   presses Continue and never starts an installation; the pages are shown on a default manifest. The pictures come back as one tar archive that the host unpacks
+   with checks (plain files named `*.png` or `*.json` only, size limits).
+
+The run fails (and says why) when the guest's screen is not the size asked for (the picture is then useless as evidence for that size), when a mode or too
+many pages are missing, or when the installer reports that a page needs horizontal scrolling or the window is larger than the screen (1366x768 is a real laptop).
+`index.json` in the screenshot directory lists what was taken per size. The XFCE look of the live desktop (`wave5-xfce-look.md`) is judged on these pictures.
+The guest program runs offscreen in the test suite (`tests/vm/test_vm_shots.py`), so its output format is tested; the real X session was not available where it was written.
+
+### Real-hardware checklist for the user's PC (hardware backlog H05)
+
+`scripts/hardware-checklist.py` is for the person who owns the machine, run by hand, in the installed system's KDE Wayland session, as the normal user:
+
+```sh
+python3 scripts/hardware-checklist.py              # a report on the screen
+python3 scripts/hardware-checklist.py --markdown   # a table for the release notes
+python3 scripts/hardware-checklist.py --json       # for a bug report
+```
+
+It is **read-only by construction** and the test suite proves it (`tests/vm/test_hardware_checklist.py`): it starts only `nvidia-smi`, `vulkaninfo`, `lsusb`,
+`loginctl show-session`, `ss -ltn`, `pgrep -x`, `systemctl is-active`, `rc-service NAME status`, `efibootmgr` (no arguments), `journalctl -k` and `df`, each in
+exactly one form that cannot change anything; it reads only below `/proc`, `/sys`, `/boot`, `/efi`, `/etc/gentoo-live-installer` and the udev rules directories;
+it has no shell, no `sudo` and no write call. It does not start OpenRGB (that scans the SMBus). Checks and what each needs: the GPU is an RTX 4090 with a
+595 driver and 24 GiB (`nvidia-smi`), `nvidia_drm` has `modeset=Y`, the kernel modules are the open ones, the session is Wayland, Vulkan lists the NVIDIA GPU, the
+kernel log has no `NVRM`/`Xid` lines, `PreserveVideoMemoryAllocations` is on and `/var/tmp` has room for 24 GiB (suspend), the boot menu lists Safe graphics (GRUB
+`grub.cfg`, systemd-boot entries or `efibootmgr`), the Razer Viper (1532:0091) is bound to `razermouse` with `openrazer-daemon` running, the Aura controller
+(0b05:18f3) is present with OpenRGB's udev rules, the DualSense (054c:0ce6) has an input node, sshd runs and listens on port 22. It *records* Secure Boot, the
+lockdown mode, the kernel taint and the install receipt. Statuses: PASS, FAIL (report it), RECORD, SKIP (not applicable or not readable by this user), MANUAL.
+The two MANUAL steps are printed with their commands: suspend and resume with the video memory full, and the fixture re-capture
+(`scripts/capture-hardware-fixture.py`), plus "log in over SSH from another PC" and "press a button on the controller". Put the report and the manual results
+into the release notes; that is the acceptance of H05. The expectations (RTX 4090, branch 595, the three USB ids) are in `EXPECTED` at the top of the script.
 
 ### Making the machine different
 
@@ -252,11 +394,14 @@ serial number, virtio NIC and display). An option left out keeps the scenario's 
 | `--vga` | `virtio`, `std`, `qxl`, `cirrus`, `vmware`, `none` (not with `--install-mode gui`) |
 | `--cpu` | any QEMU model: `Haswell`, `EPYC`, `host` (KVM only) |
 | `--machine` | `q35`, `pc` (i440FX) |
-| `--smbios` | `qemu`, `laptop-lenovo`, `laptop-dell`, `laptop-hp`, `desktop-asus`, `vmware`, `virtualbox`, `hyperv` |
+| `--smbios` | `qemu`, `laptop-lenovo`, `laptop-dell`, `laptop-hp`, `desktop-asus`, `laptop-asus-rog`, `laptop-razer-blade`, `laptop-lenovo-legion`, `vmware`, `virtualbox`, `hyperv` (the Razer strings are modelled on public reports, not read from a real Blade) |
 | `--extra-disk SIZE` | another empty raw disk (`256M`, `2G`); repeatable |
 | `--secure-boot` | OVMF's Secure Boot build (setup mode unless `--ovmf-vars-file` enrols keys) |
 | `--ovmf-vars` | `persist` (default), `fresh-on-target`, `readonly` |
 | `--ovmf-vars-file` | seed the NVRAM from a file (a kept `OVMF_VARS.fd`, or one with enrolled keys) |
+| `--resolution` | the display size the guest sees (`1366x768`; virtio, std or qxl adapter): the graphics card announces it in its EDID |
+| `--screenshots`, `--screenshot-sizes`, `--screenshot-settle` | `screenshots` scenario only: where to keep the pictures (default `build/vm/<run>/screenshots`), the display sizes (default `1366x768,1920x1080`) and the seconds the live session gets to draw its desktop (default 15) |
+| `--sb-key`, `--sb-cert` | `secure-boot-modules` only: the test-only key that signs the UKI and the dummy module, and its certificate (see below) |
 | `--rtc` | `utc`, `localtime` |
 
 Examples:

@@ -21,7 +21,21 @@ Usage::
     scripts/lint-plan.py                      # the default matrix on the pinned Gentoo tree
     scripts/lint-plan.py --cells kde-openrc   # one cell
     scripts/lint-plan.py --list               # show the available cells
+    scripts/lint-plan.py --cells nvidia-pascal-openrc --hardware pascal-desktop-gtx1060 --set hardware.gpu_driver=nvidia
+    scripts/lint-plan.py --cells wave5 --overlay /path/to/edorp-overlay   # the Wave 5 matrix (new desktops, NVIDIA, vendor tools, gaming)
     scripts/lint-plan.py --tree /var/db/repos/gentoo --json report.json
+
+``--hardware NAME`` renders every cell with the hardware plan of the fixture tests/hardware/fixtures/NAME (what the installer would
+decide on that machine), ``--set SECTION.FIELD=VALUE`` changes a manifest field in every cell, and ``--overlay DIR`` (repeatable) adds a
+repository (the user's overlay "edorp", GURU, the companion overlay) next to ::gentoo. A cell can also name its own fixture, settings
+and ``expect_atoms``: atoms that the plan must contain. A choice that the installer accepts but does not act on yet shows up there as
+an error instead of a green cell that resolved nothing.
+
+Findings (exit status 1): a dependency that needs a USE change (``emerge`` would print an autounmask suggestion), a REQUIRED_USE
+violation, an atom with no visible candidate (masked, or only ``~amd64``), an expected atom missing from the plan. Information: the
+package count against the desktop baseline of ``scripts/lint-plan-data/desktop-baseline.json`` (``--baseline``) and the packages
+that are known to take hours to build from source (``scripts/lint-plan-data/heavy-builds.json``; ``--fail-on-heavy`` makes them a
+finding for cells that must not compile them).
 
 The tree is ``--tree``, ``$GENTOO_TREE``, the snapshot pinned in ``iso/pins.env`` (below
 ``.cache/iso-review/catalyst/snapshots``), or ``/var/db/repos/gentoo``. A tree without
@@ -39,15 +53,17 @@ Exit status: 0 when every cell is clean, 1 when a cell has findings, 2 when the 
 from __future__ import annotations
 
 import argparse
+import dataclasses
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Iterable, Sequence
+from typing import Any, Callable, Collection, Iterable, Sequence
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = Path(__file__).resolve().parent / "lint-plan-data"
@@ -121,6 +137,9 @@ class Cell:
     overrides: tuple[tuple[str, Any], ...] = ()  # ("section.field", value)
     note: str = ""
     known_findings: bool = False  # a limitation outside this tool's scope; only run when named explicitly
+    hardware: str = ""  # a fixture of tests/hardware/fixtures: render with the hardware plan of that machine
+    expect_atoms: tuple[str, ...] = ()  # atoms the rendered plan must contain (a missing one means the feature has no effect yet)
+    forbid_heavy: bool = False  # packages of heavy-builds.json in the closure are findings (a cell that has to install from binary packages)
 
     def manifest(self):
         from gentoo_installer.manifest import InstallManifest
@@ -137,6 +156,56 @@ class Cell:
             setattr(getattr(manifest, section), name, value)
         manifest.require_valid()
         return manifest
+
+
+def parse_setting(text: str) -> tuple[str, Any]:
+    """'section.field=value' with true/false and integers converted, as Cell.overrides expects."""
+    key, separator, raw = text.partition("=")
+    if not separator or key.count(".") != 1:
+        raise ValueError(f"--set needs SECTION.FIELD=VALUE, not {text!r}")
+    value: Any = {"true": True, "false": False}.get(raw.lower(), raw)
+    if isinstance(value, str) and re.fullmatch(r"-?[0-9]+", value):
+        value = int(value)
+    return key, value
+
+
+def hardware_plan(fixture: str, manifest: Any) -> Any:
+    """The hardware plan the installer would build on the machine of tests/hardware/fixtures/NAME (or of a derived fixture)."""
+    from gentoo_installerd import hwplan
+    from tests.hardware.helpers import DERIVED, fixture_dict
+
+    if fixture not in DERIVED and not (ROOT / "tests" / "hardware" / "fixtures" / fixture).is_dir():
+        raise SystemExit(f"No hardware fixture {fixture!r} in tests/hardware/fixtures")
+    return hwplan.plan(manifest, fixture_dict(fixture))
+
+
+def load_data(name: str, data_dir: Path = DATA) -> dict:
+    return json.loads((data_dir / name).read_text())
+
+
+def baseline_problem(desktop: str, init: str, count: int, baseline: dict | None = None, tolerance: float = 0.15) -> str:
+    """'' when the number of packages a desktop pulls in is within ``tolerance`` of the baseline (desktops.md), else why not."""
+    table = (baseline if baseline is not None else load_data("desktop-baseline.json"))["counts"]
+    if desktop not in table:
+        return ""
+    expected = table[desktop][0 if init == "openrc" else 1]
+    if abs(count - expected) > tolerance * expected:
+        return f"{desktop}/{init} pulls in {count} packages, the baseline is {expected} (tolerance {tolerance:.0%}): the plan changed or the tree moved"
+    return ""
+
+
+def heavy_packages(closure: Sequence[str], table: dict | None = None, installed: Collection[str] = frozenset()) -> list[str]:
+    """Members of the closure that take hours to compile ('cat/pkg-version (about N h)'); a source-only cell has to build every one of them.
+
+    ``installed`` are the packages the stage3 already has (by category/package): the walk sees a newer version of them in the tree, which no cell has to compile.
+    """
+    hours = (table if table is not None else load_data("heavy-builds.json"))["hours"]
+    found = []
+    for cpv in closure:
+        name = re.sub(r"-[0-9][0-9A-Za-z._+-]*$", "", cpv)
+        if name in hours and name not in installed:
+            found.append(f"{cpv} (about {hours[name]} h)")
+    return found
 
 
 def default_cells() -> list[Cell]:
@@ -177,6 +246,48 @@ def extended_cells() -> list[Cell]:
     return default_cells() + extra
 
 
+WAVE5_DESKTOP_ATOMS = {"cinnamon": "gnome-extra/cinnamon", "mate": "mate-base/mate", "lxqt": "lxqt-base/lxqt-meta", "gnome-light": "gnome-base/gnome-light",
+                       "sway": "gui-wm/sway", "i3": "x11-wm/i3"}
+NVIDIA_ON = (("hardware.gpu_driver", "nvidia"), ("hardware.nvidia_license_accepted", True))
+
+
+def wave5_cells() -> list[Cell]:
+    """The Wave 5 matrix: every new desktop on both inits, NVIDIA on each generation, vendor tools, gaming.
+
+    Each cell lists the atoms the plan has to contain (``expect_atoms``), so a choice the installer accepts but does not act on yet
+    fails with "missing from the plan" instead of resolving nothing. Overlay atoms (asusctl, supergfxctl) need ``--overlay``.
+    """
+    cells: list[Cell] = []
+    for desktop, atom in WAVE5_DESKTOP_ATOMS.items():
+        for init in ("openrc", "systemd"):
+            cells.append(Cell(f"{desktop}-{init}", init, desktop, expect_atoms=(atom,), forbid_heavy=True, note="backlog B14: the desktop registry"))
+    cells += [
+        Cell("nvidia-rtx4090-kde-openrc", "openrc", "kde", NVIDIA_ON, "the user's PC: open kernel modules, branch 595", hardware="asus-desktop-rtx4090",
+             expect_atoms=("x11-drivers/nvidia-drivers",)),
+        Cell("nvidia-rtx4090-kde-systemd", "systemd", "kde", NVIDIA_ON, hardware="asus-desktop-rtx4090", expect_atoms=("x11-drivers/nvidia-drivers",)),
+        Cell("nvidia-pascal-xfce-openrc", "openrc", "xfce", NVIDIA_ON, "Pascal: closed 580, newer branches masked (the mask must still leave a visible 580)",
+             hardware="pascal-desktop-gtx1060", expect_atoms=("x11-drivers/nvidia-drivers",)),
+        Cell("nvidia-blackwell-kde-openrc", "openrc", "kde", NVIDIA_ON, "Blackwell: 595 open only", hardware="blackwell-desktop-rtx5090",
+             expect_atoms=("x11-drivers/nvidia-drivers",)),
+        Cell("nvidia-hybrid-laptop-gnome-systemd", "systemd", "gnome", NVIDIA_ON, "Intel + NVIDIA laptop: PRIME offload", hardware="thinkpad-intel-nvidia-hybrid",
+             expect_atoms=("x11-drivers/nvidia-drivers",)),
+        Cell("nouveau-kepler-xfce-openrc", "openrc", "xfce", NVIDIA_ON, "Kepler: no proprietary driver, nouveau", hardware="kepler-desktop-gtx680"),
+        Cell("secureboot-nvidia-kde-systemd", "systemd", "kde", NVIDIA_ON, "NVIDIA under Secure Boot: refused until backlog B07 step 2, so not part of 'wave5'",
+             known_findings=True, hardware="asus-desktop-rtx4090-secureboot"),
+        Cell("asus-rog-tools-kde-openrc", "openrc", "kde", NVIDIA_ON + (("hardware.devices", {"asus_tools": True}),), "asusctl and supergfxctl from the edorp overlay (--overlay)",
+             hardware="asus-rog-zephyrus-intel-nvidia-mux", expect_atoms=("sys-power/asusctl", "sys-power/supergfxctl")),
+        Cell("razer-devices-kde-openrc", "openrc", "kde", (("hardware.devices", {"openrazer": True, "razer_frontend": True}),), "OpenRazer and a front end",
+             hardware="razer-blade-intel-nvidia", expect_atoms=("sys-apps/openrazer",)),
+        Cell("openrgb-solaar-kde-openrc", "openrc", "kde", (("hardware.devices", {"openrgb": True, "solaar": True, "game_rules": True}),), "Aura, Logitech, controllers",
+             hardware="asus-desktop-rtx4090", expect_atoms=("app-misc/openrgb",)),
+        Cell("gaming-native-kde-openrc", "openrc", "kde", (("options.gaming", "native"), ("options.gaming_accept_external", True)) + NVIDIA_ON,
+             "Steam from the steam-overlay; multilib", hardware="asus-desktop-rtx4090", expect_atoms=("games-util/steam-launcher",)),
+        Cell("gaming-flatpak-kde-systemd", "systemd", "kde", (("options.gaming", "flatpak"),), "Steam as a Flatpak", hardware="asus-desktop-rtx4090",
+             expect_atoms=("sys-apps/flatpak",)),
+    ]
+    return cells
+
+
 def known_limitation_cells() -> list[Cell]:
     """Combinations that cannot resolve today because the published profiles have no desktop settings.
 
@@ -194,7 +305,11 @@ def select_cells(spec: str) -> list[Cell]:
         return default_cells()
     if spec == "all":
         return extended_cells()
-    available = {cell.name: cell for cell in [*extended_cells(), *known_limitation_cells()]}
+    if spec == "wave5":
+        return [cell for cell in wave5_cells() if not cell.known_findings]
+    if spec == "everything":
+        return extended_cells() + [cell for cell in wave5_cells() if not cell.known_findings]
+    available = {cell.name: cell for cell in [*extended_cells(), *known_limitation_cells(), *wave5_cells()]}
     chosen = []
     for name in (part.strip() for part in spec.split(",") if part.strip()):
         if name not in available:
@@ -250,7 +365,16 @@ def _layout_for(manifest):
     return layout
 
 
-def render_cell(cell: Cell, tree: Path, scratch: Path, plan=None) -> RenderedCell:
+def overlay_name(path: Path) -> str:
+    """The repository name of an overlay directory (profiles/repo_name), else its directory name."""
+    try:
+        name = (path / "profiles" / "repo_name").read_text().strip()
+    except OSError:
+        name = ""
+    return name or path.name
+
+
+def render_cell(cell: Cell, tree: Path, scratch: Path, plan=None, overlays: Sequence[Path] = ()) -> RenderedCell:
     """Write the installer's Portage configuration for the cell and build a scratch config root from it.
 
     Without a plan the cell gets the generic plan an installation builds when nothing was probed
@@ -279,6 +403,7 @@ def render_cell(cell: Cell, tree: Path, scratch: Path, plan=None) -> RenderedCel
     configurer.configure_portage(manifest, plan)
     configurer.configure_companion_overlay(manifest)
     atoms = stage_atoms(configurer, manifest, plan)
+    atoms = list(dict.fromkeys([*atoms, *(str(atom) for atom in getattr(plan, "driver_atoms", None) or [])]))  # the drivers the kernel stage emerges on their own
 
     config = work / "config"
     shutil.copytree(target / "etc" / "portage", config / "etc" / "portage", symlinks=True)
@@ -287,6 +412,9 @@ def render_cell(cell: Cell, tree: Path, scratch: Path, plan=None) -> RenderedCel
     overlay = target / "var/db/repos/gentoo-live-installer"
     if overlay.is_dir():
         repos.extend(("[gentoo-live-installer]", f"location = {overlay}", "masters = gentoo", "auto-sync = no", ""))
+    for extra in overlays:  # a directory, or (name, location) when the location is where a container will see it
+        name, location = extra if isinstance(extra, tuple) else (overlay_name(Path(extra)), Path(extra).resolve())
+        repos.extend((f"[{name}]", f"location = {location}", "masters = gentoo", "auto-sync = no", ""))
     (config / "etc/portage/repos.conf").mkdir(parents=True, exist_ok=True)
     for stale in (config / "etc/portage/repos.conf").iterdir():
         stale.unlink()
@@ -317,15 +445,18 @@ class Report:
     unresolved: list[dict] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     seconds: float = 0.0
+    heavy: list[str] = field(default_factory=list)  # closure members that take hours to build from source
+    notes: list[str] = field(default_factory=list)  # information: the baseline comparison, heavy builds that are tolerated
+    forbid_heavy: bool = False
 
     @property
     def ok(self) -> bool:
-        return not (self.violations or self.required_use or self.unresolved or self.errors)
+        return not (self.violations or self.required_use or self.unresolved or self.errors or (self.forbid_heavy and self.heavy))
 
     def to_dict(self) -> dict:
         return {"name": self.name, "profile": self.profile, "ok": self.ok, "closure": self.closure, "atoms": self.atoms,
                 "packages": self.packages, "violations": self.violations, "required_use": self.required_use, "unresolved": self.unresolved,
-                "errors": self.errors, "seconds": round(self.seconds, 1)}
+                "errors": self.errors, "seconds": round(self.seconds, 1), "heavy": self.heavy, "notes": self.notes}
 
 
 def prepare_environment(scratch: Path) -> None:
@@ -515,15 +646,50 @@ def lint_atoms(config_root: Path, scratch: Path, atoms: Sequence[str], stage3: s
     return report
 
 
-def lint_cell(cell: Cell, tree: Path, scratch: Path | None = None, *, plan=None, build_deps: bool = False) -> Report:
-    """Render and lint one cell of the matrix."""
+def lint_cell(cell: Cell, tree: Path, scratch: Path | None = None, *, plan=None, build_deps: bool = False, overlays: Sequence[Path] = (),
+              baseline: bool = False) -> Report:
+    """Render and lint one cell of the matrix.
+
+    ``plan`` (or the cell's own ``hardware`` fixture) is the hardware plan the configuration is rendered with; ``overlays`` are
+    further repositories; ``baseline`` compares the desktop's package count with desktop-baseline.json.
+    """
     if not portage_available():
         raise LintUnavailable("the Portage Python API is not importable")
     scratch = scratch or default_scratch()
     prepare_environment(scratch)
-    rendered = render_cell(cell, tree, scratch, plan)
-    return lint_atoms(rendered.config, scratch, rendered.atoms, load_stage3(cell.init), name=cell.name,
-                      profile=rendered.profile, build_deps=build_deps)
+    if plan is None and cell.hardware:
+        plan = hardware_plan(cell.hardware, cell.manifest())
+    rendered = render_cell(cell, tree, scratch, plan, overlays)
+    stage3 = load_stage3(cell.init)
+    report = lint_atoms(rendered.config, scratch, rendered.atoms, stage3, name=cell.name, profile=rendered.profile, build_deps=build_deps)
+    report.forbid_heavy = cell.forbid_heavy
+    report.errors += expectation_errors(cell, rendered)
+    report.heavy = heavy_packages(report.packages, installed=stage3)
+    if report.heavy:
+        report.notes.append("builds that take hours without a binary package: " + ", ".join(report.heavy))
+    if baseline and cell.desktop in load_data("desktop-baseline.json")["counts"]:
+        report.notes.append(desktop_baseline_note(cell, rendered, tree, scratch, stage3, report))
+    return report
+
+
+def expectation_errors(cell: Cell, rendered: RenderedCell) -> list[str]:
+    """Atoms a cell requires but the rendered plan lacks: the choice is accepted and has no effect (yet)."""
+    have = {atom.split("[", 1)[0].split("::", 1)[0] for atom in rendered.atoms}
+    plan_atoms = [str(atom).split("[", 1)[0] for atom in (rendered.plan.all_atoms() if rendered.plan is not None and hasattr(rendered.plan, "all_atoms") else [])]
+    have.update(plan_atoms)
+    return [f"{atom} is missing from the plan: the installer accepts this choice but does not act on it yet" for atom in cell.expect_atoms if atom not in have]
+
+
+def desktop_baseline_note(cell: Cell, rendered: RenderedCell, tree: Path, scratch: Path, stage3: set[str], full: Report) -> str:
+    """Walk the desktop's own atoms only (what desktops.md counted) and compare with the baseline."""
+    from gentoo_installerd.configure import Configurer
+    from gentoo_installerd.runner import DryRunRunner
+
+    manifest = cell.manifest()
+    atoms = list(Configurer(DryRunRunner(), rendered.root).desktop_atoms(manifest, rendered.plan).required)
+    own = lint_atoms(rendered.config, scratch, atoms, stage3, name=cell.name + "-desktop", profile=rendered.profile)
+    problem = baseline_problem(cell.desktop, cell.init, own.closure)
+    return f"desktop packages: {own.closure} (whole cell {full.closure})" + (f"; BASELINE: {problem}" if problem else "; within the baseline")
 
 
 # --- command line ------------------------------------------------------------------------------------
@@ -545,6 +711,10 @@ def format_report(report: Report, verbose: bool = False) -> str:
         lines.append(f"  UNRESOLVED  {item['atom']} (via {item['by']}): {item['reason']}")
     for error in report.errors:
         lines.append(f"  ERROR  {error}")
+    for note in report.notes:
+        lines.append(f"  NOTE  {note}")
+    if report.forbid_heavy and report.heavy:
+        lines.append("  HEAVY  " + ", ".join(report.heavy))
     if verbose:
         lines.append("  atoms: " + " ".join(report.atoms))
     return "\n".join(lines)
@@ -559,14 +729,21 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scratch", type=Path, help="scratch directory (default: $GENTOO_LINT_SCRATCH or a temporary directory)")
     parser.add_argument("--build-deps", action="store_true", help="also walk build-time dependencies (much larger closure)")
     parser.add_argument("-v", "--verbose", action="store_true", help="print the atoms of every cell")
+    parser.add_argument("--hardware", default="", metavar="FIXTURE", help="render with the hardware plan of tests/hardware/fixtures/FIXTURE (every cell)")
+    parser.add_argument("--set", action="append", default=[], metavar="SECTION.FIELD=VALUE",
+                        help="change a manifest field in every cell, e.g. hardware.gpu_driver=nvidia (true/false/numbers are converted)")
+    parser.add_argument("--overlay", action="append", default=[], type=Path, metavar="DIR",
+                        help="add this repository (edorp, GURU, a snapshot of an overlay) next to ::gentoo; repeatable")
+    parser.add_argument("--baseline", action="store_true", help="also compare the desktops' package counts with scripts/lint-plan-data/desktop-baseline.json")
+    parser.add_argument("--fail-on-heavy", action="store_true", help="a package of heavy-builds.json in any cell's closure is a finding")
     return parser
 
 
 def main(argv: Iterable[str] | None = None, out: Callable[[str], None] = print) -> int:
     args = build_parser().parse_args(list(argv) if argv is not None else None)
     if args.list:
-        for cell in [*extended_cells(), *known_limitation_cells()]:
-            out(f"{cell.name:42} {cell.init:8} {cell.desktop:8} {cell.note}")
+        for cell in [*extended_cells(), *known_limitation_cells(), *wave5_cells()]:
+            out(f"{cell.name:42} {cell.init:8} {cell.desktop:12} {cell.note}")
         return 0
     if not portage_available():
         out("lint-plan: the Portage Python API (sys-apps/portage) is not importable here")
@@ -578,8 +755,19 @@ def main(argv: Iterable[str] | None = None, out: Callable[[str], None] = print) 
     scratch = args.scratch or default_scratch()
     out(f"lint-plan: tree {tree}, scratch {scratch}")
     reports: list[Report] = []
+    try:
+        overrides = tuple(parse_setting(item) for item in args.set)
+    except ValueError as exc:
+        out(f"lint-plan: {exc}")
+        return 2
+    for overlay in args.overlay:
+        if not (overlay / "profiles").is_dir():
+            out(f"lint-plan: {overlay} is not a repository (no profiles directory)")
+            return 2
     for cell in select_cells(args.cells):
-        report = lint_cell(cell, tree, scratch, build_deps=args.build_deps)
+        cell = dataclasses.replace(cell, overrides=cell.overrides + overrides, hardware=args.hardware or cell.hardware,
+                                   forbid_heavy=cell.forbid_heavy or args.fail_on_heavy)
+        report = lint_cell(cell, tree, scratch, build_deps=args.build_deps, overlays=args.overlay, baseline=args.baseline)
         reports.append(report)
         out(format_report(report, args.verbose))
     if args.json:

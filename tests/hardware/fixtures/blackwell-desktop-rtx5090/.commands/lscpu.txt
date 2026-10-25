@@ -1,0 +1,2 @@
+Architecture:                            x86_64
+Model name:                              AMD Ryzen 9 9950X 16-Core Processor

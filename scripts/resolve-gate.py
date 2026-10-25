@@ -65,14 +65,8 @@ REASON_RE = re.compile(
 
 
 def parse_setting(text: str) -> tuple[str, Any]:
-    """'section.field=value' with true/false and integers converted, as lint-plan's Cell.overrides expects."""
-    key, separator, raw = text.partition("=")
-    if not separator or key.count(".") != 1:
-        raise ValueError(f"--set needs SECTION.FIELD=VALUE, not {text!r}")
-    value: Any = {"true": True, "false": False}.get(raw.lower(), raw)
-    if isinstance(value, str) and re.fullmatch(r"-?[0-9]+", value):
-        value = int(value)
-    return key, value
+    """'section.field=value' with true/false and integers converted (lint-plan's own parser: one source)."""
+    return load_lint().parse_setting(text)
 
 
 def load_lint() -> Any:
@@ -86,14 +80,8 @@ def load_lint() -> Any:
 
 
 def hardware_plan(fixture: str, manifest: Any) -> Any:
-    """The hardware plan the installer would build on the fixture machine."""
-    from gentoo_installer import hardware
-    from gentoo_installerd import hwplan
-
-    root = ROOT / "tests" / "hardware" / "fixtures" / fixture
-    if not root.is_dir():
-        raise SystemExit(f"No hardware fixture {fixture!r} in tests/hardware/fixtures")
-    return hwplan.plan(manifest, hardware.probe(root).to_dict())
+    """The hardware plan the installer would build on the fixture machine (lint-plan's own function)."""
+    return load_lint().hardware_plan(fixture, manifest)
 
 
 def docker(*args: str, timeout: float | None = None, capture: bool = True) -> subprocess.CompletedProcess[str]:
@@ -152,10 +140,30 @@ class CellResult:
     reasons: list[str] = field(default_factory=list)
     log: str = ""
     error: str = ""
+    total: int = 0  # emerge's "Total: N packages"
+    heavy: list[str] = field(default_factory=list)  # packages built from source that take hours (lint-plan-data/heavy-builds.json)
+    forbid_heavy: bool = False
+    notes: list[str] = field(default_factory=list)  # information: the desktop baseline
 
     @property
     def ok(self) -> bool:
-        return self.returncode == 0 and not self.error
+        return self.returncode == 0 and not self.error and not (self.forbid_heavy and self.heavy)
+
+
+SOURCE_BUILD_RE = re.compile(r"^\[ebuild\s+[^\]]*\]\s+(\S+)", re.M)  # a [binary ...] line is a download, an [ebuild ...] line a compile
+TOTAL_RE = re.compile(r"^Total: (\d+) packages?", re.M)
+
+
+def judge_output(result: CellResult, output: str, cell: Any, lint: Any) -> None:
+    """From a finished emerge --pretend: how many packages, which of them compile for hours, and how the desktop compares with its baseline."""
+    names = [re.sub(r"::\S+$", "", match.split(":")[0]) for match in SOURCE_BUILD_RE.findall(output)]
+    result.heavy = lint.heavy_packages(names)
+    result.forbid_heavy = bool(getattr(cell, "forbid_heavy", False))
+    total = TOTAL_RE.search(output)
+    result.total = int(total.group(1)) if total else 0
+    if result.total and getattr(cell, "desktop", "") in lint.load_data("desktop-baseline.json")["counts"]:
+        problem = lint.baseline_problem(cell.desktop, cell.init, result.total, tolerance=0.30)  # the cell also installs the kernel, the plan's drivers, the companions
+        result.notes.append(problem or f"{result.total} packages in all, near the {cell.desktop} baseline")
 
 
 def container_config(rendered: Any) -> Path:
@@ -172,8 +180,9 @@ def run_cell(lint: Any, cell: Any, args: argparse.Namespace, images: dict[str, s
     result = CellResult(cell.name, image, binhost=manifest.portage.binhost and not args.no_binhost, hardware=args.hardware or "")
     scratch = out / "cells" / cell.name
     try:
-        plan = hardware_plan(args.hardware, manifest) if args.hardware else None
-        rendered = lint.render_cell(cell, CONTAINER_TREE, out / "render", plan)
+        fixture = args.hardware or cell.hardware
+        plan = hardware_plan(fixture, manifest) if fixture else None
+        rendered = lint.render_cell(cell, CONTAINER_TREE, out / "render", plan, [(lint.overlay_name(path), Path(f"/overlays/{index}")) for index, path in enumerate(args.overlay)])
     except Exception as exc:  # noqa: BLE001 - a broken cell must not stop the others
         result.error = f"Could not render the installer configuration: {type(exc).__name__}: {exc}"
         return result
@@ -196,6 +205,8 @@ def run_cell(lint: Any, cell: Any, args: argparse.Namespace, images: dict[str, s
         # The rendered overlay and companion bundle live below the report and the repository.
         "--volume", f"{out}:{out}:ro", "--volume", f"{ROOT}:{ROOT}:ro",
     ]
+    for index, overlay in enumerate(args.overlay):  # lint-plan's repos.conf names them /overlays/N: the same paths inside the container
+        docker_args += ["--volume", f"{overlay.resolve()}:/overlays/{index}:ro"]
     if not result.binhost:
         docker_args += ["--network", "none"]
     docker_args += [image, *command]
@@ -212,8 +223,11 @@ def run_cell(lint: Any, cell: Any, args: argparse.Namespace, images: dict[str, s
     log = scratch / "emerge.log"
     log.write_text(output)
     result.log = str(log)
+    judge_output(result, output, cell, lint)
     if not result.ok:
         result.reasons = list(dict.fromkeys(line.rstrip() for line in output.splitlines() if REASON_RE.match(line)))[:40]
+        if result.forbid_heavy and result.heavy:
+            result.reasons.append("builds from source that take hours: " + ", ".join(result.heavy))
     return result
 
 
@@ -222,6 +236,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cells", default="default", help="'default', 'all' or comma-separated cell names (see scripts/lint-plan.py --list)")
     parser.add_argument("--tree", type=Path, default=Path("/var/db/repos/gentoo"), help="Gentoo tree to resolve against (read-only)")
     parser.add_argument("--hardware", default="", help="build the hardware plan from tests/hardware/fixtures/NAME")
+    parser.add_argument("--overlay", action="append", default=[], type=Path, metavar="DIR",
+                        help="add this repository (edorp, GURU) next to ::gentoo, mounted read-only into the container; repeatable")
+    parser.add_argument("--fail-on-heavy", action="store_true", help="a package that compiles for hours (lint-plan-data/heavy-builds.json) is a failure for every cell")
     parser.add_argument("--no-binhost", action="store_true", help="resolve source-only even when the manifest uses the binary host")
     parser.add_argument("--set", action="append", default=[], metavar="SECTION.FIELD=VALUE",
                         help="change a manifest field in every cell, e.g. hardware.gpu_driver=nvidia (true/false/numbers are converted)")
@@ -249,7 +266,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     except ValueError as exc:
         print(f"resolve-gate: {exc}", file=sys.stderr)
         return 2
-    cells = [dataclasses.replace(cell, overrides=cell.overrides + overrides) for cell in lint.select_cells(args.cells)]
+    cells = [dataclasses.replace(cell, overrides=cell.overrides + overrides, forbid_heavy=cell.forbid_heavy or args.fail_on_heavy) for cell in lint.select_cells(args.cells)]
     images = {"openrc": args.openrc_image, "systemd": args.systemd_image}
     if args.import_systemd_seed:
         images["systemd"] = import_seed(args.import_systemd_seed.resolve())
@@ -265,7 +282,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         mode = "binhost" if result.binhost else "source"
         status = "ok" if result.ok else "FAILED"
         print(f"[{result.name}] {status} ({mode}, {result.profile}, {len(result.atoms)} atoms, {result.seconds:.0f}s) {result.log}")
-        for line in ([result.error] if result.error else []) + result.reasons:
+        for line in ([result.error] if result.error else []) + result.reasons + [f"note: {note}" for note in result.notes]:
             print(f"    {line}")
     report = {"tree": str(args.tree), "hardware": args.hardware, "images": images, "cells": [vars(r) | {"ok": r.ok} for r in results]}
     (out / "report.json").write_text(json.dumps(report, indent=2) + "\n")

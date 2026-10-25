@@ -25,7 +25,7 @@ pytestmark = pytest.mark.slow  # real processes and sockets: about a second per 
 ROOT = Path(__file__).resolve().parents[2]
 PROBES = {"init", "hostname", "user", "network", "dns", "portage", "hwmonux", "portagehub",
           "firmware", "cmdline", "root-source", "swap", "receipt", "sudo", "root-lock",
-          "install-degraded", "hardware-plan-file", "hardware-plan", "world-resolve", "world-drift"}
+          "install-degraded", "hardware-plan-file", "hardware-plan", "world-resolve", "world-drift", "sshd-service", "sshd-config"}
 ADVISORY = {"sudo", "root-lock"}
 
 

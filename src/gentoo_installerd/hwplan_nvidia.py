@@ -62,8 +62,13 @@ def nvidia_decision(manifest: InstallManifest, hw: HardwareProfile) -> NvidiaDec
     """Whether the proprietary NVIDIA driver is installed, which branch and which kernel modules (see the module text for the table)."""
     choice = manifest.hardware
     if choice.gpu_driver in ("nouveau", "basic"):
-        return NvidiaDecision("", mode=choice.gpu_driver, reason=("You chose the open-source nouveau driver." if choice.gpu_driver == "nouveau"
-                                                                   else "You chose basic display mode: no 3D acceleration, the safest start."))
+        reason = ("You chose the open-source nouveau driver." if choice.gpu_driver == "nouveau"
+                  else "You chose basic display mode: no 3D acceleration, the safest start.")
+        cards = [gpu for gpu in physical_gpus(hw.gpus) if gpu.vendor == "nvidia"]
+        if choice.gpu_driver == "nouveau" and cards and all(gpu.generation not in data.PROPRIETARY_GENERATIONS for gpu in cards):
+            # Too old for every NVIDIA driver here anyway: the real reason, the same sentence "Automatic" gives.
+            reason = nvidia_reason(card_name(cards), [gpu.generation for gpu in cards], "", "", True, is_hybrid(hw))
+        return NvidiaDecision("", mode=choice.gpu_driver, reason=reason)
     explicit = choice.gpu_driver == "nvidia"
     wanted = explicit or choice.nvidia_license_accepted
     errors: list[Issue] = []

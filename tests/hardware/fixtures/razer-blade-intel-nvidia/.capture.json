@@ -1,0 +1,14 @@
+{
+ "note": "synthesized for the tests, not captured from a real machine; identifiers are plausible, serials and MACs do not exist; the DMI strings follow public dmidecode reports and were not read from the device itself. 1532:0270 is a plausible Blade 15 keyboard id, not read from a device",
+ "now": 1792800000,
+ "redacted": true,
+ "schema": 1,
+ "summary": "Intel Core i7-10750H CPU @ 2.60GHz - 12 threads - 15 GiB - Intel UHD Graphics + NVIDIA GeForce GTX 1660 Ti Mobile - NVMe SSD - UEFI 64-bit",
+ "synthetic": true,
+ "tool": "synthetic",
+ "tool_version": 1,
+ "unverified": [
+  "dmi strings",
+  "usb id 1532:0270"
+ ]
+}

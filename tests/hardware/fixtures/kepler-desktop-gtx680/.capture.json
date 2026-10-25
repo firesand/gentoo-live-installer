@@ -1,0 +1,10 @@
+{
+ "note": "synthesized for the tests, not captured from a real machine; identifiers are plausible, serials and MACs do not exist; GK104 GTX 680 (10de:1180): no supported proprietary driver in the tree, nouveau only (470 and 390 are masked)",
+ "now": 1792800000,
+ "redacted": true,
+ "schema": 1,
+ "summary": "Intel Core i7-3770K CPU @ 3.50GHz - 16 threads - 30 GiB - NVIDIA GeForce GTX 680 - NVMe SSD - UEFI 64-bit",
+ "synthetic": true,
+ "tool": "synthetic",
+ "tool_version": 1
+}

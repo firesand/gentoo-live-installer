@@ -1,0 +1,15 @@
+{
+ "note": "synthesized for the tests, not captured from a real machine; identifiers are plausible, serials and MACs do not exist; the DMI strings follow public dmidecode reports and were not read from the device itself. 048d:c965 (ITE 8295 keyboard controller) and the lenovo-wmi-other attribute are modelled, not read",
+ "now": 1792800000,
+ "redacted": true,
+ "schema": 1,
+ "summary": "AMD Ryzen 7 5800H with Radeon Graphics - 16 threads - 15 GiB - NVIDIA GeForce RTX 3060 Mobile / Max-Q + AMD Radeon Vega Series / Radeon Vega Mobile Series - NVMe SSD - UEFI 64-bit",
+ "synthetic": true,
+ "tool": "synthetic",
+ "tool_version": 1,
+ "unverified": [
+  "dmi strings",
+  "usb id 048d:c965",
+  "firmware-attributes names"
+ ]
+}

@@ -32,7 +32,7 @@ _spec = importlib.util.spec_from_file_location("capture_hardware_fixture", ROOT 
 _capture = importlib.util.module_from_spec(_spec)  # type: ignore[arg-type]
 sys.modules["capture_hardware_fixture"] = _capture
 _spec.loader.exec_module(_capture)  # type: ignore[union-attr]
-FixtureWriter = _capture.FixtureWriter
+FixtureWriter: Any = _capture.FixtureWriter
 
 FIXTURES = HERE / "fixtures"
 NOW = 1_792_800_000  # 2026-10-24T00:00:00Z: every synthetic machine "boots" at this instant
@@ -110,13 +110,14 @@ class Builder:
 
     name: str
     dest: Path = field(init=False)
-    writer: FixtureWriter = field(init=False)
+    writer: Any = field(init=False)
     _pci: list[tuple[str, str]] = field(default_factory=list)  # (vendor, device) for the trimmed pci.ids
     _cmdline: str = "BOOT_IMAGE=/boot/gentoo root=live:CDLABEL=GENTOO_INSTALLER_AMD64 rd.live.dir=/ rd.live.squashimg=image.squashfs cdroot nodhcp secureconsole"
     _mounts: list[str] = field(default_factory=list)
     _input: list[str] = field(default_factory=list)
     _efi_label: list[str] = field(default_factory=list)
     _facts: dict[str, Any] = field(default_factory=dict)
+    _meta: dict[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self.dest = FIXTURES / self.name
@@ -190,11 +191,15 @@ class Builder:
     # -- PCI and graphics ------------------------------------------------------------------------
 
     def pci(self, slot: str, class_code: str, vendor: str, device: str, driver: str = "", *, boot_vga: bool = False, runtime: str = "active",
-            parent: str = "") -> None:
+            parent: str = "", subsystem: tuple[str, str] | None = None) -> None:
+        """``subsystem`` is the (vendor, device) pair the board maker burned in: sysfs shows it as subsystem_vendor and subsystem_device."""
         base = f"/sys/bus/pci/devices/{slot}"
         self.file(base + "/class", f"0x{class_code}\n")
         self.file(base + "/vendor", f"0x{vendor}\n")
         self.file(base + "/device", f"0x{device}\n")
+        if subsystem:
+            self.file(base + "/subsystem_vendor", f"0x{subsystem[0]}\n")
+            self.file(base + "/subsystem_device", f"0x{subsystem[1]}\n")
         if class_code.startswith("03"):
             self.file(base + "/boot_vga", "1\n" if boot_vga else "0\n")
         self.file(base + "/power/runtime_status", runtime + "\n")
@@ -301,14 +306,16 @@ class Builder:
         self.link(base + "/device/driver", driver_link(subsystem, driver))
 
     def usb(self, name: str, vendor: str, product: str, device_class: str = "00", interfaces: tuple[str, ...] = (), *, manufacturer: str = "",
-            label: str = "") -> None:
+            product_name: str = "", label: str = "") -> None:
+        """A USB device. The ``manufacturer`` and ``product_name`` strings are what sysfs shows (``label`` is the older name of
+        ``product_name``); the ``serial`` file is never written."""
         base = f"/sys/bus/usb/devices/{name}"
         self.file(base + "/idVendor", vendor + "\n")
         self.file(base + "/idProduct", product + "\n")
         if manufacturer:
             self.file(base + "/manufacturer", manufacturer + "\n")
-        if label:
-            self.file(base + "/product", label + "\n")
+        if product_name or label:
+            self.file(base + "/product", (product_name or label) + "\n")
         self.file(base + "/bDeviceClass", device_class + "\n")
         for index, klass in enumerate(interfaces):
             self.file(f"{base}/{name}:1.{index}/bInterfaceClass", klass + "\n")
@@ -318,22 +325,56 @@ class Builder:
     def platform_driver(self, name: str) -> None:
         self.file(f"/sys/bus/platform/drivers/{name}/bind", "")
 
-    def platform_profile(self, choices: str = "low-power balanced performance") -> None:
-        self.file("/sys/firmware/acpi/platform_profile", "balanced\n")
-        self.file("/sys/firmware/acpi/platform_profile_choices", choices + "\n")
+    def platform_device(self, name: str, driver: str = "", attributes: dict[str, str] | None = None) -> None:
+        """/sys/devices/platform/NAME with the driver that bound it and the attribute files that driver exposes (``asus-nb-wmi``: gpu_mux_mode, ...)."""
+        base = f"/sys/devices/platform/{name}"
+        self.link(f"/sys/bus/platform/devices/{name}", f"../../../devices/platform/{name}")
+        self.writer.mkdir(base)
+        if driver:
+            self.link(base + "/driver", f"../../../bus/platform/drivers/{driver}")
+        for attribute, value in (attributes or {}).items():
+            self.file(f"{base}/{attribute}", value + "\n")
+
+    def platform_profile(self, current: str = "balanced", choices: tuple[str, ...] = ("low-power", "balanced", "performance")) -> None:
+        """/sys/firmware/acpi/platform_profile{,_choices}: the firmware's performance profiles (what power-profiles-daemon switches)."""
+        self.file("/sys/firmware/acpi/platform_profile", current + "\n")
+        self.file("/sys/firmware/acpi/platform_profile_choices", " ".join(choices) + "\n")
 
     def led(self, name: str) -> None:
+        """A LED with only its brightness file (the short form of leds())."""
         self.file(f"/sys/class/leds/{name}/brightness", "0\n")
+
+    def leds(self, name: str, *, brightness: int = 0, maximum: int = 3) -> None:
+        """/sys/class/leds/NAME, for example ``asus::kbd_backlight`` or ``platform::micmute``."""
+        self.file(f"/sys/class/leds/{name}/brightness", f"{brightness}\n")
+        self.file(f"/sys/class/leds/{name}/max_brightness", f"{maximum}\n")
 
     def sleep(self, mem_sleep: str = "[s2idle] deep", pm_profile: int = 2) -> None:
         self.file("/sys/power/mem_sleep", mem_sleep + "\n")
         self.file("/sys/firmware/acpi/pm_profile", f"{pm_profile}\n")
 
-    def charge_limit(self, battery: str, end: int = 100) -> None:
+    def charge_threshold(self, battery: str, end: int, start: int | None = None) -> None:
+        """charge_control_end_threshold (and _start_) of a battery: the kernel's battery charge limit."""
         self.file(f"/sys/class/power_supply/{battery}/charge_control_end_threshold", f"{end}\n")
+        if start is not None:
+            self.file(f"/sys/class/power_supply/{battery}/charge_control_start_threshold", f"{start}\n")
+
+    def charge_limit(self, battery: str, end: int = 100) -> None:
+        self.charge_threshold(battery, end)
 
     def iio(self, index: int, name: str) -> None:
         self.file(f"/sys/bus/iio/devices/iio:device{index}/name", name + "\n")
+
+    def firmware_attributes(self, name: str, attributes: dict[str, str]) -> None:
+        """/sys/class/firmware-attributes/NAME/attributes/ATTR/current_value (``asus-armoury``, ``lenovo-wmi-other``, ``dell-wmi-sysman``)."""
+        for attribute, value in attributes.items():
+            self.file(f"/sys/class/firmware-attributes/{name}/attributes/{attribute}/current_value", value + "\n")
+
+    def note(self, text: str, *, unverified: tuple[str, ...] = ()) -> None:
+        """Provenance for .capture.json: these machines are invented, and ``unverified`` names what was not checked against a real device."""
+        self._meta["note"] = text
+        if unverified:
+            self._meta["unverified"] = list(unverified)
 
     def tpm(self, major: str = "2") -> None:
         self.file("/sys/class/tpm/tpm0/tpm_version_major", major + "\n")
@@ -375,7 +416,7 @@ class Builder:
         self.writer.finish(None)
         profile = hardware.probe(self.dest, now=NOW)
         meta = {"tool": "synthetic", "tool_version": 1, "schema": hardware.SCHEMA, "now": NOW, "redacted": True, "synthetic": True,
-                "summary": profile.summary()}
+                "summary": profile.summary(), **self._meta}
         (self.dest / ".capture.json").write_text(json.dumps(meta, indent=1, sort_keys=True) + "\n")
 
 
@@ -620,6 +661,328 @@ def intel_rst_hidden_nvme() -> None:
     b.finish()
 
 
+# --- Wave 5 machines (H01): every one is SYNTHESIZED; see each note() for what is invented -----------------
+
+SYNTHESIZED = "synthesized for the tests, not captured from a real machine; identifiers are plausible, serials and MACs do not exist"
+DMI_UNVERIFIED = "the DMI strings follow public dmidecode reports and were not read from the device itself"
+
+
+def nvme_install_disk(b: Builder, *, pci_slot: str, parent: str, model: str, size: int = 1_000_204_886_016, with_windows: bool = False,
+                      live_slot: str = "0000:00:14.0") -> None:
+    """One NVMe system disk plus the installer stick (shared by the new machines)."""
+    b.pci(pci_slot, "010802", "144d", "a80a", "nvme", parent=parent)
+    b.block("nvme0n1", f"../devices/pci0000:00/{parent + '/' if parent else ''}{pci_slot}/nvme/nvme0/nvme0n1", size, rota=False, model=model, dev="259:0",
+            by_path=f"pci-{pci_slot}-nvme-1")
+    live = live_usb(b, bus_slot=live_slot)
+    children = ([lsblk_part("nvme0n1p1", 260 * 1024 ** 2, fstype="vfat", parttype=ESP_TYPE, maj_min="259:1"),
+                 lsblk_part("nvme0n1p2", 300 * GIB, fstype="ntfs", parttype=MS_BASIC_TYPE, maj_min="259:2")] if with_windows else [])
+    b.lsblk([lsblk_disk("nvme0n1", size, tran="nvme", model=model, serial="S6XXXXXXXXXXXXX", maj_min="259:0", children=children), live])
+
+
+def wired_desktop_network(b: Builder, *, slot: str = "0000:06:00.0", parent: str = "0000:00:1c.2", iface: str = "enp6s0", driver: str = "r8169",
+                          vendor: str = "10ec", device: str = "8125") -> None:
+    b.pci(slot, "020000", vendor, device, driver, parent=parent)
+    b.net(iface, link=f"../../devices/pci0000:00/{parent}/{slot}/net/{iface}", driver=driver, subsystem="pci", device_link=f"../../../{slot}",
+          vendor=vendor, device=device)
+    b.route(iface)
+
+
+def nvidia_desktop(name: str, *, device: str, cpu_model: str, note: str, flags: str = FLAGS_KABYLAKE_H, vendor_id: str = "GenuineIntel", family: int = 6,
+                   model: int = 183, board: str = "PRIME Z790-P", memory_kib: int = 32_000_000) -> None:
+    """A tower PC with one NVIDIA card on a monitor. Pascal, Kepler and Blackwell differ in the device id, the CPU and the board."""
+    b = Builder(name)
+    b.dmi(sys_vendor="ASUSTeK COMPUTER INC.", product_name="System Product Name", product_version="System Version", bios_vendor="American Megatrends Inc.",
+          bios_version="1664", bios_date="03/12/2025", board_vendor="ASUSTeK COMPUTER INC.", board_name=board, chassis_type=3)
+    b.cpu(vendor_id=vendor_id, model_name=cpu_model, family=family, model=model, stepping=1, flags=flags, threads=16, cores=8)
+    b.memory(memory_kib - 400_000, int(memory_kib * 0.88), 0)
+    b.efi(secure_boot=False, setup_mode=False, boot_entries=("Windows Boot Manager",))
+    b.pci("0000:01:00.0", "030000", "10de", device, "nouveau", boot_vga=True, parent="0000:00:01.0", subsystem=("1043", "8886"))
+    b.pci("0000:01:00.1", "040300", "10de", "10f0", "snd_hda_intel", parent="0000:00:01.0")
+    b.pci("0000:00:1f.3", "040300", "8086", "7a50", "snd_hda_intel")
+    b.drm("card0", "0000:01:00.0", {"DP-1": ("connected", make_edid(2560, 1440, 597, 336, "DELL U2723QE", "DEL"), "2560x1440\n1920x1080\n"),
+                                    "HDMI-A-1": ("disconnected", None, "")}, parent="0000:00:01.0")
+    nvme_install_disk(b, pci_slot="0000:02:00.0", parent="0000:00:06.0", model="Samsung SSD 980 PRO 1TB", with_windows=True)
+    wired_desktop_network(b)
+    b.input_device("Logitech USB Keyboard", "sysrq kbd leds event0", bus="0003", vendor="046d", product="c31c")
+    b.sound_card(0, "snd_hda_intel", "pci")
+    b.usb("1-2", "046d", "c31c", "00", ("03",), manufacturer="Logitech", product_name="USB Keyboard")
+    b.tpm()
+    b.rtc(NOW)
+    b.chrony()
+    b.note(note)
+    b.finish()
+
+
+def pascal_desktop_gtx1060() -> None:
+    nvidia_desktop("pascal-desktop-gtx1060", device="1c03", cpu_model="Intel(R) Core(TM) i7-6700K CPU @ 4.00GHz", model=94, board="Z170-A",
+                   note=f"{SYNTHESIZED}; GP106 GTX 1060 (10de:1c03) is on the 580 branch's supported list: closed 580 modules, newer branches masked")
+
+
+def kepler_desktop_gtx680() -> None:
+    nvidia_desktop("kepler-desktop-gtx680", device="1180", cpu_model="Intel(R) Core(TM) i7-3770K CPU @ 3.50GHz", model=58, board="P8Z77-V",
+                   note=f"{SYNTHESIZED}; GK104 GTX 680 (10de:1180): no supported proprietary driver in the tree, nouveau only (470 and 390 are masked)")
+
+
+def blackwell_desktop_rtx5090() -> None:
+    nvidia_desktop("blackwell-desktop-rtx5090", device="2b85", cpu_model="AMD Ryzen 9 9950X 16-Core Processor", vendor_id="AuthenticAMD", family=26, model=68,
+                   flags=FLAGS_ZEN2_MOBILE, board="ROG CROSSHAIR X870E HERO", memory_kib=64_000_000,
+                   note=f"{SYNTHESIZED}; GB202 RTX 5090 (10de:2b85): only the open kernel modules of the newest branch can drive it")
+
+
+def asus_rog_laptop(name: str, *, eco: bool) -> None:
+    """ROG Zephyrus: Intel iGPU + RTX 3070 Ti Laptop behind a MUX switch. eco=True is the same laptop with the dGPU switched off in firmware."""
+    b = Builder(name)
+    b.dmi(sys_vendor="ASUSTeK COMPUTER INC.", product_name="ROG Zephyrus M16 GU603ZW_GU603ZW", product_version="1.0",
+          bios_vendor="American Megatrends International, LLC.", bios_version="GU603ZW.331", bios_date="08/04/2023", board_vendor="ASUSTeK COMPUTER INC.",
+          board_name="GU603ZW", chassis_type=10)
+    b.cpu(vendor_id="GenuineIntel", model_name="12th Gen Intel(R) Core(TM) i9-12900H", family=6, model=154, stepping=3, flags=FLAGS_TIGERLAKE_H, threads=20, cores=14)
+    b.memory(32_000_000 - 1_100_000, 27_000_000, 0)
+    b.efi(secure_boot=False, setup_mode=False, windows=True, boot_entries=("ubuntu",))
+    b.pci("0000:00:02.0", "030000", "8086", "46a6", "i915", boot_vga=True, subsystem=("1043", "1ed2"))
+    if not eco:
+        b.pci("0000:01:00.0", "030200", "10de", "24a0", "nouveau", runtime="suspended", parent="0000:00:01.0", subsystem=("1043", "1ed2"))
+    b.pci("0000:00:1f.3", "040100", "8086", "51ca", "sof-audio-pci-intel-tgl")
+    b.pci("0000:00:14.3", "028000", "8086", "51f0", "iwlwifi")
+    b.drm("card0", "0000:00:02.0", {"eDP-1": ("connected", make_edid(2560, 1600, 345, 215, "TL160ADMP05-0", "TMX"), "2560x1600\n1920x1200\n"),
+                                    "HDMI-A-1": ("disconnected", None, "")})
+    if not eco:
+        b.drm("card1", "0000:01:00.0", {"HDMI-A-2": ("disconnected", None, "")}, parent="0000:00:01.0")
+    nvme_install_disk(b, pci_slot="0000:00:06.0", parent="", model="WD PC SN560 SDDPNQE-1T00-1102", with_windows=True)
+    b.net("wlp0s20f3", link="../../devices/pci0000:00/0000:00:14.3/net/wlp0s20f3", driver="iwlwifi", subsystem="pci", device_link="../../../0000:00:14.3",
+          wireless=True, vendor="8086", device="51f0", carrier=False)
+    b.route(None)
+    b.supply("BAT0", "Battery", scope="System", status="Charging", capacity=71)
+    b.supply("AC0", "Mains", online=True)
+    b.charge_threshold("BAT0", 100)
+    b.backlight("intel_backlight")
+    b.leds("asus::kbd_backlight", brightness=1)
+    b.leds("platform::micmute", maximum=1)
+    dgpu_off = "1" if eco else "0"
+    b.platform_device("asus-nb-wmi", "asus-nb-wmi", {"gpu_mux_mode": "1", "dgpu_disable": dgpu_off, "egpu_enable": "0", "panel_od": "0", "throttle_thermal_policy": "0"})
+    b.firmware_attributes("asus-armoury", {"gpu_mux_mode": "1", "dgpu_disable": dgpu_off, "panel_overdrive": "0"})
+    b.platform_profile("balanced", ("quiet", "balanced", "performance"))
+    b.input_device("AT Translated Set 2 keyboard", "sysrq kbd leds event0")
+    b.input_device("Asus Keyboard", "sysrq kbd leds event4", bus="0003", vendor="0b05", product="19b6")
+    b.input_device("ASUE120A:00 04F3:319B Touchpad", "mouse0 event6", bus="0018", vendor="04f3", product="319b")
+    b.input_device("Lid Switch", "event1")
+    b.sound_card(0, "sof_sdw", "platform")
+    b.usb("1-3", "0951", "1666", "00", ("08",))
+    b.usb("1-5", "0b05", "19b6", "00", ("03", "03"), manufacturer="ASUSTeK Computer Inc.", product_name="N-KEY Device")
+    b.usb("1-10", "8087", "0033", "e0", ("e0", "e0"))
+    b.bluetooth()
+    b.tpm()
+    b.rtc(NOW)
+    b.chrony()
+    variant = "Variant of the MUX laptop with the NVIDIA GPU disabled in firmware (Eco mode): no 10de device is visible, dgpu_disable=1. " if eco else ""
+    b.note(f"{SYNTHESIZED}; replace by a volunteer's capture. {variant}0b05:19b6 is named in the asusctl README; the sysfs attribute names follow the "
+           "asus-nb-wmi and asus-armoury drivers", unverified=("dmi strings", "usb product string", "firmware-attributes names"))
+    b.finish()
+
+
+def asus_rog_zephyrus_intel_nvidia_mux() -> None:
+    asus_rog_laptop("asus-rog-zephyrus-intel-nvidia-mux", eco=False)
+
+
+def asus_rog_zephyrus_eco() -> None:
+    asus_rog_laptop("asus-rog-zephyrus-eco", eco=True)
+
+
+def razer_blade_intel_nvidia() -> None:
+    b = Builder("razer-blade-intel-nvidia")
+    b.dmi(sys_vendor="Razer", product_name="Blade 15 Base Model (Early 2020) - RZ09-0328", product_version="8.04", bios_vendor="Razer", bios_version="1.06",
+          bios_date="01/09/2020", board_vendor="Razer", board_name="CH570", chassis_type=10)
+    b.cpu(vendor_id="GenuineIntel", model_name="Intel(R) Core(TM) i7-10750H CPU @ 2.60GHz", family=6, model=165, stepping=2, flags=FLAGS_KABYLAKE_H, threads=12, cores=6)
+    b.memory(16_000_000 - 700_000, 13_600_000, 0)
+    b.efi(secure_boot=False, setup_mode=False, windows=True, boot_entries=("Windows Boot Manager",))
+    b.pci("0000:00:02.0", "030000", "8086", "9bc4", "i915", boot_vga=True)
+    b.pci("0000:01:00.0", "030200", "10de", "2191", "nouveau", runtime="suspended", parent="0000:00:01.0")
+    b.pci("0000:00:1f.3", "040300", "8086", "06c8", "snd_hda_intel")
+    b.pci("0000:00:14.3", "028000", "8086", "06f0", "iwlwifi")
+    b.drm("card0", "0000:00:02.0", {"eDP-1": ("connected", make_edid(1920, 1080, 344, 194, "LQ156M1JW01", "SHP"), "1920x1080\n1280x720\n")})
+    nvme_install_disk(b, pci_slot="0000:00:1d.0", parent="", model="SAMSUNG MZVLB512HBJQ-000L7", size=512_110_190_592, with_windows=True)
+    b.net("wlp0s20f3", link="../../devices/pci0000:00/0000:00:14.3/net/wlp0s20f3", driver="iwlwifi", subsystem="pci", device_link="../../../0000:00:14.3",
+          wireless=True, vendor="8086", device="06f0", carrier=False)
+    b.route(None)
+    b.supply("BAT0", "Battery", scope="System", status="Discharging", capacity=64)
+    b.supply("AC0", "Mains", online=False)
+    b.backlight("intel_backlight")
+    b.input_device("AT Translated Set 2 keyboard", "sysrq kbd leds event0")
+    b.input_device("Razer Razer Blade", "sysrq kbd leds event4", bus="0003", vendor="1532", product="0270")
+    b.input_device("SYNA8004:00 06CB:CD8B Touchpad", "mouse0 event6", bus="0018", vendor="06cb", product="cd8b")
+    b.input_device("Lid Switch", "event1")
+    b.sound_card(0, "snd_hda_intel", "pci")
+    b.usb("1-3", "0951", "1666", "00", ("08",))
+    b.usb("1-9", "1532", "0270", "00", ("03", "03", "03"), manufacturer="Razer", product_name="Razer Blade")
+    b.usb("1-10", "8087", "0026", "e0", ("e0", "e0"))
+    b.bluetooth()
+    b.tpm()
+    b.rtc(NOW)
+    b.chrony()
+    b.note(f"{SYNTHESIZED}; {DMI_UNVERIFIED}. 1532:0270 is a plausible Blade 15 keyboard id, not read from a device", unverified=("dmi strings", "usb id 1532:0270"))
+    b.finish()
+
+
+def lenovo_legion_amd_nvidia() -> None:
+    b = Builder("lenovo-legion-amd-nvidia")
+    b.dmi(sys_vendor="LENOVO", product_name="82JW", product_version="Legion 5 15ACH6H", bios_vendor="LENOVO", bios_version="GKCN64WW", bios_date="07/15/2022",
+          board_vendor="LENOVO", board_name="LNVNB161216", chassis_type=10)
+    b.cpu(vendor_id="AuthenticAMD", model_name="AMD Ryzen 7 5800H with Radeon Graphics", family=25, model=80, stepping=0, flags=FLAGS_ZEN2_MOBILE, threads=16, cores=8)
+    b.memory(16_000_000 - 520_000, 13_400_000, 0)
+    b.efi(secure_boot=False, setup_mode=False, windows=True, boot_entries=("Windows Boot Manager",))
+    b.pci("0000:06:00.0", "030000", "1002", "1638", "amdgpu", boot_vga=True, parent="0000:00:08.1")
+    b.pci("0000:01:00.0", "030200", "10de", "2520", "nouveau", runtime="suspended", parent="0000:00:01.1")
+    b.pci("0000:06:00.6", "040300", "1022", "15e3", "snd_hda_intel", parent="0000:00:08.1")
+    b.pci("0000:03:00.0", "028000", "10ec", "c822", "rtw89_8852ae", parent="0000:00:02.2")
+    b.pci("0000:04:00.0", "020000", "10ec", "8168", "r8169", parent="0000:00:02.3")
+    b.drm("card0", "0000:06:00.0", {"eDP-1": ("connected", make_edid(1920, 1080, 344, 194, "LEN8AA2", "LEN"), "1920x1080\n1280x720\n")}, parent="0000:00:08.1")
+    nvme_install_disk(b, pci_slot="0000:02:00.0", parent="0000:00:02.1", model="SAMSUNG MZALQ512HBLU-00BL2", size=512_110_190_592, with_windows=True)
+    b.net("wlp3s0", link="../../devices/pci0000:00/0000:00:02.2/0000:03:00.0/net/wlp3s0", driver="rtw89_8852ae", subsystem="pci",
+          device_link="../../../0000:03:00.0", wireless=True, vendor="10ec", device="c822", carrier=False)
+    b.route(None)
+    b.supply("BAT0", "Battery", scope="System", status="Discharging", capacity=90)
+    b.supply("ADP0", "Mains", online=False)
+    b.charge_threshold("BAT0", 100)
+    b.backlight("amdgpu_bl0")
+    b.platform_device("ideapad_acpi", "ideapad_acpi", {"conservation_mode": "0", "fn_lock": "0"})
+    b.platform_profile("balanced", ("low-power", "balanced", "performance"))
+    b.firmware_attributes("lenovo-wmi-other", {"gpu_mux_mode": "1"})
+    b.input_device("AT Translated Set 2 keyboard", "sysrq kbd leds event0")
+    b.input_device("SYNA2BA6:00 06CB:CE67 Touchpad", "mouse0 event6", bus="0018", vendor="06cb", product="ce67")
+    b.input_device("Lid Switch", "event1")
+    b.sound_card(0, "snd_hda_intel", "pci")
+    b.usb("1-3", "0951", "1666", "00", ("08",))
+    b.usb("1-4", "048d", "c965", "00", ("03", "03"), manufacturer="ITE Tech. Inc.", product_name="ITE Device(8295)")
+    b.bluetooth()
+    b.tpm()
+    b.rtc(NOW)
+    b.chrony()
+    b.note(f"{SYNTHESIZED}; {DMI_UNVERIFIED}. 048d:c965 (ITE 8295 keyboard controller) and the lenovo-wmi-other attribute are modelled, not read",
+           unverified=("dmi strings", "usb id 048d:c965", "firmware-attributes names"))
+    b.finish()
+
+
+def asus_tuf_amd_nvidia() -> None:
+    """An AMD laptop with an NVIDIA GPU and no MUX switch (an ASUS TUF A15): offload only."""
+    b = Builder("amd-laptop-nvidia")
+    b.dmi(sys_vendor="ASUSTeK COMPUTER INC.", product_name="TUF Gaming A15 FA506ICB_FA506ICB", product_version="1.0",
+          bios_vendor="American Megatrends International, LLC.", bios_version="FA506ICB.317", bios_date="11/03/2022", board_vendor="ASUSTeK COMPUTER INC.",
+          board_name="FA506ICB", chassis_type=10)
+    b.cpu(vendor_id="AuthenticAMD", model_name="AMD Ryzen 7 4800H with Radeon Graphics", family=23, model=96, stepping=1, flags=FLAGS_ZEN2_MOBILE, threads=16, cores=8)
+    b.memory(16_000_000 - 510_000, 13_200_000, 0)
+    b.efi(secure_boot=False, setup_mode=False, windows=True, boot_entries=("Windows Boot Manager",))
+    b.pci("0000:05:00.0", "030000", "1002", "1638", "amdgpu", boot_vga=True, parent="0000:00:08.1")
+    b.pci("0000:01:00.0", "030200", "10de", "25a0", "nouveau", runtime="suspended", parent="0000:00:01.1")
+    b.pci("0000:05:00.6", "040300", "1022", "15e3", "snd_hda_intel", parent="0000:00:08.1")
+    b.pci("0000:02:00.0", "028000", "14c3", "0616", "mt7921e", parent="0000:00:02.2")
+    b.drm("card0", "0000:05:00.0", {"eDP-1": ("connected", make_edid(1920, 1080, 344, 194, "BOE0A72", "BOE"), "1920x1080\n1280x720\n")}, parent="0000:00:08.1")
+    nvme_install_disk(b, pci_slot="0000:03:00.0", parent="0000:00:02.1", model="Micron_2210_MTFDHBA512QFD", size=512_110_190_592, with_windows=True)
+    b.net("wlp2s0", link="../../devices/pci0000:00/0000:00:02.2/0000:02:00.0/net/wlp2s0", driver="mt7921e", subsystem="pci",
+          device_link="../../../0000:02:00.0", wireless=True, vendor="14c3", device="0616", carrier=False)
+    b.route(None)
+    b.supply("BAT0", "Battery", scope="System", status="Discharging", capacity=77)
+    b.supply("AC0", "Mains", online=False)
+    b.charge_threshold("BAT0", 100)
+    b.backlight("amdgpu_bl0")
+    b.leds("asus::kbd_backlight")
+    b.platform_device("asus-nb-wmi", "asus-nb-wmi", {"throttle_thermal_policy": "0"})
+    b.platform_profile("balanced", ("quiet", "balanced", "performance"))
+    b.input_device("AT Translated Set 2 keyboard", "sysrq kbd leds event0")
+    b.input_device("Asus Keyboard", "sysrq kbd leds event4", bus="0003", vendor="0b05", product="19b6")
+    b.input_device("ASUE1209:00 04F3:319F Touchpad", "mouse0 event6", bus="0018", vendor="04f3", product="319f")
+    b.input_device("Lid Switch", "event1")
+    b.sound_card(0, "snd_hda_intel", "pci")
+    b.usb("1-3", "0951", "1666", "00", ("08",))
+    b.usb("1-5", "0b05", "19b6", "00", ("03", "03"), manufacturer="ASUSTeK Computer Inc.", product_name="N-KEY Device")
+    b.bluetooth()
+    b.tpm()
+    b.rtc(NOW)
+    b.chrony()
+    b.note(f"{SYNTHESIZED}; {DMI_UNVERIFIED}", unverified=("dmi strings", "usb product string"))
+    b.finish()
+
+
+def intel_arc_discrete_desktop() -> None:
+    b = Builder("intel-arc-discrete-desktop")
+    b.dmi(sys_vendor="Micro-Star International Co., Ltd.", product_name="MS-7E07", product_version="1.0", bios_vendor="American Megatrends International, LLC.",
+          bios_version="1.A0", bios_date="04/16/2024", board_vendor="Micro-Star International Co., Ltd.", board_name="PRO B760M-P DDR4 (MS-7E07)", chassis_type=3)
+    b.cpu(vendor_id="GenuineIntel", model_name="13th Gen Intel(R) Core(TM) i5-13400F", family=6, model=191, stepping=2, flags=FLAGS_TIGERLAKE_H, threads=16, cores=10)
+    b.memory(32_000_000 - 450_000, 29_000_000, 0)
+    b.efi(secure_boot=False, setup_mode=False, boot_entries=("Windows Boot Manager",))
+    b.pci("0000:03:00.0", "030000", "8086", "56a0", "i915", boot_vga=True, parent="0000:00:01.0")
+    b.pci("0000:04:00.0", "040300", "8086", "4f90", "snd_hda_intel", parent="0000:00:01.0")
+    b.pci("0000:00:1f.3", "040300", "8086", "7a50", "snd_hda_intel")
+    b.drm("card0", "0000:03:00.0", {"DP-1": ("connected", make_edid(2560, 1440, 597, 336, "LG ULTRAGEAR", "GSM"), "2560x1440\n1920x1080\n"),
+                                    "HDMI-A-1": ("disconnected", None, "")}, parent="0000:00:01.0")
+    nvme_install_disk(b, pci_slot="0000:02:00.0", parent="0000:00:06.0", model="KINGSTON SKC3000S1024G", with_windows=True)
+    wired_desktop_network(b)
+    b.input_device("AT Translated Set 2 keyboard", "sysrq kbd leds event0")
+    b.sound_card(0, "snd_hda_intel", "pci")
+    b.tpm()
+    b.rtc(NOW)
+    b.chrony()
+    b.note(f"{SYNTHESIZED}; DG2 Arc A770 (8086:56a0) is a discrete card: no iGPU fix applies")
+    b.finish()
+
+
+def intel_core_ultra_laptop_arc_igpu() -> None:
+    b = Builder("intel-core-ultra-laptop-arc-igpu")
+    b.dmi(sys_vendor="Acer", product_name="Swift SFG14-72", product_version="V1.06", bios_vendor="Insyde Corp.", bios_version="V1.06", bios_date="03/12/2024",
+          board_vendor="Acer", board_name="Meteor Lake", chassis_type=10)
+    b.cpu(vendor_id="GenuineIntel", model_name="Intel(R) Core(TM) Ultra 7 155H", family=6, model=170, stepping=4, flags=FLAGS_TIGERLAKE_H, threads=22, cores=16)
+    b.memory(16_000_000 - 800_000, 13_500_000, 0)
+    b.efi(secure_boot=False, setup_mode=False, windows=True, boot_entries=("Windows Boot Manager",))
+    b.pci("0000:00:02.0", "030000", "8086", "7d55", "i915", boot_vga=True)
+    b.pci("0000:00:1f.3", "040100", "8086", "7e28", "sof-audio-pci-intel-mtl")
+    b.pci("0000:00:14.3", "028000", "8086", "7e40", "iwlwifi")
+    b.drm("card0", "0000:00:02.0", {"eDP-1": ("connected", make_edid(2880, 1800, 302, 189, "ATNA45AF01-0", "SDC"), "2880x1800\n1920x1200\n")})
+    nvme_install_disk(b, pci_slot="0000:00:06.0", parent="", model="Micron MTFDKBA512TFH", size=512_110_190_592, with_windows=True)
+    b.net("wlp0s20f3", link="../../devices/pci0000:00/0000:00:14.3/net/wlp0s20f3", driver="iwlwifi", subsystem="pci", device_link="../../../0000:00:14.3",
+          wireless=True, vendor="8086", device="7e40", carrier=False)
+    b.route(None)
+    b.supply("BAT1", "Battery", scope="System", status="Discharging", capacity=88)
+    b.supply("ACAD", "Mains", online=False)
+    b.backlight("intel_backlight")
+    b.platform_profile("balanced", ("low-power", "balanced", "performance"))
+    b.input_device("AT Translated Set 2 keyboard", "sysrq kbd leds event0")
+    b.input_device("ELAN0406:00 04F3:3077 Touchpad", "mouse0 event6", bus="0018", vendor="04f3", product="3077")
+    b.input_device("Lid Switch", "event1")
+    b.sound_card(0, "sof_sdw", "platform")
+    b.usb("1-3", "0951", "1666", "00", ("08",))
+    b.usb("1-7", "04f2", "b7b9", "ef", ("0e", "0e"), manufacturer="Chicony Electronics Co.,Ltd.", product_name="Integrated Camera")
+    b.bluetooth()
+    b.tpm()
+    b.rtc(NOW)
+    b.chrony()
+    b.note(f"{SYNTHESIZED}; Meteor Lake Arc graphics (8086:7d55) is an integrated GPU: the discrete-Arc rules must not apply")
+    b.finish()
+
+
+def desktop_secureboot(dest: Path, source: Path | None = None) -> Path:
+    """The captured RTX 4090 desktop as it would look with Secure Boot on (SecureBoot=1, kernel lockdown in integrity mode).
+
+    Derived at test time from the captured host fixture, like desktop_igpu_idle: the NVIDIA policy for Secure Boot can be tested
+    without a second copy of the real capture. The SecureBoot variable and the lockdown file are the invented part.
+    """
+    source = source or FIXTURES / "asus-desktop-rtx4090"
+    if dest.exists():
+        shutil.rmtree(dest)
+    shutil.copytree(source, dest)
+    writer = FixtureWriter(dest)
+    writer.links = json.loads((dest / ".links.json").read_text())
+    writer.write_file(f"/sys/firmware/efi/efivars/SecureBoot-{hardware.EFI_GLOBAL_GUID}", b"\x07\x00\x00\x00\x01")
+    writer.write_file("/sys/kernel/security/lockdown", "none [integrity] confidentiality\n")
+    writer.finish(None)
+    meta = json.loads((dest / ".capture.json").read_text())
+    meta.update({"synthetic": True, "note": "derived from the real asus-desktop-rtx4090 capture; only the SecureBoot variable and the lockdown file are synthesized",
+                 "summary": hardware.probe(dest, now=meta["now"]).summary()})
+    (dest / ".capture.json").write_text(json.dumps(meta, indent=1, sort_keys=True) + "\n")
+    return dest
+
+
+WAVE5_MACHINES = (pascal_desktop_gtx1060, kepler_desktop_gtx680, blackwell_desktop_rtx5090, asus_rog_zephyrus_intel_nvidia_mux, asus_rog_zephyrus_eco,
+                  razer_blade_intel_nvidia, lenovo_legion_amd_nvidia, asus_tuf_amd_nvidia, intel_arc_discrete_desktop, intel_core_ultra_laptop_arc_igpu)
+
+
 def desktop_igpu_idle(dest: Path, source: Path | None = None) -> Path:
     """The captured RTX 4090 desktop with the CPU's integrated GPU switched on but unused (monitors stay on the dGPU).
 
@@ -782,7 +1145,7 @@ def thinkpad_amd_laptop() -> None:
 def build_all() -> None:
     FIXTURES.mkdir(parents=True, exist_ok=True)
     for build in (qemu_q35_virtio, old_bios_sata_radeon, thinkpad_intel_nvidia_hybrid, amd_laptop_sof, vmware_guest, intel_rst_hidden_nvme,
-                  asus_rog_laptop, razer_blade_laptop, arc_ultra_convertible, thinkpad_amd_laptop):
+                  asus_rog_laptop, razer_blade_laptop, arc_ultra_convertible, thinkpad_amd_laptop, *WAVE5_MACHINES):
         build()
 
 

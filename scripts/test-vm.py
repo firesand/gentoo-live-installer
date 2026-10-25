@@ -48,6 +48,10 @@ import vm_iso  # noqa: E402
 import vm_matrix  # noqa: E402
 import vm_probes  # noqa: E402
 import vm_rescue  # noqa: E402
+import vm_secureboot  # noqa: E402
+import vm_session  # noqa: E402
+import vm_shots  # noqa: E402
+import vm_wave5  # noqa: E402
 from vm_hw import VMHardware  # noqa: E402
 from vm_probes import ANSI_RE, ProbeResult, parse_probe_result, parse_receipt_probe, parse_swap_probe  # noqa: E402, F401
 from vm_qmp import (  # noqa: E402
@@ -200,6 +204,17 @@ class Scenario:
     extra_roles: tuple[str, ...] = ()   # what each extra disk is: "data" (the install writes to it) or "decoy" (must survive); default all decoys
     breaks: tuple[str, ...] = ()     # damage (vm_rescue.BREAK_MODES), each repaired before the next
     repair: str = ""                 # "" | "cli": repair with gentoo-rescue
+    # --- Wave 5 (docs/TESTING.md, interface I13) ---------------------------------------------------------------
+    ssh_password_login: bool = True  # accounts.ssh_password_login: False installs a keys-only sshd (sshd -T must say so)
+    chroot: bool = False             # after the install, boot the live ISO and run gentoo-chroot non-interactively against the disk
+    live_only: bool = False          # install nothing: boot the live ISO (as --live-only does)
+    live_checks: bool = False        # live_only: remote access (gentoo-remote-access on/off, password login) and fresh SSH host keys on a second boot
+    # --- Wave 5, hardware backlog H04 ---------------------------------------------------------------------------
+    desktop: str = ""                # a Guided desktop to install ("" = minimal); desktops need --memory 12288 --build-jobs 1 --swap-mib 4096 --companions none
+    safe_graphics: bool = False      # the manifest asks for the NVIDIA driver; the installed system's Safe graphics boot entry is booted once
+    secure_boot_install: bool = False   # systemd-boot + a UKI signed with the test key (--sb-key, --sb-cert), booted under OVMF Secure Boot; module-load experiment
+    live_expect: tuple[tuple[str, Any], ...] = ()   # live_only: dotted paths into the installer's hardware report and the values they must have
+    screenshots: bool = False        # live_only: pictures of the live desktop and of every installer page at each size of --screenshot-sizes
 
     @property
     def hostname(self) -> str:
@@ -280,10 +295,49 @@ SCENARIO_MAP = {
                                       note="manual layout across two disks (ESP and root on one, swap and /home on the other) next to a third disk that must survive"),
     "text-install": Scenario("text-install", "openrc", "uefi", install_mode="text", boot_entry="text", in_all=False,
                              note="the console installer: the ISO's text entry, then gentoo-installer-text with a device confirmation"),
+    # --- Wave 5 (interface I13) ----------------------------------------------------------------------------------
+    "ssh-keys-only": Scenario("ssh-keys-only", "openrc", "uefi", ssh_password_login=False, in_all=False,
+                              note="accounts.ssh_password_login=false: sshd -T must show password and keyboard-interactive login off, root login off"),
+    "live-remote-access": Scenario("live-remote-access", "openrc", "uefi", live_only=True, live_checks=True, in_all=False,
+                                   hardware=_hw(vga="none"),
+                                   note="the live ISO only: sshd at boot, gentoo-remote-access status/on/off with a password login from the host, fresh host keys on a second boot"),
+    "rescue-chroot": Scenario("rescue-chroot", "openrc", "uefi", chroot=True, in_all=False,
+                              note="a minimal Gentoo installed first, then gentoo-chroot run non-interactively from the live ISO (DNS, emerge --info, grub-mkconfig; nothing left mounted)"),
     # A rescue run: a Gentoo is installed first, then broken and repaired.
     "rescue-gentoo": Scenario("rescue-gentoo", "openrc", "uefi", breaks=("grub-cfg", "initramfs", "fstab-uuid"), repair="cli", in_all=False,
                               note="a minimal Gentoo installed first, then broken and repaired three times (menu file, initramfs, fstab)"),
 }
+# --- Wave 5, hardware backlog H04: vendors by DMI, the Safe graphics entry, Secure Boot, every Guided desktop ---------------------------------------
+_VENDOR_NOTE = "the live ISO only, on a VM that shows {vendor}'s DMI strings: the installer's hardware report must read them (the hardware probe, not the daemon)"
+SCENARIO_MAP.update({
+    "dmi-asus-rog": Scenario("dmi-asus-rog", "openrc", "uefi", live_only=True, in_all=False, hardware=_hw(smbios="laptop-asus-rog", vga="none"),
+                             live_expect=(("machine.sys_vendor", "ASUSTeK COMPUTER INC."), ("machine.product_name", "re:ROG Zephyrus"),
+                                          ("machine.vendor_family", "re:(?i)asus")),
+                             note=_VENDOR_NOTE.format(vendor="an ASUS ROG laptop")),
+    "dmi-razer-blade": Scenario("dmi-razer-blade", "openrc", "uefi", live_only=True, in_all=False, hardware=_hw(smbios="laptop-razer-blade", vga="none"),
+                                live_expect=(("machine.sys_vendor", "Razer"), ("machine.product_name", "re:Blade"), ("machine.vendor_family", "re:(?i)razer")),
+                                note=_VENDOR_NOTE.format(vendor="a Razer Blade") + " (the Razer strings are not read from a real device)"),
+    "dmi-lenovo-legion": Scenario("dmi-lenovo-legion", "openrc", "uefi", live_only=True, in_all=False, hardware=_hw(smbios="laptop-lenovo-legion", vga="none"),
+                                  live_expect=(("machine.sys_vendor", "LENOVO"), ("machine.product_version", "re:Legion"), ("machine.vendor_family", "re:(?i)lenovo")),
+                                  note=_VENDOR_NOTE.format(vendor="a Lenovo Legion")),
+    "safe-graphics-grub": Scenario("safe-graphics-grub", "openrc", "uefi", safe_graphics=True, in_all=False,
+                                   note="the NVIDIA driver is requested; the GRUB menu of the installed system must list Safe graphics (nomodeset, graphics modules blacklisted) and booting it must work"),
+    "safe-graphics-systemd-boot": Scenario("safe-graphics-systemd-boot", "systemd", "uefi", bootloader="systemd-boot", safe_graphics=True, in_all=False,
+                                           note="the same for systemd-boot: a Safe graphics loader entry, selected once with bootctl set-oneshot"),
+    "safe-graphics-efi-stub": Scenario("safe-graphics-efi-stub", "openrc", "uefi", bootloader="efi-stub", safe_graphics=True, in_all=False,
+                                       note="the same for the EFI stub: a Safe graphics boot option, selected once with efibootmgr --bootnext"),
+    "secure-boot-modules": Scenario("secure-boot-modules", "systemd", "uefi", bootloader="systemd-boot", secure_boot_install=True, in_all=False,
+                                    hardware=_hw(secure_boot=True),
+                                    note="systemd-boot with a UKI signed by the test key, booted under OVMF Secure Boot; an unsigned and a signed dummy module are loaded on gentoo-kernel-bin (evidence for B07 step 2)"),
+})
+SCENARIO_MAP["screenshots"] = Scenario(
+    "screenshots", "openrc", "uefi", live_only=True, screenshots=True, in_all=False,
+    note="the live ISO only: a picture of the desktop and of every installer page, Guided and Advanced, at 1366x768 and 1920x1080 (--screenshots DIR)")
+for _desktop in vm_session.GUIDED_DESKTOPS:
+    for _init in ("openrc", "systemd"):
+        SCENARIO_MAP[f"desktop-{_desktop}-{_init}"] = Scenario(
+            f"desktop-{_desktop}-{_init}", _init, "uefi", desktop=_desktop, in_all=False,
+            note=f"{_desktop} on {_init}: the display manager, its greeter and a session file; pactl info (hours; --memory 12288 --build-jobs 1 --swap-mib 4096 --companions none)")
 SCENARIOS = tuple(SCENARIO_MAP)
 # What --all runs: the fast scenarios whose installs have passed on real QEMU.
 ALL_SCENARIOS = tuple(name for name, scenario in SCENARIO_MAP.items() if scenario.in_all)
@@ -397,8 +451,8 @@ def build_manifest(scenario: Scenario, ssh_public_key: str, companions: str = "b
     manifest.storage.luks_passphrase = TEST_LUKS_PASSPHRASE if scenario.luks else ""
     manifest.system.init = scenario.init
     manifest.system.stage_variant = f"amd64-{scenario.init}"
-    manifest.system.profile = "default/linux/amd64/23.0" + ("/systemd" if scenario.init == "systemd" else "")
-    manifest.system.desktop = "minimal"
+    manifest.system.profile = "" if scenario.desktop else "default/linux/amd64/23.0" + ("/systemd" if scenario.init == "systemd" else "")
+    manifest.system.desktop = scenario.desktop or "minimal"
     manifest.system.kernel = "gentoo-kernel-bin"
     manifest.system.initramfs = "dracut"
     manifest.system.bootloader = scenario.bootloader
@@ -410,6 +464,11 @@ def build_manifest(scenario: Scenario, ssh_public_key: str, companions: str = "b
     manifest.portage.binhost = True
     manifest.portage.features = ["getbinpkg"]
     manifest.portage.make_opts = f"-j{build_jobs}"
+    if scenario.safe_graphics:  # the entry is made when the NVIDIA driver is active
+        manifest.hardware.gpu_driver, manifest.hardware.nvidia_license_accepted, manifest.hardware.safe_graphics_entry = "nvidia", True, True
+    if scenario.secure_boot_install:
+        manifest.system.uki, manifest.system.secure_boot, manifest.system.secure_boot_mode = True, True, "own-key"
+        manifest.system.secure_boot_key, manifest.system.secure_boot_certificate = vm_secureboot.REMOTE_KEY, vm_secureboot.REMOTE_CERT
     manifest.accounts.hostname = scenario.hostname
     manifest.accounts.username = TEST_USERNAME
     manifest.accounts.full_name = "Disposable VM test user"
@@ -417,10 +476,11 @@ def build_manifest(scenario: Scenario, ssh_public_key: str, companions: str = "b
     manifest.accounts.root_password = TEST_ROOT_PASSWORD
     manifest.accounts.disable_root_login = True
     manifest.accounts.ssh_authorized_keys = [ssh_public_key.strip()]
+    manifest.accounts.ssh_password_login = scenario.ssh_password_login
     manifest.options.install_hwmonux = companions == "both"
     manifest.options.install_portagehub = companions in {"both", "portagehub"}
     manifest.options.ssh = True
-    manifest.options.pipewire = False
+    manifest.options.pipewire = bool(scenario.desktop)  # the desktop scenarios judge the sound server (audio-pactl)
     manifest.options.bluetooth = False
     manifest.options.printing = False
     manifest.options.microcode = False
@@ -598,7 +658,7 @@ def qemu_command(
         "-netdev", f"user,id=net0,hostfwd=tcp:{ssh_host}:{ssh_port}-:22",
         *vm_hw.nic_arguments(hw),
         "-device", "virtio-rng-pci",
-        "-vga", hw.vga,
+        *vm_hw.display_arguments(hw),
         "-display", "none",
         "-monitor", "none",
         *vm_hw.smbios_arguments(hw, run_dir, nonce),
@@ -1052,10 +1112,16 @@ DESKTOP_PACKAGES = {
     "gnome": ("gnome-base", "gnome", "gdm"),
     "xfce": ("xfce-base", "xfce4-meta", "lightdm"),
 }
+# The desktops of Wave 5: the display manager is whatever the installer chose (vm_session.parse_desktop_session_probe), so only the package is fixed here.
+EXTRA_DESKTOP_PACKAGES = {name: tuple(str(info["package"]).split("/")) for name, info in vm_session.DESKTOPS.items() if name not in DESKTOP_PACKAGES}
 
 
 def desktop_probe_plan(manifest: InstallManifest) -> list[tuple[str, str, Callable[[int, str], ProbeResult]]]:
     """Check that the selected desktop and its display manager were installed and enabled."""
+    if manifest.system.desktop in EXTRA_DESKTOP_PACKAGES:
+        category, package = EXTRA_DESKTOP_PACKAGES[manifest.system.desktop]
+        installed = f"ls -d /var/db/pkg/{category}/{package}-[0-9]*"
+        return [("desktop", installed, lambda code, output: parse_probe_result("desktop", code, output))]
     if manifest.system.desktop not in DESKTOP_PACKAGES:
         return []
     category, package, manager = DESKTOP_PACKAGES[manifest.system.desktop]
@@ -1066,6 +1132,17 @@ def desktop_probe_plan(manifest: InstallManifest) -> list[tuple[str, str, Callab
     else:
         enabled = f"systemctl is-enabled {manager}.service"
     return [("desktop", f"{installed} && {enabled}", lambda code, output: parse_probe_result("desktop", code, output))]
+
+
+def session_probe_plan(manifest: InstallManifest) -> list[tuple[str, str, Callable[[int, str], ProbeResult]]]:
+    """The graphical session of any desktop but minimal: display manager, greeter, session file; and pactl info when PipeWire is installed (Wave 5, H04)."""
+    desktop, init = manifest.system.desktop, manifest.system.init
+    if desktop not in vm_session.DESKTOPS:
+        return []
+    plan = [("desktop-session", vm_session.desktop_session_command(init), lambda code, output: vm_session.parse_desktop_session_probe(code, output, desktop, init))]
+    if manifest.options.pipewire:
+        plan.append(("audio-pactl", vm_session.pactl_command(init), vm_session.parse_pactl_probe))
+    return plan
 
 
 def parse_static_network_probe(returncode: int, output: str, expected: Mapping[str, object]) -> ProbeResult:
@@ -1315,7 +1392,8 @@ def parse_root_lock_probe(returncode: int, output: str, manifest: InstallManifes
 
 
 def installed_system_probes(manifest: InstallManifest, scenario: Scenario, *, world: bool = False, world_timeout: int = 1800,
-                            hardware_plan: Mapping[str, Any] | None = None, degraded: Sequence[str] = ()) -> list[tuple]:
+                            hardware_plan: Mapping[str, Any] | None = None, degraded: Sequence[str] = (),
+                            secure_boot_keys: tuple[bytes, bytes] | None = None) -> list[tuple]:
     """Probes of what the installer produced, beyond 'it boots': (name, command, parser[, stdin[, timeout]]).
 
     ``world`` adds ``emerge -pvuDN @world`` (minutes on a desktop); ``hardware_plan`` is the plan the daemon
@@ -1344,6 +1422,11 @@ def installed_system_probes(manifest: InstallManifest, scenario: Scenario, *, wo
     if preset.manufacturer:
         probes.append(("dmi", "cat /sys/class/dmi/id/sys_vendor /sys/class/dmi/id/chassis_type",
                        lambda c, o: parse_dmi_probe(c, o, preset)))
+    probes.extend(vm_wave5.sshd_probes(manifest, scenario.init, password))
+    if scenario.secure_boot_install:  # B07 step 2: what does the kernel do with an unsigned and a signed module under Secure Boot?
+        key, cert = secure_boot_keys or (b"", b"")
+        probes.append(("secure-boot-modules", vm_secureboot.module_experiment_command(), vm_secureboot.parse_module_experiment_probe,
+                       vm_secureboot.module_experiment_input(TEST_PASSWORD, key, cert), 900))
     if hardware_plan is not None:
         plan = dict(hardware_plan)
         atoms = [vm_probes.INTEL_MICROCODE, *vm_probes.GUEST_TOOL_ATOMS]
@@ -1736,9 +1819,14 @@ class ScenarioRunner:
 
     direct_boot: vm_iso.DirectBoot | None = None
 
+    resolution = ""
+
     def vm_arguments(self, live: bool, *, scenario: Scenario | None = None) -> list[str]:
+        scenario = scenario or self.scenario
+        if self.resolution:  # the screenshots scenario boots the same machine once per display size
+            scenario = dataclasses.replace(scenario, hardware=dataclasses.replace(scenario.hardware, resolution=self.resolution))
         return qemu_command(
-            scenario or self.scenario, iso=self.iso, disk=self.disk, run_dir=self.run_dir, live=live,
+            scenario, iso=self.iso, disk=self.disk, run_dir=self.run_dir, live=live,
             ssh_host=self.args.ssh_host, ssh_port=self.args.ssh_port,
             memory_mib=self.args.memory, cpus=self.args.cpus,
             qemu_binary=self.args.qemu_binary, firmware=self.firmware,
@@ -2087,6 +2175,8 @@ class ScenarioRunner:
             "manifest": str(manifest_path), "companions": selection,
         }, indent=2) + "\n")
         remote_manifest = "/run/gentoo-installer-vm-manifest.json"
+        if self.scenario.secure_boot_install and not reinstall:
+            self.upload_secure_boot_key()
         code, log = self.ssh(
             self.args.ssh_user, f"cat > {remote_manifest}", "ssh-upload.log",
             self.args.command_timeout, stdin=manifest_path.read_bytes(),
@@ -2292,6 +2382,7 @@ class ScenarioRunner:
         manifest = InstallManifest.load(manifest_path)
         probes.extend(companion_probe_plan(manifest))
         probes.extend(desktop_probe_plan(manifest))
+        probes.extend(session_probe_plan(manifest))
         static_probe = static_network_probe(manifest)
         if static_probe is not None:
             command, parser = static_probe
@@ -2299,7 +2390,8 @@ class ScenarioRunner:
         plan = self.hardware_plan()
         degraded = self.install_degraded()
         probes.extend(installed_system_probes(manifest, self.scenario, world=not getattr(self.args, "no_world_probe", False),
-                                              world_timeout=getattr(self.args, "world_timeout", 1800), hardware_plan=plan, degraded=degraded))
+                                              world_timeout=getattr(self.args, "world_timeout", 1800), hardware_plan=plan, degraded=degraded,
+                                              secure_boot_keys=self.secure_boot_keys() if self.scenario.secure_boot_install else None))
         results: list[ProbeResult] = []
         if "install_artifacts" in self.__dict__:  # this run installed the system: what the installer said about itself can be judged
             results.append(self.install_completion_probe(manifest, plan))
@@ -2382,6 +2474,10 @@ class ScenarioRunner:
         result["advisory_findings"] = [probe.record() for probe in probes if not probe.success and probe.advisory]
         # What Portage would still change right after the install: information, kept from the first round of probes.
         result["world_drift"] = result.get("world_drift") or next((probe.data for probe in probes if probe.name == "world-drift"), None)
+        experiment = next((probe for probe in probes if probe.name == "secure-boot-modules" and probe.data), None)
+        if experiment is not None:  # the evidence B07 step 2 waits for: kept in result.json and printed
+            result["secure_boot_modules"] = experiment.data
+            print(f"SECURE BOOT {self.scenario.name}: {experiment.output}")
         for probe in probes:
             if not probe.success and probe.advisory:
                 print(f"WARNING {self.scenario.name}: advisory probe {probe.name} failed: {probe.error}", file=sys.stderr)
@@ -2397,7 +2493,169 @@ class ScenarioRunner:
         self.wait_for_ssh(self.args.ssh_user, "live", live)
         if self.boot_entry is not None:
             self.check_boot_entry()
+        self.check_live_network()
         return live
+
+    # --- Wave 5 (interface I13): network_status, remote access, host keys, gentoo-chroot -------------------------------
+
+    live_network: list[dict] | None = None
+
+    NETWORK_RETRY_SECONDS = 3.0   # the daemon's socket and DHCP are not ready the moment SSH is: ask again
+    NETWORK_WAIT_SECONDS = 90.0
+
+    def check_live_network(self) -> dict:
+        """network_status runs for real in every VM: wired, so online with a route, DNS and no problem code.
+
+        The live system answers SSH before the daemon has made its socket and before DHCP has finished, so a failure is asked again for a
+        bounded time (NETWORK_WAIT_SECONDS) before it counts. A daemon without the action is a warning, not a failure, and is not asked twice.
+        """
+        records = self.__dict__.setdefault("live_network", [])
+        deadline = time.monotonic() + self.NETWORK_WAIT_SECONDS
+        attempt = 0
+        while True:
+            attempt += 1
+            code, log = self.ssh(self.args.ssh_user, vm_wave5.network_status_command(), f"live-network-status-{len(records) + 1}-{attempt}.log",
+                                 self.args.command_timeout)
+            probe = vm_wave5.parse_network_status_probe(code, log.read_text(errors="replace"))
+            if probe.success or probe.advisory or time.monotonic() >= deadline:
+                break
+            time.sleep(self.NETWORK_RETRY_SECONDS)
+        records.append({**probe.record(), "attempts": attempt})
+        if not probe.success and probe.advisory:
+            print(f"WARNING {self.scenario.name}: {probe.name}: {probe.error}", file=sys.stderr)
+        elif not probe.success:
+            raise HarnessError(f"network_status in the live system: {probe.error} (asked {attempt} times); see {log}")
+        return records[-1]
+
+    def password_login(self, password: str) -> tuple[int, str]:
+        """A password login as the live user from the host, with the harness key out of the way (SSH_ASKPASS, never the command line)."""
+        askpass = self.run_dir / "askpass.sh"
+        askpass.write_text(vm_wave5.askpass_script(password))
+        askpass.chmod(0o700)
+        argv = vm_wave5.password_login_arguments(self.args.ssh_binary, self.args.ssh_host, self.args.ssh_port, "gentoo",
+                                                 str(self.run_dir / "known_hosts.live-password"))
+        log = self.run_dir / "live-password-login.log"
+        self.logs.append(log)
+        try:
+            done = subprocess.run(argv, capture_output=True, text=True, timeout=self.args.command_timeout, stdin=subprocess.DEVNULL,
+                                  env={**os.environ, **vm_wave5.password_login_environment(str(askpass))})
+            code, text = done.returncode, done.stdout + done.stderr
+        except subprocess.TimeoutExpired:
+            code, text = 124, "the password login timed out"
+        finally:
+            askpass.unlink(missing_ok=True)
+        with log.open("a") as handle:
+            handle.write(f"exit {code}\n{text.replace(password, '<password>')}\n")
+        return code, text
+
+    def check_live_remote_access(self) -> dict:
+        """gentoo-remote-access on the booted live medium: off at boot, on opens a password login, off closes it (vm_wave5.live_remote_access_flow)."""
+        counter = {"n": 0}
+
+        def run(command: str) -> tuple[int, str]:
+            counter["n"] += 1
+            code, log = self.ssh(self.args.ssh_user, command, f"live-remote-{counter['n']:02d}.log", self.args.command_timeout)
+            return code, log.read_text(errors="replace")
+
+        report = vm_wave5.live_remote_access_flow(run, self.password_login).to_dict()
+        (self.run_dir / "live-remote-access.json").write_text(json.dumps(report, indent=2) + "\n")
+        return report
+
+    def live_host_keys(self, label: str) -> dict[str, str]:
+        code, log = self.ssh(self.args.ssh_user, vm_wave5.HOST_KEYS_COMMAND, f"live-host-keys-{label}.log", self.args.command_timeout)
+        return vm_wave5.parse_host_keys(code, log.read_text(errors="replace"))
+
+    def live_remote_and_host_keys(self, live: VMProcess, live_result: dict) -> tuple[VMProcess, list[str]]:
+        """Remote access on this boot, the host keys of two boots of the same ISO compared. Returns the VM of the last boot and the problems."""
+        problems: list[str] = []
+        remote = self.check_live_remote_access()
+        live_result["remote_access"] = remote
+        problems += [f"remote access: {problem}" for problem in remote["problems"]]
+        first = self.live_host_keys("boot-1")
+        self.power_off_live(live)
+        live = self.boot_live()  # launch() starts the second boot with a fresh known_hosts: a changed host key must not stop the harness
+        second = self.live_host_keys("boot-2")
+        mismatch = vm_wave5.host_key_problems([first, second])
+        live_result["host_keys"] = {"boot_1": first, "boot_2": second, "problems": mismatch}
+        problems += [f"host keys: {problem}" for problem in mismatch]
+        return live, problems
+
+    def secure_boot_keys(self) -> tuple[bytes, bytes]:
+        """The test-only key pair given with --sb-key and --sb-cert (the certificate is enrolled in the variable store of --ovmf-vars-file)."""
+        return Path(self.args.sb_key).read_bytes(), Path(self.args.sb_cert).read_bytes()
+
+    def upload_secure_boot_key(self) -> None:
+        """The manifest names the signing key and certificate by path on the live system (the daemon reads them there): put the test pair there."""
+        key, cert = self.secure_boot_keys()
+        script = (f"umask 077 && mkdir -p {vm_secureboot.REMOTE_KEY_DIR} && cat > {vm_secureboot.REMOTE_KEY} && "
+                  f"chmod 600 {vm_secureboot.REMOTE_KEY}")
+        for remote, content, name in ((script, key, "key"),
+                                      (f"umask 077 && cat > {vm_secureboot.REMOTE_CERT}", cert, "certificate")):
+            code, log = self.ssh(self.args.ssh_user, remote, f"ssh-upload-secure-boot-{name}.log", self.args.command_timeout, stdin=content)
+            if code != 0:
+                raise HarnessError(f"Could not upload the Secure Boot test {name}; see {log}")
+
+    def loader_of_install(self) -> str:
+        return {"grub": "grub", "systemd-boot": "systemd-boot", "efi-stub": "efi-stub"}[self.scenario.bootloader]
+
+    def safe_graphics_check(self, result: dict, target: VMProcess) -> VMProcess:
+        """List the installed boot menu, find Safe graphics, boot it once, and check the kernel command line and the modules."""
+        loader = self.loader_of_install()
+        evidence: dict = {"loader": loader}
+        result["safe_graphics"] = evidence
+        password = (TEST_PASSWORD + "\n").encode()
+        code, log = self.ssh(TEST_USERNAME, vm_session.safe_entry_listing_command(loader), "safe-graphics-entries.log", self.args.command_timeout,
+                             stdin=password if "sudo" in vm_session.safe_entry_listing_command(loader) else None)
+        entry = vm_session.find_safe_entry(loader, log.read_text(errors="replace")) if code == 0 else {}
+        evidence["entry"] = entry
+        if not entry:
+            raise HarnessError(f"The {loader} menu of the installed system has no Safe graphics entry (exit {code}); see {log}")
+        problems = vm_session.safe_entry_problems(entry)
+        if problems:
+            raise HarnessError("Safe graphics entry: " + "; ".join(problems))
+        code, log = self.ssh(TEST_USERNAME, vm_session.oneshot_command(loader, entry), "safe-graphics-oneshot.log", self.args.command_timeout, stdin=password)
+        if code != 0:
+            raise HarnessError(f"Could not select the Safe graphics entry for the next boot; see {log}")
+        self.stop_vm(target)  # the choice lives in the firmware variables (bootctl, efibootmgr) or on the disk (grub-reboot): a restart of QEMU keeps both
+        booted = self.start_vm(live=False)
+        self.wait_for_ssh(TEST_USERNAME, "target", booted)
+        code, log = self.ssh(TEST_USERNAME, vm_session.SAFE_BOOT_COMMAND, "safe-graphics-boot.log", self.args.command_timeout)
+        probe = vm_session.parse_safe_boot_probe(code, log.read_text(errors="replace"))
+        evidence["boot"] = probe.record()
+        if not probe.success:
+            raise HarnessError(f"Safe graphics boot: {probe.error}; see {log}")
+        return booted
+
+    def hardware_report(self, result_live: dict) -> dict:
+        """The installer's hardware report of this (virtual) machine, read in the live system: what the planner is given."""
+        code, log = self.ssh(self.args.ssh_user, vm_wave5.HARDWARE_REPORT_COMMAND, "live-hardware-report.log", self.args.command_timeout)
+        report = vm_wave5.parse_hardware_report(code, log.read_text(errors="replace"))
+        (self.run_dir / "live-hardware-report.json").write_text(json.dumps(report, indent=2, sort_keys=True) + "\n")
+        result_live["hardware_report"] = {key: report.get(key) for key in ("machine", "firmware")}
+        return report
+
+    def chroot_check(self, result: dict, target: VMProcess) -> None:
+        """Stop the installed system, boot the live ISO and run gentoo-chroot twice with its commands on standard input: read-only first (no question to
+        answer, so it does not depend on how the tool reads its prompt), then writable (the answer ``y`` first). Nothing may stay mounted after either."""
+        self.stop_vm(target)
+        bootloader = InstallManifest.load(self.run_dir / "manifest.json").system.bootloader
+        live = self.boot_live()
+        sessions: list[dict] = []
+        result["chroot"] = {"sessions": sessions}
+        failures: list[str] = []
+        log: Path | None = None
+        for writable in (False, True):
+            name = "writable" if writable else "read-only"
+            code, log = self.ssh(self.args.ssh_user, vm_wave5.chroot_command(writable=writable), f"chroot-session-{name}.log", max(600, self.args.command_timeout),
+                                 stdin=vm_wave5.chroot_input(bootloader, writable=writable).encode())
+            problems = vm_wave5.chroot_problems(code, log.read_text(errors="replace"), bootloader, writable=writable)
+            done, cleanup_log = self.ssh(self.args.ssh_user, vm_rescue.cleanup_command(self.target_device), f"chroot-cleanup-{name}.log", self.args.command_timeout)
+            problems += vm_rescue.cleanup_problems(done, cleanup_log.read_text(errors="replace"))
+            sessions.append({"mode": name, "command": vm_wave5.chroot_command(writable=writable), "exit": code, "log": log.name, "problems": problems})
+            failures += [f"{name}: {problem}" for problem in problems]
+        self.power_off_live(live)
+        if failures:
+            raise HarnessError("gentoo-chroot in the live system: " + "; ".join(failures) + f"; see {log}")
 
     # --- an entry of the ISO's boot menu (--boot-entry) ----------------------------------------------------------
 
@@ -2727,7 +2985,9 @@ class ScenarioRunner:
             if getattr(self.args, "target_image", None):
                 return self.run_on_existing_image(result, mode, command)
             self.prepare_boot_entry(result)
-            if getattr(self.args, "live_only", False):
+            if self.scenario.screenshots:
+                return self.run_screenshots(result)
+            if getattr(self.args, "live_only", False) or self.scenario.live_only:
                 return self.run_live_smoke(result)
             self.create_disks()
             live = self.boot_live()
@@ -2763,6 +3023,10 @@ class ScenarioRunner:
                 target = self.rescue_cycles(result, target, modes, command)
             if self.fresh_nvram_wanted():
                 target = self.fresh_nvram_check(result, target)
+            if self.scenario.safe_graphics:
+                target = self.safe_graphics_check(result, target)
+            if self.scenario.chroot:
+                self.chroot_check(result, target)
             if decoys:
                 target.cleanup()  # every VM is stopped: the image files can be compared safely
                 self.check_decoy_images(decoys)
@@ -2798,12 +3062,75 @@ class ScenarioRunner:
                 live_result["gui"] = {"environment": sorted(self.gui_environment())}
             except HarnessError as exc:
                 problems.append(f"the graphical live session did not start on this display adapter: {exc}")
+        if self.scenario.live_expect:
+            wanted = {path: value for path, value in self.scenario.live_expect}
+            problems += [f"hardware report: {problem}" for problem in check_expectations(self.hardware_report(live_result), wanted)]
+        if self.scenario.live_checks:
+            live, extra = self.live_remote_and_host_keys(live, live_result)
+            problems += extra
+        live_result["network_status"] = list(self.live_network or [])
         live_result["problems"] = problems
         self.power_off_live(live)
         if problems:
             raise HarnessError("The live system does not work on this machine: " + "; ".join(problems))
         result["success"] = True
         return result
+
+    def screenshots_directory(self) -> Path:
+        chosen = getattr(self.args, "screenshots", None)
+        return Path(chosen) if chosen else self.run_dir / "screenshots"
+
+    def run_screenshots(self, result: dict) -> dict:
+        """Boot the live ISO once per display size; photograph the desktop (QMP) and every installer page (the guest program), judge, keep the pictures."""
+        try:
+            sizes = vm_shots.parse_sizes(getattr(self.args, "screenshot_sizes", None) or ",".join(vm_shots.SIZES))
+        except vm_shots.ShotsError as exc:
+            raise HarnessError(str(exc)) from None
+        directory = self.screenshots_directory()
+        directory.mkdir(parents=True, exist_ok=True)
+        self.create_disks()
+        summaries: list[dict] = []
+        result["screenshots"] = {"directory": str(directory), "sizes": summaries}
+        failures: list[str] = []
+        for size in sizes:
+            self.resolution = vm_shots.size_name(size)
+            live = self.boot_live()
+            try:
+                summary = self.screenshots_of_one_size(size, directory / vm_shots.size_name(size))
+            finally:
+                self.power_off_live(live)
+            summaries.append(summary)
+            failures += [f"{summary['size']}: {problem}" for problem in summary["problems"]]
+        self.resolution = ""
+        vm_shots.write_index(directory, summaries)
+        if failures:
+            raise HarnessError("Screenshots: " + "; ".join(failures))
+        result["success"] = True
+        return result
+
+    def screenshots_of_one_size(self, size: tuple[int, int], target: Path) -> dict:
+        target.mkdir(parents=True, exist_ok=True)
+        environment = self.gui_environment()
+        time.sleep(float(getattr(self.args, "screenshot_settle", 15)))  # the installer starts by itself in the live session: give it time to draw
+        dump = self.vms[-1].screendump(self.run_dir / f"desktop-{vm_shots.size_name(size)}.ppm")
+        data = dump.read_bytes()
+        desktop = vm_shots.ppm_header(data)[:2]
+        (target / "live-desktop.png").write_bytes(vm_shots.ppm_to_png(data))
+        uploads = ((vm_shots.GUEST_SCRIPT, (PROJECT_ROOT / "scripts/vm-gui-shots.py").read_bytes(), "shots-upload.log"),)
+        for remote_path, content, log_name in uploads:
+            code, log = self.ssh(self.args.ssh_user, f"cat > {remote_path} && chmod 644 {remote_path}", f"{size[0]}-{log_name}", self.args.command_timeout, stdin=content)
+            if code != 0:
+                raise HarnessError(f"Could not upload {remote_path}; see {log}")
+        code, log = self.ssh(self.args.ssh_user, vm_shots.shots_command(environment), f"shots-{size[0]}.log", self.args.command_timeout * 6)
+        index = next((json.loads(line) for line in reversed(log.read_text(errors="replace").splitlines()) if line.startswith('{"type": "gui_shots"')), None)
+        if index is None:
+            return vm_shots.summary(size, ["live-desktop.png"], [f"the picture program printed no index (exit {code}); see {log}"])
+        code, log = self.ssh(self.args.ssh_user, vm_shots.fetch_command(), f"shots-{size[0]}.b64", self.args.command_timeout * 3)
+        try:
+            files = vm_shots.unpack(log.read_text(errors="replace"), target)
+        except vm_shots.ShotsError as exc:
+            return vm_shots.summary(size, ["live-desktop.png"], [str(exc)])
+        return vm_shots.summary(size, ["live-desktop.png", *files], vm_shots.judge(size, index, (desktop[0], desktop[1]), files))
 
     def run_on_existing_image(self, result: dict, mode: str, command: str) -> dict:
         """Boot, damage, repair and verify a disk that was installed earlier (or by another distribution's installer)."""
@@ -2982,7 +3309,7 @@ def disk_size_mib(value: str) -> int:
 def apply_overrides(scenario: Scenario, args: argparse.Namespace) -> Scenario:
     """The scenario with the command line's hardware options applied (an option left out keeps the scenario's own)."""
     changes: dict = {}
-    for option in ("disk_bus", "sector_size", "nic", "vga", "cpu", "machine", "smbios", "ovmf_vars", "rtc"):
+    for option in ("disk_bus", "sector_size", "nic", "vga", "cpu", "machine", "smbios", "ovmf_vars", "rtc", "resolution"):
         value = getattr(args, option, None)
         if value is not None:
             changes[option] = value
@@ -3011,6 +3338,13 @@ def rescue_problems(scenario: Scenario, args: argparse.Namespace) -> list[str]:
         problems.append("--target-image takes one --rescue-break at a time")
     if scenario.luks and (breaks or getattr(args, "rescue_command", None) or getattr(args, "rescue_repair", False)):
         problems.append("rescue runs support unencrypted installs only")
+    if scenario.secure_boot_install:
+        for option, value in (("--sb-key", getattr(args, "sb_key", None)), ("--sb-cert", getattr(args, "sb_cert", None)),
+                              ("--ovmf-vars-file", getattr(args, "ovmf_vars_file", None))):
+            if value is None:
+                problems.append(f"{scenario.name} needs {option} (docs/TESTING.md, \"Secure Boot and out-of-tree modules\")")
+            elif not Path(value).is_file():
+                problems.append(f"{option} {value} does not exist")
     return [f"{scenario.name}: {problem}" for problem in problems]
 
 
@@ -3026,6 +3360,10 @@ def hardware_problems(scenario: Scenario, install_mode: str | None) -> list[str]
         problems.append("--vga none leaves the graphical installer without a display; use --install-mode cli")
     if scenario.luks and scenario.hardware.vga == "none":
         problems.append("--vga none leaves no screen for the keystroke LUKS unlock; add console=ttyS0 and use the serial unlock")
+    if scenario.chroot and scenario.luks:
+        problems.append("gentoo-chroot asks for the LUKS passphrase on the console, which the non-interactive check does not drive; use an unencrypted scenario")
+    if scenario.live_checks and not scenario.live_only:
+        problems.append("the remote access and host key checks run on the live ISO only (live_only)")
     return [f"{scenario.name}: {problem}" for problem in problems]
 
 
@@ -3174,6 +3512,16 @@ def build_parser() -> argparse.ArgumentParser:
                           help="persist: both boots share one NVRAM; fresh-on-target: the installed disk boots with an empty one; "
                                "readonly: the firmware cannot save boot entries")
     hardware.add_argument("--ovmf-vars-file", type=Path, help="Seed the NVRAM from this file instead of the firmware package's pristine one")
+    hardware.add_argument("--resolution", metavar="WxH", help="Display size the guest sees (virtio, std or qxl adapter): 1366x768")
+    hardware.add_argument("--screenshots", type=Path, metavar="DIR",
+                          help="screenshots scenario: keep the pictures in DIR/<size>/ (default: the run directory)")
+    hardware.add_argument("--screenshot-sizes", metavar="WxH,WxH", help="screenshots scenario: the display sizes (default 1366x768,1920x1080)")
+    hardware.add_argument("--screenshot-settle", type=positive_int, default=15, metavar="SECONDS",
+                          help="screenshots scenario: seconds the live session gets to draw the desktop before the picture (default 15)")
+    hardware.add_argument("--sb-key", type=Path, metavar="FILE",
+                          help="secure-boot-modules: the test-only private key that signs the UKI and the dummy module (docs/TESTING.md says how to make it)")
+    hardware.add_argument("--sb-cert", type=Path, metavar="FILE",
+                          help="secure-boot-modules: its certificate, which the variable store of --ovmf-vars-file must enrol as PK, KEK and db")
     hardware.add_argument("--rtc", choices=vm_hw.RTC_MODES, help="Hardware clock in UTC (default) or local time")
     parser.add_argument("--qemu-binary", default="qemu-system-x86_64")
     parser.add_argument("--qemu-img", default="qemu-img")

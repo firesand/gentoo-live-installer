@@ -1,0 +1,10 @@
+{
+ "note": "synthesized for the tests, not captured from a real machine; identifiers are plausible, serials and MACs do not exist; Meteor Lake Arc graphics (8086:7d55) is an integrated GPU: the discrete-Arc rules must not apply",
+ "now": 1792800000,
+ "redacted": true,
+ "schema": 1,
+ "summary": "Intel Core Ultra 7 155H - 22 threads - 14 GiB - Intel Arc Graphics - NVMe SSD - UEFI 64-bit",
+ "synthetic": true,
+ "tool": "synthetic",
+ "tool_version": 1
+}

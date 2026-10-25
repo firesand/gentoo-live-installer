@@ -1,0 +1,511 @@
+{
+ "fixture": "blackwell-desktop-rtx5090",
+ "machine": "System Product Name",
+ "scenarios": {
+  "kde-openrc": {
+   "description": "the GUI defaults (KDE, OpenRC, binary packages)",
+   "issues": [
+    {
+     "code": "hw.nvidia_skipped",
+     "message": "The NVIDIA driver is available for NVIDIA GeForce RTX 5090, but its licence has not been accepted, so the open nouveau driver is used. Accept the licence on the Hardware page to use the NVIDIA driver.",
+     "severity": "info"
+    }
+   ],
+   "plan": {
+    "driver_atoms": [],
+    "early_atoms": [
+     "sys-kernel/linux-firmware"
+    ],
+    "files": [
+     [
+      "/etc/cron.weekly/fstrim",
+      "#!/bin/sh\n# Weekly TRIM of mounted solid-state filesystems (written by the Gentoo installer).\nexec /sbin/fstrim --all --quiet-unsupported\n",
+      493
+     ]
+    ],
+    "kernel_cmdline": [],
+    "make_conf": {},
+    "notes": [],
+    "optional_atoms": [],
+    "optional_services": [],
+    "package_license": {
+     "sys-kernel/linux-firmware": [
+      "linux-fw-redistributable"
+     ]
+    },
+    "package_mask": [],
+    "package_use": {
+     "media-video/pipewire": [
+      "sound-server"
+     ],
+     "sys-kernel/linux-firmware": [
+      "initramfs",
+      "redistributable"
+     ]
+    },
+    "post_steps": [
+     [
+      "sh",
+      "-c",
+      "if getent group pipewire >/dev/null; then usermod -aG pipewire \"$1\"; fi; exit 0",
+      "sh",
+      "gentoo"
+     ]
+    ],
+    "required_atoms": [],
+    "scalars": {
+     "btrfs_discard_async": false,
+     "cpu_flags_mode": "profile",
+     "cpu_vendor": "amd",
+     "firmware_forced": false,
+     "firmware_reasons": [
+      "NVIDIA GPU system processor firmware",
+      "Ethernet adapter"
+     ],
+     "form_factor": "desktop",
+     "gpu_driver": "open",
+     "gpu_mode": "nouveau",
+     "gpu_vendors": [
+      "nvidia"
+     ],
+     "grub_target": "x86_64-efi",
+     "hidpi": "off",
+     "hybrid": false,
+     "hypervisor": "",
+     "init": "openrc",
+     "luks_allow_discards": false,
+     "microcode": "amd",
+     "nvidia_branch": "",
+     "nvidia_reason": "Recommended for NVIDIA GeForce RTX 5090: the NVIDIA driver (version 595) with open kernel modules.",
+     "nvk": "no",
+     "power": "none",
+     "prime": "off",
+     "removable_fallback": "always",
+     "sof_firmware": "no",
+     "target": "this",
+     "thermald": "no",
+     "trim": "weekly",
+     "zram": "no"
+    },
+    "schema": 2,
+    "services": [],
+    "summary": [
+     "CPU: AMD Ryzen 9 9950X 16-Core Processor, 16 threads; AMD microcode (linux-firmware)",
+     "Graphics: NVIDIA GeForce RTX 5090 - open driver (nouveau; the NVIDIA driver is used once you accept its licence)",
+     "Firmware: Linux firmware (NVIDIA GPU system processor firmware, Ethernet adapter)",
+     "Storage: weekly TRIM for the solid-state disk (cron)",
+     "Boot: fallback boot path is always written"
+    ],
+    "warnings": [
+     {
+      "code": "hw.nvidia_skipped",
+      "message": "The NVIDIA driver is available for NVIDIA GeForce RTX 5090, but its licence has not been accepted, so the open nouveau driver is used. Accept the licence on the Hardware page to use the NVIDIA driver.",
+      "severity": "info"
+     }
+    ]
+   }
+  },
+  "nvidia-this": {
+   "description": "this PC, proprietary NVIDIA driver accepted",
+   "issues": [],
+   "plan": {
+    "driver_atoms": [
+     "x11-drivers/nvidia-drivers"
+    ],
+    "early_atoms": [
+     "sys-kernel/linux-firmware"
+    ],
+    "files": [
+     [
+      "/etc/cron.weekly/fstrim",
+      "#!/bin/sh\n# Weekly TRIM of mounted solid-state filesystems (written by the Gentoo installer).\nexec /sbin/fstrim --all --quiet-unsupported\n",
+      493
+     ]
+    ],
+    "first_steps": [
+     "If the screen stays black after an update, choose the boot menu entry that says safe graphics; it starts without the NVIDIA driver.",
+     "The NVIDIA modules are rebuilt by emerge after every kernel update (USE=dist-kernel). If an update reports that the build failed, run: emerge --ask @module-rebuild"
+    ],
+    "kernel_cmdline": [],
+    "make_conf": {
+     "VIDEO_CARDS": "${VIDEO_CARDS} nvidia"
+    },
+    "notes": [
+     "NVIDIA proprietary driver 595 (current, open kernel modules); if it fails to build, the open nouveau driver stays in use.",
+     "The NVIDIA driver is not on the binary host: it is downloaded from download.nvidia.com and compiled on this PC, which adds several minutes and needs internet access to that address."
+    ],
+    "optional_atoms": [],
+    "optional_services": [],
+    "package_license": {
+     "sys-kernel/linux-firmware": [
+      "linux-fw-redistributable"
+     ],
+     "x11-drivers/nvidia-drivers": [
+      "NVIDIA-2025"
+     ]
+    },
+    "package_mask": [],
+    "package_use": {
+     "media-video/pipewire": [
+      "sound-server"
+     ],
+     "sys-kernel/linux-firmware": [
+      "initramfs",
+      "redistributable"
+     ],
+     "x11-drivers/nvidia-drivers": [
+      "dist-kernel",
+      "wayland"
+     ]
+    },
+    "post_steps": [
+     [
+      "sh",
+      "-c",
+      "if [ -f /etc/modprobe.d/nvidia.conf ]; then dracut --force --regenerate-all; fi"
+     ],
+     [
+      "sh",
+      "-c",
+      "if [ ! -f /etc/modprobe.d/nvidia.conf ] && [ -d \"/home/$1\" ]; then printf \"%s\\n\" \"$2\" >> \"/home/$1/first-steps.txt\"; chown \"$1:$(id -gn \"$1\")\" \"/home/$1/first-steps.txt\"; fi; exit 0",
+      "sh",
+      "gentoo",
+      "The NVIDIA driver could not be installed during the installation, so this PC runs on the open nouveau driver. To try again once the network works: emerge --ask x11-drivers/nvidia-drivers && dracut --force --regenerate-all (the driver is downloaded from download.nvidia.com and compiled on this PC)."
+     ],
+     [
+      "sh",
+      "-c",
+      "if getent group pipewire >/dev/null; then usermod -aG pipewire \"$1\"; fi; exit 0",
+      "sh",
+      "gentoo"
+     ],
+     [
+      "sh",
+      "-c",
+      "set -- /var/db/pkg/app-misc/hwmonux-*; if [ -f /etc/modprobe.d/nvidia.conf ] && [ -d \"$1\" ]; then echo 'app-misc/hwmonux nvidia' > /etc/portage/package.use/installer-hwmonux-nvidia && emerge --oneshot app-misc/hwmonux || { rm -f /etc/portage/package.use/installer-hwmonux-nvidia; echo 'HWMonux NVIDIA sensors skipped'; }; fi; exit 0"
+     ]
+    ],
+    "required_atoms": [],
+    "scalars": {
+     "btrfs_discard_async": false,
+     "cpu_flags_mode": "profile",
+     "cpu_vendor": "amd",
+     "firmware_forced": false,
+     "firmware_reasons": [
+      "Ethernet adapter"
+     ],
+     "first_user": "gentoo",
+     "form_factor": "desktop",
+     "gpu_driver": "nvidia",
+     "gpu_mode": "nvidia",
+     "gpu_vendors": [
+      "nvidia"
+     ],
+     "grub_target": "x86_64-efi",
+     "hidpi": "off",
+     "hybrid": false,
+     "hypervisor": "",
+     "init": "openrc",
+     "luks_allow_discards": false,
+     "microcode": "amd",
+     "nvidia_branch": "595",
+     "nvidia_flavour": "open",
+     "nvidia_reason": "Recommended for NVIDIA GeForce RTX 5090: the NVIDIA driver (version 595) with open kernel modules.",
+     "nvidia_rtd3": "off",
+     "nvk": "no",
+     "power": "none",
+     "prime": "off",
+     "removable_fallback": "always",
+     "safe_graphics": {
+      "cmdline": [
+       "nomodeset",
+       "modprobe.blacklist=nvidia,nvidia_drm,nvidia_modeset,nvidia_uvm,nouveau",
+       "rd.driver.blacklist=nvidia,nvidia_drm,nvidia_modeset,nvidia_uvm,nouveau"
+      ],
+      "title": "Gentoo Linux (safe graphics)"
+     },
+     "sof_firmware": "no",
+     "target": "this",
+     "thermald": "no",
+     "trim": "weekly",
+     "zram": "no"
+    },
+    "schema": 2,
+    "services": [],
+    "summary": [
+     "CPU: AMD Ryzen 9 9950X 16-Core Processor, 16 threads; AMD microcode (linux-firmware)",
+     "Graphics: NVIDIA GeForce RTX 5090 - proprietary driver 595",
+     "Firmware: Linux firmware (Ethernet adapter)",
+     "Storage: weekly TRIM for the solid-state disk (cron)",
+     "Boot: fallback boot path is always written"
+    ],
+    "warnings": []
+   }
+  },
+  "portable-nvidia": {
+   "description": "a portable disk with the proprietary NVIDIA driver",
+   "issues": [],
+   "plan": {
+    "driver_atoms": [
+     "x11-drivers/nvidia-drivers"
+    ],
+    "early_atoms": [
+     "sys-firmware/intel-microcode",
+     "sys-kernel/linux-firmware"
+    ],
+    "files": [],
+    "first_steps": [
+     "If the screen stays black after an update, choose the boot menu entry that says safe graphics; it starts without the NVIDIA driver.",
+     "The NVIDIA modules are rebuilt by emerge after every kernel update (USE=dist-kernel). If an update reports that the build failed, run: emerge --ask @module-rebuild"
+    ],
+    "kernel_cmdline": [],
+    "make_conf": {
+     "VIDEO_CARDS": "${VIDEO_CARDS} nvidia"
+    },
+    "notes": [
+     "Portable install: both Intel and AMD microcode are installed.",
+     "NVIDIA proprietary driver 595 (current, open kernel modules); if it fails to build, the open nouveau driver stays in use.",
+     "The NVIDIA driver is not on the binary host: it is downloaded from download.nvidia.com and compiled on this PC, which adds several minutes and needs internet access to that address."
+    ],
+    "optional_atoms": [
+     "sys-firmware/sof-firmware"
+    ],
+    "optional_services": [],
+    "package_license": {
+     "sys-firmware/intel-microcode": [
+      "intel-ucode"
+     ],
+     "sys-kernel/linux-firmware": [
+      "linux-fw-redistributable"
+     ],
+     "x11-drivers/nvidia-drivers": [
+      "NVIDIA-2025"
+     ]
+    },
+    "package_mask": [],
+    "package_use": {
+     "media-video/pipewire": [
+      "sound-server"
+     ],
+     "sys-firmware/intel-microcode": [
+      "initramfs"
+     ],
+     "sys-kernel/linux-firmware": [
+      "initramfs",
+      "redistributable"
+     ],
+     "x11-drivers/nvidia-drivers": [
+      "dist-kernel",
+      "wayland"
+     ]
+    },
+    "post_steps": [
+     [
+      "sh",
+      "-c",
+      "if [ -f /etc/modprobe.d/nvidia.conf ]; then dracut --force --regenerate-all; fi"
+     ],
+     [
+      "sh",
+      "-c",
+      "if [ ! -f /etc/modprobe.d/nvidia.conf ] && [ -d \"/home/$1\" ]; then printf \"%s\\n\" \"$2\" >> \"/home/$1/first-steps.txt\"; chown \"$1:$(id -gn \"$1\")\" \"/home/$1/first-steps.txt\"; fi; exit 0",
+      "sh",
+      "gentoo",
+      "The NVIDIA driver could not be installed during the installation, so this PC runs on the open nouveau driver. To try again once the network works: emerge --ask x11-drivers/nvidia-drivers && dracut --force --regenerate-all (the driver is downloaded from download.nvidia.com and compiled on this PC)."
+     ],
+     [
+      "sh",
+      "-c",
+      "if getent group pipewire >/dev/null; then usermod -aG pipewire \"$1\"; fi; exit 0",
+      "sh",
+      "gentoo"
+     ],
+     [
+      "sh",
+      "-c",
+      "set -- /var/db/pkg/app-misc/hwmonux-*; if [ -f /etc/modprobe.d/nvidia.conf ] && [ -d \"$1\" ]; then echo 'app-misc/hwmonux nvidia' > /etc/portage/package.use/installer-hwmonux-nvidia && emerge --oneshot app-misc/hwmonux || { rm -f /etc/portage/package.use/installer-hwmonux-nvidia; echo 'HWMonux NVIDIA sensors skipped'; }; fi; exit 0"
+     ]
+    ],
+    "required_atoms": [],
+    "scalars": {
+     "btrfs_discard_async": false,
+     "cpu_flags_mode": "profile",
+     "cpu_vendor": "amd",
+     "firmware_forced": false,
+     "firmware_reasons": [
+      "a portable install can meet any hardware",
+      "Ethernet adapter"
+     ],
+     "first_user": "gentoo",
+     "form_factor": "desktop",
+     "gpu_driver": "nvidia",
+     "gpu_mode": "nvidia",
+     "gpu_vendors": [
+      "nvidia"
+     ],
+     "grub_target": "x86_64-efi",
+     "hidpi": "off",
+     "hybrid": false,
+     "hypervisor": "",
+     "init": "openrc",
+     "luks_allow_discards": false,
+     "microcode": "both",
+     "nvidia_branch": "595",
+     "nvidia_flavour": "open",
+     "nvidia_reason": "Recommended for NVIDIA GeForce RTX 5090: the NVIDIA driver (version 595) with open kernel modules.",
+     "nvidia_rtd3": "off",
+     "nvk": "no",
+     "power": "none",
+     "prime": "off",
+     "removable_fallback": "always",
+     "safe_graphics": {
+      "cmdline": [
+       "nomodeset",
+       "modprobe.blacklist=nvidia,nvidia_drm,nvidia_modeset,nvidia_uvm,nouveau",
+       "rd.driver.blacklist=nvidia,nvidia_drm,nvidia_modeset,nvidia_uvm,nouveau"
+      ],
+      "title": "Gentoo Linux (safe graphics)"
+     },
+     "sof_firmware": "yes",
+     "target": "portable",
+     "thermald": "no",
+     "trim": "off",
+     "zram": "no"
+    },
+    "schema": 2,
+    "services": [],
+    "summary": [
+     "CPU: AMD Ryzen 9 9950X 16-Core Processor, 16 threads; Intel and AMD microcode",
+     "Graphics: NVIDIA GeForce RTX 5090 - proprietary driver 595",
+     "Firmware: Linux firmware (a portable install can meet any hardware, Ethernet adapter)",
+     "Audio: Sound Open Firmware (many laptop audio chips need it)",
+     "Boot: fallback boot path is always written"
+    ],
+    "warnings": []
+   }
+  },
+  "xfce-systemd-source": {
+   "description": "Xfce on systemd, everything built from source",
+   "issues": [
+    {
+     "code": "hw.nvidia_skipped",
+     "message": "The NVIDIA driver is available for NVIDIA GeForce RTX 5090, but its licence has not been accepted, so the open nouveau driver is used. Accept the licence on the Hardware page to use the NVIDIA driver.",
+     "severity": "info"
+    }
+   ],
+   "plan": {
+    "driver_atoms": [],
+    "early_atoms": [
+     "sys-kernel/linux-firmware"
+    ],
+    "files": [],
+    "kernel_cmdline": [],
+    "make_conf": {
+     "CPU_FLAGS_X86": "aes avx avx2 bmi1 bmi2 f16c fma3 mmx mmxext pclmul popcnt rdrand sha sse sse2 sse3 sse4_1 sse4_2 sse4a ssse3",
+     "VIDEO_CARDS": "nouveau nvk"
+    },
+    "notes": [],
+    "optional_atoms": [],
+    "optional_services": [],
+    "package_license": {
+     "sys-kernel/linux-firmware": [
+      "linux-fw-redistributable"
+     ]
+    },
+    "package_mask": [],
+    "package_use": {
+     "media-libs/mesa": [
+      "vulkan"
+     ],
+     "media-video/pipewire": [
+      "sound-server"
+     ],
+     "sys-kernel/linux-firmware": [
+      "initramfs",
+      "redistributable"
+     ]
+    },
+    "post_steps": [
+     [
+      "sh",
+      "-c",
+      "if getent group pipewire >/dev/null; then usermod -aG pipewire \"$1\"; fi; exit 0",
+      "sh",
+      "gentoo"
+     ]
+    ],
+    "required_atoms": [],
+    "scalars": {
+     "btrfs_discard_async": false,
+     "cpu_flags_mode": "detect",
+     "cpu_vendor": "amd",
+     "firmware_forced": false,
+     "firmware_reasons": [
+      "NVIDIA GPU system processor firmware",
+      "Ethernet adapter"
+     ],
+     "form_factor": "desktop",
+     "gpu_driver": "open",
+     "gpu_mode": "nouveau",
+     "gpu_vendors": [
+      "nvidia"
+     ],
+     "grub_target": "x86_64-efi",
+     "hidpi": "off",
+     "hybrid": false,
+     "hypervisor": "",
+     "init": "systemd",
+     "luks_allow_discards": false,
+     "microcode": "amd",
+     "nvidia_branch": "",
+     "nvidia_reason": "Recommended for NVIDIA GeForce RTX 5090: the NVIDIA driver (version 595) with open kernel modules.",
+     "nvk": "yes",
+     "power": "none",
+     "prime": "off",
+     "removable_fallback": "always",
+     "sof_firmware": "no",
+     "target": "this",
+     "thermald": "no",
+     "trim": "weekly",
+     "zram": "no"
+    },
+    "schema": 2,
+    "services": [
+     [
+      "fstrim.timer",
+      "default"
+     ]
+    ],
+    "summary": [
+     "CPU: AMD Ryzen 9 9950X 16-Core Processor, 16 threads; AMD microcode (linux-firmware)",
+     "CPU flags: tuned for this CPU (packages are built, not downloaded)",
+     "Graphics: NVIDIA GeForce RTX 5090 - open driver (nouveau + NVK; the NVIDIA driver is used once you accept its licence)",
+     "Firmware: Linux firmware (NVIDIA GPU system processor firmware, Ethernet adapter)",
+     "Storage: weekly TRIM for the solid-state disk (fstrim.timer)",
+     "Boot: fallback boot path is always written"
+    ],
+    "user_services": [
+     [
+      "pipewire.socket",
+      "socket"
+     ],
+     [
+      "pipewire-pulse.socket",
+      "socket"
+     ],
+     [
+      "wireplumber.service",
+      "service"
+     ]
+    ],
+    "warnings": [
+     {
+      "code": "hw.nvidia_skipped",
+      "message": "The NVIDIA driver is available for NVIDIA GeForce RTX 5090, but its licence has not been accepted, so the open nouveau driver is used. Accept the licence on the Hardware page to use the NVIDIA driver.",
+      "severity": "info"
+     }
+    ]
+   }
+  }
+ }
+}

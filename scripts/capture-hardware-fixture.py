@@ -18,7 +18,7 @@ Conventions (shared with tests/hardware/synthetic.py):
 * Command output lives in ``.commands/`` (see hardware.command_key).
 * ``usr/share/hwdata/pci.ids`` is trimmed to the devices present.
 * Redaction (on by default): disk serials, WWNs and UUIDs, EDID serial numbers,
-  MAC addresses (also inside names), Bluetooth unique ids, mounts, command line
+  MAC addresses (also inside names), Bluetooth unique ids, USB/DMI serial numbers and the product UUID if a probe ever read them, mounts, command line
   tokens that are not hardware switches, and the NTP server address are removed.
   Nothing the probe reads contains a hostname, DMI serial or product UUID.
 """
@@ -363,6 +363,15 @@ def capture(root: Path, dest: Path, *, redact: bool = True, now: float | None = 
     return meta
 
 
+SERIAL_FILES = ("serial", "device_serial", "product_serial", "board_serial", "chassis_serial", "product_uuid", "uniq")
+
+
+def is_serial_file(path: str) -> bool:
+    """Files that identify one unit: USB and DMI serial numbers, the product UUID, an input device's unique id. The probe never asks for them;
+    if a newer probe or a hand-made recorder does, they are blanked rather than committed."""
+    return path.rsplit("/", 1)[-1] in SERIAL_FILES
+
+
 def _process_file(path: str, content: bytes, redact: bool) -> bytes:
     if not redact:
         return content
@@ -379,6 +388,8 @@ def _process_file(path: str, content: bytes, redact: bool) -> bytes:
         return redact_route(text()).encode()
     if path.endswith("/edid"):
         return redact_edid(content)
+    if is_serial_file(path):
+        return b"REDACTED\n"
     return content
 
 
