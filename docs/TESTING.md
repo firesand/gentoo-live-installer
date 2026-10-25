@@ -631,9 +631,37 @@ test-vm.py --matrix wave3 --matrix-parallel 1 ...                          # one
 exit status of the matrix is 0 only when every job passed. Interrupting it asks every child to
 clean up its own QEMU. `--matrix-parallel` cannot exceed 2.
 
+## The AI rescue stick and the console installer (Wave 6): what is tested, and what you must try yourself
+
+The user-facing description is [RESCUE-AI.md](RESCUE-AI.md). This section says how it is tested.
+
+**Unit and fixture tests (no network, no AI, no root):**
+
+* The helpers of `src/gentoo_rescue_ai/` run against fakes: the pinned download table and the checksum check (a wrong checksum must install nothing; a good one from a local fake mirror or from `--from DIR` installs as `rescue-ai`), the login helpers against recorded outputs of each assistant (the QR code step must fail soft to the plain link), the mount wrapper against the rescue tests' laboratory, the phone share's command line (TLS, one-time password, one client, the chosen interface, no start without a LAN address, `stop`).
+* **The approval design is tested as a property of the files and of the program:** the approver reads its answer only from its own console device; `rescue-ai` has no sudoers rule and is in none of the privileged groups; the approver runs the command with `execve`, a clean environment and a fixed PATH; the audit log records every request. The text of the managed settings, the AGENTS.md size limit (32 KiB) and the Codex and OpenCode settings are checked.
+* **Planted project config:** a fake target holds `CLAUDE.md`, `AGENTS.md`, `opencode.json` and a `.claude/settings.json` with a hook. The launcher must start every assistant in `~rescue-ai` and load none of them.
+* **The text installer** (`tests/textui`): scripted console input for every new question with defaults only (Enter accepts the recommended choice), the NVIDIA, desktop, SSH and Firefox choices against the same defaults as the wizard, and the shared help strings.
+* **The ISO** (`tests/iso`): the new boot entry and its autostart value are in the image contract, the new packages and keywords are in the specs and the overlay, and the approver service is in the AI rescue entry only.
+
+**VM scenarios** (run by the lead with the harness; see the harness section above for their names and options): the AI rescue entry starts the tmux session as `rescue-ai`; `gentoo-rescue-do` asks on the console; `gentoo-rescue-mount` mounts an installed disk read-only at `/mnt/gentoo`; `gentoo-rescue-share` answers over TLS on a forwarded port with the password and refuses without it, and `stop` closes it; agent installation from a local fake mirror refuses a bad checksum. Remember the memory rule of the harness when you run them.
+
+**Checks that need a person, on a real PC (none has been done):**
+
+1. Boot the written stick (written with `dd`, then once with caligula, Etcher or Rufus in DD mode) in BIOS and in UEFI mode, with Secure Boot off.
+2. Choose *AI rescue (text console)*. The approval password is shown on the first console. The approval console exists and `Alt+F9` (or the named console) shows it.
+3. `gentoo-rescue-agents install claude` (and codex, opencode) on a real network. Compare the sizes with the table on the disc.
+4. `gentoo-rescue-login` for each assistant: the QR code is readable on the PC's real console font, the phone login works, and `claude` itself takes the code.
+5. Mount a real broken Gentoo system (also an encrypted one) with `gentoo-rescue-mount`. It is read-only.
+6. In the assistant's pane, try to read `/dev/tty9`, to `chvt 9`, and to inject keystrokes into the approval console. All must fail.
+7. Ask the assistant to run a root command. The screen switches, shows the exact command, a wrong password refuses, the right password runs only that command, and the next command asks again.
+8. `gentoo-rescue-share` from a phone: the browser warns about the certificate, the fingerprint matches the PC, a second browser is refused, a wrong password is refused, `stop` closes the port, and a typed approval cannot be given from the phone.
+9. Log in to Codex with `--device-auth`, then check that its read-only sandbox starts on the live kernel.
+
 ## Known gaps
 
 Read these before trusting, or blaming, a result.
+
+* **The AI rescue stick has no real-hardware run.** Its code is tested with fakes, and the VM scenarios above are run by hand. The login scraping, the console switch and the QR codes on a real console, the phone share with real phone browsers, and the Codex sandbox on the live kernel are untried (the checklist above).
 
 * **Little outside the original four scenarios has run on real QEMU.** The first Wave 3 matrix runs
   (OpenRC with LUKS on NVMe, OpenRC, the install part of `rescue-gentoo`) installed a system that
