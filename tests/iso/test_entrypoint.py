@@ -238,7 +238,11 @@ def test_test_access_is_configured_and_announced(sandbox) -> None:
     assert keys.read_text() == "ssh-ed25519 AAAA key\n"
     assert stat.S_IMODE(keys.stat().st_mode) == 0o600 and stat.S_IMODE(keys.parent.stat().st_mode) == 0o700
     assert (build / "etc/gentoo-installer-vm-test").exists()
-    assert "PermitRootLogin prohibit-password" in (build / "etc/ssh/sshd_config.d/90-installer-vm-test.conf").read_text()
+    dropin = (build / "etc/ssh/sshd_config.d/90-installer-vm-test.conf").read_text()
+    assert "PermitRootLogin prohibit-password" in dropin
+    # the live user's password login (gentoo-remote-access on) must work as on a release image: the first VM run of
+    # live-remote-access was refused with "Permission denied (publickey)" while these two lines were here
+    assert "PasswordAuthentication" not in dropin and "KbdInteractiveAuthentication" not in dropin
     for name in ("issue", "motd"):
         text = (build / "etc" / name).read_text()
         assert "TEST BUILD" in text.splitlines()[1] and text.endswith(f"{name} text\n")

@@ -455,7 +455,7 @@ def image_entries(flavor: str, live_make_conf: str) -> dict[str, tuple[str, int,
     if flavor == "testkey":
         add("root/.ssh/authorized_keys", mode=0o600, extra="ssh-ed25519 AAAA\n")
         add("etc/gentoo-installer-vm-test")
-        add("etc/ssh/sshd_config.d/90-installer-vm-test.conf", extra="PermitRootLogin prohibit-password\nPasswordAuthentication no\n")
+        add("etc/ssh/sshd_config.d/90-installer-vm-test.conf", extra="PermitRootLogin prohibit-password\n")
     return entries
 
 

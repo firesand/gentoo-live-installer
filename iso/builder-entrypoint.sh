@@ -167,6 +167,9 @@ prepare_portage() {
 # label and its login screens say so; scripts/verify-iso.py insists on all of it. sshd itself
 # is in livecd/rcadd of the spec on every flavour; the test drop-in 90-installer-vm-test.conf
 # sorts before the live image's own 9999999gentoo-livecd.conf and wins (sshd takes the first value).
+# It changes root's login only: password logins of the user gentoo (gentoo-remote-access on) must
+# work as on a release image, where PAM asks for the password through keyboard-interactive
+# (9999999gentoo-pam.conf turns PasswordAuthentication off), so neither method is switched off here.
 configure_test_access() {
 	local key="${GENTOO_TEST_SSH_PUBLIC_KEY:-}" banner file
 	[[ -n ${key} ]] || return 0
@@ -180,8 +183,6 @@ configure_test_access() {
 	install -d -m 0755 "${BUILD_DIR}/root_overlay/etc/ssh/sshd_config.d"
 	cat > "${BUILD_DIR}/root_overlay/etc/ssh/sshd_config.d/90-installer-vm-test.conf" <<'EOF'
 PermitRootLogin prohibit-password
-PasswordAuthentication no
-KbdInteractiveAuthentication no
 EOF
 	touch "${BUILD_DIR}/root_overlay/etc/gentoo-installer-vm-test"
 	banner="*** TEST BUILD - root SSH is enabled with a temporary key. Never distribute this image. ***"
