@@ -30,5 +30,7 @@ x11-themes/arc-theme xfce -gtk2
 # libwebsockets with libuv and OpenSSL support (the ttyd ebuild requires [libuv,ssl]).
 net-libs/libwebsockets libuv ssl
 # mount.cifs is there to copy data off a broken PC to a network share. Kerberos mounts (ads: cifs.upcall,
-# krb5, keyutils) and the Python helpers are not needed for that and would add packages to a build.
-net-fs/cifs-utils -ads -python
+# krb5, keyutils), the CIFS ACL tools (acl: getcifsacl/setcifsacl, a PDEPEND on all of net-fs/samba) and the
+# Python helpers are not needed for that. With acl the first Wave 6 build stopped: samba's binary package needs
+# net-libs/ngtcp2[gnutls], which no binary package of the pinned tree has.
+net-fs/cifs-utils -acl -ads -python

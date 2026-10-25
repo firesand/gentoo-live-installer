@@ -46,11 +46,12 @@ def test_ttyd_is_the_exact_revision_that_pins_libwebsockets() -> None:
     assert lines == [["=www-apps/ttyd-1.7.7-r2", "~amd64"]]
 
 
-def test_cifs_utils_is_built_without_kerberos_and_python() -> None:
-    """mount.cifs copies data to a share; the default ads flag would add krb5 and keyutils to a build nobody can test here."""
+def test_cifs_utils_is_built_without_kerberos_acl_tools_and_python() -> None:
+    """mount.cifs copies data to a share. The default ads flag would add krb5 and keyutils, and acl pulls all of samba
+    (the first Wave 6 build stopped on samba's net-libs/ngtcp2[gnutls])."""
     use = (ROOT / "iso/portage/package.use/live-installer").read_text()
     match = re.search(r"^net-fs/cifs-utils\s+(.*)$", use, re.M)
-    assert match and {"-ads", "-python"} <= set(match.group(1).split())
+    assert match and {"-acl", "-ads", "-python"} <= set(match.group(1).split())
 
 
 def test_the_docs_describe_the_entry_the_account_and_the_approver() -> None:
