@@ -47,7 +47,7 @@ def test_the_desktop_is_visible_without_scrolling_on_a_1366_by_768_screen(make_w
     QApplication.processEvents()
     page = window.system
     viewport = page.scroll_area.viewport()
-    group = page.desktop_group
+    group = page.desktop_group.guided  # the Guided desktop cards (the registry's 'More desktops' sit below them)
     bottom = group.mapTo(viewport, group.rect().bottomLeft()).y()
     assert 0 < bottom <= viewport.height()
 

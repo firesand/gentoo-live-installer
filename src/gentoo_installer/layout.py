@@ -17,7 +17,7 @@ import dataclasses
 from dataclasses import asdict, dataclass
 from typing import Any, Sequence
 
-from . import blockdev
+from . import blockdev, desktops
 from .manifest import InstallManifest, Storage
 
 MIB = 1024 * 1024
@@ -37,10 +37,11 @@ MIN_FAT32_MIB = 33
 # daemon logs `df` after the validation stage so they can be calibrated from real runs.
 # Below MIN_ROOT_MIB the install is refused before any disk is touched; below
 # RECOMMENDED_ROOT_MIB the user is warned.
-MIN_ROOT_MIB = {"minimal": 8 * 1024, "xfce": 14 * 1024, "gnome": 18 * 1024, "kde": 24 * 1024}
-RECOMMENDED_ROOT_MIB = {"minimal": 15 * 1024, "xfce": 22 * 1024, "gnome": 28 * 1024, "kde": 40 * 1024}
+# (the figures come from the desktop registry)
+MIN_ROOT_MIB = {key: desktops.root_gib(key)[0] * 1024 for key in desktops.DESKTOPS}
+RECOMMENDED_ROOT_MIB = {key: desktops.root_gib(key)[1] * 1024 for key in desktops.DESKTOPS}
 # Extra room when packages are compiled instead of downloaded (portage.binhost off).
-SOURCE_BUILD_EXTRA_MIB = {"minimal": 10 * 1024, "xfce": 12 * 1024, "gnome": 14 * 1024, "kde": 16 * 1024}
+SOURCE_BUILD_EXTRA_MIB = {key: desktops.build_extra_gib(key) * 1024 for key in desktops.DESKTOPS}
 
 
 def human_size(size: int) -> str:

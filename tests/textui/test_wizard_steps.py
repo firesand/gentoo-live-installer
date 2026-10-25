@@ -411,6 +411,22 @@ def test_a_desktop_that_does_not_fit_the_disk_is_refused_with_the_reason(start) 
     assert wizard.manifest.system.desktop == "xfce" and "Not possible on the disk you chose" in script.flat
 
 
+def test_more_desktops_are_a_second_menu(start) -> None:
+    wizard, script, _ = start([("Which desktop", "5"), ("Which of these desktops", "5"), ("Which init system", "")])  # More desktops..., then Sway
+    wizard.step_system()
+    assert wizard.manifest.system.desktop == "sway" and "NVIDIA graphics are not supported" in script.flat
+    wizard2, _, _ = start([("Which desktop", "5"), ("Which of these desktops", "1"), ("Which init system", "")])
+    wizard2.step_system()
+    assert wizard2.manifest.system.desktop == "cinnamon"
+
+
+def test_cinnamon_is_refused_on_a_hardened_stage3_in_the_text_installer(start) -> None:
+    wizard, script, _ = start([("Which desktop", "5"), ("Which of these desktops", "1"), ("Which desktop", "5"), ("Which of these desktops", "2"), ("Which init system", "")])
+    wizard.manifest.system.stage_variant = "amd64-hardened-openrc"
+    wizard.step_system()
+    assert wizard.manifest.system.desktop == "mate" and "desktop/gnome Portage profile" in script.flat
+
+
 def test_the_init_system_decides_the_stage3_variant(start) -> None:
     wizard, _, _ = start([("Which desktop", "4"), ("Which init system", "2")])
     wizard.step_system()

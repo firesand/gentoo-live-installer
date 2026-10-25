@@ -10,8 +10,10 @@ preferred over these tables by the callers.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Iterable, Mapping
+
+from . import desktops
 
 # ---------------------------------------------------------------------------
 # PCI
@@ -224,7 +226,12 @@ NVIDIA_ATOM = "x11-drivers/nvidia-drivers"
 DIST_KERNELS = frozenset({"gentoo-kernel-bin", "gentoo-kernel"})
 @dataclass(frozen=True)
 class DesktopTraits:
-    """What the hardware plan needs to know about a desktop. The desktop registry (B14) will own this; until it exists the table is here."""
+    """What the hardware plan needs to know about a desktop.
+
+    The desktop registry (gentoo_installer.desktops) owns the facts it shares with the rest of the installer: graphical, the
+    power-profile switcher (ppd_ui), the Wayland build of the NVIDIA driver and the Noto fonts. desktop_traits() takes those
+    from the registry; this table adds only what the hardware plan alone uses (toolkit, HiDPI method, slow-below memory).
+    """
 
     graphical: bool = True
     ppd_ui: bool = False  # has its own power-profile switcher, so power-profiles-daemon (or tlp-pd) is what it talks to
@@ -250,11 +257,16 @@ DESKTOP_TRAITS: dict[str, DesktopTraits] = {
 
 
 def desktop_traits(desktop: str) -> DesktopTraits:
-    """Traits of a desktop; an unknown name is treated as a plain graphical desktop."""
-    return DESKTOP_TRAITS.get(desktop, DesktopTraits())
+    """Traits of a desktop; an unknown name is treated as a plain graphical desktop. Shared facts come from the registry."""
+    traits = DESKTOP_TRAITS.get(desktop, DesktopTraits())
+    entry = desktops.get(desktop)
+    if entry is None:
+        return traits
+    return replace(traits, graphical=desktops.is_graphical(desktop), ppd_ui=entry.ppd_ui, wayland=entry.wayland_use,
+                               brings_noto=entry.brings_noto)
 
 
-WAYLAND_DESKTOPS = frozenset(name for name, traits in DESKTOP_TRAITS.items() if traits.wayland)
+WAYLAND_DESKTOPS = frozenset(name for name in DESKTOP_TRAITS if desktop_traits(name).wayland)
 QT_DESKTOPS = frozenset(name for name, traits in DESKTOP_TRAITS.items() if traits.toolkit == "qt")
 # One sentence for the three places that refuse an out-of-tree kernel module under Secure Boot signing: the plan, the GUI and the text installer.
 # {what} names the thing that is refused ("The NVIDIA driver's kernel modules", "OpenRazer").
@@ -603,13 +615,9 @@ IGNORED_DISK_RE = re.compile(r"^(?:loop|ram|zram|nbd|sr|fd|dm-|md|rbd|nullb)\d*$
 # ---------------------------------------------------------------------------
 
 # desktop -> (minimum root, recommended root) with the binhost; source builds add BUILD_EXTRA_GIB.
-ROOT_SIZES_GIB: dict[str, tuple[int, int]] = {
-    "minimal": (8, 15),
-    "xfce": (14, 22),
-    "gnome": (18, 28),
-    "kde": (24, 40),
-}
-BUILD_EXTRA_GIB: dict[str, int] = {"minimal": 10, "xfce": 12, "gnome": 14, "kde": 16}
+# The figures live in the desktop registry (desktops.py).
+ROOT_SIZES_GIB: dict[str, tuple[int, int]] = {key: desktops.root_gib(key) for key in desktops.DESKTOPS}
+BUILD_EXTRA_GIB: dict[str, int] = {key: desktops.build_extra_gib(key) for key in desktops.DESKTOPS}
 
 
 def distinct(values: Iterable[str]) -> list[str]:

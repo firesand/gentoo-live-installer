@@ -127,7 +127,8 @@ class PackageUseTableTests(unittest.TestCase):
                 self.assertNotIn(atom, minimal)
         self.assertEqual(DESKTOP_USE["kde"], {"dev-qt/qtpositioning": ("geoclue",)})
         self.assertEqual(DESKTOP_USE["gnome"], {"net-libs/ngtcp2": ("gnutls",)})
-        self.assertEqual(DESKTOP_USE["xfce"], {"dev-libs/libdbusmenu": ("gtk3",)})
+        self.assertEqual(DESKTOP_USE["xfce"], {"dev-libs/libdbusmenu": ("gtk3",),
+                                               "xfce-base/xfce4-meta": ("archive", "editor", "image", "screenshooter")})
 
     def test_user_flags_cannot_remove_what_the_selected_packages_need(self) -> None:
         table = self.table(system={"desktop": "kde"}, portage={"package_use": {"dev-qt/qtpositioning": ["-geoclue", "gps"]}})
@@ -488,7 +489,8 @@ class StageInstallTests(unittest.TestCase):
 
     def test_a_dependency_failure_is_not_an_error_when_everything_requested_is_installed(self) -> None:
         mark_installed(self.root, "xfce-base/xfce4-meta", "x11-base/xorg-server", "x11-misc/lightdm",
-                       "x11-misc/lightdm-gtk-greeter", "gnome-extra/polkit-gnome", "gui-libs/display-manager-init")
+                       "x11-misc/lightdm-gtk-greeter", "gnome-extra/polkit-gnome", "gui-libs/display-manager-init",
+                       "gnome-extra/nm-applet", "media-sound/pavucontrol")
         self.runner.script("chroot", ("fail", " * 1) app-misc/unrelated-1::gentoo (/log)"))
         result = self.c.install_desktop(target_manifest(system={"desktop": "xfce"}, options={"bluetooth": False, "pipewire": False, "printing": False}))
         self.assertEqual(result.degraded, [])

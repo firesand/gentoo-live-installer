@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from pathlib import Path
 from typing import Any, Callable, ClassVar, get_args, get_origin, get_type_hints
 
+from . import desktops
 from .licenses import license_problems
 from .optimize import optimize_problem
 from .usedesc import STAR_MESSAGE, video_cards_problem
@@ -77,21 +78,12 @@ HOSTS_NAME_RE = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z0-9])?")
 # GNOME and Xfce are unverified there. Minimal always works.
 STAGE3_VARIANTS = frozenset(
     f"{family}-{init}" for family in ("amd64", "amd64-desktop", "amd64-nomultilib", "amd64-hardened") for init in ("openrc", "systemd"))
-FAMILY_LABELS = {"standard": "Standard", "desktop": "Desktop", "nomultilib": "No multilib", "hardened": "Hardened"}
-# The lighter desktops and window managers are listed for every family; the desktop registry (a later Wave 5 step) refines them.
-_EXTRA_DESKTOPS = {"cinnamon", "mate", "lxqt", "gnome-light", "sway", "i3"}
-DESKTOPS = ("minimal", "kde", "gnome", "xfce", "cinnamon", "mate", "lxqt", "gnome-light", "sway", "i3")
-FAMILY_DESKTOP_SUPPORT = {
-    "standard": {"kde", "gnome", "xfce"} | _EXTRA_DESKTOPS,
-    "desktop": {"kde", "gnome", "xfce"} | _EXTRA_DESKTOPS,
-    "nomultilib": {"gnome", "xfce"} | _EXTRA_DESKTOPS,
-    "hardened": {"gnome", "xfce"} | _EXTRA_DESKTOPS,
-}
-UNVERIFIED_FAMILIES = {"nomultilib", "hardened"}
-KDE_NEEDS_DESKTOP_STAGE = (
-    "KDE Plasma needs a Standard or Desktop stage3: the Hardened and No-multilib profiles do not enable the desktop USE flags Plasma requires, "
-    "so the package step would fail after your disk was erased. Choose a Standard stage3 or the Minimal system."
-)
+# The desktops and what each stage3 family allows come from the desktop registry (desktops.py).
+FAMILY_LABELS = desktops.FAMILY_LABELS
+DESKTOPS = desktops.DESKTOPS
+FAMILY_DESKTOP_SUPPORT = desktops.family_desktop_support()
+UNVERIFIED_FAMILIES = set(desktops.UNVERIFIED_FAMILIES)
+KDE_NEEDS_DESKTOP_STAGE = desktops.KDE_NEEDS_DESKTOP_STAGE
 # The profiles Gentoo publishes under default/linux/amd64/23.0 (with and without /systemd).
 PUBLISHED_PROFILES = frozenset(
     PROFILE_BASE + middle + suffix
@@ -114,10 +106,7 @@ def stage_family(stage_variant: str) -> str:
 
 def desktop_problem(stage_variant: str, desktop: str) -> str:
     """Why this desktop cannot be installed on this stage3 ("" when it can)."""
-    if desktop in DESKTOPS and desktop != "minimal" and desktop not in FAMILY_DESKTOP_SUPPORT[stage_family(stage_variant)]:
-        return KDE_NEEDS_DESKTOP_STAGE if desktop == "kde" else (
-            f"{desktop.upper()} is not available on this stage3: choose a Standard or Desktop stage3 or the Minimal system.")
-    return ""
+    return desktops.family_problem(desktop, stage_family(stage_variant))
 
 
 def profile_problem(profile: str, init: str, stage_variant: str) -> str:
@@ -144,12 +133,8 @@ def derive_profile(init: str, desktop: str, *, multilib: bool = True, hardened: 
         # The pinned tree has no desktop/no-multilib profiles. Desktop package
         # selection remains independent, while this chooses the valid ABI profile.
         path += "/no-multilib"
-    elif desktop == "kde":
-        path += "/desktop/plasma"
-    elif desktop == "gnome":
-        path += "/desktop/gnome"
-    elif desktop == "xfce":
-        path += "/desktop"
+    else:
+        path += desktops.profile_suffix(desktop)
     if init == "systemd":
         path += "/systemd"
     return path
@@ -1312,7 +1297,7 @@ class InstallManifest:
         system, options, storage = self.system, self.options, self.storage
         advice: list[str] = []
         family = stage_family(system.stage_variant)
-        if family in UNVERIFIED_FAMILIES and system.desktop not in {"minimal", "kde"} and system.desktop in FAMILY_DESKTOP_SUPPORT[family]:
+        if desktops.unverified(system.desktop, family):
             advice.append(f"Not verified: {system.desktop.upper()} on a {FAMILY_LABELS[family]} stage3 may need extra USE changes during the installation.")
         if system.desktop == "minimal" and (options.install_hwmonux or options.install_portagehub):
             advice.append(COMPANIONS_ON_MINIMAL)

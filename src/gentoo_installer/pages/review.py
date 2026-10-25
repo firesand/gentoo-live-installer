@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .. import diagnostics, layout
+from .. import desktops, diagnostics, layout
 from ..manifest import InstallManifest
 from ..system_info import DiskInfo, SystemInfo, tools_for_selection
 from ..widgets import Card, FlowLayout, Page, wrapped_label
@@ -90,7 +90,7 @@ def manifest_warnings(manifest: InstallManifest, info: SystemInfo | None = None)
     warnings: list[str] = list(extra()) if callable(extra) else []
     system, options = manifest.system, manifest.options
     family = stage_family(system.stage_variant)
-    if family in UNVERIFIED_FAMILIES and system.desktop in {"gnome", "xfce"} and system.desktop in FAMILY_DESKTOP_SUPPORT[family]:
+    if desktops.unverified(system.desktop, family):
         warnings.append(f"Not verified: {system.desktop.upper()} on a {FAMILY_LABELS[family]} stage3 may need extra USE changes during the installation.")
     if system.desktop == "minimal" and (options.install_hwmonux or options.install_portagehub):
         warnings.append("HWMonux and PortageHub are graphical applications and cannot start on a minimal system; they only add build time and disk space there.")

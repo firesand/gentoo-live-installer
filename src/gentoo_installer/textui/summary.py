@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .. import keymaps, layout, recommend
+from .. import desktops, keymaps, layout, recommend
 from ..diagnostics import redact_url_userinfo
 from ..manifest import InstallManifest
 from .console import Console
@@ -81,7 +81,7 @@ def settings_rows(manifest: InstallManifest, view: MachineView) -> list[tuple[st
         disk += " - recognised by its hardware path, size and model"
     swap_mib = layout.effective_swap_mib(storage, int(view.memory_gib * 1024 * 1024))
     swap = f"{swap_mib} MiB swap" if swap_mib else "no swap"
-    desktop = "no desktop (text mode)" if system.desktop == "minimal" else {"kde": "KDE Plasma", "gnome": "GNOME", "xfce": "Xfce"}.get(system.desktop, system.desktop)
+    desktop = "no desktop (text mode)" if system.desktop == "minimal" else desktops.label(system.desktop)
     root = "root login turned off (use sudo)" if accounts.disable_root_login else "root has a password"
     return [
         ("Disk", f"{disk}. ALL DATA ON IT WILL BE ERASED." if storage.mode == "erase" else f"{disk}, your own partitions (manual mode)"),

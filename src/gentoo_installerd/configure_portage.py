@@ -8,6 +8,7 @@ import shutil
 from pathlib import Path
 from typing import Mapping, MutableMapping, Sequence
 
+from gentoo_installer import desktops
 from gentoo_installer.binhost import binhost_url, BINREPO_NAME, cpu_level_of, render_binrepos
 from gentoo_installer.licenses import effective_accept_license, render_package_license
 from gentoo_installer.makeopts import auto_make_opts as shared_auto_make_opts
@@ -77,15 +78,9 @@ PACKAGE_USE_ATOM = re.compile(r"\*/\*|" + ATOM_RE.pattern)
 
 
 # What the installer writes under /etc/portage so that its own package choices resolve without
-# autounmask. These are configuration, never left to the binary package host (CRITIC-0/1).
-DESKTOP_USE: Mapping[str, Mapping[str, tuple[str, ...]]] = {
-    # kde-apps-meta -> kdeutils-meta -> kweather needs qtpositioning[geoclue]
-    "kde": {"dev-qt/qtpositioning": ("geoclue",)},
-    # samba -> libngtcp2 needs the GnuTLS crypto backend
-    "gnome": {"net-libs/ngtcp2": ("gnutls",)},
-    # xfce4-panel needs libdbusmenu[gtk3]
-    "xfce": {"dev-libs/libdbusmenu": ("gtk3",)},
-}
+# autounmask comes from the desktop registry (gentoo_installer.desktops.package_use). These are
+# configuration, never left to the binary package host (CRITIC-0/1).
+DESKTOP_USE: Mapping[str, Mapping[str, tuple[str, ...]]] = {key: desktops.package_use(key) for key in desktops.DESKTOPS}
 
 
 # The package.env of the hardware plan (hwplan.MEMORY_HEAVY_ATOMS): the compile jobs the memory-heavy packages may use.
@@ -319,7 +314,7 @@ class PortageMixin(ConfigurerBase):
         if system.desktop != "minimal":
             # Current binary libwebp[tiff] and tiff[webp] depend on each other.
             _forbid_use(package_use, "media-libs/libwebp", "tiff")
-            for atom, flags in DESKTOP_USE.get(system.desktop, {}).items():
+            for atom, flags in desktops.package_use(system.desktop, flatpak=desktops.flatpak_wanted(options)).items():
                 _require_use(package_use, atom, *flags)
         return package_use
 

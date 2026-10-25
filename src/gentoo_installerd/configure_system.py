@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from gentoo_installer import keymaps
+from gentoo_installer import desktops, keymaps
 from gentoo_installer.manifest import InstallManifest, System
 
 from .configure_base import _plan_list, ConfigurationError, ConfigurerBase, shell_value
@@ -137,10 +137,11 @@ class SystemMixin(ConfigurerBase):
         if system.desktop == "minimal" or _keyboard_is_default(system):
             return []
         files = [("etc/X11/xorg.conf.d/00-keyboard.conf", render_xorg_keyboard(system), 0o644)]
-        if system.desktop == "kde":
+        kind = desktops.REGISTRY[system.desktop].keyboard if system.desktop in desktops.REGISTRY else ""
+        if kind == "kxkb":
             # Plasma (X11 and Wayland) and the SDDM greeter read kxkbrc, not xorg.conf.d.
             files.append(("etc/xdg/kxkbrc", render_kxkbrc(system), 0o644))
-        elif system.desktop == "gnome":
+        elif kind == "dconf":
             files.append(("etc/dconf/profile/user", "user-db:user\nsystem-db:local\n", 0o644))
             files.append(("etc/dconf/db/local.d/00-gentoo-installer-keyboard", render_dconf_keyboard(system), 0o644))
         return files
@@ -223,8 +224,10 @@ class SystemMixin(ConfigurerBase):
         if system.console_font and system.init == "openrc":
             desktop.append(("consolefont", "boot", True))
         if system.desktop != "minimal":
-            manager = {"kde": "sddm", "gnome": "gdm", "xfce": "lightdm"}[system.desktop]
-            desktop.append(("display-manager" if system.init == "openrc" else manager, "default", True))
+            openrc_name, unit = desktops.display_manager(system.desktop)
+            desktop.append(("display-manager" if system.init == "openrc" else unit, "default", True))
+            for name, runlevel in desktops.services(system.desktop, system.init):
+                desktop.append((name, runlevel, True))
         for item in [*_plan_list(plan, "services"), *_plan_list(plan, "optional_services")]:
             name, runlevel = (item, "default") if isinstance(item, str) else (item[0], item[1])
             if (str(name), str(runlevel), True) not in desktop:
@@ -249,7 +252,7 @@ class SystemMixin(ConfigurerBase):
         system = manifest.system
         warnings: list[str] = []
         if phase in {"all", "desktop"} and system.desktop != "minimal":
-            manager = {"kde": "sddm", "gnome": "gdm", "xfce": "lightdm"}[system.desktop]
+            manager = desktops.display_manager(system.desktop)[0]
             if system.init == "openrc" and self.service_installed("display-manager", "openrc"):
                 self.write("etc/conf.d/display-manager", f'DISPLAYMANAGER="{manager}"\n')
         for name, runlevel, optional in self.service_specs(manifest, plan, phase):

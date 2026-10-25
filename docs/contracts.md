@@ -452,6 +452,7 @@ bootloader, hardware), ACCT (accounts, tools, text installer).
 | `gentoo_installerd/netactions.py`, `remote.py` | NET | daemon actions of features `network.v1` and `remote.v1` (docs/protocol.md) |
 | `gentoo_installer/pages/tools_tab.py` | ACCT | Applications && tools tab (`load_tools`, `save_tools`) |
 | `gentoo_installer/pages/system.py` | CORE | init system, stage3 and profile, and the layout that embeds the two sections |
+| `gentoo_installer/desktops.py` | CORE | the desktop registry: every desktop fact (cards, profile suffix, display manager, atoms, USE, services, sizes, families) |
 | `gentoo_installer/pages/desktop_section.py` | PORT | desktop cards, stage3 family rules (`load`, `collect`, `set_advanced`) |
 | `gentoo_installer/pages/boot_section.py` | BOOT | kernel, initramfs, bootloader, Secure Boot and UKI controls (`load`, `collect`, `set_advanced`) |
 | `gentoo_installer/pages/help.py` | CORE | `HelpNote`, `Badge`, `AdvancedSection`, `HANDBOOK_LINKS`; every page adopts them for its own text |
