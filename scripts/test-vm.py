@@ -2687,11 +2687,21 @@ class ScenarioRunner:
 
     def ai_hands(self, live: VMProcess) -> vm_wave6.Hands:
         """The harness as the machine owner and as the agents' account: root over SSH, the keyboard through QMP, the logs without any secret."""
+        logs: dict[str, list[Path]] = {}
+
+        def rehide(label: str) -> None:
+            for log in logs.get(label, []):
+                text = log.read_text(errors="replace")
+                hidden = hands.hide(text)
+                if hidden != text:
+                    log.write_text(hidden)
+
         def run(command: str, label: str) -> tuple[int, str]:
             self.ai_counter += 1
             slow = label.startswith(("mount", "unmount", "agents"))
             code, log = self.ssh(self.args.ssh_user, command, f"ai-{self.ai_counter:03d}-{label or 'command'}.log",
                                  max(600, self.args.command_timeout) if slow else self.args.command_timeout)
+            logs.setdefault(label, []).append(log)
             text = log.read_text(errors="replace")
             hidden = hands.hide(text)
             if hidden != text:
@@ -2710,7 +2720,7 @@ class ScenarioRunner:
         def type_console(text: str) -> None:
             live.type_text(text)
 
-        hands = vm_wave6.Hands(run, type_console, password, lambda seconds: time.sleep(seconds * self.AI_SLEEP_SCALE), time.monotonic)
+        hands = vm_wave6.Hands(run, type_console, password, lambda seconds: time.sleep(seconds * self.AI_SLEEP_SCALE), time.monotonic, relog=rehide)
         return hands
 
     def ai_forwarder(self, live: VMProcess, opened: list[int]) -> Callable[[int], int]:

@@ -101,6 +101,12 @@ class Hands:
     now: Callable[[], float]
     home: str = AI_HOME
     secrets: list[str] = field(default_factory=list)
+    relog: Callable[[str], None] | None = None     # rewrites the logs of one label once a secret became known (the share password)
+
+    def rehide(self, label: str) -> None:
+        """A secret that is only known after a command ran (the share password) must also leave that command's own log."""
+        if self.relog is not None:
+            self.relog(label)
 
     def ai(self, command: str, label: str = "") -> tuple[int, str]:
         return self.run(as_ai(command, self.home), label)
@@ -227,7 +233,7 @@ def parse_cwd_probe(returncode: int, output: str) -> ProbeResult:
 
 # --- the rules of the security design (point 4 and the approver) ---------------------------------------------------------------------------------
 
-APPROVER_COMMAND = (f"pgrep -af gentoo-rescue-approver; echo ---; stat -c '%U:%G %a %n' {DO_SOCKET} {DO_PASSWORD_FILE} 2>&1; echo ---; "
+APPROVER_COMMAND = (f"pgrep -af '[g]entoo-rescue-approver'; echo ---; stat -c '%U:%G %a %n' {DO_SOCKET} {DO_PASSWORD_FILE} 2>&1; echo ---; "
                     f"cat {APPROVER_VT_FILE} 2>/dev/null; true")
 VT_OPTION_RE = re.compile(r"--vt[ =](\d+)")
 
@@ -243,13 +249,20 @@ def approver_vt(output: str) -> int:
     return DEFAULT_APPROVER_VT
 
 
+def approver_processes(output: str) -> list[str]:
+    """The lines of pgrep that are the approver itself: not the remote shell whose command line holds the same words."""
+    parts = _sections(output)
+    lines = _clean(parts[0] if parts else output).splitlines()
+    return [line for line in lines if "gentoo-rescue-approver" in line and not re.search(r"\b(?:bash|sh|pgrep)\b.*gentoo-rescue-approver", line)]
+
+
 def parse_approver_probe(returncode: int, output: str) -> ProbeResult:
     parts = _sections(output)
     if len(parts) != 3:
         return ProbeResult("approver", False, _tail(output), "the check returned no three sections: could not tell")
     processes, stats, _vt = parts
     problems: list[str] = []
-    if "gentoo-rescue-approver" not in processes:
+    if not approver_processes(processes):
         problems.append("the approver service is not running (it must be started at boot in the AI rescue entry)")
     modes = {line.split()[-1]: line.split()[0] + " " + line.split()[1] for line in stats.strip().splitlines() if len(line.split()) == 3}
     if modes.get(DO_SOCKET) != "root:rescue-ai 660":
@@ -436,7 +449,7 @@ def audit_events(text: str) -> list[dict[str, Any]]:
 
 
 def audit_problems(events: Sequence[Mapping[str, Any]], answers: Sequence[str], password: str, raw: str) -> list[str]:
-    """The three requests of the flow are in the audit log with their argv, each answer and the one exit status, and the password is not."""
+    """The requests of the flow are in the audit log with their argv, each answer and the one exit status, and the password is not."""
     problems: list[str] = []
     requests = [event for event in events if event.get("event") == "request" and list(event.get("argv", []))[1:] == list(DO_COMMAND)[1:]
                 and str(event.get("argv", [""])[0]).endswith("/" + DO_COMMAND[0])]
@@ -456,8 +469,10 @@ def audit_problems(events: Sequence[Mapping[str, Any]], answers: Sequence[str], 
 
 
 def do_flow(hands: Hands, vt: int) -> Report:
-    """Three requests, each asked on the approver's console only. Bare Enter refuses (77), the password approves exactly that one command,
-    and the next request asks again: an approval is never a window of time. The audit log tells the same story afterwards."""
+    """Two requests, each asked on the approver's console only. The password approves exactly that one command; the next request asks again
+    and bare Enter refuses it (77): an approval is never a window of time. The approval comes first on purpose: the approver keeps quiet for
+    a few seconds after any request that was not approved (BACKOFF_START), so a refusal first would make the next request be turned away
+    before it reaches the console. The audit log tells the same story afterwards."""
     report = Report()
     password = hands.password()
     hands.secrets.append(password)
@@ -498,13 +513,12 @@ def do_flow(hands: Hands, vt: int) -> Report:
         report.step(f"{label}: the console goes back to {before}", back, "it stayed on the approver's screen" if not back else "")
         return ok
 
-    one(1, "", "refused")
-    one(2, None, "approved")
-    one(3, "", "refused")
+    one(1, None, "approved")
+    one(2, "", "refused")
     code, raw = hands.run(f"cat {DO_AUDIT_LOG}", "do-audit")
     events = audit_events(raw)
-    problems = audit_problems(events, ["wrong", "approved", "wrong"], password, raw) if code == 0 else [f"the audit log could not be read (exit {code})"]
-    report.step("the audit log records the three requests, their answers and the one exit status, never the password", not problems, "; ".join(problems))
+    problems = audit_problems(events, ["approved", "wrong"], password, raw) if code == 0 else [f"the audit log could not be read (exit {code})"]
+    report.step("the audit log records the two requests, their answers and the one exit status, never the password", not problems, "; ".join(problems))
     return report
 
 
@@ -716,6 +730,7 @@ def share_flow(hands: Hands, forward: Forward, fetch: Fetcher) -> Report:
         code, output = hands.ai(command, f"share-start-{mode}")
         info = parse_share_start(output)
         hands.secrets.append(info.password)
+        hands.rehide(f"share-start-{mode}")
         ready = code == 0 and info.port > 0 and bool(info.password) and bool(info.fingerprint)
         if not report.step(f"{mode}: gentoo-rescue-share starts and prints address, password and fingerprint", ready,
                            f"exit {code}: {hands.hide(_tail(output))}" if not ready else ""):
@@ -746,6 +761,7 @@ def share_flow(hands: Hands, forward: Forward, fetch: Fetcher) -> Report:
             report.step("status shows the port and fingerprint but never the password", code == 0 and str(info.port) in status_text and info.password not in status_text,
                         hands.hide(_tail(status_text)) if code != 0 or info.password in status_text else "")
             code, again = hands.ai(SHARE_START, "share-again")
+            hands.rehide("share-again")
             report.step("a second start while one runs is refused", code != 0 and "already running" in again.lower(), f"exit {code}: {_tail(again)}" if code == 0 else "")
         code, output = hands.ai("gentoo-rescue-share stop", f"share-stop-{mode}")
         report.step(f"{mode}: stop succeeds", code == 0, _tail(output) if code != 0 else "")

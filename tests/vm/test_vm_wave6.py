@@ -105,6 +105,21 @@ def test_a_console_that_does_not_exist_cannot_prove_it_is_closed():
     assert not result.success and "/dev/tty9 does not exist" in result.error
 
 
+def test_the_approver_probe_does_not_count_its_own_shell_as_the_approver():
+    assert "'[g]entoo-rescue-approver'" in w6.APPROVER_COMMAND
+    only_the_shell = ("9999 bash -c pgrep -af '[g]entoo-rescue-approver'; echo ---; stat -c ... gentoo-rescue-approver\n---\n"
+                      "root:rescue-ai 660 /run/gentoo-rescue/do.sock\nroot:root 600 /run/gentoo-rescue/do-password\n---\n")
+    assert w6.approver_processes(only_the_shell) == []
+    result = w6.parse_approver_probe(0, only_the_shell)
+    assert not result.success and "not running" in result.error
+
+
+def test_the_stick_without_an_approver_fails_the_probe():
+    stick = Stick(approver_running=False)
+    code, text = stick.run(w6.APPROVER_COMMAND, "approver")
+    assert not w6.parse_approver_probe(code, text).success
+
+
 def test_the_approver_vt_comes_from_its_command_line_then_the_file_then_the_default():
     assert w6.approver_vt("412 gentoo-rescue-approver --vt 8 --socket x\n---\nroot:root 600 x\n---\n7\n") == 8
     assert w6.approver_vt("---\n\n---\n7\n") == 7
@@ -121,8 +136,9 @@ def run_do(**change):
 def test_the_do_flow_passes_on_a_correct_approver_and_types_only_where_it_should():
     stick, report = run_do()
     assert report.success, report.problems
-    assert stick.typed == ["", PASSWORD, ""], "bare Enter, then the password for exactly one command, then bare Enter again"
-    assert [event.get("answer") for event in stick.audit if event["event"] == "answer"] == ["wrong", "approved", "wrong"]
+    assert stick.typed == [PASSWORD, ""], "the password for exactly one command, then bare Enter for the next"
+    assert [event.get("answer") for event in stick.audit if event["event"] == "answer"] == ["approved", "wrong"]
+    assert not [event for event in stick.audit if event["event"] == "refused"], "no request ran into the approver's quiet period"
     assert PASSWORD not in json.dumps(report.to_dict()), "the password never reaches the report"
 
 
@@ -160,11 +176,37 @@ def test_a_password_in_the_audit_log_fails():
     assert any("password is in the audit log" in problem for problem in report.problems)
 
 
-def test_the_audit_checker_wants_the_three_requests_and_one_exit():
-    events = [{"event": "request", "argv": ["/usr/bin/id", "-u"], "cwd": "/home/rescue-ai"}] * 3
-    events += [{"event": "answer", "answer": "wrong"}, {"event": "answer", "answer": "approved"}, {"event": "answer", "answer": "wrong"}, {"event": "exit", "status": 0}]
-    assert w6.audit_problems(events, ["wrong", "approved", "wrong"], "pw", "") == []
-    assert w6.audit_problems(events[:-1], ["wrong", "approved", "wrong"], "pw", "")
+def test_the_audit_checker_wants_the_two_requests_and_one_exit():
+    events = [{"event": "request", "argv": ["/usr/bin/id", "-u"], "cwd": "/home/rescue-ai"}] * 2
+    events += [{"event": "answer", "answer": "approved"}, {"event": "answer", "answer": "wrong"}, {"event": "exit", "status": 0}]
+    assert w6.audit_problems(events, ["approved", "wrong"], "pw", "") == []
+    assert w6.audit_problems(events[:-1], ["approved", "wrong"], "pw", "")
+
+
+def test_the_stick_models_the_approvers_quiet_period_so_a_refusal_first_fails():
+    """The old order (bare Enter, then the password at once) is turned away by the real approver before it asks: the stick says so too."""
+    stick = Stick()
+    hands = stick.hands()
+    for number, answer in ((1, ""), (2, PASSWORD)):
+        hands.run(w6.do_start_command(number, hands.home), f"do-start-{number}")
+        if stick.active == "tty9":
+            hands.type_console(answer)
+    assert stick.requests[2]["rc"] == 77 and stick.active == "tty1"
+    assert [e["event"] for e in stick.audit].count("refused") == 1
+    assert [e["event"] for e in stick.audit].count("request") == 1
+    # after the quiet period (a bit over BACKOFF_START) a new request is asked again
+    stick.clock.sleep(6)
+    hands.run(w6.do_start_command(3, hands.home), "do-start-3")
+    assert stick.active == "tty9" and stick.requests[3]["state"] == "waiting"
+
+
+def test_an_approval_ends_the_quiet_period():
+    stick = Stick()
+    hands = stick.hands()
+    hands.run(w6.do_start_command(1, hands.home), "do-start-1")
+    hands.type_console(PASSWORD)
+    hands.run(w6.do_start_command(2, hands.home), "do-start-2")
+    assert stick.active == "tty9"
 
 
 # --- gentoo-rescue-mount -------------------------------------------------------------------------------------------------------------------------
@@ -200,6 +242,27 @@ def test_a_mount_that_says_read_write_or_forgets_the_hints_fails():
 def run_share(**change):
     stick = Stick(**change)
     return stick, w6.share_flow(stick.hands(), stick.forward, stick.fetch)
+
+
+def test_the_share_password_leaves_the_logs_of_the_command_that_printed_it():
+    stick = Stick()
+    logs: dict[str, str] = {}
+    base = stick.hands()
+
+    def run(command, label):
+        code, text = stick.run(command, label)
+        logs[label] = logs.get(label, "") + hands.hide(text)      # like the real run(): hides what is known by now; what the harness wrote to disk before it knew the password
+        return code, text
+
+    def relog(label):
+        logs[label] = hands.hide(logs[label])
+
+    hands = w6.Hands(run, base.type_console, base.password, base.sleep, base.now, relog=relog)
+    report = w6.share_flow(hands, stick.forward, stick.fetch)
+    assert report.success, report.problems
+    assert {"share-start-writable", "share-start-read-only", "share-again"} <= set(logs)
+    assert not [label for label, text in logs.items() if SHARE_PASSWORD in text], "the share password is in a log"
+    assert "[hidden]" in logs["share-start-writable"]
 
 
 def test_the_share_flow_passes_on_a_correct_share_in_both_modes():

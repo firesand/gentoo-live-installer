@@ -21,6 +21,7 @@ SHARE_PASSWORD = "bako-fidu-meza"
 FINGERPRINT = "AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89"
 PRINTED_HEX = FINGERPRINT.replace(":", "").lower()
 SHARE_PORT = 23456
+BACKOFF_START = 5.0                    # seconds the real approver stays quiet after an unapproved request
 
 
 class Clock:
@@ -72,6 +73,7 @@ class Stick:
     socket_mode: str = "root:rescue-ai 660"
     # do
     approver_vt: int = 9
+    approver_running: bool = True
     password: str = PASSWORD
     approver_switches: bool = True
     runs_without_approval: bool = False
@@ -96,6 +98,7 @@ class Stick:
     requests: dict[int, dict] = field(default_factory=dict)
     audit: list[dict] = field(default_factory=list)
     approved_before: bool = False
+    quiet_until: float = 0.0              # the approver's backoff after a request that was not approved
     share_running: bool = False
     share_read_only: bool = False
     agents_installed: bool = False
@@ -116,10 +119,12 @@ class Stick:
             ok = text == self.password
             self.audit.append({"event": "answer", "answer": "approved" if ok else "wrong"})
             if ok:
+                self.quiet_until = 0.0
                 self.approved_before = True
                 self.audit.append({"event": "exit", "status": 0})
                 item.update(state="done", rc=0, out="gentoo-rescue-do: waiting for the person at the PC's console\n0\n")
             else:
+                self.quiet_until = self.clock.now() + BACKOFF_START
                 item.update(state="done", rc=77, out="gentoo-rescue-do: waiting\ngentoo-rescue-do: not run: the password was wrong or empty: refused\n")
             self.active = "tty1"
 
@@ -145,7 +150,7 @@ class Stick:
             (r"^cat /tmp/gentoo-vm-do-(\d)\.out", lambda c, m: self.do_file(int(m.group(1)), "out")),
             (r"tmux has-session", lambda c, m: (0, "") if self.session_up() else (1, "no server running\n")),
             (r"tmux list-windows", self.session_report),
-            (r"^pgrep -af gentoo-rescue-approver", self.approver_report),
+            (r"^pgrep -af '\[g\]entoo-rescue-approver'", self.approver_report),
             (r"^cat /sys/kernel/security/lsm", lambda c, m: ("lockdown,capability,yama\n" if self.yama else "lockdown,capability\n") + f"\n---\n{self.ptrace}\n"),
             (r"^id -nG rescue-ai", lambda c, m: f"{self.groups}\n---\n{self.sudo_text}\n---\n\n---\nrescue-ai:x:1001:1001::/home/rescue-ai:/bin/bash\n"),
             (r"import fcntl, json, os, subprocess, sys", self.console_report),
@@ -181,6 +186,8 @@ class Stick:
         return f"{windows}---\n{self.client_tty}\n---\n{self.tmux_owner} tmux: server\n{self.tmux_owner} tmux -u new-session -A -s rescue\n"
 
     def approver_report(self, command, match):
+        if not self.approver_running:
+            return "9999 bash -c pgrep -af '[g]entoo-rescue-approver'; echo ---; stat\n---\nmissing\n---\n"
         return (f"412 /usr/bin/python3 /usr/bin/gentoo-rescue-approver --vt {self.approver_vt} --socket /run/gentoo-rescue/do.sock\n---\n"
                 f"{self.socket_mode} /run/gentoo-rescue/do.sock\nroot:root 600 /run/gentoo-rescue/do-password\n---\n{self.approver_vt}\n")
 
@@ -200,6 +207,10 @@ class Stick:
         if self.runs_without_approval or (self.carries_approval and self.approved_before):
             self.requests[number] = {"state": "done", "rc": 0, "out": "0\n"}
             self.audit.append({"event": "exit", "status": 0})
+        elif self.clock.now() < self.quiet_until:
+            # the real approver: no question, no console switch, no 'request' event, until the quiet period is over
+            self.requests[number] = {"state": "done", "rc": 77, "out": "gentoo-rescue-do: not run: rate limit after an unanswered request\n"}
+            self.audit.append({"event": "refused", "reason": "rate limit after an unanswered request"})
         else:
             self.requests[number] = {"state": "waiting", "rc": None, "out": ""}
             self.audit.append({"event": "request", "argv": ["/usr/bin/id", "-u"], "cwd": w6.AI_HOME})
