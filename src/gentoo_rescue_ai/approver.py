@@ -90,12 +90,14 @@ def show_argv(argv: list[str]) -> str:
     return " ".join(words)
 
 
-def prompt_text(peer: "Peer", argv: list[str], cwd: str) -> str:
+def prompt_text(peer: "Peer", argv: list[str], cwd: str, warnings: list[str] | None = None) -> str:
+    caution = "".join(f"  !! The agent can still change {visible(item)} after you read this command. Do not approve it unless you have read that file.\n" for item in warnings or [])
     return (
         "\n==================== gentoo-rescue-do ====================\n"
         f"An AI agent ({visible(peer.name)}, process {peer.pid}) asks to run this command as ROOT:\n\n"
         f"    {show_argv(argv)}\n\n"
         f"  in the folder: {visible(cwd)}\n\n"
+        f"{caution}"
         "Nothing has been run yet. Read it carefully; the agent may have been misled by a file on the broken disk.\n"
         "Type the rescue password to allow THIS ONE command, or just press Enter to refuse.\n"
         "Password (hidden): ")
@@ -262,6 +264,59 @@ def below_target(path: str) -> bool:
     return any(real == prefix or real.startswith(prefix + "/") for prefix in TARGET_PREFIXES)
 
 
+def writable_by(info: os.stat_result, uid: int, gids: frozenset[int]) -> bool:
+    mode = stat.S_IMODE(info.st_mode)
+    if info.st_uid == uid:
+        return bool(mode & 0o200)
+    if info.st_gid in gids:
+        return bool(mode & 0o020)
+    return bool(mode & 0o002)
+
+
+def peer_groups(peer: "Peer") -> frozenset[int]:
+    try:
+        return frozenset(os.getgrouplist(peer.name, peer.gid))
+    except (KeyError, OSError):
+        return frozenset({peer.gid})
+
+
+def changeable_by_peer(path: str, peer: "Peer") -> str:
+    """The first path component of ``path`` (itself or a folder above it) that ``peer`` can change, or ''. A symlink is followed."""
+    gids = peer_groups(peer)
+    real = os.path.realpath(path)
+    parts = real.split("/")
+    for depth in range(len(parts), 0, -1):
+        candidate = "/".join(parts[:depth]) or "/"
+        try:
+            if writable_by(os.stat(candidate), peer.uid, gids):
+                return candidate
+        except OSError:
+            continue
+    return ""
+
+
+def program_problem(program: str, peer: "Peer") -> str:
+    """Why root must not run ``program``: it comes from the broken disk, or the agent can change it (or a folder above it)."""
+    if below_target(program):
+        return "programs of the broken disk are never run as root; use gentoo-rescue or gentoo-chroot for the target"
+    changed = changeable_by_peer(program, peer)
+    if changed:
+        return f"{changed} can be changed by the rescue-ai user, so what would run is not what was approved. Programs must be system files only root can change"
+    return ""
+
+
+def writable_arguments(argv: list[str], cwd: str, peer: "Peer") -> list[str]:
+    """Arguments that are files or folders the agent can still change after the person has read the command (a script, a config)."""
+    found = []
+    for arg in argv[1:]:
+        if not arg or arg.startswith("-") or "\0" in arg:
+            continue
+        path = arg if arg.startswith("/") else os.path.join(cwd, arg)
+        if os.path.lexists(path) and changeable_by_peer(path, peer):
+            found.append(arg)
+    return found
+
+
 def check_request(request: Any) -> tuple[list[str], str]:
     """The (argv, cwd) of a request, or ``Refused``."""
     if not isinstance(request, dict):
@@ -310,12 +365,13 @@ def run_command(argv: list[str], cwd: str, send: Send) -> int:
 # ---- the service ---------------------------------------------------------------------------------------------------------------------------------
 class Approver:
     def __init__(self, console: Console, password: str, audit: Audit, allowed_uids: set[int], *, runner: Callable[[list[str], str, Send], int] = run_command,
-                 peer_of: Callable[[socket.socket], Peer] = peer_creds, approval_seconds: float = APPROVAL_SECONDS) -> None:
+                 peer_of: Callable[[socket.socket], Peer] = peer_creds, approval_seconds: float = APPROVAL_SECONDS,
+                 program_check: Callable[[str, Peer], str] = program_problem) -> None:
         if len(password) < MIN_PASSWORD:
             raise ValueError("the per-boot password is too short")
         self._password = password.encode()
         self.console, self.audit, self.allowed_uids = console, audit, set(allowed_uids)
-        self.runner, self.peer_of, self.approval_seconds = runner, peer_of, approval_seconds
+        self.runner, self.peer_of, self.approval_seconds, self.program_check = runner, peer_of, approval_seconds, program_check
 
     # one request, one connection
     def handle(self, conn: socket.socket) -> None:
@@ -343,12 +399,17 @@ class Approver:
             self.audit.write("refused", reason=str(exc), argv=argv, cwd=cwd, pid=peer.pid, uid=peer.uid)
             send({"event": "denied", "reason": str(exc)})
             return
+        problem = self.program_check(program, peer)
+        if problem:
+            self.audit.write("refused", reason=problem, argv=argv, cwd=cwd, pid=peer.pid, uid=peer.uid)
+            send({"event": "denied", "reason": problem})
+            return
         shown = [program, *argv[1:]]
         if not self.audit.write("request", argv=shown, cwd=cwd, pid=peer.pid, uid=peer.uid):
             send({"event": "denied", "reason": "the audit log cannot be written, so nothing is run"})
             return
         send({"event": "waiting", "message": "waiting for the person at the PC's console to approve this command"})
-        answer = self._ask(peer, shown, cwd)
+        answer = self._ask(peer, shown, cwd, writable_arguments(shown, cwd, peer))
         if answer != "approved":
             self.audit.write("answer", answer=answer, argv=shown, pid=peer.pid)
             send({"event": "denied", "reason": {"timeout": "nobody approved it in time", "wrong": "the password was wrong or empty: refused", "console": "the console is not available"}.get(answer, answer)})
@@ -370,10 +431,10 @@ class Approver:
         if status != -2:
             send({"event": "exit", "status": status})
 
-    def _ask(self, peer: Peer, argv: list[str], cwd: str) -> str:
+    def _ask(self, peer: Peer, argv: list[str], cwd: str, warnings: list[str]) -> str:
         try:
             self.console.enter()
-            typed = self.console.read_secret(prompt_text(peer, argv, cwd), self.approval_seconds)
+            typed = self.console.read_secret(prompt_text(peer, argv, cwd, warnings), self.approval_seconds)
         except OSError:
             return "console"
         if typed is None:

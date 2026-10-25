@@ -258,7 +258,11 @@ def start(args: argparse.Namespace, *, say: Callable[[str], None] = print, which
     say("")
     say(PHONE_NOTE)
     if foreground:
-        supervise(state, ttyd_alive=lambda: process.poll() is None, clients=lambda: tmux_clients(tmux), stop=lambda reason: (process.terminate(), say(f"Stopped: {reason}")))
+        def finish(reason: str) -> None:
+            process.terminate()
+            say(f"Stopped: {reason}")
+
+        supervise(state, ttyd_alive=lambda: process.poll() is None, clients=lambda: tmux_clients(tmux), stop=finish)
         cleanup(folder)
         return 0
     if os.fork() != 0:

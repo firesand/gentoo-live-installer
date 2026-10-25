@@ -42,11 +42,13 @@ class FakeConsole:
 
 
 class Service:
-    def __init__(self, tmp: Path, sock_dir: Path, answers: list[str | None], allowed: set[int] | None = None, runner=None) -> None:
+    def __init__(self, tmp: Path, sock_dir: Path, answers: list[str | None], allowed: set[int] | None = None, runner=None, program_check=None) -> None:
         self.console = FakeConsole(answers)
         self.log = tmp / "do.log"
         self.audit = approver.Audit(str(self.log))
+        # In the sandbox "/" belongs to the user running the tests, so the real check (root-owned programs only) is switched off except where a test asks for it.
         kwargs = {"runner": runner} if runner else {}
+        kwargs["program_check"] = program_check or (lambda program, peer: "")
         self.approver = approver.Approver(self.console, PASSWORD, self.audit, {ME} if allowed is None else allowed, **kwargs)
         self.path = str(sock_dir / "do.sock")
         self.listener = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
@@ -280,3 +282,28 @@ def test_a_terminal_that_is_not_a_private_root_device_is_refused(tmp_path) -> No
     device.write_text("")
     with pytest.raises(OSError):
         approver.VtConsole(9, device=str(device)).secure()
+
+
+def test_root_never_runs_a_program_the_agent_can_change_or_one_from_the_broken_disk(make, tmp_path, monkeypatch) -> None:
+    script = tmp_path / "fix.sh"
+    script.write_text("#!/bin/sh\necho pwned\n")
+    script.chmod(0o755)
+    service = make([PASSWORD, PASSWORD], program_check=approver.program_problem)
+    code, out, _, notes = service.ask([str(script)], cwd=str(tmp_path))
+    assert code == do_client.EXIT_REFUSED and out == b"" and any("can be changed by the rescue-ai user" in note for note in notes)
+    assert service.console.prompts == []
+    target = tmp_path / "gentoo"
+    (target / "bin").mkdir(parents=True)
+    monkeypatch.setattr(approver, "TARGET_PREFIXES", (str(target),))
+    code, _, _, notes = service.ask([str(target / "bin" / "tool")], cwd=str(tmp_path))
+    assert code == do_client.EXIT_REFUSED and service.console.prompts == []
+
+
+def test_a_file_argument_the_agent_can_still_change_is_flagged_on_the_screen(make, tmp_path, monkeypatch) -> None:
+    notes_file = tmp_path / "plan.txt"
+    notes_file.write_text("x")
+    monkeypatch.setattr(approver, "changeable_by_peer", lambda path, peer: path if path == str(notes_file) else "")
+    service = make([PASSWORD])
+    service.ask(["/bin/cat", str(notes_file), "/etc/hostname"], cwd=str(tmp_path))
+    prompt = service.console.prompts[0]
+    assert f"can still change {notes_file}" in prompt and prompt.count("!!") == 1

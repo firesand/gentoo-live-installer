@@ -149,10 +149,10 @@ def place(pin: Pin, verified: Path, target_dir: Path) -> Path:
             else:
                 with tarfile.open(verified, "r:gz") as archive:
                     member = pick_member(archive, pin.binary)
-                    source = archive.extractfile(member)
-                    if source is None:
+                    packed = archive.extractfile(member)
+                    if packed is None:
                         raise AgentError("the program cannot be read from the archive")
-                    shutil.copyfileobj(source, out, CHUNK)
+                    shutil.copyfileobj(packed, out, CHUNK)
         temp.chmod(0o755)
         os.replace(temp, final)
     except BaseException:
