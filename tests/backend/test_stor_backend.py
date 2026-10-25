@@ -207,7 +207,8 @@ class TestFilesystems:
         runner = StatefulRunner([vda()])
         runner._cmd_blockdev = lambda args: runner.ok(args, f"{4 * GiB}\n")
         make_manager(runner, tmp_path).prepare(erase(device="/dev/vda"))
-        assert self.mkfs(runner, "mkfs.ext4") == ("mkfs.ext4", "-F", "-T", "small", "/dev/vda3")
+        # 1 KiB blocks: without the orphan file, which the kernel refuses at that block size (the first real VM run of a separate /boot)
+        assert self.mkfs(runner, "mkfs.ext4") == ("mkfs.ext4", "-F", "-T", "small", "-O", "^orphan_file", "/dev/vda3")
 
     def test_large_ext4_does_not(self, tmp_path):
         runner = StatefulRunner([vda()])

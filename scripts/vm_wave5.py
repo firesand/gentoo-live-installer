@@ -63,13 +63,20 @@ def parse_sshd_service_probe(returncode: int, output: str, init: str) -> ProbeRe
 SSHD_T_COMMAND = "sudo -S -p '' sshd -T"
 
 
+SSHD_KEYWORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9]*")
+
+
 def sshd_settings(output: str) -> dict[str, str]:
-    """``sshd -T`` prints one lowercase ``keyword value`` per line; the first line of a keyword counts."""
+    """``sshd -T`` prints one ``keyword value`` per line; the first line of a keyword counts, and keywords are compared lowercase.
+
+    OpenSSH before 10 printed the keywords lowercase (``permitrootlogin no``); the one in the pinned tree prints them as they are
+    documented (``PermitRootLogin no``), which the first real VM run showed.
+    """
     settings: dict[str, str] = {}
     for line in ANSI_RE.sub("", output).splitlines():
         key, _, value = line.strip().partition(" ")
-        if key and key.islower() and key not in settings:
-            settings[key] = value.strip()
+        if SSHD_KEYWORD_RE.fullmatch(key) and value.strip() and key.lower() not in settings:
+            settings[key.lower()] = value.strip()
     return settings
 
 

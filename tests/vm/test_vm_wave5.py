@@ -136,6 +136,17 @@ def test_the_installed_system_probes_of_the_harness_include_sshd():
     assert by_name["sshd-config"][3] == (vm.TEST_PASSWORD + "\n").encode(), "sshd -T needs root: the sudo password goes on stdin"
 
 
+def test_sshd_t_keywords_are_read_in_any_case():
+    """OpenSSH 10 in the pinned tree prints the keywords as documented (the first real VM run), older ones lowercase."""
+    real = "Port 22\nUsePAM yes\nPermitRootLogin no\nPasswordAuthentication no\nKbdInteractiveAuthentication yes\nPermitEmptyPasswords no\n"
+    old = real.lower()
+    for text in (real, old):
+        settings = w5.sshd_settings(text)
+        assert settings["permitrootlogin"] == "no" and settings["usepam"] == "yes" and w5.password_login_possible(settings)
+    assert w5.sshd_settings("Could not load host key: /etc/ssh/ssh_host_rsa_key\n" + real)["permitrootlogin"] == "no"
+    assert w5.sshd_settings("[sudo] password for vmtest:\n") == {}
+
+
 # --- remote access on the live medium -------------------------------------------------------------------------------
 
 STATUS_OFF = """Remote access (SSH): disabled

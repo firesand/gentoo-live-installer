@@ -868,9 +868,14 @@ class StorageManager:
             return 0
 
     def _ext4_profile(self, device: str) -> tuple[str, ...]:
-        """``-T small`` for an ext4 filesystem below 8 GiB (the Handbook's "small ext4 partitions"): fewer inodes, more room for files."""
+        """``-T small`` for an ext4 filesystem below 8 GiB (the Handbook's "small ext4 partitions"): fewer inodes, more room for files.
+
+        ``-T small`` means 1 KiB blocks, and on those e2fsprogs 1.47 makes a 1 MiB orphan file that the kernel refuses ("orphan file
+        too big", the mount fails with "Structure needs cleaning"): the first real VM run of a separate /boot showed it on 6.18. The
+        orphan file only speeds up deleting many open files at once, which /boot never does, so it is left out.
+        """
         size = self._device_bytes(device)
-        return ("-T", "small") if 0 < size < SMALL_EXT4_BYTES else ()
+        return ("-T", "small", "-O", "^orphan_file") if 0 < size < SMALL_EXT4_BYTES else ()
 
     def _xfs_options(self) -> tuple[str, ...]:
         """The newest mkfs.xfs configuration xfsprogs ships (lts_*.conf), when there is one: the Handbook's recommended defaults."""
