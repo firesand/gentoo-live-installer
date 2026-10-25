@@ -24,7 +24,9 @@ BASHRC = (
     "[ -f ~/.bashrc ] && . ~/.bashrc\n"
     'PS1="(chroot) ${PS1:-\\s-\\v\\$ }"\n'
 )
-LEAVE_LINE = "Type exit to leave; the system is unmounted for you."
+LEAVE_UNMOUNTED = "Type exit to leave; the system is unmounted for you."
+LEAVE_SESSION = "Type exit to leave. Unmount the system from the repair tool when you are done."
+LEAVE_LINE = LEAVE_UNMOUNTED
 USER_RE = re.compile(r"^[a-z_][a-z0-9_.-]{0,31}$")
 
 
@@ -109,9 +111,11 @@ def fixes(view: Any) -> list[tuple[str, str]]:
     return result
 
 
-def banner(*, title: str, state: str, view: Any | None = None) -> str:
+def banner(*, title: str, state: str, view: Any | None = None, dns: bool = True, leave: str = LEAVE_UNMOUNTED) -> str:
     """The text printed before the shell: where you are, whether changes are real, the fixes that fit, how to leave."""
-    lines = ["", f"Gentoo Live rescue: a shell in {title}, {state}.", "The network settings of the live system are available here (DNS works)."]
+    lines = ["", f"Gentoo Live rescue: a shell in {title}, {state}."]
+    if dns:
+        lines.append("The network settings of the live system are available here (DNS works).")
     if view is not None:
         try:
             listed = fixes(view)
@@ -123,5 +127,5 @@ def banner(*, title: str, state: str, view: Any | None = None) -> str:
             width = max(len(command) for command, _ in listed)
             for command, note in listed:
                 lines.append(f"  {command:<{width}}  # {note}")
-    lines += ["", LEAVE_LINE, ""]
+    lines += ["", leave, ""]
     return "\n".join(lines) + "\n"
