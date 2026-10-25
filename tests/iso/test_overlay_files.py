@@ -224,6 +224,12 @@ def test_every_overlay_file_is_covered_by_the_image_contract() -> None:
         "mnt/gentoo", "mnt/rescue", "home/gentoo", "usr/lib/modules", "usr/lib/firmware",
         "usr/bin/gentoo-installer-text", "usr/bin/gentoo-chroot", "usr/libexec/polkit-gnome-authentication-agent-1",
         "usr/lib/grub/i386-pc", "usr/lib/grub/x86_64-efi", "usr/bin/gentoo-remote-access",
+        # wave 6: the approver service and the account come from the installer package and the fsscript; the AI rescue files
+        # and console scripts from the gentoo_rescue_ai package (tests/iso/test_ai_rescue.py keeps them in step)
+        "etc/init.d/gentoo-rescue-approver", "etc/conf.d/gentoo-rescue-approver", "etc/passwd", "etc/group", "home/rescue-ai",
+        "etc/gentoo-rescue/AGENTS.md", "etc/claude-code/CLAUDE.md", "etc/claude-code/managed-settings.json", "etc/skel-rescue-ai",
+        "usr/bin/gentoo-rescue-agents", "usr/bin/gentoo-rescue-login", "usr/bin/gentoo-rescue-ai", "usr/bin/gentoo-rescue-do",
+        "usr/bin/gentoo-rescue-approver", "usr/bin/gentoo-rescue-mount", "usr/bin/gentoo-rescue-share",
         # the desktop look: files of the packages arc-theme, papirus-icon-theme, firefox-bin, xfdesktop, thunar, gparted
         # and xfce4-terminal (test_desktop_look.py checks them against the tree)
         "usr/share/backgrounds/xfce/xfce-x.svg", "usr/share/themes/Arc-Dark/gtk-3.0/gtk.css", "usr/share/themes/Arc-Dark/xfwm4/themerc",

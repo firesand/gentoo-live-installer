@@ -1,0 +1,12 @@
+# /etc/conf.d/gentoo-rescue-approver
+
+# The console (virtual terminal) the approver switches to when an AI agent asks to run a command as
+# root: 9 is tty9, Alt+F9. When something already uses it, the service takes the next free one.
+RESCUE_VT=9
+
+# "yes" starts the approver on every boot. By default only the boot menu entry "AI rescue (text
+# console)" starts it.
+RESCUE_APPROVER_ALWAYS="no"
+
+# Extra arguments for gentoo-rescue-approver.
+command_args_extra=""

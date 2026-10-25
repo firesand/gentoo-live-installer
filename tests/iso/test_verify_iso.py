@@ -407,6 +407,12 @@ def source_applies(condition: str | dict[str, str]) -> bool:
     return path.is_file() and condition["contains"] in path.read_text()
 
 
+# The accounts of the synthetic image: what Catalyst's livecdfs-update and the fsscript leave behind.
+PASSWD = "root:x:0:0:root:/root:/bin/bash\ngentoo:x:1000:100:Live user:/home/gentoo:/bin/bash\nrescue-ai:x:999:999:AI rescue agents:/home/rescue-ai:/bin/bash\n"
+GROUP = "root:x:0:root\nwheel:x:10:gentoo\ndisk:x:6:gentoo\ntty:x:5:\nusers:x:100:\nrescue-ai:x:999:\n"
+SUDOERS = "root ALL=(ALL:ALL) ALL\n%wheel ALL=(ALL:ALL) NOPASSWD: ALL\n@includedir /etc/sudoers.d\n"
+
+
 def image_entries(flavor: str, live_make_conf: str) -> dict[str, tuple[str, int, int, int, str]]:
     """A root file system that satisfies iso/image-contract.json, built from the repository's own overlay."""
     entries: dict[str, tuple[str, int, int, int, str]] = {}
@@ -444,7 +450,13 @@ def image_entries(flavor: str, live_make_conf: str) -> dict[str, tuple[str, int,
         category, name = package.split("/")
         add(f"var/db/pkg/{category}/{name}-1.0", "dir", 0o755)
     add("etc/portage/make.conf", extra=live_make_conf)
-    add("etc/shadow", mode=0o640, extra="root:!:20000::::::\ngentoo::20000:0:99999:7:::\n")
+    add("etc/shadow", mode=0o640, extra="root:!:20000::::::\ngentoo::20000:0:99999:7:::\nrescue-ai:!:20000::::::\n")
+    # what app-admin/gentoo-live-installer[rescue-ai] installs from its files/ directory
+    add("etc/init.d/gentoo-rescue-approver", mode=0o755, extra=(FILES_DIR / "gentoo-rescue-approver.initd").read_text())
+    add("etc/conf.d/gentoo-rescue-approver", extra=(FILES_DIR / "gentoo-rescue-approver.confd").read_text())
+    add("etc/passwd", extra=PASSWD)
+    add("etc/group", extra=GROUP)
+    add("etc/sudoers", mode=0o440, extra=SUDOERS)
     add("home/gentoo/.bashrc", uid=1000, gid=100)
     entries["home/gentoo"] = ("dir", 0o700, 1000, 100, "")
     for banner in ("etc/issue", "etc/motd"):
@@ -469,7 +481,8 @@ def live_make_conf(tmp_path: Path, pins: dict[str, str]) -> str:
     return "".join(f'{k}="{v}"\n' for k, v in live.items())
 
 
-KERNEL_CONFIG = (ROOT / "packaging/gentoo-overlay/app-admin/gentoo-live-installer/files/live-safe-graphics.config").read_text() + "CONFIG_DRM_NOUVEAU=m\n# CONFIG_DRM_EFIDRM is not set\n"
+FILES_DIR = ROOT / "packaging/gentoo-overlay/app-admin/gentoo-live-installer/files"
+KERNEL_CONFIG = (FILES_DIR / "live-safe-graphics.config").read_text() + (FILES_DIR / "live-rescue-ai.config").read_text() + "CONFIG_DRM_NOUVEAU=m\n# CONFIG_DRM_EFIDRM is not set\n"
 
 
 def build_iso(tmp_path: Path, flavor: str, live_make_conf: str, pins: dict[str, str], *, mutate=None) -> Path:
@@ -657,7 +670,7 @@ def test_the_contract_requires_sshd_everywhere_and_no_host_keys() -> None:
 def test_an_image_whose_kernel_has_no_generic_drm_driver_fails(tmp_path: Path, live_make_conf: str, pins: dict[str, str]) -> None:
     """H1: the kernel of gentoo-kernel-bin cannot show a Safe graphics desktop."""
     def binary_kernel(entries, tree):
-        (tree / "boot/gentoo-config").write_text("# CONFIG_SYSFB_SIMPLEFB is not set\n# CONFIG_DRM_SIMPLEDRM is not set\nCONFIG_FB_EFI=y\n")
+        (tree / "boot/gentoo-config").write_text("# CONFIG_SYSFB_SIMPLEFB is not set\n# CONFIG_DRM_SIMPLEDRM is not set\nCONFIG_FB_EFI=y\n" + (FILES_DIR / "live-rescue-ai.config").read_text())
 
     iso = build_iso(tmp_path, "release", live_make_conf, pins, mutate=binary_kernel)
     report, _ = verify.verify(iso, flavor="release", workspace=ROOT, tools=verify.Tools(iso, tmp_path / "scratch"))

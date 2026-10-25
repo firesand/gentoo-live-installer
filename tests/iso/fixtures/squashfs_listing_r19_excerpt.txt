@@ -7,6 +7,7 @@ file etc/init.d/NetworkManager 0755 0 0
 file etc/init.d/acpid 0755 0 0
 file etc/init.d/autoconfig 0755 0 0
 file etc/init.d/chronyd 0755 0 0
+file etc/init.d/sysctl 0755 0 0
 file etc/init.d/dbus 0755 0 0
 file etc/init.d/elogind 0755 0 0
 file etc/init.d/fixinittab 0755 0 0

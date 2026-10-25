@@ -45,6 +45,11 @@ livecd/readme: @BUILD_DIR@/README-live.txt
 # etc/ssh/sshd_config.d/10-gentoo-live.conf refuses empty passwords, so nobody can log in
 # until `sudo gentoo-remote-access on` (or `sudo passwd root`, the Handbook's way) is used.
 # The test-key flavour must not add sshd again (builder-entrypoint.sh configure_test_access).
+# gentoo-rescue-approver (wave 6) is the root half of the AI agents' gentoo-rescue-do. It is in the default
+# runlevel of every boot, but its init script starts nothing unless the kernel command line has
+# gentoo.autostart=ai-rescue (the boot menu entry "AI rescue (text console)"), so no other entry has an
+# approver, a socket or a password. sysctl (boot runlevel, part of OpenRC's own set) applies
+# etc/sysctl.d/60-gentoo-rescue-ai.conf (Yama); scripts/verify-iso.py checks it is there.
 livecd/rcadd:
 	udev|sysinit
 	dbus|default
@@ -52,6 +57,7 @@ livecd/rcadd:
 	NetworkManager|default
 	chronyd|default
 	gentoo-installerd|default
+	gentoo-rescue-approver|default
 	sshd|default
 # dev-lang/rust-bin (about 680 MiB) is only needed to build PortageHub in stage1; nothing
 # installed depends on it at run time (checked against /var/db/pkg of the r19 image).

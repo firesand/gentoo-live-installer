@@ -1,0 +1,9 @@
+// The AI rescue stick (wave 6): the AI agents run as the user rescue-ai and may never ask polkit for
+// anything. The live user has an empty password and polkit's administrators are the group wheel, so
+// "pkexec" from an agent would otherwise be answered by the live user's empty password. Rules run in
+// file name order and the first answer wins, so this file comes first.
+polkit.addRule(function(action, subject) {
+    if (subject.user == "rescue-ai") {
+        return polkit.Result.NO;
+    }
+});

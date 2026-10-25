@@ -23,12 +23,38 @@ if [[ -f /etc/gentoo-installer-vm-test ]]; then
 	usermod -p '*' root
 fi
 
-chmod 0755 /etc/init.d/gentoo-installerd /etc/acpi/actions/powerbtn.sh
+chmod 0755 /etc/init.d/gentoo-installerd /etc/init.d/gentoo-rescue-approver /etc/acpi/actions/powerbtn.sh
+
+# The AI rescue stick (wave 6): the agents (Claude Code, Codex, OpenCode) run as this account and as
+# nobody else. It has NO password, NO sudoers rule and NO group but its own: not tty, wheel (the group
+# Catalyst's livecdfs-update gives passwordless sudo, and the one pam_wheel needs for su), disk, video,
+# input, audio, plugdev, usb, kvm or portage. A system account (uid below 1000) keeps it apart from
+# the live user (1000). Its only way to root is gentoo-rescue-do, which asks the root approver service
+# on a console of its own (src/gentoo_rescue_ai, iso/image-contract.json "accounts").
+# /etc/skel-rescue-ai is the package's skeleton for the agents' configuration (Codex, OpenCode).
+rescue_ai_skel=()
+if [[ -d /etc/skel-rescue-ai ]]; then
+	rescue_ai_skel=(-k /etc/skel-rescue-ai)
+fi
+useradd -r -m "${rescue_ai_skel[@]}" -U -d /home/rescue-ai -s /bin/bash -c "AI rescue agents" rescue-ai
+passwd -l rescue-ai
+chmod 0700 /home/rescue-ai
+chown -R rescue-ai:rescue-ai /home/rescue-ai
 
 fail() {
 	echo "$*" >&2
 	exit 1
 }
+
+# The agents' account must stay weak whatever a package or a skeleton did to it.
+[[ "$(id -nG rescue-ai)" == "rescue-ai" ]] || fail "rescue-ai must be in no group but its own, it is in: $(id -nG rescue-ai)"
+[[ "$(id -u rescue-ai)" -lt 1000 ]] || fail "rescue-ai must be a system account (uid below 1000)"
+if grep -rqsE '(^|[^[:alnum:]_-])rescue-ai([^[:alnum:]_-]|$)' /etc/sudoers /etc/sudoers.d /etc/doas.conf; then
+	fail "rescue-ai must have no sudo or doas rule: its only way to root is gentoo-rescue-do"
+fi
+if grep -rqsE '^[[:space:]]*(ALL|%rescue-ai)[[:space:]]' /etc/sudoers /etc/sudoers.d; then
+	fail "a sudo rule for ALL users would give rescue-ai root"
+fi
 
 # Everything the installer, the repair tool and the hardware support run on the live
 # side. A missing program must stop the build here, not surface on somebody's PC.
@@ -55,6 +81,10 @@ required_commands=(
 	cpuid2cpuflags setxkbmap xrandr xset
 	# helpers
 	chronyd chronyc jq pv links gpg gpgv tar rsync gparted lsof lvs lscpu
+	# the AI rescue stick (wave 6): the share and the QR code of the login, the agents' search tool,
+	# the tmux session, the console switch of the approver, and the SystemRescue-style tools
+	tmux ttyd qrencode rg openssl chvt
+	snapper fsarchiver ncdu tcpdump mtr dd_rescue dislocker foremost memtester restic rclone mount.cifs vim mc
 	# the repair tool on the live side (hostenv.TOOLS_WANTED, fsprobe.CHECK_TOOLS and the
 	# host policy of src/gentoo_installerd/rescue; tests/iso/test_ebuilds.py keeps them in step)
 	blockdev mount umount dmesg script setsid chroot timeout sync modprobe
@@ -77,6 +107,16 @@ fi
 if compgen -G '/usr/lib/python3*/site-packages/gentoo_installer/textui/__init__.py' >/dev/null; then
 	[[ -x /usr/bin/gentoo-installer-text ]] \
 		|| echo "warning: the text installer package is installed but /usr/bin/gentoo-installer-text is missing" >&2
+fi
+
+# The AI rescue tool is a second Python package. As with the repair tool, a missing console script is a warning
+# here and a failure of scripts/verify-iso.py (iso/image-contract.json) once pyproject.toml declares it.
+if compgen -G '/usr/lib/python3*/site-packages/gentoo_rescue_ai/__init__.py' >/dev/null; then
+	for command_path in /usr/bin/gentoo-rescue-ai /usr/bin/gentoo-rescue-do /usr/bin/gentoo-rescue-approver \
+		/usr/bin/gentoo-rescue-agents /usr/bin/gentoo-rescue-login /usr/bin/gentoo-rescue-mount /usr/bin/gentoo-rescue-share; do
+		[[ -x "${command_path}" ]] || echo "warning: the AI rescue package is installed but ${command_path} is missing" >&2
+	done
+	[[ -f /etc/gentoo-rescue/AGENTS.md ]] || echo "warning: the AI rescue package is installed but /etc/gentoo-rescue/AGENTS.md is missing" >&2
 fi
 
 # The repair tool falls back to the live GRUB when the repaired system cannot run its own

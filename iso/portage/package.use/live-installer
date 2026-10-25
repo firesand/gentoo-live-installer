@@ -22,7 +22,7 @@ sys-apps/util-linux -cryptsetup
 # because liquidctl is ~amd64) and Secure Boot signing tools for the installer's checks.
 app-misc/hwmonux liquidctl
 # safe-graphics installs the kernel configuration fragment for the live kernel (see the stage2 spec).
-app-admin/gentoo-live-installer secureboot safe-graphics
+app-admin/gentoo-live-installer secureboot safe-graphics rescue-ai
 # The live desktop's look (wave 5): the Arc GTK and xfwm4 themes, without the GTK 2 theme (it would
 # pull gtk-engines-murrine and gnome-themes-standard for programs the disc does not have).
 x11-themes/arc-theme xfce -gtk2

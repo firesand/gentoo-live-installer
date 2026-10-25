@@ -16,7 +16,7 @@ S="${WORKDIR}/${P}"
 LICENSE="GPL-2+"
 SLOT="0"
 KEYWORDS="amd64"
-IUSE="+btrfs +efi safe-graphics secureboot +xfs"
+IUSE="+btrfs +efi rescue-ai safe-graphics secureboot +xfs"
 RESTRICT="mirror fetch"
 
 # Everything the daemon and the repair tool run: REQUIRED_TOOLS and OPTIONAL_TOOLS in
@@ -26,6 +26,11 @@ RESTRICT="mirror fetch"
 # of the repair tool (F2FS, exFAT, JFS, NTFS) are not behind flags: a disk from another
 # PC can have any of them. coreutils, kmod and zstd are in every Gentoo system anyway; they
 # are listed because the repair tool runs timeout, chroot, modprobe and zstd by name.
+# The rescue-ai flag is the AI rescue stick (wave 6, src/gentoo_rescue_ai): tmux carries the agents'
+# session, ttyd shares it to a phone, qrencode draws the login and share QR codes, ripgrep is the
+# agents' search tool (Claude Code's own ebuild depends on it too), kbd has chvt (the approver
+# switches to its console with it) and openssl makes the share's self-signed certificate.
+# !dev-util/claude-code: that package and this one install /etc/claude-code/managed-settings.json.
 # lsinitrd comes from dracut; grub-install of the live GRUB (pc and efi-64) is the fallback
 # when the repaired system cannot run its own.
 RDEPEND="
@@ -69,6 +74,15 @@ RDEPEND="
 		sys-boot/mokutil
 	)
 	xfs? ( sys-fs/xfsprogs )
+	rescue-ai? (
+		!dev-util/claude-code
+		app-misc/tmux
+		dev-libs/openssl
+		media-gfx/qrencode
+		sys-apps/kbd
+		sys-apps/ripgrep
+		www-apps/ttyd
+	)
 "
 BDEPEND="
 	app-arch/zstd
@@ -105,6 +119,26 @@ src_install() {
 		# live disc sets the flag: on an installed system the fragment would change its kernels.
 		insinto /etc/kernel/config.d
 		newins "${FILESDIR}/live-safe-graphics.config" 50-gentoo-live-safe-graphics.config
+	fi
+	if use rescue-ai; then
+		# The AI rescue stick. The kernel fragment gives the live kernel Yama (ptrace_scope=1 keeps the agents
+		# apart); the approver service is the root half of gentoo-rescue-do and only runs in the boot menu
+		# entry "AI rescue (text console)" (its init script checks the kernel command line).
+		insinto /etc/kernel/config.d
+		newins "${FILESDIR}/live-rescue-ai.config" 51-gentoo-live-rescue-ai.config
+		newinitd "${FILESDIR}/gentoo-rescue-approver.initd" gentoo-rescue-approver
+		newconfd "${FILESDIR}/gentoo-rescue-approver.confd" gentoo-rescue-approver
+		# The tree of src/gentoo_rescue_ai/data/root mirrors where its files go: /etc/gentoo-rescue/AGENTS.md,
+		# /etc/claude-code (the managed settings and the hook), /etc/skel-rescue-ai (the skeleton of the
+		# account rescue-ai: Codex's config.toml, OpenCode's opencode.json and the AGENTS.md symlinks). It is
+		# copied as it is, with its modes and symlinks, never edited here. The console scripts
+		# (gentoo-rescue-ai, -do, -approver, -agents, -login, -mount, -share) come from pyproject.toml.
+		if [[ -d ${S}/src/gentoo_rescue_ai/data/root ]]; then
+			cp -a --no-preserve=ownership "${S}/src/gentoo_rescue_ai/data/root/." "${ED}/" \
+				|| die "failed to install the AI rescue files"
+			# The agents' instructions and managed settings are root's: nobody else may change them.
+			find "${ED}/etc/gentoo-rescue" "${ED}/etc/claude-code" -type f -exec chmod go-w {} + || die
+		fi
 	fi
 	newinitd "${FILESDIR}/gentoo-installerd.initd" gentoo-installerd
 	newconfd "${FILESDIR}/gentoo-installerd.confd" gentoo-installerd
