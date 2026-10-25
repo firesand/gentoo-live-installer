@@ -21,6 +21,8 @@ MACHINES = ("q35", "pc")
 OVMF_VARS_MODES = ("persist", "fresh-on-target", "readonly")
 RTC_MODES = ("utc", "localtime")
 SECTOR_SIZES = (512, 4096)
+RESOLUTION_RE = re.compile(r"[1-9][0-9]{2,3}x[1-9][0-9]{2,3}")
+RESOLUTION_ADAPTERS = ("virtio", "std", "qxl")
 CPU_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*(?:,[+-]?[A-Za-z0-9_.-]+(?:=[A-Za-z0-9_.-]+)?)*")
 
 
@@ -39,6 +41,7 @@ class VMHardware:
     secure_boot: bool = False       # OVMF secure-boot build (setup mode unless a vars template enrols keys)
     ovmf_vars: str = "persist"      # persist | fresh-on-target | readonly
     rtc: str = "utc"
+    resolution: str = ""            # "1366x768": the display announces exactly this size (virtio, std and qxl adapters); "" leaves QEMU's default
 
     def problems(self) -> list[str]:
         found: list[str] = []
@@ -57,6 +60,10 @@ class VMHardware:
             found.append("QEMU's IDE/SATA disks only have 512-byte logical sectors: use --disk-bus nvme, virtio, scsi or usb for 4096")
         if self.removable and self.disk_bus != "usb":
             found.append("A removable disk needs --disk-bus usb")
+        if self.resolution and not RESOLUTION_RE.fullmatch(self.resolution):
+            found.append(f"Invalid display size {self.resolution!r}: use WIDTHxHEIGHT such as 1366x768")
+        elif self.resolution and self.vga not in RESOLUTION_ADAPTERS:
+            found.append(f"A display size needs the {', '.join(RESOLUTION_ADAPTERS)} adapter, not {self.vga}")
         if self.cpu and not CPU_RE.fullmatch(self.cpu):
             found.append(f"Invalid --cpu {self.cpu!r}")
         if any(size < 64 or size > 1 << 21 for size in self.extra_disks):
@@ -204,6 +211,15 @@ def disk_device_arguments(hardware: VMHardware, drive: str, serial: str, index: 
     controller = f"nvme{index}"
     return ["-device", f"nvme,id={controller}{ident}",
             "-device", f"nvme-ns,drive={drive},bus={controller},nsid=1{sizes}"]
+
+
+def display_arguments(hardware: VMHardware) -> list[str]:
+    """``-vga ADAPTER``, or the adapter as a device that announces ``resolution`` in its EDID (so the guest's X server starts in that mode)."""
+    if not hardware.resolution:
+        return ["-vga", hardware.vga]
+    width, height = hardware.resolution.split("x")
+    device = {"virtio": "virtio-vga,edid=on", "std": "VGA,edid=on", "qxl": "qxl-vga"}[hardware.vga]
+    return ["-device", f"{device},xres={width},yres={height}"]
 
 
 def nic_arguments(hardware: VMHardware, netdev: str = "net0") -> list[str]:

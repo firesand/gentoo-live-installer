@@ -158,6 +158,7 @@ them and even when the harness is killed with SIGKILL (the kernel sends QEMU SIG
 | `uefi-manual-two-disks` | a manual layout across two disks (ESP and root on the first, swap and `/home` on the second) next to a third disk that must stay byte for byte as it was |
 | `text-install` | the console installer: the ISO's text entry, then `gentoo-installer-text` with a device confirmation |
 | `rescue-gentoo` | a minimal Gentoo installed first, then broken and repaired three times (menu file, initramfs, fstab) |
+| `screenshots` | the live ISO only: a picture of the live desktop and of every installer page, Guided and Advanced, at 1366x768 and 1920x1080 (see below) |
 | `dmi-asus-rog`, `dmi-razer-blade`, `dmi-lenovo-legion` | the live ISO only, with the DMI strings of an ASUS ROG laptop, a Razer Blade or a Lenovo Legion: the installer's hardware report (`python3 -m gentoo_installer.hardware --json`, run in the live system) must read the vendor, product and (once the probe has it) `vendor_family` |
 | `safe-graphics-grub`, `safe-graphics-systemd-boot`, `safe-graphics-efi-stub` | the NVIDIA driver is requested, so the installed boot menu must list Safe graphics (`nomodeset`, the graphics modules blacklisted); the entry is chosen once and booted (needs backlog items B04 and B05; compiles the NVIDIA driver) |
 | `secure-boot-modules` | systemd-boot with a UKI signed by the test key, booted under OVMF's Secure Boot build; an unsigned and a signed dummy module are loaded on `gentoo-kernel-bin`; the verdict is the evidence B07 step 2 waits for |
@@ -328,6 +329,52 @@ store; no Microsoft key and no shim are involved, matching `manifest.py` (Secure
 I could not run any of this where it was written: the first real run may need small corrections to the `virt-fw-vars` call or to the
 dummy module build (the report says which step failed).
 
+### Screenshots of the live desktop and of every installer page
+
+```sh
+python3 scripts/test-vm.py --scenario screenshots --iso build/test-dist/<iso> --ssh-host 127.0.0.1 --ssh-port 40222 \
+  --ssh-private-key "$testkey" --memory 4096 --screenshots build/screenshots/$(date +%Y%m%d)
+```
+
+The scenario boots the live ISO once per display size (`--screenshot-sizes`, default `1366x768,1920x1080`) on a VM whose graphics card announces exactly that
+size (`--resolution`), waits for the XFCE session (`--gui-timeout`) and the installer window that starts by itself (`--screenshot-settle`), and then:
+
+1. takes a picture of the whole screen through QMP (what a person sees after the ISO has booted), converted from PPM to PNG without any tool on the host:
+   `<size>/live-desktop.png`;
+2. uploads `scripts/vm-gui-shots.py` and runs it as the live user in the live X session. It opens the real installer window, shows each page of
+   `window.pages` (so a page added later is photographed too) with the mode switch in each position, waits for the page to settle and saves
+   `<size>/page-NN-<page>-guided.png` and `...-advanced.png`; a page with a scroll bar also gets `...-full.png`, the whole content in one tall picture. It never
+   presses Continue and never starts an installation; the pages are shown on a default manifest. The pictures come back as one tar archive that the host unpacks
+   with checks (plain files named `*.png` or `*.json` only, size limits).
+
+The run fails (and says why) when the guest's screen is not the size asked for (the picture is then useless as evidence for that size), when a mode or too
+many pages are missing, or when the installer reports that a page needs horizontal scrolling or the window is larger than the screen (1366x768 is a real laptop).
+`index.json` in the screenshot directory lists what was taken per size. The XFCE look of the live desktop (`wave5-xfce-look.md`) is judged on these pictures.
+The guest program runs offscreen in the test suite (`tests/vm/test_vm_shots.py`), so its output format is tested; the real X session was not available where it was written.
+
+### Real-hardware checklist for the user's PC (hardware backlog H05)
+
+`scripts/hardware-checklist.py` is for the person who owns the machine, run by hand, in the installed system's KDE Wayland session, as the normal user:
+
+```sh
+python3 scripts/hardware-checklist.py              # a report on the screen
+python3 scripts/hardware-checklist.py --markdown   # a table for the release notes
+python3 scripts/hardware-checklist.py --json       # for a bug report
+```
+
+It is **read-only by construction** and the test suite proves it (`tests/vm/test_hardware_checklist.py`): it starts only `nvidia-smi`, `vulkaninfo`, `lsusb`,
+`loginctl show-session`, `ss -ltn`, `pgrep -x`, `systemctl is-active`, `rc-service NAME status`, `efibootmgr` (no arguments), `journalctl -k` and `df`, each in
+exactly one form that cannot change anything; it reads only below `/proc`, `/sys`, `/boot`, `/efi`, `/etc/gentoo-live-installer` and the udev rules directories;
+it has no shell, no `sudo` and no write call. It does not start OpenRGB (that scans the SMBus). Checks and what each needs: the GPU is an RTX 4090 with a
+595 driver and 24 GiB (`nvidia-smi`), `nvidia_drm` has `modeset=Y`, the kernel modules are the open ones, the session is Wayland, Vulkan lists the NVIDIA GPU, the
+kernel log has no `NVRM`/`Xid` lines, `PreserveVideoMemoryAllocations` is on and `/var/tmp` has room for 24 GiB (suspend), the boot menu lists Safe graphics (GRUB
+`grub.cfg`, systemd-boot entries or `efibootmgr`), the Razer Viper (1532:0091) is bound to `razermouse` with `openrazer-daemon` running, the Aura controller
+(0b05:18f3) is present with OpenRGB's udev rules, the DualSense (054c:0ce6) has an input node, sshd runs and listens on port 22. It *records* Secure Boot, the
+lockdown mode, the kernel taint and the install receipt. Statuses: PASS, FAIL (report it), RECORD, SKIP (not applicable or not readable by this user), MANUAL.
+The two MANUAL steps are printed with their commands: suspend and resume with the video memory full, and the fixture re-capture
+(`scripts/capture-hardware-fixture.py`), plus "log in over SSH from another PC" and "press a button on the controller". Put the report and the manual results
+into the release notes; that is the acceptance of H05. The expectations (RTX 4090, branch 595, the three USB ids) are in `EXPECTED` at the top of the script.
+
 ### Making the machine different
 
 Every option has a default that reproduces the original machine (q35, one virtio-blk disk with a
@@ -349,6 +396,8 @@ serial number, virtio NIC and display). An option left out keeps the scenario's 
 | `--secure-boot` | OVMF's Secure Boot build (setup mode unless `--ovmf-vars-file` enrols keys) |
 | `--ovmf-vars` | `persist` (default), `fresh-on-target`, `readonly` |
 | `--ovmf-vars-file` | seed the NVRAM from a file (a kept `OVMF_VARS.fd`, or one with enrolled keys) |
+| `--resolution` | the display size the guest sees (`1366x768`; virtio, std or qxl adapter): the graphics card announces it in its EDID |
+| `--screenshots`, `--screenshot-sizes`, `--screenshot-settle` | `screenshots` scenario only: where to keep the pictures (default `build/vm/<run>/screenshots`), the display sizes (default `1366x768,1920x1080`) and the seconds the live session gets to draw its desktop (default 15) |
 | `--sb-key`, `--sb-cert` | `secure-boot-modules` only: the test-only key that signs the UKI and the dummy module, and its certificate (see below) |
 | `--rtc` | `utc`, `localtime` |
 

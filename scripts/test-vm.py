@@ -50,6 +50,7 @@ import vm_probes  # noqa: E402
 import vm_rescue  # noqa: E402
 import vm_secureboot  # noqa: E402
 import vm_session  # noqa: E402
+import vm_shots  # noqa: E402
 import vm_wave5  # noqa: E402
 from vm_hw import VMHardware  # noqa: E402
 from vm_probes import ANSI_RE, ProbeResult, parse_probe_result, parse_receipt_probe, parse_swap_probe  # noqa: E402, F401
@@ -213,6 +214,7 @@ class Scenario:
     safe_graphics: bool = False      # the manifest asks for the NVIDIA driver; the installed system's Safe graphics boot entry is booted once
     secure_boot_install: bool = False   # systemd-boot + a UKI signed with the test key (--sb-key, --sb-cert), booted under OVMF Secure Boot; module-load experiment
     live_expect: tuple[tuple[str, Any], ...] = ()   # live_only: dotted paths into the installer's hardware report and the values they must have
+    screenshots: bool = False        # live_only: pictures of the live desktop and of every installer page at each size of --screenshot-sizes
 
     @property
     def hostname(self) -> str:
@@ -328,6 +330,9 @@ SCENARIO_MAP.update({
                                     hardware=_hw(secure_boot=True),
                                     note="systemd-boot with a UKI signed by the test key, booted under OVMF Secure Boot; an unsigned and a signed dummy module are loaded on gentoo-kernel-bin (evidence for B07 step 2)"),
 })
+SCENARIO_MAP["screenshots"] = Scenario(
+    "screenshots", "openrc", "uefi", live_only=True, screenshots=True, in_all=False,
+    note="the live ISO only: a picture of the desktop and of every installer page, Guided and Advanced, at 1366x768 and 1920x1080 (--screenshots DIR)")
 for _desktop in vm_session.GUIDED_DESKTOPS:
     for _init in ("openrc", "systemd"):
         SCENARIO_MAP[f"desktop-{_desktop}-{_init}"] = Scenario(
@@ -651,7 +656,7 @@ def qemu_command(
         "-netdev", f"user,id=net0,hostfwd=tcp:{ssh_host}:{ssh_port}-:22",
         *vm_hw.nic_arguments(hw),
         "-device", "virtio-rng-pci",
-        "-vga", hw.vga,
+        *vm_hw.display_arguments(hw),
         "-display", "none",
         "-monitor", "none",
         *vm_hw.smbios_arguments(hw, run_dir, nonce),
@@ -1812,9 +1817,14 @@ class ScenarioRunner:
 
     direct_boot: vm_iso.DirectBoot | None = None
 
+    resolution = ""
+
     def vm_arguments(self, live: bool, *, scenario: Scenario | None = None) -> list[str]:
+        scenario = scenario or self.scenario
+        if self.resolution:  # the screenshots scenario boots the same machine once per display size
+            scenario = dataclasses.replace(scenario, hardware=dataclasses.replace(scenario.hardware, resolution=self.resolution))
         return qemu_command(
-            scenario or self.scenario, iso=self.iso, disk=self.disk, run_dir=self.run_dir, live=live,
+            scenario, iso=self.iso, disk=self.disk, run_dir=self.run_dir, live=live,
             ssh_host=self.args.ssh_host, ssh_port=self.args.ssh_port,
             memory_mib=self.args.memory, cpus=self.args.cpus,
             qemu_binary=self.args.qemu_binary, firmware=self.firmware,
@@ -2953,6 +2963,8 @@ class ScenarioRunner:
             if getattr(self.args, "target_image", None):
                 return self.run_on_existing_image(result, mode, command)
             self.prepare_boot_entry(result)
+            if self.scenario.screenshots:
+                return self.run_screenshots(result)
             if getattr(self.args, "live_only", False) or self.scenario.live_only:
                 return self.run_live_smoke(result)
             self.create_disks()
@@ -3041,6 +3053,62 @@ class ScenarioRunner:
             raise HarnessError("The live system does not work on this machine: " + "; ".join(problems))
         result["success"] = True
         return result
+
+    def screenshots_directory(self) -> Path:
+        chosen = getattr(self.args, "screenshots", None)
+        return Path(chosen) if chosen else self.run_dir / "screenshots"
+
+    def run_screenshots(self, result: dict) -> dict:
+        """Boot the live ISO once per display size; photograph the desktop (QMP) and every installer page (the guest program), judge, keep the pictures."""
+        try:
+            sizes = vm_shots.parse_sizes(getattr(self.args, "screenshot_sizes", None) or ",".join(vm_shots.SIZES))
+        except vm_shots.ShotsError as exc:
+            raise HarnessError(str(exc)) from None
+        directory = self.screenshots_directory()
+        directory.mkdir(parents=True, exist_ok=True)
+        self.create_disks()
+        summaries: list[dict] = []
+        result["screenshots"] = {"directory": str(directory), "sizes": summaries}
+        failures: list[str] = []
+        for size in sizes:
+            self.resolution = vm_shots.size_name(size)
+            live = self.boot_live()
+            try:
+                summary = self.screenshots_of_one_size(size, directory / vm_shots.size_name(size))
+            finally:
+                self.power_off_live(live)
+            summaries.append(summary)
+            failures += [f"{summary['size']}: {problem}" for problem in summary["problems"]]
+        self.resolution = ""
+        vm_shots.write_index(directory, summaries)
+        if failures:
+            raise HarnessError("Screenshots: " + "; ".join(failures))
+        result["success"] = True
+        return result
+
+    def screenshots_of_one_size(self, size: tuple[int, int], target: Path) -> dict:
+        target.mkdir(parents=True, exist_ok=True)
+        environment = self.gui_environment()
+        time.sleep(float(getattr(self.args, "screenshot_settle", 15)))  # the installer starts by itself in the live session: give it time to draw
+        dump = self.vms[-1].screendump(self.run_dir / f"desktop-{vm_shots.size_name(size)}.ppm")
+        data = dump.read_bytes()
+        desktop = vm_shots.ppm_header(data)[:2]
+        (target / "live-desktop.png").write_bytes(vm_shots.ppm_to_png(data))
+        uploads = ((vm_shots.GUEST_SCRIPT, (PROJECT_ROOT / "scripts/vm-gui-shots.py").read_bytes(), "shots-upload.log"),)
+        for remote_path, content, log_name in uploads:
+            code, log = self.ssh(self.args.ssh_user, f"cat > {remote_path} && chmod 644 {remote_path}", f"{size[0]}-{log_name}", self.args.command_timeout, stdin=content)
+            if code != 0:
+                raise HarnessError(f"Could not upload {remote_path}; see {log}")
+        code, log = self.ssh(self.args.ssh_user, vm_shots.shots_command(environment), f"shots-{size[0]}.log", self.args.command_timeout * 6)
+        index = next((json.loads(line) for line in reversed(log.read_text(errors="replace").splitlines()) if line.startswith('{"type": "gui_shots"')), None)
+        if index is None:
+            return vm_shots.summary(size, ["live-desktop.png"], [f"the picture program printed no index (exit {code}); see {log}"])
+        code, log = self.ssh(self.args.ssh_user, vm_shots.fetch_command(), f"shots-{size[0]}.b64", self.args.command_timeout * 3)
+        try:
+            files = vm_shots.unpack(log.read_text(errors="replace"), target)
+        except vm_shots.ShotsError as exc:
+            return vm_shots.summary(size, ["live-desktop.png"], [str(exc)])
+        return vm_shots.summary(size, ["live-desktop.png", *files], vm_shots.judge(size, index, (desktop[0], desktop[1]), files))
 
     def run_on_existing_image(self, result: dict, mode: str, command: str) -> dict:
         """Boot, damage, repair and verify a disk that was installed earlier (or by another distribution's installer)."""
@@ -3219,7 +3287,7 @@ def disk_size_mib(value: str) -> int:
 def apply_overrides(scenario: Scenario, args: argparse.Namespace) -> Scenario:
     """The scenario with the command line's hardware options applied (an option left out keeps the scenario's own)."""
     changes: dict = {}
-    for option in ("disk_bus", "sector_size", "nic", "vga", "cpu", "machine", "smbios", "ovmf_vars", "rtc"):
+    for option in ("disk_bus", "sector_size", "nic", "vga", "cpu", "machine", "smbios", "ovmf_vars", "rtc", "resolution"):
         value = getattr(args, option, None)
         if value is not None:
             changes[option] = value
@@ -3422,6 +3490,12 @@ def build_parser() -> argparse.ArgumentParser:
                           help="persist: both boots share one NVRAM; fresh-on-target: the installed disk boots with an empty one; "
                                "readonly: the firmware cannot save boot entries")
     hardware.add_argument("--ovmf-vars-file", type=Path, help="Seed the NVRAM from this file instead of the firmware package's pristine one")
+    hardware.add_argument("--resolution", metavar="WxH", help="Display size the guest sees (virtio, std or qxl adapter): 1366x768")
+    hardware.add_argument("--screenshots", type=Path, metavar="DIR",
+                          help="screenshots scenario: keep the pictures in DIR/<size>/ (default: the run directory)")
+    hardware.add_argument("--screenshot-sizes", metavar="WxH,WxH", help="screenshots scenario: the display sizes (default 1366x768,1920x1080)")
+    hardware.add_argument("--screenshot-settle", type=positive_int, default=15, metavar="SECONDS",
+                          help="screenshots scenario: seconds the live session gets to draw the desktop before the picture (default 15)")
     hardware.add_argument("--sb-key", type=Path, metavar="FILE",
                           help="secure-boot-modules: the test-only private key that signs the UKI and the dummy module (docs/TESTING.md says how to make it)")
     hardware.add_argument("--sb-cert", type=Path, metavar="FILE",

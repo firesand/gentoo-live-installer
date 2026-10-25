@@ -124,7 +124,8 @@ def qmp_client(client: socket.socket) -> None:
             command = request.get("execute")
             arguments = request.get("arguments") or {}
             if command == "screendump":
-                Path(arguments["filename"]).write_bytes(b"P6\n1 1\n255\n\x00\x00\x00")
+                width, height = display_size()
+                Path(arguments["filename"]).write_bytes(b"P6\n%d %d\n255\n" % (width, height) + b"\x00" * (3 * width * height))
             elif command == "input-send-event":
                 append("fake-qmp-keys.jsonl", json.dumps(arguments) + "\n")
             stream.write(json.dumps({"return": {}}).encode() + b"\r\n")
@@ -134,6 +135,14 @@ def qmp_client(client: socket.socket) -> None:
                 return
     except (OSError, ValueError):
         return
+
+
+def display_size() -> tuple[int, int]:
+    """The size the harness asked the display for (xres=, yres= of the graphics device), else a 1x1 picture."""
+    import re
+
+    match = re.search(r"xres=(\d+),yres=(\d+)", " ".join(sys.argv))
+    return (int(match.group(1)), int(match.group(2))) if match else (1, 1)
 
 
 def main() -> int:
