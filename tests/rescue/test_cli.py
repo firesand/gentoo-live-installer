@@ -450,7 +450,8 @@ class SpawnedShell:
         return Process()
 
 
-def test_chroot_and_umount_are_other_names_for_shell_and_unmount(lab_factory, capsys) -> None:
+def test_chroot_and_umount_are_other_names_for_shell_and_unmount(lab_factory, capsys, monkeypatch) -> None:
+    monkeypatch.setattr("gentoo_installerd.rescue.shell._stdin_is_tty", lambda: True)  # a person at a terminal: the shell gets it as its controlling terminal
     lab, tree, _ = prepared(lab_factory)
     spawned = SpawnedShell()
     run = Run(lab, shell_spawn=spawned)

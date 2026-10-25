@@ -564,15 +564,22 @@ def cmd_logs(ctx: Context, args: argparse.Namespace) -> int:
 
 
 def cmd_shell(ctx: Context, args: argparse.Namespace) -> int:
+    from .chroot_cmd import run_chroot, wants_chroot_without_session
+
+    if wants_chroot_without_session(args):  # gentoo-chroot [SYSTEM]: find, open, shell, unmount
+        return run_chroot(ctx, args)
+    simple = getattr(args, "simple", False)
     need_name = ""
-    if not args.typed:
+    if not args.typed and not simple:
         info = ctx.client.result("rescue.session", session_id=args.session)
         need_name = info["root"]["device"].rsplit("/", 1)[-1]
         if ctx.console.interactive:
             args.typed = ctx.console.ask(f'Type "{need_name}" to open a terminal in this system: ')
     request = {"action": "rescue.shell", "session_id": args.session, "writable": args.writable, "host": args.host, "confirm": True, "typed": args.typed or "",
                "phrase": "I HAVE A BACKUP" if args.i_have_a_backup else "", "term": os.environ.get("TERM", "xterm")}
-    if ctx.console.interactive and args.writable and not args.i_have_a_backup:
+    if simple:  # the repair window asked once (system, device, "commands I type here change the installed system")
+        request.update({"simple": True, "acknowledged": bool(args.writable), "typed": "", "phrase": ""})
+    elif ctx.console.interactive and args.writable and not args.i_have_a_backup:
         request["phrase"] = ctx.console.ask('A read-write terminal can change anything. Type "I HAVE A BACKUP" to continue: ')
     size = shutil.get_terminal_size((80, 24))
     request.update({"rows": size.lines, "cols": size.columns})
@@ -762,8 +769,11 @@ def build_parser() -> argparse.ArgumentParser:
     logs.add_argument("--live", action="store_true", help="show this live session's own kernel warnings")
 
     shell = sub.add_parser("shell", aliases=["chroot"], help="a terminal in the system (also called chroot)")
-    shell.add_argument("session")
-    shell.add_argument("--writable", action="store_true")
+    shell.add_argument("session", nargs="?", help="a session from 'status'; without one the system is found, opened, and unmounted when you leave (gentoo-chroot)")
+    shell.add_argument("--writable", action="store_true", help="a read-write terminal (without a session: answer the read-write question with yes)")
+    shell.add_argument("--read-only", action="store_true", help="without a session: open the system read-only and do not ask")
+    shell.add_argument("--passphrase-stdin", action="store_true", help="without a session: read the passphrase of an encrypted volume from standard input")
+    shell.add_argument("--simple", action="store_true", help=argparse.SUPPRESS)
     shell.add_argument("--host", action="store_true", help="a live-system shell in the mount directory (nothing of the system runs)")
     shell.add_argument("--typed", help="the root device name")
     shell.add_argument("--i-have-a-backup", action="store_true")

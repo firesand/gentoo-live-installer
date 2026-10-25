@@ -268,13 +268,16 @@ Arch Linux, Debian, Ubuntu, Fedora, openSUSE, Void, Alpine, NixOS and every othe
 Choose *Terminal* (`t`) in the text menu, or run:
 
 ```sh
+sudo gentoo-chroot                           # finds the system, mounts it, opens a shell, unmounts it when you type exit
+sudo gentoo-chroot --read-only               # the same, without the question about changing the system
 gentoo-rescue status                         # lists the mounted systems (sessions)
 gentoo-chroot SESSION                        # a shell inside the system, read-only; same as: gentoo-rescue chroot SESSION
 gentoo-chroot SESSION --writable             # a shell that can change the system
 ```
 
-* The tool asks you to type the name of the root device to open the terminal.
-* A **writable** terminal also asks you to type `I HAVE A BACKUP`. In it you can fix what the tool cannot (install packages, edit files).
+* `gentoo-chroot` without a session asks one question: *Open it read-write? Changes are real.* The prompt of the shell starts with `(chroot) `, a short list of the usual fixes for your system (kernel, boot loader, password, fstab) is printed first, and `exit`, a lost terminal or a stop signal unmount everything for you. The repair window has the same as **Open a terminal in this system (chroot)**: one confirmation, and a tick box *Commands I type here change the installed system* for a terminal that can change files.
+* With a SESSION the tool asks you to type the name of the root device to open the terminal.
+* A **writable** terminal of a SESSION also asks you to type `I HAVE A BACKUP`. In it you can fix what the tool cannot (install packages, edit files).
 * A read-only terminal does not change the system. Use it for looking around and for copying files out.
 * Programs of the repaired system run as root with full rights while you are in the terminal. If you do not trust the system (malware), do not run its programs: use the read-only inspection and copy your data out.
 * `exit` leaves the terminal. The session stays mounted until you unmount it: `gentoo-rescue unmount`, or *Unmount and quit* in the menu. Unmount before you restart.

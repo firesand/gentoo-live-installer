@@ -123,7 +123,10 @@ Only Gentoo is repaired. Any other Linux on the computer (Debian, Ubuntu,
 Fedora, Arch and so on) is listed as "Not a Gentoo system - this repair
 tool only supports Gentoo". It is not opened and not changed.
 
-"gentoo-chroot SESSION" opens a shell inside a mounted Gentoo system.
+"sudo gentoo-chroot" finds the Gentoo system on your disks, asks for the
+disk password if needed, opens a shell inside it (the prompt starts with
+"(chroot) ") and unmounts everything when you type exit. "gentoo-chroot
+SESSION" opens a shell inside a system the repair tool has mounted.
 Tools for hard cases are on the disc: smartctl, nvme, ddrescue, testdisk,
 fsck for ext4, xfs, btrfs, f2fs, exfat, vfat, jfs and ntfs, cryptsetup,
 lvm and mdadm. This disc leaves volume groups and RAID arrays alone until

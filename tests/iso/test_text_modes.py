@@ -368,10 +368,10 @@ def test_gentoo_chroot_help_reaches_the_repair_tool(tmp_path: Path) -> None:
     assert calls == ["chroot", "--help"]
 
 
-def test_gentoo_chroot_without_arguments_explains_instead_of_failing_in_argparse(tmp_path: Path) -> None:
+def test_gentoo_chroot_without_arguments_finds_the_system_itself(tmp_path: Path) -> None:
+    """Wave 5 (I12): no session needed; the repair tool finds, opens and releases the system."""
     result, calls = run_helper(tmp_path)
-    assert calls == [] and result.returncode == 2 and result.stdout == ""
-    assert "Usage: gentoo-chroot SESSION" in result.stderr and "sudo gentoo-rescue" in result.stderr and "gentoo-rescue status" in result.stderr
+    assert calls == ["chroot"] and result.returncode == 7
 
 
 def test_gentoo_chroot_uses_only_names_the_repair_tool_knows() -> None:

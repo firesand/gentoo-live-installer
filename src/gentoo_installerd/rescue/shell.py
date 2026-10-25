@@ -97,6 +97,13 @@ def script_command(inner: list[str], transcript: Path) -> list[str]:
     return ["setsid", "--ctty", "script", "--quiet", "--return", "--flush", "--output-limit", TRANSCRIPT_LIMIT, "--log-out", str(transcript), "--command", shlex.join(inner)]
 
 
+def _stdin_is_tty() -> bool:
+    try:
+        return os.isatty(0)
+    except OSError:
+        return False
+
+
 class ShellManager:
     def __init__(self, session: RescueSession, *, spawn: Callable[..., subprocess.Popen[bytes]] | None = None, clock: Callable[[], float] = time.time,
                  view: Callable[[], Any] | None = None) -> None:
@@ -176,6 +183,8 @@ class ShellManager:
         """Console form: the terminal shares the current tty until the shell exits; returns its exit status."""
         argv, info = self.prepare(params)
         info["_inline"] = True
+        if not _stdin_is_tty():  # commands piped in (a script, a test): setsid --ctty needs a terminal; script makes its own
+            argv = [item for item in argv if item != "--ctty"]
         print(info["banner"], end="", flush=True)
         process = self.spawn(argv, cwd="/")
         self._track(process, info)
