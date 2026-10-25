@@ -109,6 +109,21 @@ prepare_source_archives() {
 	done
 }
 
+# copy_vendored_distfiles OVERLAY DEST: the distfiles named by the committed Manifests of vendored
+# packages (the fetch above verified them) go next to the project's own archives, so that an
+# installation without a network builds those packages too.
+copy_vendored_distfiles() {
+	local manifest name
+	for manifest in "$1"/*/*/Manifest; do
+		[[ -f ${manifest} ]] || continue
+		while read -r name; do
+			[[ -n ${name} ]] || continue
+			[[ -f ${DISTDIR}/${name} ]] || die "the distfile ${name} of ${manifest#"$1"/} is missing from ${DISTDIR}"
+			cp -a --no-preserve=ownership -- "${DISTDIR}/${name}" "$2/"
+		done < <(awk '$1 == "DIST" { print $2 }' "${manifest}")
+	done
+}
+
 prepare_portage() {
 	local ebuild overlay_copy="${BUILD_DIR}/root_overlay/usr/local/share/gentoo-installer/overlay"
 	copy_tree_without_owner "${WORKSPACE}/packaging/gentoo-overlay" "${BUILD_DIR}/overlay"
@@ -119,8 +134,16 @@ prepare_portage() {
 	cp -a --no-preserve=ownership -- "${DISTDIR}"/gentoo-live-installer-*.tar.zst "${DISTDIR}"/hwmonux-*.tar.zst \
 		"${DISTDIR}"/portagehub-*.tar.zst "${BUILD_DIR}/root_overlay/usr/local/share/gentoo-installer/distfiles/"
 	for ebuild in "${BUILD_DIR}"/overlay/*/*/*.ebuild; do
-		env DISTDIR="${DISTDIR}" ebuild "${ebuild}" manifest
+		if [[ -f ${ebuild%/*}/Manifest ]]; then
+			# A vendored package (hardware item I01) ships its Manifest: that file is the pin. Fetching
+			# checks the tarball against it and fails on any difference; `manifest` would write
+			# whatever the server sent today.
+			env DISTDIR="${DISTDIR}" ebuild "${ebuild}" fetch
+		else
+			env DISTDIR="${DISTDIR}" ebuild "${ebuild}" manifest
+		fi
 	done
+	copy_vendored_distfiles "${BUILD_DIR}/overlay" "${BUILD_DIR}/root_overlay/usr/local/share/gentoo-installer/distfiles"
 	# The installed target needs the same authenticated distfile manifests.
 	copy_tree_without_owner "${BUILD_DIR}/overlay" "${overlay_copy}"
 

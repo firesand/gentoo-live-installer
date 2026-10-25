@@ -41,9 +41,10 @@ def test_relative_links_resolve(document: Path) -> None:
 
 def test_every_documented_option_and_variable_exists_in_the_script() -> None:
     documented = set(re.findall(r"`(--[a-z0-9-]+)", ISO_DOC.read_text()))
-    documented -= {"--flavor", "--previous-manifest", "--reinstall-atoms", "--jobs"}
+    documented -= {"--flavor", "--previous-manifest", "--reinstall-atoms", "--jobs", "--usepkg-exclude"}
+    check_atoms = (ROOT / "iso/check-atoms.py").read_text()  # section 11 documents its options too
     for option in documented:
-        assert option in BUILD_SCRIPT, f"{option} is documented but build-iso.sh does not know it"
+        assert option in BUILD_SCRIPT or f'"{option}"' in check_atoms, f"{option} is documented but build-iso.sh does not know it"
     for variable in ("JOBS", "LOAD_AVERAGE", "BUILD_MEMORY", "BUILD_MIN_FREE_GIB", "ISO_CACHE_DIR", "ISO_DIST_DIR", "ISO_LOG_DIR", "ISO_SECCOMP", "ISO_KEEP_STAGE1"):
         assert variable in BUILD_SCRIPT and variable in ISO_DOC.read_text()
 
