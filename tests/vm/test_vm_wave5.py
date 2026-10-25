@@ -5,6 +5,9 @@ Every rule is judged on recorded or hand-written output of the real tools: no VM
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
+import subprocess
 
 import pytest
 
@@ -158,6 +161,63 @@ def test_remote_access_state_user_address_password_and_fingerprints_are_read_fro
     assert all(digest.startswith("SHA256:") for _kind, digest in access.fingerprints)
     assert w5.parse_remote_access(STATUS_OFF).state == "disabled"
     assert w5.parse_remote_access(STATUS_OFF).password == ""
+
+
+# What the real gentoo-remote-access printed in the first VM run (2026-10-25), before it had a "remote login:" line; the password is changed.
+REAL_STATUS_AT_BOOT = """sshd:      running
+password:  none for gentoo, so nobody can log in yet (sudo gentoo-remote-access on)
+log in with:
+  ssh gentoo@10.0.2.15
+host key fingerprints (SHA256), to compare when ssh asks "Are you sure?":
+  ECDSA  SHA256:1ixc4IjJmvkmcjt4ylhIGkG/tUs57T+6xKssRnK/GI8
+  ED25519  SHA256:L7BseEp0Ru9VRkNhIB6ABRTIf5CBOQn5G0O1U7XyE1k
+  MLDSA44-ED25519  SHA256:S7tbAhd3ETrkjFdy1yrh4jtqtAk0z+ojZnA9Coe4vmw
+  RSA  SHA256:Ptmrf1xjA+YkCX3BtmBadQyAGFyRZH/VP/ZqO7TNZ6U
+"""
+REAL_ON = REAL_STATUS_AT_BOOT.replace("password:  none for gentoo, so nobody can log in yet (sudo gentoo-remote-access on)", "password:  set for gentoo") \
+    + "password:  owl-fern-moon17\nTurn it off again with: sudo gentoo-remote-access off\n"
+REAL_OFF = "The password of gentoo is removed: nobody can log in over SSH (sshd keeps running).\n"
+
+
+def test_the_wording_of_the_first_real_tool_is_read():
+    assert w5.parse_remote_access(REAL_STATUS_AT_BOOT).state == "disabled"
+    on = w5.parse_remote_access(REAL_ON)
+    assert on.state == "enabled" and on.password == "owl-fern-moon17" and on.addresses == ("10.0.2.15",)
+    assert [kind for kind, _digest in on.fingerprints] == ["ECDSA", "ED25519", "MLDSA44-ED25519", "RSA"]
+    assert w5.parse_remote_access(REAL_OFF).state == "disabled"
+
+
+def test_the_wording_of_the_tool_in_this_tree_is_read(tmp_path):
+    """The script itself, run on fakes (as tests/iso/test_remote_access.py does): its status, on and off texts parse."""
+    script = Path(__file__).resolve().parents[2] / "packaging/gentoo-overlay/app-admin/gentoo-live-installer/files/gentoo-remote-access"
+    state, bin_dir = tmp_path / "state", tmp_path / "bin"
+    state.mkdir()
+    bin_dir.mkdir()
+    fakes = {
+        "id": "#!/bin/sh\necho 0\n",
+        "chpasswd": f"#!/bin/sh\ncat > /dev/null\necho 'You can now choose the new password' \ntouch {state}/set\n",
+        "passwd": f'#!/bin/sh\nif [ "$1" = -S ]; then [ -e {state}/set ] && echo "gentoo P" || echo "gentoo NP"; exit 0; fi\nrm -f {state}/set\n',
+        "rc-service": "#!/bin/sh\nexit 0\n",
+        "ip": "#!/bin/sh\necho '2: eth0    inet 10.0.2.15/24 brd 10.0.2.255 scope global eth0'\n",
+        "ssh-keygen": "#!/bin/sh\n",
+    }
+    for name, text in fakes.items():
+        (bin_dir / name).write_text(text)
+        (bin_dir / name).chmod(0o755)
+    env = {"PATH": f"{bin_dir}:{os.environ['PATH']}", "LC_ALL": "C"}
+
+    def run(*args: str) -> str:
+        result = subprocess.run(["bash", str(script), *args], capture_output=True, text=True, env=env, timeout=30, check=False)
+        assert result.returncode == 0, result.stderr
+        return result.stdout
+
+    assert w5.parse_remote_access(run("status")).state == "disabled"
+    on_text = run("on")
+    on = w5.parse_remote_access(on_text)
+    assert on.state == "enabled" and on.password and on.addresses == ("10.0.2.15",)
+    assert "choose the new password" not in on_text, "PAM's own text (with a suggested password of its own) is not shown"
+    assert w5.parse_remote_access(run("status")).state == "enabled"
+    assert w5.parse_remote_access(run("off")).state == "disabled"
 
 
 @pytest.mark.parametrize(("text", "state"), [

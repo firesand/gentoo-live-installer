@@ -132,7 +132,8 @@ LIVE_LOGIN_MARKER_COMMAND = 'echo "LIVE-LOGIN-$((6*7))-$(id -un)"'  # computed, 
 LIVE_LOGIN_OK = "LIVE-LOGIN-42-gentoo"
 SSH_ADDRESS_RE = re.compile(r"\bssh\s+(?:-\S+\s+)*([\w.-]+)@([\w.:-]+)")
 PASSWORD_RE = re.compile(r"(?im)^\W*password\s*[:=]\s*(\S+)\s*$")
-FINGERPRINT_RE = re.compile(r"(?:(ED25519|RSA|ECDSA)\D{0,12})?(SHA256:[A-Za-z0-9+/=]{20,})", re.I)
+# the whole key type, so a hybrid one such as MLDSA44-ED25519 (OpenSSH 10) is not read as a second ED25519 key
+FINGERPRINT_RE = re.compile(r"(?:\b((?:[A-Z0-9]+-)*(?:ED25519|RSA|ECDSA))\D{0,12})?(SHA256:[A-Za-z0-9+/=]{20,})", re.I)
 STATE_LINE_RE = re.compile(r"(?im)^\W*(?:remote access|ssh|remote login|password login|status)\b[^:\n]*:\s*(enabled|disabled|on|off)\b")
 
 
@@ -154,7 +155,7 @@ def parse_remote_access(output: str) -> RemoteAccess:
         state = "enabled" if line.group(1).lower() in ("enabled", "on") else "disabled"
     else:
         lowered = text.lower()
-        enabled, disabled = bool(re.search(r"\b(?:is|now|are)\s+(?:turned\s+)?(?:enabled|on)\b|\bremote access (?:is )?(?:enabled|on)\b", lowered)), \
+        enabled, disabled = bool(re.search(r"\b(?:is|now|are)\s+(?:turned\s+)?(?:enabled|on)\b|\bremote access (?:is )?(?:enabled|on)\b|^\W*password:\s+set for\b", lowered, re.M)), \
             bool(re.search(r"\b(?:is|now|are)\s+(?:turned\s+)?(?:disabled|off)\b|\bremote access (?:is )?(?:disabled|off)\b|\bnobody can log in\b", lowered))
         state = "enabled" if enabled and not disabled else "disabled" if disabled and not enabled else "unknown"
     addresses = tuple(dict.fromkeys(address for _user, address in SSH_ADDRESS_RE.findall(text)))

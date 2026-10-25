@@ -89,7 +89,7 @@ def test_status_shows_addresses_fingerprints_and_that_nobody_can_log_in_yet(box)
     assert out.returncode == 0, out.stderr
     assert "sshd:      running" in out.stdout
     assert "ssh gentoo@192.168.1.23" in out.stdout
-    assert "none for gentoo, so nobody can log in yet" in out.stdout
+    assert out.stdout.startswith("remote login:  off (gentoo has no password, so nobody can log in yet")
     assert "ED25519  SHA256:abcED25519def" in out.stdout and "RSA  SHA256:abcRSAdef" in out.stdout
     assert box.run().stdout == out.stdout, "status is the default"
     assert not (box.state / "chpasswd").exists() and not (box.state / "passwd-calls").exists(), "status changes nothing"
@@ -107,7 +107,7 @@ def test_on_sets_a_generated_readable_password_and_starts_sshd(box) -> None:
     written = (box.state / "chpasswd").read_text()
     assert re.fullmatch(r"gentoo:[a-z]+-[a-z]+-[a-z]+\d\d\n", written), written
     password = written.split(":", 1)[1].strip()
-    assert f"password:  {password}" in result.stdout
+    assert f"password:  {password}\n" in result.stdout and result.stdout.count("password:") == 1, "the password once, alone on its line"
     assert "start" in (box.state / "rc-calls").read_text() and "sshd" in (box.state / "rc-calls").read_text()
     assert "ssh gentoo@192.168.1.23" in result.stdout and "sudo gentoo-remote-access off" in result.stdout
     # two runs make two different passwords
@@ -139,7 +139,19 @@ def test_off_removes_the_password_and_keeps_sshd(box) -> None:
     assert result.returncode == 0
     assert (box.state / "passwd-calls").read_text() == "-d gentoo\n"
     assert not (box.state / "rc-calls").exists(), "sshd keeps running"
-    assert "nobody can log in" in result.stdout
+    assert result.stdout.startswith("remote login:  off") and "nobody can log in" in result.stdout
+
+
+def test_pam_chatter_of_chpasswd_is_shown_only_when_it_fails(box) -> None:
+    """passwdqc prints "You can now choose the new password" with a suggested password of its own, which is not the one set."""
+    chatter = 'You can now choose the new password.\nyou can pick this as your password: "Somali5chap!Vault".\n'
+    chpasswd = box.state.parent / "bin/chpasswd"
+    chpasswd.write_text(f"#!/bin/sh\ncat >> {box.state}/chpasswd\nprintf '%s' '{chatter}'\n[ ! -e {box.state}/chpasswd-fails ]\n")
+    result = box.run("on")
+    assert result.returncode == 0 and "Somali5chap" not in result.stdout + result.stderr
+    box.put("chpasswd-fails", "")
+    result = box.run("on")
+    assert result.returncode == 1 and "choose the new password" in result.stderr and "could not set the password" in result.stderr
 
 
 def test_failures_are_reported(box) -> None:
@@ -153,7 +165,7 @@ def test_failures_are_reported(box) -> None:
 
 def test_password_state_is_read_from_passwd(box) -> None:
     box.put("passwd-status", "gentoo P 2026-10-25 0 99999 7 -1\n")
-    assert "password:  set for gentoo" in box.run("status").stdout
+    assert box.run("status").stdout.startswith("remote login:  on (gentoo has a password)")
 
 
 def test_unknown_action_prints_usage(box) -> None:

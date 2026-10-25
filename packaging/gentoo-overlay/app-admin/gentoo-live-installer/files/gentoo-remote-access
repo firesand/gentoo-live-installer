@@ -73,14 +73,16 @@ make_password() {
 	printf '%s-%s-%s%02d\n' "${WORDS[a % count]}" "${WORDS[b % count]}" "${WORDS[(a + b + c) % count]}" "$((c % 100))"
 }
 
+# show [PASSWORD]: the first line answers "can somebody log in?"; "on" passes the password it just set.
 show() {
 	local state address any=0
 	state=$(password_state)
-	if sshd_running; then say "sshd:      running"; else say "sshd:      not running (sudo rc-service ${SERVICE} start)"; fi
 	case ${state} in
-		set) say "password:  set for ${USER_NAME}" ;;
-		*) say "password:  none for ${USER_NAME}, so nobody can log in yet (sudo gentoo-remote-access on)" ;;
+		set) say "remote login:  on (${USER_NAME} has a password)" ;;
+		*) say "remote login:  off (${USER_NAME} has no password, so nobody can log in yet: sudo gentoo-remote-access on)" ;;
 	esac
+	if sshd_running; then say "sshd:      running"; else say "sshd:      not running (sudo rc-service ${SERVICE} start)"; fi
+	[ -z "${1:-}" ] || say "password:  $1"
 	say "log in with:"
 	while read -r address; do
 		[ -n "${address}" ] || continue
@@ -111,22 +113,26 @@ case ${action} in
 		case ${password} in
 			*$'\n'*) die "the password must be a single line" ;;
 		esac
-		printf '%s:%s\n' "${USER_NAME}" "${password}" | chpasswd || die "could not set the password of ${USER_NAME}"
+		# chpasswd goes through PAM, and passwdqc prints its "choose a new password" text with a suggested password of its
+		# own: that is not the password set here, so its words are shown only when chpasswd fails.
+		if ! output=$(printf '%s:%s\n' "${USER_NAME}" "${password}" | chpasswd 2>&1); then
+			[ -z "${output}" ] || printf '%s\n' "${output}" >&2
+			die "could not set the password of ${USER_NAME}"
+		fi
 		if ! sshd_running; then
 			rc-service "${SERVICE}" start >/dev/null 2>&1 || die "sshd could not be started (rc-service ${SERVICE} start shows why)"
 		fi
-		show
 		if [ "${generated}" -eq 1 ]; then
-			say "password:  ${password}"
+			show "${password}"
 		else
-			say "password:  the one you typed"
+			show "the one you typed"
 		fi
 		say "Turn it off again with: sudo gentoo-remote-access off"
 		;;
 	off)
 		need_root off
 		passwd -d "${USER_NAME}" >/dev/null 2>&1 || die "could not remove the password of ${USER_NAME}"
-		say "The password of ${USER_NAME} is removed: nobody can log in over SSH (sshd keeps running)."
+		say "remote login:  off (the password of ${USER_NAME} is removed, so nobody can log in over SSH; sshd keeps running)"
 		;;
 	*)
 		usage >&2
