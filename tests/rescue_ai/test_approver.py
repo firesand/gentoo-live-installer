@@ -100,12 +100,16 @@ def test_the_right_password_typed_on_the_console_runs_exactly_one_command(make, 
     assert oct(service.log.stat().st_mode & 0o777) == "0o600"
 
 
-def test_the_screen_shows_the_exact_argv_and_folder_and_not_the_password(make, tmp_path) -> None:
+def test_the_screen_shows_the_exact_argv_the_folder_and_the_password_of_this_boot(make, tmp_path) -> None:
+    """The password is on the approver's own console, which only a person at this PC's keyboard can see and type on, so a newcomer
+    who did not note it on the first screen is not stuck. It never goes back to the agent, and it is never logged."""
     service = make([PASSWORD])
-    service.ask(["/bin/echo", "a b", "x"], cwd=str(tmp_path))
+    code, out, err, notes = service.ask(["/bin/echo", "a b", "x"], cwd=str(tmp_path))
     prompt = service.console.prompts[0]
     assert "/bin/echo 'a b' x" in prompt and str(tmp_path) in prompt and "ONE command" in prompt
-    assert PASSWORD not in prompt
+    assert f"The rescue password of this boot is:  {PASSWORD}" in prompt
+    assert PASSWORD.encode() not in out and PASSWORD not in str(err) and not any(PASSWORD in note for note in notes)
+    assert PASSWORD not in service.log.read_text()
 
 
 @pytest.mark.parametrize("typed", ["wrong-password!", "", None, PASSWORD + " "])

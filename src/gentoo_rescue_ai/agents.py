@@ -240,7 +240,7 @@ def main(argv: Sequence[str] | None = None, *, fetch: Fetcher = download, home: 
         print(f"gentoo-rescue-agents {args.command}: say which one: claude, codex, opencode or all", file=sys.stderr)
         return 2
     if args.command != "status" and hasattr(os, "geteuid") and os.geteuid() == 0:
-        print("gentoo-rescue-agents: do not run this as root. Use the rescue-ai shell (window 2 of the rescue session): downloads never run as root.", file=sys.stderr)
+        print("gentoo-rescue-agents: do not run this as root. Use the rescue-ai shell (the window named shell of the rescue session: Ctrl+B n): downloads never run as root.", file=sys.stderr)
         return 1
     try:
         pins = load_pins(pins_path)

@@ -1,8 +1,8 @@
 """``gentoo-rescue-share [--read-only] [--interface IF] [--minutes N] | stop | status``: the rescue session in a phone's browser.
 
 Starts ``ttyd`` as ``rescue-ai`` (never as root) on the LAN interface only, on a random port, with TLS (a fresh self-signed
-certificate; its fingerprint is shown here so it can be compared with the phone's warning), a one-time three-word password, ONE
-client, an origin check, and an idle timeout. The phone can type by default (``--read-only`` makes it a view-only share).
+certificate; its fingerprint is shown here so it can be compared with the phone's warning), a fresh three-word password for this share
+(valid until it stops), ONE client, an origin check, and an idle timeout. The phone can type by default (``--read-only`` makes it a view-only share).
 
 The phone is the user ``rescue-ai`` like the agents are: it can talk to the agent and use the shell window, but it can NEVER
 approve a root command. Approvals (gentoo-rescue-do) are typed on the PC's own console, on a screen no ``rescue-ai`` process can
@@ -12,6 +12,7 @@ reach. Anyone on the same network who learns the password can use the agent for 
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import secrets
@@ -46,7 +47,20 @@ def make_password(words: int = 3, rng: Callable[[str], str] = secrets.choice) ->
     return "-".join("".join(rng(CONSONANTS if i % 2 == 0 else VOWELS) for i in range(4)) for _ in range(words))
 
 
-def lan_addresses(ip_output: str) -> list[tuple[str, str]]:
+# A local network: the private ranges of RFC 1918, and the shared range of RFC 6598 (carrier NAT, VPNs such as Tailscale), which the
+# internet cannot reach either. A public address would put the agents' shell on the internet, behind nothing but the password.
+LOCAL_NETWORKS = tuple(ipaddress.ip_network(net) for net in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"))
+
+
+def is_local(address: str) -> bool:
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return False
+    return any(ip in network for network in LOCAL_NETWORKS)
+
+
+def global_addresses(ip_output: str) -> list[tuple[str, str]]:
     """(interface, IPv4 address) from ``ip -4 -o addr show scope global``, loopback and link-local left out."""
     found = []
     for line in ip_output.splitlines():
@@ -56,6 +70,11 @@ def lan_addresses(ip_output: str) -> list[tuple[str, str]]:
             if name != "lo" and not address.startswith(("127.", "169.254.")):
                 found.append((name, address))
     return found
+
+
+def lan_addresses(ip_output: str) -> list[tuple[str, str]]:
+    """The addresses of ``global_addresses`` that are on a local network (``LOCAL_NETWORKS``): the share never listens on a public one."""
+    return [(name, address) for name, address in global_addresses(ip_output) if is_local(address)]
 
 
 def default_route_interface(route_output: str) -> str | None:
@@ -79,6 +98,18 @@ def choose_interface(addresses: list[tuple[str, str]], wanted: str | None, route
             if name == route_interface:
                 return name, address
     return addresses[0]
+
+
+def pick_address(listed: list[tuple[str, str]], wanted: str | None, route_interface: str | None) -> tuple[str, str]:
+    """The (interface, address) to listen on: a local one only. A machine whose only address is public gets a plain refusal."""
+    addresses = [(name, address) for name, address in listed if is_local(address)]
+    public = [f"{address} ({name})" for name, address in listed if not is_local(address) and (not wanted or name == wanted)]
+    if public and (not addresses or (wanted and all(name != wanted for name, _ in addresses))):
+        plural = len(public) > 1
+        raise ShareError(f"The address{'es' if plural else ''} {', '.join(public)} {'are' if plural else 'is'} on the internet, not on a local network. "
+                         "The share is for a phone on the same Wi-Fi or cable network, so it does not start "
+                         "(anyone on the internet could reach it, behind nothing but the password).")
+    return choose_interface(addresses, wanted, route_interface)
 
 
 def free_port(rng: Callable[[int, int], int] = secrets.SystemRandom().randint, address: str = "127.0.0.1", tries: int = 50) -> int:
@@ -214,7 +245,7 @@ def supervise(state: State, *, ttyd_alive: Callable[[], bool], clients: Callable
 
 def start(args: argparse.Namespace, *, say: Callable[[str], None] = print, which: Callable[[str], str | None] = shutil.which, foreground: bool = False) -> int:
     if os.geteuid() == 0:
-        raise ShareError(f"gentoo-rescue-share never runs as root. Run it in the {AI_USER} shell (window 2 of the rescue session).")
+        raise ShareError(f"gentoo-rescue-share never runs as root. Run it in the {AI_USER} shell (the window named shell of the rescue session: Ctrl+B n).")
     ttyd, openssl, tmux = which("ttyd"), which("openssl"), which("tmux")
     for name, path in (("ttyd", ttyd), ("openssl", openssl), ("tmux", tmux)):
         if not path:
@@ -226,9 +257,9 @@ def start(args: argparse.Namespace, *, say: Callable[[str], None] = print, which
     current = read_state(folder)
     if current is not None and alive(current.ttyd, "ttyd"):
         raise ShareError(f"A share is already running on port {current.port}. Stop it first: gentoo-rescue-share stop")
-    addresses = lan_addresses(subprocess.run(["ip", "-4", "-o", "addr", "show", "scope", "global"], capture_output=True, text=True, check=False).stdout)
+    listed = global_addresses(subprocess.run(["ip", "-4", "-o", "addr", "show", "scope", "global"], capture_output=True, text=True, check=False).stdout)
     route = default_route_interface(subprocess.run(["ip", "-4", "route", "show", "default"], capture_output=True, text=True, check=False).stdout)
-    interface, address = choose_interface(addresses, args.interface, route)
+    interface, address = pick_address(listed, args.interface, route)
     cert, key = str(folder / "cert.pem"), str(folder / "key.pem")
     os.umask(0o077)
     made = subprocess.run(openssl_argv(openssl, cert, key, address), capture_output=True, text=True, check=False)
@@ -294,7 +325,7 @@ def status(say: Callable[[str], None] = print) -> int:
 
 
 def parse(argv: Sequence[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(prog="gentoo-rescue-share", description="Show the rescue session in a phone's browser (TLS, one-time password, one client, LAN only, idle timeout).")
+    parser = argparse.ArgumentParser(prog="gentoo-rescue-share", description="Show the rescue session in a phone's browser (TLS, a password for this share, one client, local network only, idle timeout).")
     parser.add_argument("action", nargs="?", choices=["start", "stop", "status"], default="start")
     parser.add_argument("--read-only", action="store_true", help="view-only share: the phone cannot type")
     parser.add_argument("--interface", help="network interface to share on (default: the one with the default route)")

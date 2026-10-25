@@ -3,7 +3,7 @@
 It runs as root on tty1 first (so the person can fix the network and type a disk passphrase where no agent can see it), then
 opens a tmux session ``rescue`` as the unprivileged user ``rescue-ai``:
 
-* window 1 is the agent (or a shell when none is installed yet), window 2 a plain ``rescue-ai`` shell;
+* the window named ``agent`` is the agent (or a shell when none is installed yet), the window ``shell`` a plain ``rescue-ai`` shell;
 * every window starts in the home directory of ``rescue-ai``, never below the broken disk (``/mnt/gentoo``, ``/mnt/rescue``);
 * the agents get a clean environment, their safe configuration files are put back at every start, and project settings
   of the working directory are switched off where the agent allows it (Claude ``--setting-sources user``, Codex untrusted
@@ -204,7 +204,7 @@ def drop_privileges(launch: Launch) -> list[str]:
 
 
 def tmux_session_argv(agent_window: Launch, shell_window: Launch) -> list[str]:
-    """One tmux invocation: create (or attach to) the session with the agent in window 1 and a plain shell in window 2.
+    """One tmux invocation: create (or attach to) the session with the agent in the window ``agent`` and a plain shell in the window ``shell``.
     Both windows start in the home directory. No other window exists: in particular none that takes approvals."""
     return ["tmux", "-u", "new-session", "-A", "-s", TMUX_SESSION, "-n", "agent", "-c", agent_window.cwd, *agent_window.argv,
             ";", "new-window", "-n", "shell", "-c", shell_window.cwd, "/bin/bash", "-l",

@@ -248,3 +248,18 @@ def test_the_minutes_are_bounded_and_the_command_line_parses() -> None:
     assert share.parse(["--minutes", "30", "--read-only"]).read_only is True
     assert share.parse(["stop"]).action == "stop"
     assert share.main(["--minutes", "0"]) == 2
+
+
+def test_the_share_listens_on_a_local_network_only() -> None:
+    """A public address would put the agents' shell on the internet, behind nothing but the password."""
+    assert all(share.is_local(a) for a in ("10.1.2.3", "172.16.0.9", "172.31.255.1", "192.168.1.23", "100.64.0.5", "100.127.255.1"))
+    assert not any(share.is_local(a) for a in ("8.8.8.8", "172.32.0.1", "100.128.0.1", "203.0.113.7", "not-an-address"))
+    listed = [("eth0", "203.0.113.7"), ("wlan0", "192.168.1.23")]
+    assert share.pick_address(listed, None, "eth0") == ("wlan0", "192.168.1.23"), "the default route is public: the local one is used"
+    with pytest.raises(share.ShareError, match="on the internet, not on a local network"):
+        share.pick_address([("eth0", "203.0.113.7")], None, "eth0")
+    with pytest.raises(share.ShareError, match="203.0.113.7 .eth0. is on the internet"):
+        share.pick_address(listed, "eth0", None)
+    with pytest.raises(share.ShareError, match="no LAN address"):
+        share.pick_address([], None, None)
+    assert share.lan_addresses("2: eth0    inet 203.0.113.7/24 brd 203.0.113.255 scope global eth0\n") == []

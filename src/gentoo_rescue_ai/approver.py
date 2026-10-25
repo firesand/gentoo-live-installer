@@ -95,7 +95,10 @@ def show_argv(argv: list[str]) -> str:
     return " ".join(words)
 
 
-def prompt_text(peer: "Peer", argv: list[str], cwd: str, warnings: list[str] | None = None) -> str:
+def prompt_text(peer: "Peer", argv: list[str], cwd: str, warnings: list[str] | None = None, password: str = "") -> str:
+    """The question on the approver's console. The password of this boot is shown on it: nobody but a person at this PC's own
+    keyboard can type on this console (no rescue-ai process can open it, and the phone sees only the agents' session), so typing
+    it is the deliberate yes after reading the command, and a newcomer who did not note it on the first screen is not stuck."""
     items = list(warnings or [])
     caution = "".join(f"  !! The agent can still change {visible(item)[:200]} after you read this command. Do not approve it unless you have read that file.\n" for item in items[:MAX_WARNINGS])
     if len(items) > MAX_WARNINGS:
@@ -107,7 +110,8 @@ def prompt_text(peer: "Peer", argv: list[str], cwd: str, warnings: list[str] | N
         f"  in the folder: {visible(cwd)}\n\n"
         f"{caution}"
         "Nothing has been run yet. Read it carefully; the agent may have been misled by a file on the broken disk.\n"
-        "Type the rescue password to allow THIS ONE command, or just press Enter to refuse.\n"
+        + (f"The rescue password of this boot is:  {password}\n" if password else "")
+        + "Type the rescue password to allow THIS ONE command, or just press Enter to refuse.\n"
         "Password (hidden): ")
 
 
@@ -518,7 +522,7 @@ class Approver:
     def _ask(self, peer: Peer, argv: list[str], cwd: str, warnings: list[str]) -> str:
         try:
             self.console.enter()
-            typed = self.console.read_secret(prompt_text(peer, argv, cwd, warnings), self.approval_seconds)
+            typed = self.console.read_secret(prompt_text(peer, argv, cwd, warnings, self._password.decode()), self.approval_seconds)
         except OSError:
             return "console"
         if typed is None:

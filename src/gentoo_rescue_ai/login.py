@@ -242,7 +242,7 @@ def main(argv: Sequence[str] | None = None, *, home: str | None = None, stdin_fd
         print(__doc__)
         return 0
     if os.geteuid() == 0 and home is None:
-        print(f"gentoo-rescue-login: run it as {AI_USER} (window 2 of the rescue session). The agents and their logins belong to that user, not to root.", file=sys.stderr)
+        print(f"gentoo-rescue-login: run it as {AI_USER} (the window named shell of the rescue session: Ctrl+B n). The agents and their logins belong to that user, not to root.", file=sys.stderr)
         return 1
     home = home or home_of()
     agent = arguments[0] if arguments else None
