@@ -206,7 +206,7 @@
       "media-gfx/qrencode", "net-analyzer/mtr", "net-analyzer/tcpdump", "net-fs/cifs-utils", "net-misc/rclone", "sys-apps/memtester",
       "sys-apps/ripgrep", "sys-fs/dd-rescue", "sys-fs/dislocker", "sys-fs/ncdu", "www-apps/ttyd"
     ],
-    "forbidden_packages": ["dev-lang/rust-bin", "sys-boot/shim", "net-misc/netifrc"],
+    "forbidden_packages": ["dev-lang/rust-bin", "dev-lang/go", "sys-boot/shim", "net-misc/netifrc"],
     "content": [
       {"path": "etc/lvm/lvmlocal.conf", "must_match": ["^\\s*event_activation\\s*=\\s*0\\b", "^\\s*auto_activation_volume_list\\s*=\\s*\\[\\s*\\]"],
        "why": "the live system must not activate the PC's volume groups by itself"},

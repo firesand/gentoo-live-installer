@@ -125,6 +125,7 @@ def test_stage2_weight_reductions_are_the_safe_ones() -> None:
     values = spec(STAGE2)
     unmerge = verify.spec_list(values, "livecd/unmerge")
     assert "dev-lang/rust-bin" in unmerge and "net-misc/netifrc" in unmerge
+    assert "dev-lang/go" in unmerge, "a BDEPEND of restic and rclone only: about 140 MiB of the image"
     removed = verify.spec_list(values, "livecd/rm")
     assert "/var/cache/binhost" in removed
     for path in removed:

@@ -61,9 +61,12 @@ livecd/rcadd:
 	sshd|default
 # dev-lang/rust-bin (about 680 MiB) is only needed to build PortageHub in stage1; nothing
 # installed depends on it at run time (checked against /var/db/pkg of the r19 image).
+# dev-lang/go is only a BDEPEND of restic and rclone (go-module eclass; their programs are static); the
+# first Wave 6 image carried it and grew by 144 MiB.
 livecd/unmerge:
 	net-misc/netifrc
 	dev-lang/rust-bin
+	dev-lang/go
 # /etc/ssh/ssh_host_*: sshd runs at every boot and makes its own host keys (its init script runs
 # ssh-keygen -A); no key may be shared by all discs, so a key left by a package step is removed.
 # Download and documentation caches. Man and info pages stay for the rescue console.
