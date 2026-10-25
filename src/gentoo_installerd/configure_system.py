@@ -275,11 +275,22 @@ class SystemMixin(ConfigurerBase):
             steps: list[tuple[str, ...]] = [("dbus-uuidgen", "--ensure=/etc/machine-id")]
         else:
             steps = [("systemd-machine-id-setup",), ("systemctl", "preset-all", "--preset-mode=enable-only")]
+        if manifest.system.init == "systemd":
+            steps.extend(("systemctl", "disable", unit) for unit in self.preset_units_to_disable(manifest))
         for step in steps:
             try:
                 self.chroot(step)
             except RunnerError as exc:
                 self.notify(f"warning: {' '.join(step)} failed ({exc}); the system sets this up by itself at first boot")
+
+    def preset_units_to_disable(self, manifest: InstallManifest) -> list[str]:
+        """Units the upstream systemd presets enable but the user's choices exclude (preset-all enables them regardless)."""
+        units: list[str] = []
+        if manifest.options.timesync != "timesyncd":
+            units.append("systemd-timesyncd.service")
+        if manifest.network.manager != "systemd-networkd":
+            units.extend(["systemd-networkd.service", "systemd-networkd-wait-online.service", "systemd-networkd.socket", "systemd-resolved.service"])
+        return units
 
     def configure_sshd(self, manifest: InstallManifest) -> None:
         """The remote-login policy, written only when the user wants SSH (the service itself is enabled with the other base services)."""

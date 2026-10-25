@@ -47,6 +47,15 @@ def test_the_time_zone_is_detected_and_shown_with_change(qtbot):
     assert widget.manifest.system.timezone == "Europe/Berlin"
 
 
+def test_a_chosen_utc_survives_a_reload(qtbot):
+    widget = used(qtbot=qtbot, detect_zone=lambda: "Europe/Berlin")
+    widget.set_timezone("UTC")
+    widget.save_manifest()
+    assert widget.manifest.system.timezone == "UTC"
+    widget.load_manifest()
+    assert widget.timezone_value() == "UTC"
+
+
 def test_detection_failure_falls_back_to_utc_with_a_visible_note(qtbot):
     widget = used(qtbot=qtbot, detect_zone=lambda: "")
     assert widget.timezone_value() == "UTC"

@@ -41,7 +41,16 @@ NATIVE_USE = {
     "media-libs/vulkan-loader": ["abi_x86_32"],
     "media-libs/libglvnd": ["abi_x86_32"],
     "media-libs/libpulse": ["abi_x86_32"],
+    # The 32-bit NVIDIA userland (harmless lines when the GPU is not NVIDIA: package.use for an absent package is ignored).
+    "x11-drivers/nvidia-drivers": ["abi_x86_32"],
+    "gui-libs/egl-gbm": ["abi_x86_32"],
+    "gui-libs/egl-wayland": ["abi_x86_32"],
+    "gui-libs/egl-x11": ["abi_x86_32"],
+    "media-libs/vulkan-layers": ["abi_x86_32"],
 }
+# Steam's RDEPEND and mesa[abi_x86_32] pull a long closure (libdrm, fontconfig, expat, zlib, llvm ...) in 32-bit form, and Portage
+# never turns abi_x86_32 on by itself, so native mode enables it for every package (the Gentoo wiki's multilib approach).
+GLOBAL_ABI_LINE = "*/* abi_x86_32\n"
 
 SYSCTL_TEXT = "# Written by the Gentoo LiveCD installer: many games need a large number of memory maps.\nvm.max_map_count = 2147483642\n"
 MODULES_TEXT = "# Written by the Gentoo LiveCD installer: NTSYNC makes Windows games faster under Wine and Proton.\nntsync\n"
@@ -94,7 +103,7 @@ class GamingMixin(PackagesMixin):
             use = dict(NATIVE_USE)
             if options.pipewire:
                 use["media-video/pipewire"] = ["abi_x86_32"]
-            files.append((USE_FILE, render_package_use(use)))
+            files.append((USE_FILE, GLOBAL_ABI_LINE + render_package_use(use)))
         return files
 
     def gaming_system_files(self, manifest: InstallManifest) -> list[tuple[str, str, int]]:

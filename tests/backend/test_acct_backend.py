@@ -114,6 +114,22 @@ def test_systemd_sets_the_machine_id_and_presets_before_its_enables(tmp_path):
     assert setup < preset < first_enable
 
 
+def test_systemd_presets_are_undone_for_what_the_choices_exclude(tmp_path):
+    m = target_manifest(system={"init": "systemd", "stage_variant": "amd64-systemd"}, options={"timesync": "none"}, network={"manager": "networkmanager"})
+    c, runner, _ = make(tmp_path, m)
+    c.configure_services(m, phase="base")
+    lines = runner.lines()
+    preset = next(i for i, line in enumerate(lines) if line.endswith("preset-all --preset-mode=enable-only"))
+    for unit in ("systemd-timesyncd.service", "systemd-networkd.service", "systemd-networkd-wait-online.service", "systemd-resolved.service"):
+        assert next(i for i, line in enumerate(lines) if line.endswith(f"systemctl disable {unit}")) > preset
+
+
+def test_systemd_presets_keep_what_the_choices_include(tmp_path):
+    m = target_manifest(system={"init": "systemd", "stage_variant": "amd64-systemd"}, options={"timesync": "timesyncd"}, network={"manager": "systemd-networkd"})
+    c, runner, _ = make(tmp_path, m)
+    assert c.preset_units_to_disable(m) == []
+
+
 def test_openrc_runs_dbus_uuidgen_only_once_dbus_is_installed(tmp_path):
     m = target_manifest()
     c, runner, _ = make(tmp_path, m)

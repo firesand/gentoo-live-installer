@@ -82,6 +82,16 @@ def test_native_mode_files(tmp_path):
     assert "games-util/steam-launcher" in emerge and "games-util/esteam" in emerge and "gnome-extra/zenity" in emerge
 
 
+def test_native_mode_turns_32_bit_on_for_everything_and_covers_nvidia(tmp_path):
+    m, c, _, _ = gaming(tmp_path, gaming="native")
+    use = dict(c.gaming_portage_files(m))[USE_FILE]
+    assert use.splitlines()[0] == "*/* abi_x86_32"
+    for atom in ("x11-drivers/nvidia-drivers", "gui-libs/egl-gbm", "gui-libs/egl-wayland", "gui-libs/egl-x11", "media-libs/vulkan-layers"):
+        assert f"{atom} abi_x86_32\n" in use
+    m, c, _, _ = gaming(tmp_path, gaming="flatpak")
+    assert USE_FILE not in dict(c.gaming_portage_files(m))
+
+
 def test_native_mode_without_pipewire_has_no_pipewire_flag(tmp_path):
     m, c, _, _ = gaming(tmp_path, gaming="native", pipewire=False)
     assert "pipewire" not in dict(c.gaming_portage_files(m))[USE_FILE]

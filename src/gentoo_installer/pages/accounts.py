@@ -645,7 +645,7 @@ class AccountsPage(Page):
         self._fill_locale_list()
         zone = system.timezone
         note = ""
-        if zone == "UTC":
+        if zone == "UTC" and fresh:  # a UTC the user chose or imported survives a reload
             detected = self._detect_zone()
             if detected:
                 zone, note = detected, f"Detected from this session: {detected}. Change it if that is not where you are."
