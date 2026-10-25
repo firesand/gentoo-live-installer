@@ -10,7 +10,7 @@ import pytest
 
 from gentoo_installer.manifest import Hardware
 from gentoo_installer.system_info import DiskInfo, SystemInfo, mark_shared_identities
-from tests.hardware.helpers import FIXTURE_NAMES, fixture_dict
+from tests.hardware.helpers import FIXTURE_NAMES, fixture_dict, untouched_hardware
 
 GIB = 1024**3
 
@@ -58,7 +58,7 @@ def test_the_wizard_reaches_the_review_on_every_machine(make_window, name):
     disk = next(item for item in info.disks if item.selectable)
     walk(window, disk)
     assert window.manifest.validate() == []
-    assert window.manifest.hardware == Hardware()  # a visit changes none of the hardware choices
+    assert window.manifest.hardware == untouched_hardware(window.manifest)  # a visit changes none of the hardware choices
     review = window.review
     review.confirmation.setText(disk.path)
     assert review.validate_page() == (True, "")
@@ -75,7 +75,7 @@ def test_the_hardware_tab_works_in_both_views_on_every_machine(make_window, name
     for index in (1, 0):
         window.mode.setCurrentIndex(index)
         assert tab.summary.text() and tab.plan_card.isVisibleTo(tab)
-        assert tab.values() == dataclasses.asdict(Hardware())  # nothing was touched
+        assert tab.values() == dataclasses.asdict(untouched_hardware(window.manifest))  # nothing was touched
         assert tab.problems() == []
 
 
@@ -99,7 +99,7 @@ def test_the_old_bios_computer_is_installed_for_legacy_boot(make_window):
     assert not model.item(window.system.bootloader.findData("systemd-boot")).isEnabled() and not window.system.secure_boot.isEnabled()
     window._show_page(4)
     tab = window.customize.hardware
-    assert not tab.gpu_driver.cards["nvidia"].isVisibleTo(tab) and "AMD Radeon" in tab.summary.text()
+    assert not tab.gpu_driver.cards["open"].isVisibleTo(tab) and not tab.recommendation.isVisibleTo(tab) and "AMD Radeon" in tab.summary.text()
     assert "open AMD driver" in tab.plan_text.text()
     assert not tab.row_shown("removable_fallback")  # no EFI boot partition on this machine
 

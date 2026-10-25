@@ -6,7 +6,7 @@ with the Readiness and Review pages:
 
 * ``hardware_plan()`` asks the planner (``gentoo_installerd.hwplan``) what the
   installer will do, so the page never decides anything itself;
-* ``nvidia_offer()`` says whether the proprietary NVIDIA driver can be offered;
+* ``nvidia_offer()`` says whether the proprietary NVIDIA driver can be offered, and ``driver_cards()`` what each driver card of the page says;
 * ``hardware_issues()`` returns the planner's cross-checks, sorted by page.
 
 Rule for the widgets: a value that was loaded from a settings file is never
@@ -21,22 +21,25 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFormLayout,
     QLabel,
     QSpinBox,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
+from .. import devices as devices_module
 from .. import hardware_data, recommend
 from ..hardware import HardwareProfile, gpu_label
-from ..manifest import HARDWARE_CHOICES, PRINTER_DRIVERS, Hardware, InstallManifest
+from ..manifest import HARDWARE_CHOICES, NVIDIA_EXTRAS, PRINTER_DRIVERS, Hardware, InstallManifest
 from ..system_info import SystemInfo, profile_of
 from ..widgets import Card, ChoiceGroup, wrapped_label
+from .devices_card import DevicesCard
 
 LOG = logging.getLogger("gentoo_installer.hardware_page")
 
@@ -133,6 +136,28 @@ class NvidiaOffer:
     label: str = ""
     licence: str = ""
     reasons: tuple[str, ...] = ()  # why it is not available
+    flavour: str = ""  # open | closed kernel modules
+    recommendation: str = ""  # the plain sentence of the recommended card
+    generations: tuple[str, ...] = ()  # of the NVIDIA cards in this PC
+
+
+DRIVER_KEYS = ("auto", "open", "closed", "nouveau", "basic")
+
+
+@dataclass(frozen=True)
+class DriverCard:
+    """One card of the driver choice: what it says and whether it can be picked here."""
+
+    key: str
+    title: str
+    description: str
+    available: bool = True
+    reason: str = ""  # why it cannot be picked ("" when it can)
+    recommended: bool = False
+
+
+def _trial(manifest: InstallManifest, **hardware: Any) -> InstallManifest:
+    return dataclasses.replace(manifest, hardware=dataclasses.replace(manifest.hardware, **hardware))
 
 
 def nvidia_offer(manifest: InstallManifest, profile: HardwareProfile) -> NvidiaOffer:
@@ -140,8 +165,7 @@ def nvidia_offer(manifest: InstallManifest, profile: HardwareProfile) -> NvidiaO
     try:
         from gentoo_installerd import hwplan
 
-        trial = dataclasses.replace(manifest, hardware=dataclasses.replace(manifest.hardware, gpu_driver="nvidia", nvidia_branch="auto"))
-        decision = hwplan.nvidia_decision(trial, profile)
+        decision = hwplan.nvidia_decision(_trial(manifest, gpu_driver="nvidia", nvidia_branch="auto", nvidia_modules="auto"), profile)
     except Exception:  # noqa: BLE001
         LOG.exception("The NVIDIA decision could not be made")
         return NvidiaOffer(False, False)
@@ -149,8 +173,60 @@ def nvidia_offer(manifest: InstallManifest, profile: HardwareProfile) -> NvidiaO
     visible = has_card or manifest.hardware.target == "portable" or manifest.hardware.gpu_driver == "nvidia"
     if decision.branch:
         info = hardware_data.NVIDIA_BRANCHES.get(decision.branch, {})
-        return NvidiaOffer(visible, True, decision.branch, str(info.get("label", decision.branch)), str(info.get("license", "")))
-    return NvidiaOffer(visible, False, reasons=tuple(issue.message for issue in decision.errors))
+        return NvidiaOffer(visible, True, decision.branch, str(info.get("label", decision.branch)), str(info.get("license", "")),
+                           flavour=decision.flavour, recommendation=decision.reason, generations=decision.generations)
+    return NvidiaOffer(visible, False, reasons=tuple(issue.message for issue in decision.errors) or ((decision.reason,) if decision.reason else ()),
+                       recommendation=decision.reason, generations=decision.generations)
+
+
+def driver_key(hardware: Hardware, flavour: str = "open") -> str:
+    """The card that shows these settings; ``flavour`` is what Automatic modules mean for the NVIDIA driver on this machine."""
+    if hardware.gpu_driver in ("auto", "nouveau", "basic"):
+        return hardware.gpu_driver
+    modules = hardware.nvidia_modules if hardware.nvidia_modules != "auto" else (flavour or "open")
+    return "closed" if modules == "closed" else "open"
+
+
+def driver_settings(key: str) -> tuple[str, str]:
+    """(gpu_driver, nvidia_modules) that a card stands for."""
+    return {"auto": ("auto", "auto"), "open": ("nvidia", "open"), "closed": ("nvidia", "closed"), "nouveau": ("nouveau", "auto"), "basic": ("basic", "auto")}[key]
+
+
+def driver_cards(manifest: InstallManifest, profile: HardwareProfile) -> list[DriverCard]:
+    """The five driver cards for this machine, in the order they are shown. Plain trade-offs, no numbers; a card that cannot be picked says why."""
+    offer = nvidia_offer(manifest, profile)
+    reason_for: dict[str, str] = {}
+    try:
+        from gentoo_installerd import hwplan
+
+        for modules in ("open", "closed"):
+            decision = hwplan.nvidia_decision(_trial(manifest, gpu_driver="nvidia", nvidia_branch="auto", nvidia_modules=modules), profile)
+            if not decision.branch:
+                reason_for[modules] = " ".join(issue.message for issue in decision.errors) or decision.reason or "Not available on this computer."
+    except Exception:  # noqa: BLE001
+        LOG.exception("The driver cards could not be checked")
+        reason_for = {"open": "Not available on this computer.", "closed": "Not available on this computer."}
+    gpu_text = "your NVIDIA card" if not offer.recommendation else offer.recommendation
+    if offer.available:
+        automatic = (f"{gpu_text} Automatic uses it as soon as you accept NVIDIA's licence, and the open nouveau driver until then." if offer.recommendation.startswith("Recommended")
+                     else "Uses the NVIDIA driver once you accept its licence, and the open nouveau driver until then.")
+    else:
+        automatic = "Uses the open-source driver that fits your graphics card. Nothing to accept, nothing downloaded from NVIDIA."
+    sway = _trial(manifest).system.desktop == "sway"
+    return [
+        DriverCard("auto", "Automatic", automatic, recommended=True),
+        DriverCard("open", "NVIDIA, open kernel modules (version 595)",
+                   "For GeForce RTX 20 series and newer, and the only choice for the RTX 50 series. Needs NVIDIA's licence; the driver is built on this PC.",
+                   "open" not in reason_for, reason_for.get("open", "")),
+        DriverCard("closed", "NVIDIA, closed kernel modules (version 580)",
+                   "For GeForce GTX 750 Ti to GTX 10 series, TITAN V and some RTX 20 laptops (their power saving needs it). Long-term version; not for the RTX 50 series. "
+                   "Needs NVIDIA's licence; built on this PC.", "closed" not in reason_for, reason_for.get("closed", "")),
+        DriverCard("nouveau", "Open-source driver (nouveau, with NVK)",
+                   "Works on every card and needs no licence. Games and 3D programs run slower than on the NVIDIA driver, but nothing is downloaded from NVIDIA."),
+        DriverCard("basic", "Basic display",
+                   "No 3D acceleration and no Wayland: the safest start if nothing else works. You can change it later.",
+                   not sway, "Basic display has no 3D, and the Sway desktop only runs on Wayland." if sway else ""),
+    ]
 
 
 def gpu_lines(profile: HardwareProfile) -> list[str]:
@@ -222,6 +298,19 @@ SPECS: tuple[Spec, ...] = (
     Spec("cpu_flags_mode", "CPU optimisation", "choice",
          _choices("cpu_flags_mode", {"auto": AUTO, "detect": "Tune for this CPU", "profile": "Profile defaults", "manual": "My own list"}), advanced=True, group="boot",
          hint="Tuning for this CPU makes some packages build from source instead of downloading them. 'My own list' uses CPU_FLAGS_X86 from the Portage tab."),
+    Spec("safe_graphics_entry", "Safe graphics boot entry", "check", advanced=True, group="graphics",
+         hint="A second entry in the boot menu that starts without the NVIDIA driver. It is always added when the NVIDIA driver is installed, because it is the way back "
+              "to a working screen."),
+    Spec("nvidia_rtd3", "Power saving of the NVIDIA card", "choice", _choices("nvidia_rtd3", {"auto": AUTO, "on": "On", "off": "Off"}), advanced=True, group="graphics",
+         hint="Lets a laptop switch its NVIDIA card off when idle. Only for RTX 20 series laptops with the closed modules; the newer cards do it with the open modules."),
+    Spec("battery_charge_limit", "Battery charge limit", "choice", (("0", "No limit"), ("80", "Stop charging at 80%"), ("60", "Stop charging at 60%")), advanced=True, group="power",
+         hint="A battery that is not always full lasts more years. Uses TLP, so it replaces power-profiles-daemon; the laptop must support it."),
+    Spec("lid_action", "When the lid is closed", "choice", _choices("lid_action", {"suspend": "Sleep (the default)", "lock": "Lock the screen", "ignore": "Do nothing"}),
+         advanced=True, group="power", hint="What closing the lid does, on battery and on the charger."),
+    Spec("vendor_workarounds", "Known fixes for this computer's maker", "check", advanced=True, group="power",
+         hint="Applies the small fixes the installer knows for your model, for example the lid of a Razer Blade."),
+    Spec("signed_modules", "Signed kernel modules (Secure Boot)", "choice", (("off", "Off"), ("auto", "Automatic (not available yet)"), ("kernel_key", "Kernel key (not available yet)")),
+         advanced=True, group="boot", hint="Signing the NVIDIA and other add-on modules so they load with Secure Boot is not available yet; the installer says so instead of ignoring the choice."),
     Spec("fwupd", "Firmware updates from the vendor (fwupd)", "check", group="boot",
          hint="Lets you update the firmware of the computer, disks and devices from the desktop."),
     Spec("hidpi", "Screen scaling (Xfce)", "choice", (("auto", AUTO), ("off", "No scaling"), ("custom", "Custom")), group="display",
@@ -233,7 +322,7 @@ SPECS: tuple[Spec, ...] = (
 )
 SPEC_BY_NAME = {spec.name: spec for spec in SPECS}
 # Fields with their own widgets.
-CUSTOM_FIELDS = ("target", "gpu_driver", "nvidia_branch", "nvidia_license_accepted", "printer_drivers")
+CUSTOM_FIELDS = ("target", "gpu_driver", "nvidia_modules", "nvidia_branch", "nvidia_license_accepted", "nvidia_extras", "nvidia_cuda_license_accepted", "printer_drivers", "devices")
 HIDPI_DEFAULT = 144
 DENSE_SCREEN_DPI = 110  # above this the scaling control is worth showing in the Guided view
 
@@ -281,23 +370,37 @@ class HardwareTab(QWidget):
         self.graphics = Card("Graphics", "")
         self.gpus = wrapped_label("", muted=True, selectable=True)
         self.graphics.content.addWidget(self.gpus)
-        self.gpu_driver = ChoiceGroup([
-            ("open", "Open-source driver", "Works on every graphics card and needs no licence. This is the recommended choice.", True),
-            ("nvidia", "NVIDIA proprietary driver",
-             "Faster 3D and CUDA on NVIDIA cards. It is non-free software and needs your agreement to NVIDIA's licence. "
-             "If it cannot be built, the open driver stays in use.", False),
-        ], columns=2)
-        self.controls["gpu_driver"] = self.gpu_driver
-        self.graphics.content.addWidget(self.gpu_driver)
-        self.nvidia_reason = wrapped_label("", muted=True)
-        self.nvidia_reason.hide()
-        self.graphics.content.addWidget(self.nvidia_reason)
-        self.nvidia_form = self._form()
+        self.recommendation = wrapped_label("", selectable=True)
+        self.recommendation.hide()
+        self.graphics.content.addWidget(self.recommendation)
         self.nvidia_license = QCheckBox("I accept the NVIDIA Software License")
         self.nvidia_license.setAccessibleName("Accept the NVIDIA licence")
         self.controls["nvidia_license_accepted"] = self.nvidia_license
         self.nvidia_license.toggled.connect(lambda _=False: self._edited("nvidia_license_accepted"))
-        self.nvidia_form.addRow(self.nvidia_license)
+        self.graphics.content.addWidget(self.nvidia_license)
+        self.license_note = wrapped_label("The driver is downloaded from NVIDIA and built on this PC, which takes a while. If it cannot be built, the open nouveau driver stays in use.", muted=True)
+        self.graphics.content.addWidget(self.license_note)
+        self.nvidia_reason = wrapped_label("", muted=True)
+        self.nvidia_reason.hide()
+        self.graphics.content.addWidget(self.nvidia_reason)
+        self.driver_toggle = QToolButton()
+        self.driver_toggle.setText("Choose another driver")
+        self.driver_toggle.setCheckable(True)
+        self.driver_toggle.setAutoRaise(True)
+        self.driver_toggle.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.driver_toggle.setArrowType(Qt.ArrowType.RightArrow)
+        self.driver_toggle.setAccessibleName("Choose another driver")
+        self.driver_toggle.toggled.connect(self._driver_toggled)
+        self.graphics.content.addWidget(self.driver_toggle, 0, Qt.AlignmentFlag.AlignLeft)
+        self.driver_box = QWidget()
+        box = QVBoxLayout(self.driver_box)
+        box.setContentsMargins(0, 0, 0, 0)
+        box.setSpacing(8)
+        self.gpu_driver = ChoiceGroup([(key, key, "", key == "auto") for key in DRIVER_KEYS], columns=2)
+        self.controls["gpu_driver"] = self.gpu_driver
+        self.controls["nvidia_modules"] = self.gpu_driver  # the kernel modules are part of the driver card
+        box.addWidget(self.gpu_driver)
+        self.nvidia_form = self._form()
         self.nvidia_branch = QComboBox()
         self.nvidia_branch.setAccessibleName("NVIDIA driver version")
         self.controls["nvidia_branch"] = self.nvidia_branch
@@ -305,10 +408,15 @@ class HardwareTab(QWidget):
         self.nvidia_branch_label = QLabel("Driver version")
         self.nvidia_branch_label.setBuddy(self.nvidia_branch)
         self.nvidia_form.addRow(self.nvidia_branch_label, self.nvidia_branch)
-        self.graphics.content.addLayout(self.nvidia_form)
+        box.addLayout(self.nvidia_form)
+        self.graphics.content.addWidget(self.driver_box)
         self.forms: dict[str, QFormLayout] = {"graphics": self._form()}
         self.graphics.content.addLayout(self.forms["graphics"])
+        self._add_extras()
         outer.addWidget(self.graphics)
+        self.devices = DevicesCard()
+        self.devices.toggledKey.connect(lambda _key, _checked: self._edited("devices"))
+        outer.addWidget(self.devices)
 
         self.cards: dict[str, Card] = {"graphics": self.graphics}
         for group, title in (("power", "Laptop and power"), ("memory", "Memory and storage"), ("boot", "Boot and firmware"),
@@ -390,6 +498,43 @@ class HardwareTab(QWidget):
             form.addRow(hint)
             self._remember(spec.name, form, hint)
 
+    EXTRA_LABELS = {
+        "vaapi": ("Video decoding on the NVIDIA card", "Uses a testing version of nvidia-vaapi-driver, built on this PC, so the browser can decode video on the card."),
+        "cuda": ("CUDA toolkit", "For programs that compute on the card. A very large download that needs a second licence."),
+        "nvtop": ("nvtop", "A monitor for the card, like top for the processor."),
+        "persistenced": ("Persistence daemon", "Keeps the card ready between programs."),
+    }
+
+    def _add_extras(self) -> None:
+        """The Advanced add-ons of the NVIDIA driver (hardware.nvidia_extras and the second licence of CUDA)."""
+        self.extras_box = QWidget()
+        layout = QVBoxLayout(self.extras_box)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
+        heading = QLabel("NVIDIA add-ons")
+        layout.addWidget(heading)
+        self.extra_checks: dict[str, QCheckBox] = {}
+        for name in NVIDIA_EXTRAS:
+            title, hint = self.EXTRA_LABELS[name]
+            check = QCheckBox(title)
+            check.setAccessibleName(title)
+            check.setAccessibleDescription(hint)
+            check.toggled.connect(lambda _=False: self._edited("nvidia_extras"))
+            self.extra_checks[name] = check
+            layout.addWidget(check)
+            layout.addWidget(wrapped_label(hint, muted=True))
+        self.cuda_license = QCheckBox("I accept the NVIDIA CUDA licence (NVIDIA-CUDA)")
+        self.cuda_license.setAccessibleName("Accept the NVIDIA CUDA licence")
+        self.cuda_license.toggled.connect(lambda _=False: self._edited("nvidia_cuda_license_accepted"))
+        layout.addWidget(self.cuda_license)
+        self.controls["nvidia_extras"] = self.extra_checks["vaapi"]
+        self.controls["nvidia_cuda_license_accepted"] = self.cuda_license
+        self.graphics.content.addWidget(self.extras_box)
+
+    def _driver_toggled(self, opened: bool) -> None:
+        self.driver_toggle.setArrowType(Qt.ArrowType.DownArrow if opened else Qt.ArrowType.RightArrow)
+        self.refresh()
+
     def _add_printers(self, form: QFormLayout) -> None:
         self.printer_checks: dict[str, QCheckBox] = {}
         labels = {"gutenprint": "Epson, Canon and other inkjet printers (Gutenprint)", "hplip": "HP printers (HPLIP)"}
@@ -437,8 +582,8 @@ class HardwareTab(QWidget):
         self._touched.add(name)
         if name == "gpu_driver":
             self._touched.add("nvidia_license_accepted")
-            if self.gpu_driver.value() == "nvidia":
-                # Accepting NVIDIA's licence is its own act: choosing the driver never ticks it, whatever was loaded before.
+            if self.gpu_driver.value() != "auto":
+                # Accepting NVIDIA's licence is its own act: choosing a driver never ticks it, whatever was loaded before.
                 self.nvidia_license.blockSignals(True)
                 self.nvidia_license.setChecked(False)
                 self.nvidia_license.blockSignals(False)
@@ -451,8 +596,12 @@ class HardwareTab(QWidget):
             hardware = self.manifest.hardware
             self._touched.clear()
             self.target.set_value(hardware.target if hardware.target in self.target.cards else "this")
-            self.gpu_driver.set_value("nvidia" if hardware.gpu_driver == "nvidia" else "open")
+            self.devices.clear_touched()
+            self.gpu_driver.set_value(driver_key(hardware, self._flavour()))
             self.nvidia_license.setChecked(hardware.nvidia_license_accepted)
+            for name, check in self.extra_checks.items():
+                check.setChecked(name in hardware.nvidia_extras)
+            self.cuda_license.setChecked(hardware.nvidia_cuda_license_accepted)
             for spec in SPECS:
                 self._load_spec(spec, getattr(hardware, spec.name))
             for name, check in self.printer_checks.items():
@@ -461,6 +610,12 @@ class HardwareTab(QWidget):
         finally:
             self._loading -= 1
         self.refresh()
+
+    def _flavour(self) -> str:
+        """Which kernel modules Automatic means for the NVIDIA driver on this machine (open unless the machine needs the closed ones)."""
+        if not self.detected:
+            return "open"
+        return nvidia_offer(self.manifest, self.profile).flavour or "open"
 
     def _load_spec(self, spec: Spec, value: Any) -> None:
         widget = self.controls[spec.name]
@@ -485,32 +640,49 @@ class HardwareTab(QWidget):
             index = combo.count() - 1
         combo.setCurrentIndex(index)
 
+    LEGACY_BRANCHES = (
+        ("470", "470 (not offered: the last for Kepler cards, removed from Gentoo)"),
+        ("390", "390 (not offered: the last for Fermi cards, removed from Gentoo)"),
+    )
+
     def _fill_branches(self) -> None:
         current = self.manifest.hardware.nvidia_branch
         self.nvidia_branch.clear()
         self.nvidia_branch.addItem("Automatic", "auto")
         for branch, details in hardware_data.NVIDIA_BRANCHES.items():
             self.nvidia_branch.addItem(str(details["label"]), branch)
+        for branch, label in self.LEGACY_BRANCHES:  # greyed with the reason; 535 is not listed at all
+            self.nvidia_branch.addItem(label, branch)
+            index = self.nvidia_branch.count() - 1
+            item = self.nvidia_branch.model().item(index)  # type: ignore[attr-defined]
+            if item is not None:
+                item.setEnabled(False)
+            self.nvidia_branch.setItemData(index, "This version is no longer in Gentoo and cannot be installed here; the open nouveau driver supports these cards.",
+                                           Qt.ItemDataRole.ToolTipRole)
         self._select(self.nvidia_branch, current, current)
 
     def save_manifest(self) -> None:
         """Write back only what the user changed on this page."""
         self._write(self.manifest.hardware)
         self._touched.clear()
+        self.devices.clear_touched()
 
     def _write(self, hardware: Hardware) -> None:
         for name in sorted(self._touched):
             if name == "target":
                 hardware.target = self.target.value() or hardware.target
             elif name == "gpu_driver":
-                if self.gpu_driver.value() == "nvidia":
-                    hardware.gpu_driver = "nvidia"
-                elif hardware.gpu_driver == "nvidia":
-                    hardware.gpu_driver = "open"
+                hardware.gpu_driver, hardware.nvidia_modules = driver_settings(self.gpu_driver.value() or "auto")
             elif name == "nvidia_license_accepted":
-                hardware.nvidia_license_accepted = self.nvidia_license.isChecked() and self.gpu_driver.value() == "nvidia"
+                hardware.nvidia_license_accepted = self.nvidia_license.isChecked() and self.gpu_driver.value() in ("auto", "open", "closed")
             elif name == "nvidia_branch":
                 hardware.nvidia_branch = str(self.nvidia_branch.currentData() or "auto")
+            elif name == "nvidia_extras":
+                hardware.nvidia_extras = [extra for extra in NVIDIA_EXTRAS if self.extra_checks[extra].isChecked()]
+            elif name == "nvidia_cuda_license_accepted":
+                hardware.nvidia_cuda_license_accepted = self.cuda_license.isChecked()
+            elif name == "devices":
+                hardware.devices = {**hardware.devices, **self.devices.touched}
             elif name == "printer_drivers":
                 hardware.printer_drivers = [driver for driver, check in sorted(self.printer_checks.items()) if check.isChecked()]
             elif name in SPEC_BY_NAME:
@@ -524,6 +696,8 @@ class HardwareTab(QWidget):
             return widget.value()
         assert isinstance(widget, QComboBox)
         item = str(widget.currentData())
+        if spec.name == "battery_charge_limit":
+            return int(item)
         if spec.name == "hidpi" and item == "custom":
             custom = self.controls["hidpi_custom"]
             return f"dpi:{custom.value()}" if isinstance(custom, QSpinBox) else "auto"
@@ -548,7 +722,10 @@ class HardwareTab(QWidget):
         self._offer = nvidia_offer(working, profile) if self.detected else NvidiaOffer(False, False)
         self._refresh_texts(profile, working, plan)
         self._refresh_auto_labels(scalars)
+        self._refresh_graphics(profile, working)
         self._refresh_visibility(profile, scalars, working)
+        offers = devices_module.device_offers(profile, working) if self.detected else []
+        self.devices.set_offers(offers, devices_module.wanted(working, offers), self.advanced)
 
     def _refresh_texts(self, profile: HardwareProfile, working: InstallManifest, plan: Any) -> None:
         if self.detected:
@@ -585,28 +762,55 @@ class HardwareTab(QWidget):
                 text = resolved_text(spec.name, scalars)
                 widget.setItemText(index, f"{AUTO} ({text})" if text else AUTO)
 
-    def _refresh_visibility(self, profile: HardwareProfile, scalars: dict[str, Any], working: InstallManifest) -> None:
+    def _refresh_graphics(self, profile: HardwareProfile, working: InstallManifest) -> None:
+        """The driver cards, the recommendation, the licence and the version: what the planner says for this machine and these choices."""
         offer = self._offer
-        chosen_nvidia = self.gpu_driver.value() == "nvidia"
-        self.gpu_driver.set_card_enabled("nvidia", offer.available or chosen_nvidia, " ".join(offer.reasons) or "Not available on this computer.")
-        self.gpu_driver.cards["nvidia"].setVisible(offer.visible or chosen_nvidia)
-        reasons = " ".join(offer.reasons) if offer.visible or chosen_nvidia else ""
-        self.nvidia_reason.setText(reasons if not offer.available else "")
-        self.nvidia_reason.setVisible(bool(self.nvidia_reason.text()))
-        self.nvidia_license.setText(f"I accept the NVIDIA Software License (Portage licence {offer.licence or 'NVIDIA-2025'})")
-        self.nvidia_license.setVisible(chosen_nvidia)
-        show_branch = chosen_nvidia and (self.advanced or working.hardware.nvidia_branch != "auto")
+        key = self.gpu_driver.value() or "auto"
+        chosen_nvidia = key in ("open", "closed")
+        relevant = offer.visible or chosen_nvidia
+        for card in driver_cards(working, profile) if self.detected else [DriverCard(name, name, "", name in ("auto", "nouveau", "basic")) for name in DRIVER_KEYS]:
+            widget = self.gpu_driver.cards[card.key]
+            if card.title != card.key:
+                widget.title_label.setText(card.title)
+                widget.description_label.setText(card.description)
+                widget.setAccessibleName(card.title)
+                widget.setAccessibleDescription(card.description)
+            self.gpu_driver.set_card_enabled(card.key, card.available or card.key == key, card.reason)
+            widget.setVisible(card.key not in ("open", "closed") or relevant)
+        guided_open = self.driver_toggle.isChecked()
+        self.driver_toggle.setVisible(not self.advanced and relevant)
+        self.driver_box.setVisible(self.advanced or guided_open or key != "auto")
+        self.nvidia_license.setText(f"I accept the NVIDIA Software License ({offer.licence or 'NVIDIA-2025'})")
+        self.nvidia_license.setVisible(relevant and (offer.available or chosen_nvidia) and key in ("auto", "open", "closed"))
+        self.license_note.setVisible(self.nvidia_license.isVisibleTo(self.graphics))
+        recommended = relevant and offer.available and key in ("auto", "open", "closed")
+        self.recommendation.setText(offer.recommendation if recommended else "")
+        self.recommendation.setVisible(recommended and bool(offer.recommendation))
+        reasons = " ".join(offer.reasons) if relevant and not offer.available and key in ("auto", "open", "closed") else ""
+        self.nvidia_reason.setText(reasons)
+        self.nvidia_reason.setVisible(bool(reasons))
+        show_branch = relevant and key in ("auto", "open", "closed") and (self.advanced or working.hardware.nvidia_branch != "auto")
         self.nvidia_branch.setVisible(show_branch)
         self.nvidia_branch_label.setVisible(show_branch)
+        self.extras_box.setVisible(self.advanced and relevant and offer.available)
+        cuda = self.extra_checks["cuda"].isChecked()
+        self.cuda_license.setVisible(self.advanced and relevant and offer.available and cuda)
         self.graphics.setVisible(bool(profile.gpus) or offer.visible or not self.detected)
 
+    def _refresh_visibility(self, profile: HardwareProfile, scalars: dict[str, Any], working: InstallManifest) -> None:
         mobile = profile.machine.form_factor in ("laptop", "tablet")
+        nvidia_active = scalars.get("gpu_driver") == "nvidia"
         nvidia_present = any(gpu.vendor == "nvidia" and not gpu.virtual for gpu in profile.gpus)
         dense = max((display.dpi for display in profile.displays), default=0) > DENSE_SCREEN_DPI
         unknown = not self.detected
         vm = bool(profile.machine.hypervisor)
         relevant = {
-            "nvk": nvidia_present and not chosen_nvidia,
+            "nvk": nvidia_present and not nvidia_active,
+            "safe_graphics_entry": nvidia_active,
+            "nvidia_rtd3": nvidia_active and bool(scalars.get("hybrid")) and mobile,
+            "battery_charge_limit": mobile or unknown,
+            "lid_action": mobile or unknown,
+            "vendor_workarounds": profile.machine.vendor_family == "razer" and profile.machine.oem == "blade",
             "prime": bool(scalars.get("hybrid")),
             "power": mobile or unknown,
             "thermald": profile.cpu.vendor in ("intel", "") and (mobile or unknown),

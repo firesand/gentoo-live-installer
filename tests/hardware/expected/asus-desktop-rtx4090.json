@@ -4,7 +4,13 @@
  "scenarios": {
   "kde-openrc": {
    "description": "the GUI defaults (KDE, OpenRC, binary packages)",
-   "issues": [],
+   "issues": [
+    {
+     "code": "hw.nvidia_skipped",
+     "message": "The NVIDIA driver is available for NVIDIA GeForce RTX 4090, but its licence has not been accepted, so the open nouveau driver is used. Accept the licence on the Hardware page to use the NVIDIA driver.",
+     "severity": "info"
+    }
+   ],
    "plan": {
     "driver_atoms": [],
     "early_atoms": [
@@ -18,10 +24,21 @@
       493
      ]
     ],
+    "first_steps": [
+     "Razer devices: open RazerGenie to choose colours and DPI. You were added to the group plugdev; log out and in once so it applies."
+    ],
+    "groups": [
+     "plugdev"
+    ],
     "kernel_cmdline": [],
     "make_conf": {},
-    "notes": [],
-    "optional_atoms": [],
+    "notes": [
+     "OpenRazer is built on this PC against your kernel; a kernel update rebuilds it. If the build fails the system still starts without it."
+    ],
+    "optional_atoms": [
+     "sys-apps/openrazer",
+     "sys-apps/razergenie"
+    ],
     "optional_services": [],
     "package_license": {
      "sys-firmware/intel-microcode": [
@@ -36,6 +53,9 @@
      "media-video/pipewire": [
       "sound-server"
      ],
+     "sys-apps/openrazer": [
+      "dist-kernel"
+     ],
      "sys-firmware/intel-microcode": [
       "initramfs"
      ],
@@ -44,6 +64,11 @@
      ]
     },
     "post_steps": [
+     [
+      "sh",
+      "-c",
+      "if [ -f /usr/share/openrazer/openrazer-daemon.desktop ]; then mkdir -p /etc/xdg/autostart && ln -sf /usr/share/openrazer/openrazer-daemon.desktop /etc/xdg/autostart/openrazer-daemon.desktop; fi; exit 0"
+     ],
      [
       "sh",
       "-c",
@@ -63,8 +88,10 @@
       "Wi-Fi",
       "Bluetooth"
      ],
+     "first_user": "gentoo",
      "form_factor": "desktop",
      "gpu_driver": "open",
+     "gpu_mode": "nouveau",
      "gpu_vendors": [
       "nvidia"
      ],
@@ -76,6 +103,7 @@
      "luks_allow_discards": false,
      "microcode": "intel",
      "nvidia_branch": "",
+     "nvidia_reason": "Recommended for NVIDIA GeForce RTX 4090: the NVIDIA driver (version 595) with open kernel modules.",
      "nvk": "no",
      "power": "none",
      "prime": "off",
@@ -90,12 +118,18 @@
     "services": [],
     "summary": [
      "CPU: Intel Core i9-14900K, 32 threads; Intel microcode",
-     "Graphics: NVIDIA GeForce RTX 4090 - open driver (nouveau)",
+     "Graphics: NVIDIA GeForce RTX 4090 - open driver (nouveau; the NVIDIA driver is used once you accept its licence)",
      "Firmware: Linux firmware (NVIDIA GPU system processor firmware, Wi-Fi, Bluetooth)",
      "Storage: weekly TRIM for the solid-state disk (cron)",
      "Boot: fallback boot path is always written"
     ],
-    "warnings": []
+    "warnings": [
+     {
+      "code": "hw.nvidia_skipped",
+      "message": "The NVIDIA driver is available for NVIDIA GeForce RTX 4090, but its licence has not been accepted, so the open nouveau driver is used. Accept the licence on the Hardware page to use the NVIDIA driver.",
+      "severity": "info"
+     }
+    ]
    }
   },
   "nvidia-this": {
@@ -116,17 +150,27 @@
       493
      ]
     ],
-    "kernel_cmdline": [
-     "nvidia-drm.modeset=1",
-     "nvidia-drm.fbdev=1"
+    "first_steps": [
+     "If the screen stays black after an update, choose the boot menu entry that says safe graphics; it starts without the NVIDIA driver.",
+     "The NVIDIA modules are rebuilt by emerge after every kernel update (USE=dist-kernel). If an update reports that the build failed, run: emerge --ask @module-rebuild",
+     "Razer devices: open RazerGenie to choose colours and DPI. You were added to the group plugdev; log out and in once so it applies."
     ],
+    "groups": [
+     "plugdev"
+    ],
+    "kernel_cmdline": [],
     "make_conf": {
      "VIDEO_CARDS": "${VIDEO_CARDS} nvidia"
     },
     "notes": [
-     "NVIDIA proprietary driver 595 (current, open kernel modules); if it fails to build, the open nouveau driver stays in use."
+     "NVIDIA proprietary driver 595 (current, open kernel modules); if it fails to build, the open nouveau driver stays in use.",
+     "The NVIDIA driver is not on the binary host: it is downloaded from download.nvidia.com and compiled on this PC, which adds several minutes and needs internet access to that address.",
+     "OpenRazer is built on this PC against your kernel; a kernel update rebuilds it. If the build fails the system still starts without it."
     ],
-    "optional_atoms": [],
+    "optional_atoms": [
+     "sys-apps/openrazer",
+     "sys-apps/razergenie"
+    ],
     "optional_services": [],
     "package_license": {
      "sys-firmware/intel-microcode": [
@@ -144,6 +188,9 @@
      "media-video/pipewire": [
       "sound-server"
      ],
+     "sys-apps/openrazer": [
+      "dist-kernel"
+     ],
      "sys-firmware/intel-microcode": [
       "initramfs"
      ],
@@ -160,6 +207,19 @@
       "sh",
       "-c",
       "if [ -f /etc/modprobe.d/nvidia.conf ]; then dracut --force --regenerate-all; fi"
+     ],
+     [
+      "sh",
+      "-c",
+      "if [ ! -f /etc/modprobe.d/nvidia.conf ] && [ -d \"/home/$1\" ]; then printf \"%s\\n\" \"$2\" >> \"/home/$1/first-steps.txt\"; chown \"$1:$(id -gn \"$1\")\" \"/home/$1/first-steps.txt\"; fi; exit 0",
+      "sh",
+      "gentoo",
+      "The NVIDIA driver could not be installed during the installation, so this PC runs on the open nouveau driver. To try again once the network works: emerge --ask x11-drivers/nvidia-drivers && dracut --force --regenerate-all (the driver is downloaded from download.nvidia.com and compiled on this PC)."
+     ],
+     [
+      "sh",
+      "-c",
+      "if [ -f /usr/share/openrazer/openrazer-daemon.desktop ]; then mkdir -p /etc/xdg/autostart && ln -sf /usr/share/openrazer/openrazer-daemon.desktop /etc/xdg/autostart/openrazer-daemon.desktop; fi; exit 0"
      ],
      [
       "sh",
@@ -184,8 +244,10 @@
       "Wi-Fi",
       "Bluetooth"
      ],
+     "first_user": "gentoo",
      "form_factor": "desktop",
      "gpu_driver": "nvidia",
+     "gpu_mode": "nvidia",
      "gpu_vendors": [
       "nvidia"
      ],
@@ -197,10 +259,21 @@
      "luks_allow_discards": false,
      "microcode": "intel",
      "nvidia_branch": "595",
+     "nvidia_flavour": "open",
+     "nvidia_reason": "Recommended for NVIDIA GeForce RTX 4090: the NVIDIA driver (version 595) with open kernel modules.",
+     "nvidia_rtd3": "off",
      "nvk": "no",
      "power": "none",
      "prime": "off",
      "removable_fallback": "always",
+     "safe_graphics": {
+      "cmdline": [
+       "nomodeset",
+       "modprobe.blacklist=nvidia,nvidia_drm,nvidia_modeset,nvidia_uvm,nouveau",
+       "rd.driver.blacklist=nvidia,nvidia_drm,nvidia_modeset,nvidia_uvm,nouveau"
+      ],
+      "title": "Gentoo Linux (safe graphics)"
+     },
      "sof_firmware": "no",
      "target": "this",
      "thermald": "no",
@@ -231,16 +304,18 @@
      "sys-kernel/linux-firmware"
     ],
     "files": [],
-    "kernel_cmdline": [
-     "nvidia-drm.modeset=1",
-     "nvidia-drm.fbdev=1"
+    "first_steps": [
+     "If the screen stays black after an update, choose the boot menu entry that says safe graphics; it starts without the NVIDIA driver.",
+     "The NVIDIA modules are rebuilt by emerge after every kernel update (USE=dist-kernel). If an update reports that the build failed, run: emerge --ask @module-rebuild"
     ],
+    "kernel_cmdline": [],
     "make_conf": {
      "VIDEO_CARDS": "${VIDEO_CARDS} nvidia"
     },
     "notes": [
      "Portable install: both Intel and AMD microcode are installed.",
-     "NVIDIA proprietary driver 595 (current, open kernel modules); if it fails to build, the open nouveau driver stays in use."
+     "NVIDIA proprietary driver 595 (current, open kernel modules); if it fails to build, the open nouveau driver stays in use.",
+     "The NVIDIA driver is not on the binary host: it is downloaded from download.nvidia.com and compiled on this PC, which adds several minutes and needs internet access to that address."
     ],
     "optional_atoms": [
      "sys-firmware/sof-firmware"
@@ -283,6 +358,14 @@
      [
       "sh",
       "-c",
+      "if [ ! -f /etc/modprobe.d/nvidia.conf ] && [ -d \"/home/$1\" ]; then printf \"%s\\n\" \"$2\" >> \"/home/$1/first-steps.txt\"; chown \"$1:$(id -gn \"$1\")\" \"/home/$1/first-steps.txt\"; fi; exit 0",
+      "sh",
+      "gentoo",
+      "The NVIDIA driver could not be installed during the installation, so this PC runs on the open nouveau driver. To try again once the network works: emerge --ask x11-drivers/nvidia-drivers && dracut --force --regenerate-all (the driver is downloaded from download.nvidia.com and compiled on this PC)."
+     ],
+     [
+      "sh",
+      "-c",
       "if getent group pipewire >/dev/null; then usermod -aG pipewire \"$1\"; fi; exit 0",
       "sh",
       "gentoo"
@@ -304,8 +387,10 @@
       "Wi-Fi",
       "Bluetooth"
      ],
+     "first_user": "gentoo",
      "form_factor": "desktop",
      "gpu_driver": "nvidia",
+     "gpu_mode": "nvidia",
      "gpu_vendors": [
       "nvidia"
      ],
@@ -317,10 +402,21 @@
      "luks_allow_discards": false,
      "microcode": "both",
      "nvidia_branch": "595",
+     "nvidia_flavour": "open",
+     "nvidia_reason": "Recommended for NVIDIA GeForce RTX 4090: the NVIDIA driver (version 595) with open kernel modules.",
+     "nvidia_rtd3": "off",
      "nvk": "no",
      "power": "none",
      "prime": "off",
      "removable_fallback": "always",
+     "safe_graphics": {
+      "cmdline": [
+       "nomodeset",
+       "modprobe.blacklist=nvidia,nvidia_drm,nvidia_modeset,nvidia_uvm,nouveau",
+       "rd.driver.blacklist=nvidia,nvidia_drm,nvidia_modeset,nvidia_uvm,nouveau"
+      ],
+      "title": "Gentoo Linux (safe graphics)"
+     },
      "sof_firmware": "yes",
      "target": "portable",
      "thermald": "no",
@@ -341,7 +437,13 @@
   },
   "xfce-systemd-source": {
    "description": "Xfce on systemd, everything built from source",
-   "issues": [],
+   "issues": [
+    {
+     "code": "hw.nvidia_skipped",
+     "message": "The NVIDIA driver is available for NVIDIA GeForce RTX 4090, but its licence has not been accepted, so the open nouveau driver is used. Accept the licence on the Hardware page to use the NVIDIA driver.",
+     "severity": "info"
+    }
+   ],
    "plan": {
     "driver_atoms": [],
     "early_atoms": [
@@ -349,13 +451,24 @@
      "sys-kernel/linux-firmware"
     ],
     "files": [],
+    "first_steps": [
+     "Razer devices: open Polychromatic to choose colours and DPI. You were added to the group plugdev; log out and in once so it applies."
+    ],
+    "groups": [
+     "plugdev"
+    ],
     "kernel_cmdline": [],
     "make_conf": {
      "CPU_FLAGS_X86": "aes avx avx2 avx_vnni bmi1 bmi2 f16c fma3 mmx mmxext pclmul popcnt rdrand sha sse sse2 sse3 sse4_1 sse4_2 ssse3 vpclmulqdq",
      "VIDEO_CARDS": "nouveau nvk"
     },
-    "notes": [],
-    "optional_atoms": [],
+    "notes": [
+     "OpenRazer is built on this PC against your kernel; a kernel update rebuilds it. If the build fails the system still starts without it."
+    ],
+    "optional_atoms": [
+     "sys-apps/openrazer",
+     "sys-apps/polychromatic"
+    ],
     "optional_services": [],
     "package_license": {
      "sys-firmware/intel-microcode": [
@@ -373,6 +486,9 @@
      "media-video/pipewire": [
       "sound-server"
      ],
+     "sys-apps/openrazer": [
+      "dist-kernel"
+     ],
      "sys-firmware/intel-microcode": [
       "initramfs"
      ],
@@ -381,6 +497,11 @@
      ]
     },
     "post_steps": [
+     [
+      "sh",
+      "-c",
+      "if [ -f /usr/share/openrazer/openrazer-daemon.desktop ]; then mkdir -p /etc/xdg/autostart && ln -sf /usr/share/openrazer/openrazer-daemon.desktop /etc/xdg/autostart/openrazer-daemon.desktop; fi; exit 0"
+     ],
      [
       "sh",
       "-c",
@@ -400,8 +521,10 @@
       "Wi-Fi",
       "Bluetooth"
      ],
+     "first_user": "gentoo",
      "form_factor": "desktop",
      "gpu_driver": "open",
+     "gpu_mode": "nouveau",
      "gpu_vendors": [
       "nvidia"
      ],
@@ -413,6 +536,7 @@
      "luks_allow_discards": false,
      "microcode": "intel",
      "nvidia_branch": "",
+     "nvidia_reason": "Recommended for NVIDIA GeForce RTX 4090: the NVIDIA driver (version 595) with open kernel modules.",
      "nvk": "yes",
      "power": "none",
      "prime": "off",
@@ -433,12 +557,36 @@
     "summary": [
      "CPU: Intel Core i9-14900K, 32 threads; Intel microcode",
      "CPU flags: tuned for this CPU (packages are built, not downloaded)",
-     "Graphics: NVIDIA GeForce RTX 4090 - open driver (nouveau + NVK)",
+     "Graphics: NVIDIA GeForce RTX 4090 - open driver (nouveau + NVK; the NVIDIA driver is used once you accept its licence)",
      "Firmware: Linux firmware (NVIDIA GPU system processor firmware, Wi-Fi, Bluetooth)",
      "Storage: weekly TRIM for the solid-state disk (fstrim.timer)",
      "Boot: fallback boot path is always written"
     ],
-    "warnings": []
+    "user_services": [
+     [
+      "openrazer-daemon.service",
+      "service"
+     ],
+     [
+      "pipewire.socket",
+      "socket"
+     ],
+     [
+      "pipewire-pulse.socket",
+      "socket"
+     ],
+     [
+      "wireplumber.service",
+      "service"
+     ]
+    ],
+    "warnings": [
+     {
+      "code": "hw.nvidia_skipped",
+      "message": "The NVIDIA driver is available for NVIDIA GeForce RTX 4090, but its licence has not been accepted, so the open nouveau driver is used. Accept the licence on the Hardware page to use the NVIDIA driver.",
+      "severity": "info"
+     }
+    ]
    }
   }
  }

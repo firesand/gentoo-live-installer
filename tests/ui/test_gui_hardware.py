@@ -16,7 +16,7 @@ from gentoo_installer.pages import dialogs, hardware as hardware_page
 from gentoo_installer.pages.hardware import HardwareTab, covered_fields, issue_section, nvidia_offer, plan_lines, resolved_text
 from gentoo_installer.pages.review import blocking_problems, storage_plan_text
 from gentoo_installer.system_info import DiskInfo, SystemInfo, profile_of
-from tests.hardware.helpers import FIXTURE_NAMES, fixture_dict
+from tests.hardware.helpers import FIXTURE_NAMES, fixture_dict, untouched_hardware
 from tests.ui.conftest import sample_info
 
 GIB = 1024**3
@@ -62,10 +62,9 @@ def pick(widget: QComboBox, value: str) -> None:
 
 # --- every manifest.hardware field has a control -----------------------------------------------------------------------------------
 
+# Wave 5 fields whose control a later step adds; the owner of a control removes the name here (the test then keeps it covered). All have one now.
 
-# Wave 5 fields whose control a later step adds; the owner of a control removes the name here (the test then keeps it covered).
-WAVE5_FIELDS_WITHOUT_CONTROL = {"nvidia_modules", "safe_graphics_entry", "nvidia_rtd3", "nvidia_extras", "nvidia_cuda_license_accepted",
-                                "signed_modules", "devices", "battery_charge_limit", "lid_action", "vendor_workarounds"}
+WAVE5_FIELDS_WITHOUT_CONTROL: set[str] = set()
 
 
 def test_every_hardware_field_has_a_control_and_every_choice_a_label():
@@ -107,7 +106,7 @@ def test_default_choices_stay_on_auto_after_a_visit(make_window, name):
     window = make_window(info=machine(name) if name else sample_info())
     tab_of(window)
     window.customize.save_manifest()
-    assert window.manifest.hardware == Hardware()
+    assert window.manifest.hardware == untouched_hardware(window.manifest)
 
 
 def test_without_detection_the_tab_says_so_and_keeps_automatic(make_window):
@@ -133,21 +132,27 @@ def test_the_summary_line_and_the_plan_come_from_the_detected_machine(make_windo
 def test_the_nvidia_driver_is_offered_only_where_the_planner_says_it_fits(make_window):
     desktop = make_window(info=machine("asus-desktop-rtx4090"))
     tab = tab_of(desktop)
-    assert tab.gpu_driver.cards["nvidia"].isVisibleTo(tab) and tab.gpu_driver.cards["nvidia"].isEnabled()
+    # Guided: one recommended card with the licence box; the other drivers wait behind "Choose another driver"
+    assert tab.recommendation.isVisibleTo(tab) and "GeForce RTX 4090" in tab.recommendation.text() and "open kernel modules" in tab.recommendation.text()
+    assert tab.nvidia_license.isVisibleTo(tab) and tab.driver_toggle.isVisibleTo(tab) and not tab.driver_box.isVisibleTo(tab)
+    assert tab.gpu_driver.cards["open"].isEnabled() and tab.gpu_driver.value() == "auto"
     offer = nvidia_offer(desktop.manifest, profile_of(desktop.info.hardware))
-    assert offer.available and offer.branch == "595" and offer.licence == "NVIDIA-2025"
-    # no NVIDIA card in this computer: the choice is not shown at all
+    assert offer.available and offer.branch == "595" and offer.licence == "NVIDIA-2025" and offer.flavour == "open"
+    # no NVIDIA card in this computer: nothing about NVIDIA is shown at all
     radeon = make_window(info=machine("old-bios-sata-radeon"))
     tab = tab_of(radeon)
-    assert not tab.gpu_driver.cards["nvidia"].isVisibleTo(tab)
+    assert not tab.recommendation.isVisibleTo(tab) and not tab.driver_toggle.isVisibleTo(tab) and not tab.driver_box.isVisibleTo(tab)
+    assert not tab.nvidia_license.isVisibleTo(tab) and not tab.gpu_driver.cards["open"].isVisibleTo(tab)
     assert not nvidia_offer(radeon.manifest, profile_of(radeon.info.hardware)).available
-    # an old card that no proprietary branch supports is shown with the reason, but cannot be picked
+    # an old card that no proprietary branch supports is shown with the reason, and neither NVIDIA card can be picked
     old = machine("asus-desktop-rtx4090")
     old.hardware["gpus"][0]["generation"] = "kepler"
     kepler = make_window(info=old)
+    kepler.mode.setCurrentIndex(1)
     tab = tab_of(kepler)
-    assert tab.gpu_driver.cards["nvidia"].isVisibleTo(tab) and not tab.gpu_driver.cards["nvidia"].isEnabled()
-    assert "not supported" in tab.nvidia_reason.text()
+    assert not tab.recommendation.isVisibleTo(tab) and "not supported" in tab.nvidia_reason.text()
+    assert not tab.gpu_driver.cards["open"].isEnabled() and not tab.gpu_driver.cards["closed"].isEnabled()
+    assert tab.gpu_driver.cards["nouveau"].isEnabled()
 
 
 def test_maxwell_cards_get_the_long_term_branch(make_window):
@@ -159,27 +164,43 @@ def test_maxwell_cards_get_the_long_term_branch(make_window):
 def test_nvidia_needs_the_licence_checkbox_and_a_distribution_kernel(make_window):
     window = make_window(info=machine("asus-desktop-rtx4090"))
     tab = tab_of(window)
-    assert not tab.nvidia_license.isVisibleTo(tab)
-    tab.gpu_driver.set_value("nvidia")
-    assert tab.nvidia_license.isVisibleTo(tab) and "NVIDIA-2025" in tab.nvidia_license.text()
+    assert tab.nvidia_license.isVisibleTo(tab) and "NVIDIA-2025" in tab.nvidia_license.text() and not tab.nvidia_license.isChecked()
+    assert tab.problems() == []                                  # Automatic without the tick is just nouveau
+    tab.gpu_driver.set_value("open")                             # choosing the NVIDIA card by hand needs the tick
     assert "licence" in " ".join(tab.problems())
     tab.nvidia_license.setChecked(True)
     assert tab.problems() == []
     window.customize.save_manifest()
-    assert (window.manifest.hardware.gpu_driver, window.manifest.hardware.nvidia_license_accepted) == ("nvidia", True)
+    assert (window.manifest.hardware.gpu_driver, window.manifest.hardware.nvidia_modules, window.manifest.hardware.nvidia_license_accepted) == ("nvidia", "open", True)
     assert window.customize.validate_page() == (True, "")
     # switching back to the open driver forgets the licence
-    tab.gpu_driver.set_value("open")
+    tab.gpu_driver.set_value("nouveau")
     window.customize.save_manifest()
-    assert (window.manifest.hardware.gpu_driver, window.manifest.hardware.nvidia_license_accepted) == ("nouveau", False)  # the card "open" stores the saved name "nouveau"
+    assert (window.manifest.hardware.gpu_driver, window.manifest.hardware.nvidia_license_accepted) == ("nouveau", False)
+
+
+def test_ticking_the_licence_under_automatic_is_all_a_newcomer_does(make_window):
+    window = make_window(info=machine("asus-desktop-rtx4090"))
+    tab = tab_of(window)
+    assert "once you accept its licence" in " ".join(plan_lines(hardware_page.hardware_plan(tab.working_manifest(), window.info.hardware)))
+    tab.nvidia_license.setChecked(True)
+    window.customize.save_manifest()
+    hardware = window.manifest.hardware
+    assert (hardware.gpu_driver, hardware.nvidia_modules, hardware.nvidia_license_accepted) == ("auto", "auto", True)
+    plan = hardware_page.hardware_plan(window.manifest, window.info.hardware)
+    assert plan.driver_atoms == ["x11-drivers/nvidia-drivers"] and plan.scalars["nvidia_flavour"] == "open"
+    assert "NVIDIA proprietary driver 595" in tab.plan_text.text()
 
 
 def test_nvidia_with_secure_boot_is_not_available_and_says_why(make_window):
     manifest = InstallManifest()
     manifest.system.secure_boot = True
     window = make_window(manifest=manifest, info=machine("asus-desktop-rtx4090"))
+    window.mode.setCurrentIndex(1)
     tab = tab_of(window)
-    assert not tab.gpu_driver.cards["nvidia"].isEnabled() and "Secure Boot" in tab.nvidia_reason.text()
+    assert not tab.gpu_driver.cards["open"].isEnabled() and not tab.gpu_driver.cards["closed"].isEnabled()
+    assert "Secure Boot" in tab.nvidia_reason.text() and "unsigned" not in tab.nvidia_reason.text().replace("no signature", "") or "signature" in tab.nvidia_reason.text()
+    assert not tab.recommendation.isVisibleTo(tab) and not tab.nvidia_license.isVisibleTo(tab)
 
 
 def test_a_loaded_nvidia_choice_that_cannot_work_here_is_refused_not_replaced(make_window):
@@ -188,7 +209,7 @@ def test_a_loaded_nvidia_choice_that_cannot_work_here_is_refused_not_replaced(ma
     manifest.hardware.nvidia_license_accepted = True
     window = make_window(manifest=manifest, info=machine("old-bios-sata-radeon"))
     tab = tab_of(window)
-    assert tab.gpu_driver.value() == "nvidia"
+    assert tab.gpu_driver.value() == "open" and tab.driver_box.isVisibleTo(tab)     # a loaded choice is never hidden
     valid, message = window.customize.validate_page()
     assert not valid and "NVIDIA" in message
     window.customize.save_manifest()
@@ -351,7 +372,7 @@ def test_the_first_inspection_seeds_what_the_machine_suggests(make_window):
     assert options.microcode is False  # the hypervisor owns the microcode
     assert options.bluetooth is False  # no radio in a virtual machine
     assert storage.swap_mib == 2048  # 4 GiB of memory with compressed RAM swap
-    assert window.manifest.hardware == Hardware()  # the hardware choices themselves stay on automatic
+    assert window.manifest.hardware == untouched_hardware(window.manifest)  # the hardware choices themselves stay on automatic
 
 
 def test_explicit_values_are_never_replaced_by_the_seeding(make_window):
@@ -652,7 +673,7 @@ def test_choosing_the_nvidia_driver_never_ticks_the_licence_for_the_user(make_wi
     window = make_window(manifest=manifest, info=machine("asus-desktop-rtx4090"))
     tab = tab_of(window)
     assert tab.nvidia_license.isChecked()  # shown as loaded
-    tab.gpu_driver.set_value("nvidia")
+    tab.gpu_driver.set_value("open")
     assert not tab.nvidia_license.isChecked()
     assert any("licence" in problem for problem in tab.problems())
 
@@ -682,7 +703,7 @@ def test_the_review_names_the_target_and_the_graphics_driver(make_window):
     rows = summary_rows(window)
     assert rows["Installed for"] == "This computer" and rows["Graphics driver"] == "NVIDIA proprietary driver 595"
     window.manifest.hardware.target = "portable"
-    window.manifest.hardware.gpu_driver = "auto"
+    window.manifest.hardware.gpu_driver, window.manifest.hardware.nvidia_license_accepted = "auto", False
     window._show_page(5)
     window._show_page(6)
     rows = summary_rows(window)
@@ -695,3 +716,214 @@ def test_the_review_names_the_target_and_the_graphics_driver(make_window):
     plain = make_window()
     plain._show_page(6)
     assert summary_rows(plain)["Graphics driver"] == "Open-source driver"
+
+
+
+# --- G01: the NVIDIA driver cards ----------------------------------------------------------------------------------------------------------
+
+
+def card_texts(tab: HardwareTab) -> dict[str, tuple[bool, bool, str]]:
+    """key -> (shown, enabled, title) of the driver cards."""
+    return {key: (card.isVisibleTo(tab), card.isEnabled(), card.title_label.text()) for key, card in tab.gpu_driver.cards.items()}
+
+
+def test_guided_shows_one_recommended_card_and_the_expander_opens_the_rest(make_window):
+    window = make_window(info=machine("asus-desktop-rtx4090"))
+    tab = tab_of(window)
+    assert tab.recommendation.text().startswith("Recommended for NVIDIA GeForce RTX 4090: the NVIDIA driver (version 595) with open kernel modules")
+    assert not tab.driver_box.isVisibleTo(tab) and not tab.nvidia_branch.isVisibleTo(tab) and not tab.extras_box.isVisibleTo(tab)
+    tab.driver_toggle.setChecked(True)
+    shown = card_texts(tab)
+    assert [key for key, (visible, _enabled, _title) in shown.items() if visible] == ["auto", "open", "closed", "nouveau", "basic"]
+    assert all(enabled for _visible, enabled, _title in shown.values())
+    assert shown["closed"][2] == "NVIDIA, closed kernel modules (version 580)"
+
+
+def test_a_pascal_card_gets_the_closed_modules_and_the_open_ones_are_refused(make_window):
+    window = make_window(info=machine("intel-rst-hidden-nvme"))
+    tab = tab_of(window)
+    assert "driver 580" in tab.recommendation.text() and "closed kernel modules" in tab.recommendation.text() and "last NVIDIA driver" in tab.recommendation.text()
+    tab.driver_toggle.setChecked(True)
+    shown = card_texts(tab)
+    assert shown["closed"][1] and not shown["open"][1]
+    assert "open kernel modules need" in tab.gpu_driver.cards["open"].toolTip()
+
+
+def test_a_blackwell_card_only_has_the_open_modules(make_window):
+    info = machine("asus-desktop-rtx4090")
+    info.hardware["gpus"][0]["generation"] = "blackwell"
+    tab = tab_of(make_window(info=info))
+    tab.driver_toggle.setChecked(True)
+    shown = card_texts(tab)
+    assert shown["open"][1] and not shown["closed"][1]
+    assert "Blackwell" in tab.gpu_driver.cards["closed"].toolTip() and "open" in tab.gpu_driver.cards["closed"].toolTip()
+
+
+def test_a_kepler_card_is_left_to_nouveau_in_every_view(make_window):
+    info = machine("asus-desktop-rtx4090")
+    info.hardware["gpus"][0]["generation"] = "kepler"
+    for index in (0, 1):
+        window = make_window(info=info)
+        window.mode.setCurrentIndex(index)
+        tab = tab_of(window)
+        shown = card_texts(tab)
+        assert not shown["open"][1] and not shown["closed"][1] and shown["nouveau"][1] and shown["auto"][1]
+        assert "too old" in tab.gpu_driver.cards["open"].toolTip() or "not supported" in tab.gpu_driver.cards["open"].toolTip()
+
+
+def test_advanced_lists_every_driver_and_greys_the_branches_that_are_gone(make_window):
+    window = make_window(info=machine("asus-desktop-rtx4090"))
+    window.mode.setCurrentIndex(1)
+    tab = tab_of(window)
+    assert tab.driver_box.isVisibleTo(tab) and not tab.driver_toggle.isVisibleTo(tab)
+    assert [key for key, (visible, *_rest) in card_texts(tab).items() if visible] == ["auto", "open", "closed", "nouveau", "basic"]
+    labels = {tab.nvidia_branch.itemData(i): (tab.nvidia_branch.itemText(i), tab.nvidia_branch.model().item(i).isEnabled()) for i in range(tab.nvidia_branch.count())}
+    assert set(labels) == {"auto", "595", "580", "470", "390"}                  # 535 is not listed
+    assert labels["595"][1] and labels["580"][1] and not labels["470"][1] and not labels["390"][1]
+    assert "not offered" in labels["470"][0]
+
+
+def test_basic_display_is_a_card_and_sway_cannot_use_it(make_window):
+    window = make_window(info=machine("asus-desktop-rtx4090"))
+    window.mode.setCurrentIndex(1)
+    tab = tab_of(window)
+    tab.gpu_driver.set_value("basic")
+    window.customize.save_manifest()
+    assert window.manifest.hardware.gpu_driver == "basic" and not window.manifest.hardware.nvidia_license_accepted
+    assert "Basic display" in tab.plan_text.text() or "basic display" in tab.plan_text.text().lower()
+    window.manifest.system.desktop = "sway"
+    tab.refresh()
+    assert not tab.gpu_driver.cards["basic"].isEnabled() or tab.gpu_driver.value() == "basic"
+
+
+def test_the_addons_and_the_second_licence_are_advanced_and_cuda_needs_its_tick(make_window):
+    window = make_window(info=machine("asus-desktop-rtx4090"))
+    tab = tab_of(window)
+    assert not tab.extras_box.isVisibleTo(tab)
+    window.mode.setCurrentIndex(1)
+    assert tab.extras_box.isVisibleTo(tab) and not tab.cuda_license.isVisibleTo(tab)
+    tab.extra_checks["cuda"].setChecked(True)
+    tab.extra_checks["nvtop"].setChecked(True)
+    assert tab.cuda_license.isVisibleTo(tab)
+    assert any("CUDA" in problem for problem in tab.problems())                    # impossible without the second tick
+    tab.cuda_license.setChecked(True)
+    window.customize.save_manifest()
+    hardware = window.manifest.hardware
+    assert hardware.nvidia_extras == ["cuda", "nvtop"] and hardware.nvidia_cuda_license_accepted
+
+
+def test_the_wave5_power_and_boot_choices_have_controls_that_write_what_was_picked(make_window):
+    window = make_window(info=machine("thinkpad-amd-laptop"))
+    window.mode.setCurrentIndex(1)
+    tab = tab_of(window)
+    pick(combo(tab, "battery_charge_limit"), "80")
+    pick(combo(tab, "lid_action"), "ignore")
+    pick(combo(tab, "signed_modules"), "off")
+    window.customize.save_manifest()
+    hardware = window.manifest.hardware
+    assert (hardware.battery_charge_limit, hardware.lid_action, hardware.signed_modules) == (80, "ignore", "off")
+    assert tab.row_shown("battery_charge_limit") and tab.row_shown("lid_action") and not tab.row_shown("nvidia_rtd3") and not tab.row_shown("vendor_workarounds")
+    desktop = tab_of(make_window(info=machine("asus-desktop-rtx4090")))
+    assert not desktop.row_shown("battery_charge_limit") and not desktop.row_shown("lid_action")
+
+
+def test_the_safe_graphics_and_power_saving_rows_show_only_with_the_nvidia_driver(make_window):
+    manifest = InstallManifest()
+    manifest.hardware.nvidia_license_accepted = True
+    window = make_window(manifest=manifest, info=machine("asus-desktop-rtx4090"))
+    window.mode.setCurrentIndex(1)
+    tab = tab_of(window)
+    assert tab.row_shown("safe_graphics_entry") and not tab.row_shown("nvidia_rtd3") and not tab.row_shown("nvk")
+    other = tab_of(make_window(info=machine("asus-desktop-rtx4090")))
+    assert not other.row_shown("safe_graphics_entry") and other.row_shown("nvk") or not other.advanced
+
+
+# --- G02: the Devices card ----------------------------------------------------------------------------------------------------------------
+
+
+def test_the_users_pc_shows_razer_openrgb_and_controller_lines(make_window):
+    window = make_window(info=machine("asus-desktop-rtx4090"))
+    tab = tab_of(window)
+    card = tab.devices
+    assert card.isVisibleTo(tab) and card.visible_keys() == ["openrazer", "openrgb", "game_rules"]
+    assert card.lines["openrazer"].check.isChecked() and not card.lines["openrgb"].check.isChecked() and not card.lines["game_rules"].check.isChecked()
+    assert "Razer" in card.lines["openrazer"].sentence.text() and "built on this PC" in card.lines["openrazer"].detail.text()
+    assert "testing" in card.lines["game_rules"].detail.text().lower() or "one tested version" in card.lines["game_rules"].detail.text()
+    assert not card.lines["openrazer"].detail.text().startswith("Found:")          # the evidence is for Advanced
+
+
+def test_a_plain_virtual_machine_shows_no_devices_card(make_window):
+    window = make_window(info=machine("qemu-q35-virtio"))
+    tab = tab_of(window)
+    assert not tab.devices.isVisibleTo(tab) and tab.devices.visible_keys() == []
+    assert not tab_of(make_window()).devices.isVisibleTo(tab)                      # nothing detected at all
+
+
+def test_guided_shows_at_most_five_lines_and_advanced_all_with_what_was_found(make_window):
+    window = make_window(info=machine("arc-ultra-convertible"))
+    tab = tab_of(window)
+    assert len(tab.devices.visible_keys()) <= 5
+    window.mode.setCurrentIndex(1)
+    keys = tab.devices.visible_keys()
+    assert "wacom" in keys and tab.devices.lines["wacom"].detail.text().startswith("Found:")
+    info = machine("thinkpad-amd-laptop")
+    info.hardware["peripherals"]["usb_devices"] = [{"vendor_id": "1532", "product_id": "0091", "role": "razer"}]
+    thinkpad = make_window(info=info)
+    thinkpad.mode.setCurrentIndex(0)
+    guided = tab_of(thinkpad)
+    assert "thinkfan" not in guided.devices.visible_keys() and guided.devices.more.isVisibleTo(guided)
+    thinkpad.mode.setCurrentIndex(1)
+    assert "thinkfan" in guided.devices.visible_keys() and not guided.devices.more.isVisibleTo(guided)
+
+
+def test_the_asus_laptop_card_says_plainly_where_the_tools_come_from(make_window):
+    window = make_window(info=machine("asus-rog-laptop"))
+    window.mode.setCurrentIndex(1)
+    tab = tab_of(window)
+    line = tab.devices.lines["asus_tools"]
+    assert not line.check.isChecked()
+    assert "unofficial" in line.detail.text() and "GURU" in line.detail.text() and "edorp" in line.detail.text()
+    assert "supergfxctl" in line.sentence.text()                                     # a hybrid laptop
+
+
+def test_only_the_lines_the_user_clicked_are_written_to_the_manifest(make_window):
+    window = make_window(info=machine("asus-desktop-rtx4090"))
+    tab = tab_of(window)
+    window.customize.save_manifest()
+    assert window.manifest.hardware.devices == {}                                    # looking changes nothing
+    tab.devices.lines["openrgb"].check.setChecked(True)
+    tab.devices.lines["openrazer"].check.setChecked(False)
+    window.customize.save_manifest()
+    assert window.manifest.hardware.devices == {"openrgb": True, "openrazer": False}
+    again = tab_of(window)
+    assert again.devices.lines["openrgb"].check.isChecked() and not again.devices.lines["openrazer"].check.isChecked()
+    assert window.manifest.validate_sections()["hardware"] == []
+
+
+def test_a_device_the_secure_boot_setting_would_refuse_is_greyed_with_a_sentence(make_window):
+    manifest = InstallManifest()
+    manifest.system.secure_boot = True
+    window = make_window(manifest=manifest, info=machine("asus-desktop-rtx4090"))
+    line = tab_of(window).devices.lines["openrazer"]
+    assert not line.check.isEnabled() and not line.check.isChecked() and "unsigned" in line.sentence.text()
+
+
+def test_the_devices_the_user_chose_reach_the_plan(make_window):
+    window = make_window(info=machine("asus-desktop-rtx4090"))
+    tab = tab_of(window)
+    tab.devices.lines["openrgb"].check.setChecked(True)
+    window.customize.save_manifest()
+    plan = hardware_page.hardware_plan(window.manifest, window.info.hardware)
+    assert "app-misc/openrgb" in plan.optional_atoms and "sys-apps/openrazer" in plan.optional_atoms and {"plugdev", "i2c"} <= set(plan.groups)
+
+
+def test_the_licence_box_and_the_saved_licence_agree_after_leaving_and_returning_to_automatic(make_window):
+    manifest = InstallManifest()
+    manifest.hardware.nvidia_license_accepted = True
+    window = make_window(info=machine("asus-desktop-rtx4090"), manifest=manifest)
+    tab = tab_of(window)
+    tab.gpu_driver.set_value("nouveau")
+    tab.gpu_driver.set_value("auto")
+    window.customize.save_manifest()
+    assert tab.nvidia_license.isChecked() is False
+    assert window.manifest.hardware.nvidia_license_accepted is False

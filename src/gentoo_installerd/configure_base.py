@@ -89,6 +89,7 @@ class ConfigurerBase:
         def desktop_atoms(self, manifest: InstallManifest, plan: object | None = None) -> DesktopAtoms: ...  # configure_desktop
         def early_boot_atoms(self, manifest: InstallManifest, plan: object | None = None) -> list[str]: ...  # configure_boot
         def bootloader_atoms(self, manifest: InstallManifest) -> list[str]: ...  # configure_boot
+        def prepare_plan_repos(self, manifest: InstallManifest, plan: object | None = None) -> list[str]: ...  # configure_hardware
 
     def __init__(self, runner: Runner, target_root: str | Path, *, dry_run: bool = False,
                  companion_bundle: str | Path = "/usr/local/share/gentoo-installer",

@@ -97,6 +97,8 @@ class MachineInfo:
     chassis_type: int | None = None
     form_factor: str = ""  # desktop | laptop | tablet | server | vm | other
     hypervisor: str = ""  # "" | qemu | kvm | vmware | virtualbox | hyperv | xen | parallels | bhyve | other
+    vendor_family: str = ""  # asus | razer | lenovo | dell | hp | framework | system76 | tuxedo | microsoft | apple ... | "" (see hardware_data)
+    oem: str = ""  # product line inside the family: rog | tuf | thinkpad | legion | victus | blade | surface ... | ""
 
 
 @dataclass
@@ -144,6 +146,7 @@ class GpuInfo:
     virtual: bool = False
     connected_outputs: int | None = None  # None: not read (device runtime-suspended or no DRM node)
     card: str = ""  # drm card name, e.g. card1
+    vram_mib: int = 0  # video memory in MiB: a known card's size, else the big memory window of the card; 0 when unknown
 
 
 @dataclass
@@ -267,10 +270,55 @@ class BluetoothInfo:
 
 
 @dataclass
+class UsbDevice:
+    """One USB device (never its serial number). ``role`` is the key of the tool it may need (hardware_data.usb_role)."""
+
+    vendor_id: str = ""
+    product_id: str = ""
+    manufacturer: str = ""
+    product: str = ""
+    classes: list[str] = field(default_factory=list)
+    role: str = ""  # razer | aura | logitech | controller | tablet | corsair | steelseries | ... | ""
+
+
+@dataclass
 class PeripheralInfo:
     usb_printers: int = 0
     thunderbolt: bool = False
     webcam: bool = False
+    usb_devices: list[UsbDevice] = field(default_factory=list)
+
+    def with_role(self, role: str) -> list[UsbDevice]:
+        return [device for device in self.usb_devices if device.role == role]
+
+
+@dataclass
+class PlatformInfo:
+    """Kernel platform drivers that say which vendor tools make sense (read from /sys; nothing is loaded or probed)."""
+
+    asus_nb_wmi: bool = False
+    asus_armoury: bool = False
+    platform_profile: bool = False
+    platform_profiles: list[str] = field(default_factory=list)  # low-power | balanced | performance ...
+    thinkpad_acpi: bool = False
+    i2c_dev: bool = False  # /dev/i2c-N exist (OpenRGB talks to RAM and motherboard RGB through them)
+    kbd_backlight: bool = False
+
+
+@dataclass
+class LaptopInfo:
+    """What a laptop's sysfs shows; only meaningful when machine.form_factor is laptop or tablet."""
+
+    pm_profile: int | None = None  # ACPI preferred PM profile: 2 mobile, 8 tablet, 1 desktop ...
+    mem_sleep: str = ""  # selected suspend mode: s2idle | deep | ""
+    mem_sleep_options: list[str] = field(default_factory=list)
+    charge_threshold: bool = False  # the battery accepts a charge limit
+    charge_end: int | None = None
+    iio_sensors: list[str] = field(default_factory=list)  # accel_3d, gyro_3d, als ...
+    pen: bool = False
+    tablet_switch: bool = False
+    convertible: bool = False
+    ipu_camera: bool = False  # Intel IPU6 camera: no working driver stack on Gentoo
 
 
 @dataclass
@@ -300,6 +348,8 @@ class HardwareProfile:
     audio: AudioInfo = field(default_factory=AudioInfo)
     bluetooth: BluetoothInfo = field(default_factory=BluetoothInfo)
     peripherals: PeripheralInfo = field(default_factory=PeripheralInfo)
+    platform: PlatformInfo = field(default_factory=PlatformInfo)
+    laptop: LaptopInfo = field(default_factory=LaptopInfo)
     clock: ClockInfo = field(default_factory=ClockInfo)
     hypervisor: HypervisorInfo = field(default_factory=HypervisorInfo)
     # Names (not contents) of the NetworkManager connections of this session; readable by root only.
@@ -855,6 +905,16 @@ def _warn(code: str, severity: str, message: str, action: str = "") -> HardwareW
     return HardwareWarning("hw." + code, severity, message, action)
 
 
+def physical_gpus(gpus: Sequence[GpuInfo]) -> list[GpuInfo]:
+    """The graphics cards that are real hardware: not paravirtual adapters and not a server's management chip."""
+    return [gpu for gpu in gpus if not gpu.virtual and gpu.vendor not in data.BMC_GPU_VENDORS]
+
+
+def is_detected(profile: HardwareProfile) -> bool:
+    """False for an empty profile (no probe ran): firmware, disk and driver checks would only produce noise."""
+    return bool(profile.cpu.threads or profile.gpus or profile.disks or profile.memory.total_kib)
+
+
 def is_hybrid(profile: HardwareProfile) -> bool:
     """Integrated + discrete GPU where switching helpers make sense.
 
@@ -950,7 +1010,25 @@ def derive_warnings(profile: HardwareProfile) -> list[HardwareWarning]:
             what = "Wi-Fi" if nic.kind == "wifi" else "network"
             out.append(_warn("net_no_driver", "warning", f"A {what} adapter ({nic.vendor_id}:{nic.device_id}) has no driver in this kernel. Use Ethernet or USB tethering during the install."))
             if nic.vendor_id == data.VENDOR_BROADCOM and nic.kind == "wifi":
-                out.append(_warn("net_broadcom_sta", "warning", "This Wi-Fi chip may need the proprietary broadcom-sta driver, which this installer does not provide. Use Ethernet or USB tethering during the install."))
+                out.append(_warn("net_broadcom_sta", "warning",
+                                 "This Broadcom Wi-Fi chip has no open driver in the kernel. It needs the proprietary broadcom-sta driver (net-wireless/broadcom-sta), "
+                                 "which this installer does not set up. Use Ethernet or USB tethering during the install, then install that package from the new system."))
+    # Vendors: whole-machine hints. Always "may": the installer cannot test every model, and nothing here says a machine is unsupported.
+    if machine.vendor_family == "microsoft" and machine.oem == "surface":
+        out.append(_warn("vendor_surface", "warning",
+                         "Microsoft Surface devices may need drivers that the standard Gentoo kernel does not include. The touch screen, pen, cameras and "
+                         "keyboard cover may not work until you add the linux-surface kernel patches after the installation."))
+    if machine.vendor_family == "apple" and any(c.vendor_id == data.VENDOR_APPLE for c in profile.storage_controllers):
+        out.append(_warn("vendor_apple_t2", "warning",
+                         "This Mac may have the Apple T2 security chip. A standard Linux kernel may not see its internal drive, keyboard, trackpad, "
+                         "Wi-Fi or sound without extra drivers; check the T2 Linux project before you install."))
+    if machine.oem == "victus" and is_hybrid(profile):
+        out.append(_warn("vendor_victus", "info",
+                         "HP Victus laptops with two graphics cards may wake up with a black screen after sleep (s2idle). A firmware update from HP often fixes it."))
+    if machine.oem == "legion":
+        out.append(_warn("vendor_legion", "info",
+                         "Lenovo Legion laptops work with the standard kernel and power-profiles-daemon (performance modes, battery conservation). "
+                         "Fan curves and keyboard lighting need the separate LenovoLegionLinux project, which this installer does not set up."))
     # Machine
     if machine.hypervisor:
         out.append(_warn("vm_detected", "info", f"Running in a virtual machine ({machine.hypervisor}). Guest tools can be installed; CPU microcode and power management are skipped.", "install_guest_tools"))
@@ -1027,6 +1105,8 @@ class _Prober:
             ("input", self.collect_input),
             ("audio", self.collect_audio),
             ("usb", self.collect_usb),
+            ("platform", self.collect_platform),
+            ("laptop", self.collect_laptop),
             ("clock", self.collect_clock),
             ("network_profiles", self.collect_network_profiles),
         )
@@ -1091,6 +1171,8 @@ class _Prober:
         m.bios_version, m.bios_date = self.fs.line(dmi + "bios_version"), self.fs.line(dmi + "bios_date")
         m.board_vendor, m.board_name = self.fs.line(dmi + "board_vendor"), self.fs.line(dmi + "board_name")
         m.chassis_type = self.fs.int_of(dmi + "chassis_type")
+        m.vendor_family = data.vendor_family(m.sys_vendor, m.board_vendor)
+        m.oem = data.vendor_oem(m.vendor_family, m.product_name, m.product_version)
         lscpu = self.command(("lscpu",)) or ""
         match = re.search(r"^Hypervisor vendor:\s*(.+)$", lscpu, re.M)
         self.lscpu_vendor = match.group(1).strip() if match else ""
@@ -1161,12 +1243,13 @@ class _Prober:
             gpu.virtual = vendor in data.VIRTUAL_GPU_VENDORS
             if vendor == "nvidia":
                 gpu.generation, gpu.generation_guess = data.classify_nvidia(name, dev.device_id)
+                gpu.vram_mib = data.nvidia_vram_mib(name) or data.vram_from_resources(self.fs.read(f"/sys/bus/pci/devices/{dev.slot}/resource", 1 << 16) or "")
             elif vendor == "amd":
                 gpu.generation = data.classify_amd(name, dev.driver)
                 gpu.integrated = data.amd_is_integrated(name)
             elif vendor == "intel":
                 gpu.generation = data.classify_intel_gpu(name)
-                gpu.integrated = not data.intel_is_discrete(name)
+                gpu.integrated = not data.intel_is_discrete(name, dev.slot)
             gpus.append(gpu)
         physical = [g for g in gpus if not g.virtual and g.vendor not in data.BMC_GPU_VENDORS]
         if len(physical) > 1:
@@ -1423,6 +1506,10 @@ class _Prober:
                 info.keyboard = True
             if data.GAME_CONTROLLER_RE.search(name):
                 continue  # a DualSense or Xbox pad has a touchpad and a motion sensor too
+            if data.PEN_RE.search(name):
+                self.profile.laptop.pen = True
+            if data.TABLET_SWITCH_RE.search(name):
+                self.profile.laptop.tablet_switch = True
             if name == "Lid Switch":
                 self.profile.power.has_lid = True
             elif data.TOUCHPAD_RE.search(name):
@@ -1468,6 +1555,44 @@ class _Prober:
                 peripherals.webcam = True
             if vendor in data.FINGERPRINT_USB_VENDORS and data.USB_CLASS_VENDOR_SPECIFIC in classes:
                 info.fingerprint_usb.append(f"{vendor}:{product}")
+            if vendor and product:  # the names are read for display only; a serial number is never read
+                manufacturer, label = fs.line(path + "/manufacturer"), fs.line(path + "/product")
+                peripherals.usb_devices.append(UsbDevice(vendor, product, manufacturer, label, sorted(c for c in classes if c),
+                                                         data.usb_role(vendor, product, label)))
+
+    # -- platform drivers, laptop sysfs ----------------------------------------------------------------
+
+    def collect_platform(self) -> None:
+        fs, platform = self.fs, self.profile.platform
+        drivers = "/sys/bus/platform/drivers"
+        platform.asus_nb_wmi = fs.exists(f"{drivers}/asus-nb-wmi") or fs.exists("/sys/devices/platform/asus-nb-wmi")
+        platform.asus_armoury = fs.exists("/sys/class/firmware-attributes/asus-armoury") or fs.exists(f"{drivers}/asus-armoury")
+        platform.thinkpad_acpi = fs.exists(f"{drivers}/thinkpad_acpi") or fs.exists("/sys/devices/platform/thinkpad_acpi")
+        profiles = fs.line("/sys/firmware/acpi/platform_profile_choices")
+        platform.platform_profiles = profiles.split()
+        platform.platform_profile = fs.exists("/sys/firmware/acpi/platform_profile") or bool(profiles)
+        platform.i2c_dev = bool(fs.listdir("/sys/class/i2c-dev"))
+        platform.kbd_backlight = any("kbd_backlight" in name for name in fs.listdir("/sys/class/leds"))
+
+    def collect_laptop(self) -> None:
+        fs, laptop = self.fs, self.profile.laptop
+        laptop.pm_profile = fs.int_of("/sys/firmware/acpi/pm_profile")
+        sleep = fs.line("/sys/power/mem_sleep")
+        laptop.mem_sleep_options = [word.strip("[]") for word in sleep.split()]
+        selected = re.search(r"\[(\w+)\]", sleep)
+        laptop.mem_sleep = selected.group(1) if selected else ""
+        for name in fs.listdir("/sys/class/power_supply"):
+            base = f"/sys/class/power_supply/{name}"
+            if fs.line(base + "/type") == "Battery" and fs.line(base + "/scope") != "Device" and fs.exists(base + "/charge_control_end_threshold"):
+                laptop.charge_threshold = True
+                laptop.charge_end = fs.int_of(base + "/charge_control_end_threshold")
+        laptop.iio_sensors = data.distinct(sorted(filter(None, (fs.line(f"/sys/bus/iio/devices/{entry}/name") for entry in fs.listdir("/sys/bus/iio/devices")
+                                                              if entry.startswith("iio:device")))))
+        laptop.ipu_camera = any(dev.vendor_id == data.VENDOR_INTEL and dev.class_code[:4] == "0480"
+                                and (re.search(r"ipu", self.pci_devices.get((dev.vendor_id, dev.device_id), ""), re.I) or "ipu" in dev.driver)
+                                for dev in self.pci)
+        machine = self.profile.machine
+        laptop.convertible = machine.chassis_type in (31, 32) or laptop.tablet_switch
 
     def collect_network_profiles(self) -> None:
         directory = "/etc/NetworkManager/system-connections"

@@ -38,6 +38,7 @@ def configure(index: int, case: dict) -> dict:
     (cfg / "etc/portage/package.use").write_text("".join(f"{atom} {' '.join(flags)}\n" for atom, flags in case["package_use"].items()))
     (cfg / "etc/portage/package.license").write_text("".join(f"{atom} {' '.join(items)}\n" for atom, items in case["package_license"].items()))
     (cfg / "etc/portage/package.mask").write_text("".join(line + "\n" for line in case["package_mask"]))
+    (cfg / "etc/portage/package.accept_keywords").write_text("".join(f"{atom} {' '.join(words)}\n" for atom, words in case.get("package_keywords", {}).items()))
     trees = portage.create_trees(config_root=str(cfg), target_root=str(scratch / "root"))
     return trees[next(iter(trees))]
 

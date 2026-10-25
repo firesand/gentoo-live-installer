@@ -27,6 +27,10 @@ FIXTURE_NAMES = (
     "amd-laptop-sof",
     "vmware-guest",
     "intel-rst-hidden-nvme",
+    "asus-rog-laptop",
+    "razer-blade-laptop",
+    "arc-ultra-convertible",
+    "thinkpad-amd-laptop",
 )
 
 
@@ -56,3 +60,12 @@ def probe_fixture(name: str) -> hardware.HardwareProfile:
 
 def fixture_dict(name: str) -> dict:
     return probe_fixture(name).to_dict()
+
+
+def untouched_hardware(manifest):
+    """``Hardware()`` as the wizard seeds it on start: only the maker-based fwupd default differs (Dell, HP, Lenovo, Framework, System76 laptops)."""
+    import dataclasses
+
+    from gentoo_installer.manifest import Hardware
+
+    return dataclasses.replace(Hardware(), fwupd=manifest.hardware.fwupd)

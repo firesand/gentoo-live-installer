@@ -30,10 +30,17 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Mapping, Sequence
 
+from gentoo_installer import devices
 from gentoo_installer import hardware_data as data
 from gentoo_installer import keyboard_data, recommend
-from gentoo_installer.hardware import DiskInfo, GpuInfo, HardwareProfile, gpu_label, is_hybrid, parent_disk_name
+from gentoo_installer.hardware import DiskInfo, GpuInfo, HardwareProfile, gpu_label, is_detected, is_hybrid, parent_disk_name, physical_gpus
 from gentoo_installer.manifest import InstallManifest
+
+from .hwissue import Issue
+from .hwplan_devices import DevicePlanMixin, device_issues
+from .hwplan_nvidia import NvidiaDecision, nvidia_decision
+from .hwplan_session import SessionPlanMixin
+from .hwplan_nvidia_plan import NVK_GENERATIONS, NvidiaPlanMixin, nvidia_policy_issues, rtd3_blocker
 
 PLAN_SCHEMA = 2
 # Plans saved by an earlier installer (schema 1 has none of the Wave 5 fields) are still read.
@@ -88,19 +95,7 @@ LIC_INTEL_UCODE = "intel-ucode"
 
 # Kernel drivers whose adapters want a firmware file from linux-firmware to work properly.
 FIRMWARE_NIC_DRIVERS = frozenset({"r8169", "bnx2", "bnx2x", "tg3", "qede", "qed"})
-DIST_KERNELS = frozenset({"gentoo-kernel-bin", "gentoo-kernel"})
-
-
-@dataclass(frozen=True)
-class Issue:
-    """A finding about the combination of manifest and hardware. ``code`` is in the ``hw.`` namespace."""
-
-    code: str
-    severity: str  # error | warning | info
-    message: str
-
-    def to_dict(self) -> dict[str, str]:
-        return {"code": self.code, "severity": self.severity, "message": self.message}
+DIST_KERNELS = data.DIST_KERNELS
 
 
 @dataclass
@@ -226,8 +221,7 @@ def _profile(hardware: Mapping[str, Any] | HardwareProfile | None) -> HardwarePr
     return hardware if isinstance(hardware, HardwareProfile) else HardwareProfile.from_dict(hardware if isinstance(hardware, Mapping) else None)
 
 
-def _physical(gpus: Sequence[GpuInfo]) -> list[GpuInfo]:
-    return [gpu for gpu in gpus if not gpu.virtual and gpu.vendor not in data.BMC_GPU_VENDORS]
+_physical = physical_gpus
 
 
 def _target_disks(manifest: InstallManifest, hw: HardwareProfile) -> list[DiskInfo]:
@@ -235,6 +229,13 @@ def _target_disks(manifest: InstallManifest, hw: HardwareProfile) -> list[DiskIn
     devices = [manifest.storage.device, *(p.device for p in manifest.storage.partitions)]
     wanted = {parent_disk_name(device.rsplit("/", 1)[-1]) for device in devices if device.startswith("/dev/")}
     return [disk for disk in hw.disks if disk.name in wanted or any(device == f"/dev/{part.name}" for device in devices for part in disk.partitions)]
+
+
+def _erase_root_mib(m: InstallManifest, disk: DiskInfo) -> int:
+    """MiB the root filesystem gets when the whole disk is erased and partitioned by the installer."""
+    storage = m.storage
+    return disk.size // 1024**2 - (1024 if storage.firmware == "uefi" else 3) - (1024 if storage.luks else 0) - storage.swap_mib \
+        - (storage.home_mib if storage.separate_home else 0)
 
 
 def _typed_flags(text: str) -> tuple[str, list[str]]:
@@ -248,74 +249,14 @@ def _is_mobile(hw: HardwareProfile) -> bool:
     return hw.machine.form_factor in ("laptop", "tablet")
 
 
-def _detected(hw: HardwareProfile) -> bool:
-    """False for an empty profile (no probe ran): firmware and disk checks would only produce noise."""
-    return bool(hw.cpu.threads or hw.gpus or hw.disks or hw.memory.total_kib)
-
-
-@dataclass
-class NvidiaDecision:
-    branch: str  # "" when the proprietary path is off or impossible
-    errors: list[Issue] = field(default_factory=list)
-    warnings: list[Issue] = field(default_factory=list)
-
-
-def nvidia_decision(manifest: InstallManifest, hw: HardwareProfile) -> NvidiaDecision:
-    """Whether the proprietary NVIDIA driver can be installed, and which branch. Shared by plan() and validate_plan()."""
-    choice = manifest.hardware
-    if choice.gpu_driver != "nvidia":
-        return NvidiaDecision("")
-    errors: list[Issue] = []
-    warnings: list[Issue] = []
-    portable = choice.target == "portable"
-    gpus = [gpu for gpu in _physical(hw.gpus) if gpu.vendor == "nvidia"]
-    if manifest.system.kernel not in DIST_KERNELS or manifest.system.initramfs != "dracut":
-        errors.append(Issue("hw.nvidia_kernel", "error", "The proprietary NVIDIA driver needs a Gentoo distribution kernel (gentoo-kernel or gentoo-kernel-bin) and Dracut: "
-                            "its modules are built against the installed kernel and added to the initramfs."))
-    if manifest.system.secure_boot:
-        errors.append(Issue("hw.nvidia_secure_boot", "error", "The proprietary NVIDIA driver cannot be used together with Secure Boot signing: its kernel modules would be unsigned "
-                            "and refused. Turn Secure Boot signing off or use the open driver."))
-    if not portable and not gpus and _detected(hw):  # a probe that found nothing at all cannot tell
-        errors.append(Issue("hw.nvidia_no_gpu", "error", "The proprietary NVIDIA driver was selected but no NVIDIA graphics card was found in this PC. "
-                            "Choose the open driver, or select 'portable' if the disk will run on another computer."))
-    explicit = choice.nvidia_branch
-    if explicit != "auto" and explicit not in data.NVIDIA_BRANCHES:
-        errors.append(Issue("hw.nvidia_branch_unavailable", "error", f"NVIDIA driver branch {explicit} is not available in this installer. Choose one of: "
-                            + ", ".join(sorted(data.NVIDIA_BRANCHES)) + "."))
-    generations = [gpu.generation for gpu in gpus]
-    supported = [generation for generation in generations if generation in ("turing+", "maxwell-volta")]
-    if explicit in data.NVIDIA_BRANCHES:
-        branch = explicit
-    elif "maxwell-volta" in supported:
-        branch = "580"  # the long-term branch also drives any Turing or newer card in the same PC
-    elif supported:
-        branch = "595"
-    elif generations and not portable:
-        branch = ""
-    else:
-        branch = "595"
-    if gpus and not portable:
-        covered: Sequence[str] = data.NVIDIA_BRANCHES[branch]["generations"] if branch else ()  # type: ignore[assignment]
-        for gpu in gpus:
-            if gpu.generation not in covered:
-                errors.append(Issue("hw.nvidia_unsupported_gpu", "error",
-                                    f"{gpu_label(gpu) if gpu.name else 'This NVIDIA card'} is not supported by"
-                                    + (f" driver branch {branch}" if branch else " any proprietary driver offered here")
-                                    + ". " + ("Choose branch 580 (the last for Maxwell, Pascal and Volta cards) or the open driver."
-                                              if branch == "595" and gpu.generation == "maxwell-volta" else "The open nouveau driver supports it.")))
-            elif gpu.generation_guess:
-                warnings.append(Issue("hw.nvidia_generation_guess", "warning",
-                                      f"The generation of the NVIDIA card {gpu.vendor_id}:{gpu.device_id} is guessed from its id (it is newer than the device database)."))
-    if errors:
-        return NvidiaDecision("", errors, warnings)
-    return NvidiaDecision(branch, errors, warnings)
+_detected = is_detected
 
 
 # ---------------------------------------------------------------------------
 # Plan
 # ---------------------------------------------------------------------------
 
-class _Planner:
+class _Planner(NvidiaPlanMixin, DevicePlanMixin, SessionPlanMixin):
     def __init__(self, manifest: InstallManifest, hw: HardwareProfile) -> None:
         self.m = manifest
         self.hw = hw
@@ -328,6 +269,8 @@ class _Planner:
         self.mobile = _is_mobile(hw)
         self.gpus = _physical(hw.gpus)
         self.nvidia_gpus = [gpu for gpu in self.gpus if gpu.vendor == "nvidia"]
+        self.offers = devices.device_offers(hw, manifest)
+        self.traits = data.desktop_traits(manifest.system.desktop)
         self.proprietary = ""  # nvidia branch when the proprietary path is active
         self.firmware_reasons: list[str] = []
         self.fonts: tuple[str, str] | None = None  # (atom, what it covers) when the locale needs a font package
@@ -341,6 +284,15 @@ class _Planner:
     def license(self, atom: str, *licenses: str) -> None:
         current = self.p.package_license.setdefault(atom, [])
         current.extend(item for item in licenses if item not in current)
+
+    def keyword(self, atom: str, *keywords: str) -> None:
+        """Accept testing keywords for one exact version (never for a whole package, never globally)."""
+        current = self.p.package_keywords.setdefault(atom, [])
+        current.extend(word for word in keywords if word not in current)
+
+    def first_step(self, line: str) -> None:
+        if line not in self.p.first_steps:
+            self.p.first_steps.append(line)
 
     def service(self, name: str, level: str = "default", *, optional: bool = False) -> None:
         target = self.p.optional_services if optional else self.p.services
@@ -378,10 +330,12 @@ class _Planner:
         self.heavy_builds()
         self.guest_tools()
         self.peripherals()
+        self.vendor()
         self.audio()
         self.boot()
         self.display()
         self.locale()
+        self.session()
         self.companions()
         self.finish()
         return p
@@ -454,7 +408,7 @@ class _Planner:
             return reasons
         if any(gpu.vendor == "amd" for gpu in self.gpus):
             reasons.append("AMD graphics")
-        if self.nvidia_gpus and not self.proprietary and any(gpu.generation == "turing+" for gpu in self.nvidia_gpus):
+        if self.nvidia_gpus and not self.proprietary and any(data.is_turing_plus(gpu.generation) for gpu in self.nvidia_gpus):
             reasons.append("NVIDIA GPU system processor firmware")
         if any(gpu.vendor == "intel" and gpu.generation == "gen8+" for gpu in self.gpus):
             reasons.append("Intel graphics")
@@ -482,54 +436,62 @@ class _Planner:
     # Graphics -------------------------------------------------------------------------------------------------------
 
     def graphics(self) -> None:
-        decision = nvidia_decision(self.m, self.hw)
+        decision = self.decision = nvidia_decision(self.m, self.hw)
         self.p.warnings.extend(decision.warnings)
         self.proprietary = decision.branch
-        if self.m.hardware.gpu_driver == "nvidia" and not decision.branch:
+        explicit = self.m.hardware.gpu_driver == "nvidia"
+        if explicit and not decision.branch:
             self.warn("nvidia_skipped", "warning", "The proprietary NVIDIA driver was not installed because it does not fit this PC or these settings "
                       "(" + ", ".join(issue.code.removeprefix("hw.") for issue in decision.errors) + "). The open driver is used.")
-        nvk = self.nvk()
+        basic = decision.mode == "basic"
+        nvk = False if basic else self.nvk()
         if self.proprietary:
-            self.nvidia_driver(self.proprietary)
+            self.nvidia_driver(decision)
+            self.nvidia_rtd3(decision)
+            self.nvidia_extras(decision)
+            self.nvidia_vram_tmp(decision, self.var_tmp_free_mib())
+        elif basic:
+            self.basic_graphics()
         self.video_cards(nvk)
         self.p.scalars["gpu_driver"] = "nvidia" if self.proprietary else "open"
         self.p.scalars["nvidia_branch"] = self.proprietary
+        if self.nvidia_gpus or basic or self.portable:  # the machines without an NVIDIA card keep the plan they always had
+            self.p.scalars["gpu_mode"] = "basic" if basic else ("nvidia" if self.proprietary else "nouveau")
+            self.p.scalars["nvidia_reason"] = decision.reason
         self.p.scalars["hybrid"] = is_hybrid(self.hw)
         self.prime()
 
+    def var_tmp_free_mib(self) -> int | None:
+        """About how much room /var/tmp will have after the installation (None when the layout does not say)."""
+        storage = self.m.storage
+        if storage.mode == "manual":
+            tmp = next((row for row in storage.partitions if row.mountpoint == "/var/tmp"), None)
+            if tmp is not None and tmp.filesystem == "tmpfs":
+                return self.hw.memory.total_kib // 2048  # a tmpfs may use half of the memory
+            root = next((row for row in storage.partitions if row.mountpoint == "/"), None)
+            size = next((part.size for disk in self.hw.disks for part in disk.partitions if root is not None and f"/dev/{part.name}" == root.device), 0)
+            root_mib = size // 1024**2
+        else:
+            disks = _target_disks(self.m, self.hw)
+            if not disks or not disks[0].size:
+                return None
+            root_mib = _erase_root_mib(self.m, disks[0])
+        minimum, _recommended = recommend.minimum_root_gib(self.desktop, self.m.portage.binhost)
+        return root_mib - minimum * 1024 if root_mib else None
+
     def nvk(self) -> bool:
-        """NVK (Mesa's Vulkan driver for NVIDIA GPUs) is part of a source build for Turing and newer, or on request."""
+        """NVK (Mesa's Vulkan driver for NVIDIA GPUs) is part of a source build for Kepler and newer, or on request."""
         choice = self.m.hardware.nvk
         if self.proprietary or choice == "off":
             result = False
         elif choice == "on":
             result = bool(self.nvidia_gpus) or self.portable
         else:
-            result = not self.binhost and not self.portable and any(g.generation == "turing+" for g in self.nvidia_gpus)
+            result = not self.binhost and not self.portable and any(g.generation in NVK_GENERATIONS for g in self.nvidia_gpus)
         if result:
             self.use(A_MESA, "vulkan")  # video_cards_nvk? ( vulkan video_cards_nouveau )
         self.p.scalars["nvk"] = "yes" if result else "no"
         return result
-
-    def nvidia_driver(self, branch: str) -> None:
-        info = data.NVIDIA_BRANCHES[branch]
-        self.p.driver_atoms.append(A_NVIDIA)
-        self.license(A_NVIDIA, str(info["license"]))
-        flags = ["dist-kernel"]  # modules follow kernel updates
-        if self.desktop in ("kde", "gnome"):
-            flags.append("wayland")
-        if branch == "580" and self.nvidia_gpus and all(g.generation == "turing+" for g in self.nvidia_gpus):
-            flags.append("kernel-open")  # open modules on Turing and newer; Maxwell to Volta need the closed ones
-        self.use(A_NVIDIA, *flags)
-        if info["mask"]:
-            self.p.package_mask.append(str(info["mask"]))
-        # Explicit and harmless: both are the driver defaults since 595, and the packaged modprobe.d file
-        # (which also blacklists nouveau) sets modeset on 580.
-        self.p.kernel_cmdline.extend(["nvidia-drm.modeset=1", "nvidia-drm.fbdev=1"])
-        # The initramfs must contain the driver's modprobe.d file or nouveau can bind first. Rebuilt only when
-        # the driver really installed, so a failed build leaves a bootable nouveau system.
-        self.post("sh", "-c", "if [ -f /etc/modprobe.d/nvidia.conf ]; then dracut --force --regenerate-all; fi")
-        self.note(f"NVIDIA proprietary driver {info['label']}; if it fails to build, the open nouveau driver stays in use.")
 
     def video_cards(self, nvk: bool) -> None:
         explicit = self.m.portage.video_cards.strip()
@@ -583,14 +545,24 @@ class _Planner:
     def power(self) -> None:
         choice = self.m.hardware.power
         if choice == "auto":
-            choice = "none" if (not self.mobile or self.vm or self.portable) else ("ppd" if self.desktop in ("kde", "gnome") else "tlp")
+            if not self.mobile or self.vm or self.portable:
+                choice = "none"
+            elif self.asus_wanted:
+                choice = "none"  # asusd manages the power profiles itself and conflicts with both
+            elif self.m.hardware.battery_charge_limit:
+                choice = "tlp"  # only TLP sets the charge limit
+            else:
+                choice = "ppd" if self.traits.ppd_ui else "tlp"
+        elif self.asus_wanted and choice in ("ppd", "tlp"):
+            self.warn("asus_power_conflict", "warning", "The ASUS tools manage the power profiles themselves, so the power management you chose was not installed.")
+            choice = "none"
         self.p.scalars["power"] = choice
         if choice == "ppd":
             self.p.optional_atoms.append(A_PPD)
             self.service(A_PPD.split("/")[1], optional=True)
         elif choice == "tlp":
             self.p.optional_atoms.append(A_TLP)
-            ppd_ui = self.desktop in ("kde", "gnome")
+            ppd_ui = self.traits.ppd_ui
             flags = [] if ppd_ui else ["-ppd"]  # tlp[ppd] replaces power-profiles-daemon for the desktop's profile switcher
             if self.m.network.manager != "networkmanager":
                 flags.append("-rdw")  # rdw needs NetworkManager
@@ -605,10 +577,14 @@ class _Planner:
         if want:
             self.p.optional_atoms.append(A_THERMALD)
             self.service("thermald", optional=True)
-        if self.m.hardware.fingerprint:
+        if self.fingerprint_wanted:
             self.p.optional_atoms.append(A_FPRINTD)
         if self.m.hardware.fwupd:
             self.p.optional_atoms.append(A_FWUPD)
+            if self.init == "openrc":
+                self.service("fwupd", optional=True)  # the ebuild ships an init script; systemd starts the daemon through D-Bus
+        if self.asus_wanted and self.p.scalars.get("power") == "none" and self.mobile:
+            self.note("ASUS tools replace power-profiles-daemon and TLP: asusd offers the power profiles, so neither of them is installed.")
 
     # Storage: TRIM and swap ------------------------------------------------------------------------------------------
 
@@ -688,7 +664,7 @@ class _Planner:
         hypervisor = self.hw.machine.hypervisor
         if not hypervisor or self.m.hardware.guest_tools == "none":
             return
-        graphical = self.desktop != "minimal"
+        graphical = self.traits.graphical
         if hypervisor in ("qemu", "kvm"):
             self.p.optional_atoms.append(A_QEMU_GA)
             self.service("qemu-guest-agent", optional=True)
@@ -740,6 +716,14 @@ class _Planner:
         if self.m.hardware.pipewire_alsa:
             self.use(A_PIPEWIRE, "pipewire-alsa")
         self.post("sh", "-c", 'if getent group pipewire >/dev/null; then usermod -aG pipewire "$1"; fi; exit 0', "sh", self.m.accounts.username)
+        if self.init == "systemd":
+            # The user's PipeWire is socket-activated by systemd; nothing enables it for a user session by itself.
+            for unit, kind in (("pipewire.socket", "socket"), ("pipewire-pulse.socket", "socket"), ("wireplumber.service", "service")):
+                self.p.user_services.append((unit, kind))
+        elif self.desktop == "sway":
+            self.file("/etc/sway/config.d/10-installer-pipewire.conf", "# Written by the Gentoo installer: start PipeWire with the session.\nexec gentoo-pipewire-launcher restart\n")
+        elif self.desktop == "i3":
+            self.first_step("Sound: add the line  exec --no-startup-id gentoo-pipewire-launcher restart  to ~/.config/i3/config so PipeWire starts with i3.")
 
     # Boot, display ------------------------------------------------------------------------------------------------------------
 
@@ -761,8 +745,14 @@ class _Planner:
         else:
             dpi = recommend.recommend_dpi(self.hw.displays)
         self.p.scalars["hidpi"] = "off" if dpi <= 96 else f"dpi:{dpi}"
-        if dpi > 96 and self.desktop == "xfce":
-            self.file("/etc/skel/.config/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml", xfce_xsettings(dpi))
+        method = self.traits.hidpi
+        if dpi > 96:
+            if method == "xsettings":
+                self.file("/etc/skel/.config/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml", xfce_xsettings(dpi))
+            elif method == "xresources":
+                self.file("/etc/skel/.Xresources", f"! Written by the Gentoo installer: the screen is dense, so text and buttons are scaled.\nXft.dpi: {dpi}\n")
+            elif method == "sway":
+                self.file("/etc/sway/config.d/20-installer-hidpi.conf", f"# Written by the Gentoo installer: the screen is dense.\noutput * scale {round(dpi / 96 * 4) / 4:g}\n")
 
     def locale(self) -> None:
         """Fonts for the script of the chosen language; without them a translated desktop shows empty boxes.
@@ -771,12 +761,12 @@ class _Planner:
         media-fonts/noto (kde-plasma/plasma-integration needs it); nothing in it has Chinese, Japanese or Korean
         glyphs. Both packages are large downloads, so they are optional atoms: a failure only degrades.
         """
-        if self.desktop == "minimal":
+        if not self.traits.graphical:
             return
         script = keyboard_data.locale_script(self.m.system.locale)
         if script == "cjk":
             self.fonts = (A_NOTO_CJK, "Chinese, Japanese and Korean text")
-        elif script == "complex" and self.desktop != "kde":
+        elif script == "complex" and not self.traits.brings_noto:
             self.fonts = (A_NOTO, "Arabic, Hebrew, Indic, Thai and other scripts")
         if self.fonts:
             self.p.optional_atoms.append(self.fonts[0])
@@ -811,6 +801,9 @@ class _Planner:
         p.package_use = {atom: flags for atom, flags in sorted(p.package_use.items()) if flags}
         p.package_license = {atom: items for atom, items in sorted(p.package_license.items()) if items}
         p.make_conf = {key: value for key, value in p.make_conf.items() if value}
+        p.groups = data.distinct(p.groups)
+        if p.groups or p.first_steps:
+            p.scalars["first_user"] = self.m.accounts.username  # whose groups and first-steps.txt the configuration step writes
         p.summary = self.describe()
 
     def respect_user_package_use(self) -> None:
@@ -855,8 +848,8 @@ class _Planner:
             lines.append(f"Virtual machine: {hw.machine.hypervisor}; " + ("guest tools installed" if tools else "no guest tools"))
         if s["removable_fallback"] != "never" and self.m.storage.firmware == "uefi":
             lines.append("Boot: " + {"always": "fallback boot path is always written", "if-missing": "fallback boot path is written only if missing"}[s["removable_fallback"]])
-        if s["hidpi"] != "off" and self.desktop == "xfce":
-            lines.append(f"Display: {s['hidpi'][4:]} dpi interface scale for Xfce")
+        if s["hidpi"] != "off" and self.traits.hidpi in ("xsettings", "xresources", "sway"):
+            lines.append(f"Display: {s['hidpi'][4:]} dpi interface scale for {self.desktop.upper() if self.desktop in ('kde', 'gnome', 'lxqt') else self.desktop.capitalize()}")
         if self.fonts:
             lines.append(f"Fonts: {self.fonts[0].rsplit('/', 1)[1]} for {self.fonts[1]}")
         if self.p.warnings:
@@ -870,7 +863,8 @@ class _Planner:
             if self.proprietary:
                 return f" - proprietary driver {self.proprietary}"
             nvk = " + NVK" if self.p.scalars.get("nvk") == "yes" else ""
-            return f" - open driver (nouveau{nvk})"
+            ready = "; the NVIDIA driver is used once you accept its licence" if self.decision.available[0] else ""
+            return f" - open driver (nouveau{nvk}{ready})"
         driver = {"intel": "Intel", "amd": "AMD"}.get(gpu.vendor, gpu.vendor)
         return f" - open {driver} driver"
 
@@ -944,7 +938,7 @@ def validate_plan(manifest: InstallManifest, hardware: Mapping[str, Any] | Hardw
     hw = _profile(hardware)
     m = manifest
     decision = nvidia_decision(m, hw)
-    issues: list[Issue] = [*decision.errors, *decision.warnings]
+    issues: list[Issue] = [*decision.errors, *decision.warnings, *nvidia_policy_issues(m, hw, decision), *device_issues(m, hw)]
     issues.extend(_memory_issues(m, hw))
     issues.extend(_power_issues(m, hw))
     if _detected(hw):  # an empty profile (no probe ran) says nothing about firmware or disks
@@ -967,7 +961,8 @@ def blocking_issues(manifest: InstallManifest, hardware: Mapping[str, Any] | Har
 def _memory_issues(m: InstallManifest, hw: HardwareProfile) -> list[Issue]:
     out: list[Issue] = []
     gib = hw.memory.total_kib / recommend.KIB_PER_GIB
-    if hw.memory.total_kib and 2 <= gib < 4 and m.system.desktop in ("kde", "gnome"):
+    enough = data.desktop_traits(m.system.desktop).min_ram_gib
+    if hw.memory.total_kib and 2 <= gib < enough:
         out.append(Issue("hw.memory_tight", "info", f"This PC has {gib:.1f} GiB of memory. {m.system.desktop.upper()} will feel slow; Xfce needs less."))
     if m.hardware.hibernate:
         if m.storage.luks:
@@ -1101,11 +1096,10 @@ def _disk_issues(m: InstallManifest, hw: HardwareProfile, disk: DiskInfo) -> lis
     if not disk.serial and not disk.wwn and storage.device_id_kind != "path":
         out.append(Issue("hw.st_no_serial", "info", "This disk has no serial number or WWN. It must be identified by its bus connection, size and model, which you have to approve."))
     if storage.mode == "erase" and disk.size:
-        root_mib = disk.size // 1024**2 - (1024 if storage.firmware == "uefi" else 3) - (1024 if storage.luks else 0) - storage.swap_mib \
-            - (storage.home_mib if storage.separate_home else 0)
+        root_mib = _erase_root_mib(m, disk)
         minimum, recommended = recommend.minimum_root_gib(m.system.desktop, m.portage.binhost)
         if root_mib < minimum * 1024:
-            out.append(Issue("hw.disk_too_small", "error", f"The root filesystem would get {max(root_mib, 0) / 1024:.0f} GiB, but {m.system.desktop.upper() if m.system.desktop != 'minimal' else 'a minimal system'} needs at least {minimum} GiB."))
+            out.append(Issue("hw.disk_too_small", "error", f"The root filesystem would get {max(root_mib, 0) / 1024:.0f} GiB, but {m.system.desktop.upper() if data.desktop_traits(m.system.desktop).graphical else 'a minimal system'} needs at least {minimum} GiB."))
         elif root_mib < recommended * 1024:
             out.append(Issue("hw.disk_small", "warning", f"The root filesystem would get {root_mib / 1024:.0f} GiB; {recommended} GiB is recommended."))
     return out

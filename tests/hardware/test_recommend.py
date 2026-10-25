@@ -101,8 +101,10 @@ def test_the_authors_pc_only_gets_the_optional_nvidia_suggestion():
     result = found(m, fixture_dict("asus-desktop-rtx4090"))
     assert set(result) == {"rec.nvidia_proprietary"}
     suggestion = result["rec.nvidia_proprietary"]
-    assert (suggestion.field, suggestion.suggestion, suggestion.severity) == ("hardware.gpu_driver", "nvidia", "info")
-    assert "595" in suggestion.message and "licence" in suggestion.message
+    assert (suggestion.field, suggestion.suggestion, suggestion.severity) == ("hardware.gpu_driver", "", "info")
+    assert "595" in suggestion.message and "licence" in suggestion.message and "open kernel modules" in suggestion.message
+    chosen = found(manifest(hardware={"gpu_driver": "nouveau"}), fixture_dict("asus-desktop-rtx4090"))["rec.nvidia_proprietary"]
+    assert (chosen.field, chosen.suggestion) == ("hardware.gpu_driver", "auto")
 
 
 @pytest.mark.parametrize(("ram", "desktop", "code", "suggestion"), [
@@ -189,6 +191,7 @@ def test_graphics_advice():
     assert "rec.nvidia_legacy" in found(manifest(), profile(gpus=(gpu("nvidia", "kepler"),)))
     already = found(manifest(hardware={"gpu_driver": "nvidia", "nvidia_license_accepted": True}), profile(gpus=(gpu("nvidia", "turing+"),)))
     assert "rec.nvidia_proprietary" not in already
+    assert "rec.nvidia_proprietary" not in found(manifest(hardware={"nvidia_license_accepted": True}), profile(gpus=(gpu("nvidia", "ampere_plus"),)))   # Automatic does it
     assert "rec.nvidia_proprietary" not in found(manifest(), profile(hypervisor="qemu", gpus=(gpu("virtio"),)))
     assert "rec.old_intel_graphics" in found(manifest(), profile(gpus=(gpu("intel", "gen3", integrated=True),)))
     assert "rec.old_intel_graphics" not in found(manifest(portage={"binhost": False}), profile(gpus=(gpu("intel", "gen3", integrated=True),)))
@@ -256,7 +259,7 @@ def test_apply_defaults_never_fills_video_cards_or_the_nvidia_driver():
     for name in FIXTURE_NAMES:
         m = InstallManifest()
         rec.apply_defaults(m, fixture_dict(name), resolve_auto=True)
-        assert m.portage.video_cards == "" and m.hardware.gpu_driver == "nouveau" and not m.hardware.nvidia_license_accepted
+        assert m.portage.video_cards == "" and m.hardware.gpu_driver in ("auto", "nouveau") and not m.hardware.nvidia_license_accepted
 
 
 def test_the_firmware_seed_can_be_skipped_for_an_explicit_manifest():
@@ -280,10 +283,11 @@ def test_resolving_auto_does_not_change_what_the_planner_decides(name, builder):
     machine = fixture_dict(name)
     m = manifest() if builder == "openrc" else __import__("tests.hardware.builders", fromlist=["systemd"]).systemd()
     m.storage.swap_mib = 6144  # a deliberate size, which the seeding leaves alone: the compile jobs of the heavy packages follow the swap
-    before = hwplan.plan(m, machine).to_dict()
     resolved = manifest() if builder == "openrc" else __import__("tests.hardware.builders", fromlist=["systemd"]).systemd()
     resolved.storage.swap_mib = 6144
     rec.apply_defaults(resolved, machine, resolve_auto=True, include_firmware=False)
+    m.hardware.fwupd = resolved.hardware.fwupd  # seeded from the maker (LVFS): a default of its own, not the resolution of an "auto"
+    before = hwplan.plan(m, machine).to_dict()
     assert all(getattr(resolved.hardware, field) != "auto" for field in ("power", "thermald", "zram", "trim", "sof_firmware", "nvk", "prime", "removable_fallback", "hidpi"))
     after = hwplan.plan(resolved, machine).to_dict()
     # In a VM the microcode option is switched off, which only removes the explanatory note.

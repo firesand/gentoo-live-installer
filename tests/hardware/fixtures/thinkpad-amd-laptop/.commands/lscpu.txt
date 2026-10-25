@@ -1,0 +1,2 @@
+Architecture:                            x86_64
+Model name:                              AMD Ryzen 7 PRO 6850U with Radeon Graphics

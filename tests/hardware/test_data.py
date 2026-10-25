@@ -1,16 +1,22 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+
 import pytest
 
 from gentoo_installer import hardware_data as data
 
 
 @pytest.mark.parametrize(("name", "device_id", "generation", "guess"), [
-    ("AD102 [GeForce RTX 4090]", "2684", "turing+", False),
-    ("GB202 [GeForce RTX 5090]", "2b85", "turing+", False),
-    ("GA102 [GeForce RTX 3090]", "2204", "turing+", False),
-    ("TU117M [GeForce GTX 1650 Ti Mobile]", "1f95", "turing+", False),
-    ("GH100 [H100 PCIe]", "2331", "turing+", False),
+    ("AD102 [GeForce RTX 4090]", "2684", "ampere_plus", False),
+    ("GB202 [GeForce RTX 5090]", "2b85", "blackwell", False),
+    ("GB10 [GB10]", "2e12", "blackwell", False),
+    ("GA102 [GeForce RTX 3090]", "2204", "ampere_plus", False),
+    ("GA100 [A100 SXM4 40GB]", "20b0", "ampere_plus", False),  # the name wins: the id is among the Turing ones
+    ("TU117M [GeForce GTX 1650 Ti Mobile]", "1f95", "turing", False),
+    ("TU116 [GeForce GTX 1660 SUPER]", "21c4", "turing", False),
+    ("GH100 [H100 PCIe]", "2331", "ampere_plus", False),
     ("GP104 [GeForce GTX 1080]", "1b80", "maxwell-volta", False),
     ("GM107 [GeForce GTX 750 Ti]", "1380", "maxwell-volta", False),
     ("GV100 [TITAN V]", "1d81", "maxwell-volta", False),
@@ -20,7 +26,9 @@ from gentoo_installer import hardware_data as data
     ("G98 [GeForce 8400 GS]", "06e4", "older", False),
     ("NV43 [GeForce 6600]", "0141", "older", False),
     # Not in pci.ids: the id range decides, flagged as a guess.
-    ("", "2d04", "turing+", True),
+    ("", "2d04", "blackwell", True),
+    ("", "2684", "ampere_plus", True),
+    ("", "1f95", "turing", True),
     ("", "1c82", "maxwell-volta", True),
     ("", "0fc6", "older", True),
     ("Tesla K80", "102d", "older", True),
@@ -30,7 +38,7 @@ def test_classify_nvidia(name, device_id, generation, guess):
 
 
 @pytest.mark.parametrize(("generation", "branch"), [
-    ("turing+", "595"), ("maxwell-volta", "580"), ("kepler", ""), ("fermi", ""), ("older", ""), ("", ""),
+    ("blackwell", "595"), ("ampere_plus", "595"), ("turing", "595"), ("turing+", "595"), ("maxwell-volta", "580"), ("kepler", ""), ("fermi", ""), ("older", ""), ("", ""),
 ])
 def test_nvidia_branch_by_generation(generation, branch):
     assert data.nvidia_branch_for(generation) == branch
@@ -184,3 +192,69 @@ def test_offered_disks(name):
 def test_merged_keeps_order_and_deduplicates():
     assert data.merged({"a/b": ["x", "y"]}, {"a/b": ["y", "z"], "c/d": ["q"]}) == {"a/b": ["x", "y", "z"], "c/d": ["q"]}
     assert data.distinct(["b", "a", "b"]) == ["b", "a"]
+
+
+# -- the oracle: every id of NVIDIA's own list of supported cards (a slice of the 615.78.08 driver's supported-gpus.json) -------
+
+SLICE = json.loads((Path(__file__).parent / "data" / "nvidia-supported-gpus-slice.json").read_text())["gpus"]
+
+
+def _outcome(generation: str) -> str:
+    """What a generation means for the driver choice: open (595), maxwell-volta (580) or legacy (nouveau only)."""
+    if generation in data.OPEN_MODULE_GENERATIONS:
+        return "open"
+    return "maxwell-volta" if generation == "maxwell-volta" else "legacy"
+
+
+def _expected(row: dict) -> str:
+    return {"": "open", "580": "maxwell-volta"}.get(row["branch"], "legacy")
+
+
+def test_the_slice_is_not_empty_and_covers_every_branch():
+    assert len(SLICE) > 400
+    assert {row["branch"] for row in SLICE} >= {"", "580", "470", "390", "367"}
+
+
+@pytest.mark.parametrize("row", SLICE, ids=lambda row: row["id"])
+def test_every_listed_card_gets_the_branch_nvidia_lists_for_it(row):
+    named, _ = data.classify_nvidia(row["name"], row["id"])
+    guessed, guess = data.classify_nvidia("", row["id"])
+    assert _outcome(named) == _expected(row), (row, named)
+    assert _outcome(guessed) == _expected(row), (row, guessed)
+    assert guess is True
+
+
+def test_blackwell_ids_are_blackwell():
+    blackwell = [row for row in SLICE if row["name"].startswith("GB")]
+    assert len(blackwell) > 20
+    assert all(data.classify_nvidia(row["name"], row["id"]) == ("blackwell", False) for row in blackwell)
+    assert all(data.classify_nvidia("", row["id"])[0] == "blackwell" for row in blackwell)
+
+
+def test_ids_the_pci_database_does_not_know_yet_are_still_sorted_by_range():
+    unnamed = [row for row in SLICE if not row["name"] and row["branch"] == ""]
+    assert unnamed  # the newest Blackwell boards
+    assert all(data.classify_nvidia("", row["id"])[0] in data.OPEN_MODULE_GENERATIONS for row in unnamed)
+
+
+def test_kepler_boards_in_the_grid_range_are_legacy_either_way():
+    # Three GRID Kepler boards (branch 367) are listed apart from the Kepler 470 branch; both end in nouveau here.
+    grid = [row for row in SLICE if row["branch"] == "367"]
+    assert len(grid) == 3
+    assert all(_outcome(data.classify_nvidia(row["name"], row["id"])[0]) == "legacy" for row in grid)
+
+
+@pytest.mark.parametrize(("name", "slot", "integrated"), [
+    ("Meteor Lake-P [Intel Arc Graphics]", "0000:00:02.0", True),
+    ("Lunar Lake [Intel Arc Graphics 130V / 140V]", "0000:00:02.0", True),
+    ("Arrow Lake-P [Intel Graphics]", "0000:00:02.0", True),
+    ("Meteor Lake-P [Intel Arc Graphics]", "", True),   # no slot: the name has no model, so it is the processor's graphics
+    ("DG2 [Arc A770]", "0000:03:00.0", False),
+    ("BMG G21 [Arc B580]", "0000:03:00.0", False),
+    ("DG2 [Arc A770]", "", False),
+    ("Arc Pro A40", "0000:03:00.0", False),
+    ("DG1 [Iris Xe MAX Graphics]", "0000:03:00.0", False),
+    ("UHD Graphics 770", "0000:00:02.0", True),
+])
+def test_intel_arc_graphics_of_the_processor_is_integrated(name, slot, integrated):
+    assert (not data.intel_is_discrete(name, slot)) is integrated

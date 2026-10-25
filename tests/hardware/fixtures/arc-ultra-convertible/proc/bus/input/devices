@@ -1,0 +1,35 @@
+I: Bus=0011 Vendor=0001 Product=0001 Version=ab41
+N: Name="AT Translated Set 2 keyboard"
+H: Handlers=sysrq kbd leds event0
+B: PROP=0
+B: EV=120013
+
+I: Bus=0018 Vendor=27c6 Product=0f95 Version=ab41
+N: Name="GXTP7863:00 27C6:0F95 Touchpad"
+H: Handlers=mouse0 event6
+B: PROP=0
+B: EV=120013
+
+I: Bus=0018 Vendor=27c6 Product=0f95 Version=ab41
+N: Name="GXTP7863:00 27C6:0F95"
+H: Handlers=mouse1 event7
+B: PROP=0
+B: EV=120013
+
+I: Bus=0018 Vendor=04f3 Product=2c5a Version=ab41
+N: Name="ELAN9008:00 04F3:2C5A Stylus"
+H: Handlers=event8
+B: PROP=0
+B: EV=120013
+
+I: Bus=0011 Vendor=0001 Product=0001 Version=ab41
+N: Name="Intel HID switches"
+H: Handlers=event9
+B: PROP=0
+B: EV=120013
+
+I: Bus=0011 Vendor=0001 Product=0001 Version=ab41
+N: Name="Lid Switch"
+H: Handlers=event1
+B: PROP=0
+B: EV=120013

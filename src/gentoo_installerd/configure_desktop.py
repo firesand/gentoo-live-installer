@@ -88,6 +88,7 @@ class DesktopMixin(PackagesMixin):
         plan = self._plan(plan)
         atoms = self.desktop_atoms(manifest, plan)
         result = DesktopResult()
+        result.degraded.extend(self.prepare_plan_repos(manifest, plan))  # the hardware plan's extra software sources (overlays), before their packages
         problem = self.prepare_companions(manifest)
         if problem:
             result.degraded.append("The companion applications were skipped: " + problem)

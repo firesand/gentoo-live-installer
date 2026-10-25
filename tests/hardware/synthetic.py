@@ -300,13 +300,40 @@ class Builder:
         self.link(base + "/device", f"../../../{driver}.{index}")
         self.link(base + "/device/driver", driver_link(subsystem, driver))
 
-    def usb(self, name: str, vendor: str, product: str, device_class: str = "00", interfaces: tuple[str, ...] = ()) -> None:
+    def usb(self, name: str, vendor: str, product: str, device_class: str = "00", interfaces: tuple[str, ...] = (), *, manufacturer: str = "",
+            label: str = "") -> None:
         base = f"/sys/bus/usb/devices/{name}"
         self.file(base + "/idVendor", vendor + "\n")
         self.file(base + "/idProduct", product + "\n")
+        if manufacturer:
+            self.file(base + "/manufacturer", manufacturer + "\n")
+        if label:
+            self.file(base + "/product", label + "\n")
         self.file(base + "/bDeviceClass", device_class + "\n")
         for index, klass in enumerate(interfaces):
             self.file(f"{base}/{name}:1.{index}/bInterfaceClass", klass + "\n")
+
+    # -- platform drivers and laptop sysfs -------------------------------------------------------------
+
+    def platform_driver(self, name: str) -> None:
+        self.file(f"/sys/bus/platform/drivers/{name}/bind", "")
+
+    def platform_profile(self, choices: str = "low-power balanced performance") -> None:
+        self.file("/sys/firmware/acpi/platform_profile", "balanced\n")
+        self.file("/sys/firmware/acpi/platform_profile_choices", choices + "\n")
+
+    def led(self, name: str) -> None:
+        self.file(f"/sys/class/leds/{name}/brightness", "0\n")
+
+    def sleep(self, mem_sleep: str = "[s2idle] deep", pm_profile: int = 2) -> None:
+        self.file("/sys/power/mem_sleep", mem_sleep + "\n")
+        self.file("/sys/firmware/acpi/pm_profile", f"{pm_profile}\n")
+
+    def charge_limit(self, battery: str, end: int = 100) -> None:
+        self.file(f"/sys/class/power_supply/{battery}/charge_control_end_threshold", f"{end}\n")
+
+    def iio(self, index: int, name: str) -> None:
+        self.file(f"/sys/bus/iio/devices/iio:device{index}/name", name + "\n")
 
     def tpm(self, major: str = "2") -> None:
         self.file("/sys/class/tpm/tpm0/tpm_version_major", major + "\n")
@@ -623,9 +650,139 @@ def desktop_igpu_idle(dest: Path, source: Path | None = None) -> Path:
     return dest
 
 
+def laptop_disk(b: Builder, model: str = "Samsung SSD 980 PRO 1TB") -> None:
+    """One NVMe disk and the live USB stick, for the laptops that only exist to exercise vendor probes."""
+    b.pci("0000:00:1d.0", "010802", "144d", "a80a", "nvme")
+    b.block("nvme0n1", "../devices/pci0000:00/0000:00:1d.0/nvme/nvme0/nvme0n1", 1_000_204_886_016, rota=False, model=model, dev="259:0",
+            by_path="pci-0000:00:1d.0-nvme-1")
+    live = live_usb(b, bus_slot="0000:00:14.0")
+    b.lsblk([lsblk_disk("nvme0n1", 1_000_204_886_016, tran="nvme", model=model, serial="S64XXXXXXXXXXXX", maj_min="259:0",
+                        children=[lsblk_part("nvme0n1p1", 500 * 1024 ** 2, fstype="vfat", parttype=ESP_TYPE, maj_min="259:1")]), live])
+
+
+def asus_rog_laptop() -> None:
+    b = Builder("asus-rog-laptop")
+    b.dmi(sys_vendor="ASUSTeK COMPUTER INC.", product_name="ROG Zephyrus G14 GA402XI_GA402XI", product_version="1.0", bios_vendor="American Megatrends International, LLC.",
+          bios_version="GA402XI.318", bios_date="03/05/2024", board_vendor="ASUSTeK COMPUTER INC.", board_name="GA402XI", chassis_type=10)
+    b.cpu(vendor_id="AuthenticAMD", model_name="AMD Ryzen 9 7940HS w/ Radeon 780M Graphics", family=25, model=116, stepping=1, flags=FLAGS_ZEN2_MOBILE,
+          threads=16, cores=8)
+    b.memory(16_000_000 - 512_000, 13_900_000, 0)
+    b.efi(secure_boot=False, setup_mode=False, boot_entries=("Windows Boot Manager",))
+    b.pci("0000:65:00.0", "030000", "1002", "15bf", "amdgpu", boot_vga=True, parent="0000:00:08.1")
+    b.pci("0000:01:00.0", "030200", "10de", "28e0", "nouveau", runtime="suspended", parent="0000:00:01.1")
+    b.drm("card0", "0000:65:00.0", {"eDP-1": ("connected", make_edid(2560, 1600, 301, 188, "AUO8AA0", "AUO"), "2560x1600\n1920x1200\n")}, parent="0000:00:08.1")
+    b.drm("card1", "0000:01:00.0", {}, parent="0000:00:01.1")
+    b.supply("BAT0", "Battery", scope="System", status="Discharging", capacity=70)
+    b.charge_limit("BAT0")
+    b.supply("ACAD", "Mains", online=False)
+    b.backlight("amdgpu_bl1")
+    b.input_device("AT Translated Set 2 keyboard", "sysrq kbd leds event0")
+    b.input_device("ASUE120A:00 04F3:319B Touchpad", "mouse0 event6", bus="0018", vendor="04f3", product="319b")
+    b.input_device("Lid Switch", "event1")
+    b.usb("1-3", "0b05", "19b6", "00", ("03",), manufacturer="ASUSTeK Computer Inc.", label="N-KEY Device")
+    b.usb("1-4", "0b05", "19af", "00", ("03",), manufacturer="ASUSTeK Computer Inc.", label="AURA LED Controller")
+    b.bluetooth()
+    b.platform_driver("asus-nb-wmi")
+    b.platform_profile()
+    b.led("asus::kbd_backlight")
+    b.sleep("[s2idle]", 2)
+    b.tpm()
+    b.rtc(NOW)
+    laptop_disk(b)
+    b.finish()
+
+
+def razer_blade_laptop() -> None:
+    b = Builder("razer-blade-laptop")
+    b.dmi(sys_vendor="Razer", product_name="Blade 15 Base Model (2020)", product_version="8.04", bios_vendor="Razer", bios_version="01.04",
+          bios_date="09/15/2020", board_vendor="Razer", board_name="CH570", chassis_type=10)
+    b.cpu(vendor_id="GenuineIntel", model_name="Intel(R) Core(TM) i7-10750H CPU @ 2.60GHz", family=6, model=165, stepping=2, flags=FLAGS_KABYLAKE_H,
+          threads=12, cores=6)
+    b.memory(16_000_000 - 512_000, 13_900_000, 0)
+    b.efi(secure_boot=False, setup_mode=False, boot_entries=("Windows Boot Manager",))
+    b.pci("0000:00:02.0", "030000", "8086", "9bc4", "i915", boot_vga=True)
+    b.pci("0000:01:00.0", "030200", "10de", "249d", "nouveau", runtime="suspended", parent="0000:00:01.0")
+    b.drm("card0", "0000:00:02.0", {"eDP-1": ("connected", make_edid(1920, 1080, 344, 194, "SDC4147", "SDC"), "1920x1080\n")})
+    b.drm("card1", "0000:01:00.0", {}, parent="0000:00:01.0")
+    b.supply("BAT0", "Battery", scope="System", status="Discharging", capacity=64)
+    b.supply("AC0", "Mains", online=False)
+    b.backlight()
+    b.input_device("AT Translated Set 2 keyboard", "sysrq kbd leds event0")
+    b.input_device("Lid Switch", "event1")
+    b.usb("1-3", "1532", "026f", "00", ("03",), manufacturer="Razer", label="Razer Blade")
+    b.bluetooth()
+    b.sleep("[s2idle]", 2)
+    b.tpm()
+    b.rtc(NOW)
+    laptop_disk(b)
+    b.finish()
+
+
+def arc_ultra_convertible() -> None:
+    b = Builder("arc-ultra-convertible")
+    b.dmi(sys_vendor="LENOVO", product_name="83DN", product_version="Yoga Pro 9 16IMH9", bios_vendor="LENOVO", bios_version="N0XET32W (1.14 )",
+          bios_date="05/23/2024", board_vendor="LENOVO", board_name="LNVNB161216", chassis_type=31)
+    b.cpu(vendor_id="GenuineIntel", model_name="Intel(R) Core(TM) Ultra 9 185H", family=6, model=170, stepping=4, flags=FLAGS_TIGERLAKE_H, threads=22, cores=16)
+    b.memory(32_000_000 - 1_000_000, 27_500_000, 0)
+    b.efi(secure_boot=False, setup_mode=False, boot_entries=("Windows Boot Manager",))
+    b.pci("0000:00:02.0", "030000", "8086", "7d55", "i915", boot_vga=True)
+    b.pci("0000:01:00.0", "030200", "10de", "28a1", "nouveau", runtime="suspended", parent="0000:00:01.0")
+    b.pci("0000:00:05.0", "048000", "8086", "7d19", "intel-ipu6")
+    b.drm("card0", "0000:00:02.0", {"eDP-1": ("connected", make_edid(3200, 2000, 346, 216, "LEN8DA3", "LEN"), "3200x2000\n")})
+    b.drm("card1", "0000:01:00.0", {}, parent="0000:00:01.0")
+    b.supply("BAT0", "Battery", scope="System", status="Discharging", capacity=90)
+    b.charge_limit("BAT0")
+    b.supply("AC", "Mains", online=False)
+    b.backlight()
+    b.input_device("AT Translated Set 2 keyboard", "sysrq kbd leds event0")
+    b.input_device("GXTP7863:00 27C6:0F95 Touchpad", "mouse0 event6", bus="0018", vendor="27c6", product="0f95")
+    b.input_device("GXTP7863:00 27C6:0F95", "mouse1 event7", bus="0018", vendor="27c6", product="0f95")
+    b.input_device("ELAN9008:00 04F3:2C5A Stylus", "event8", bus="0018", vendor="04f3", product="2c5a")
+    b.input_device("Intel HID switches", "event9")
+    b.input_device("Lid Switch", "event1")
+    b.iio(0, "accel_3d")
+    b.iio(1, "als")
+    b.usb("1-6", "27c6", "6594", "ff", ("ff",), manufacturer="Goodix", label="Goodix MOC Fingerprint Sensor")
+    b.bluetooth()
+    b.sleep("[s2idle]", 2)
+    b.tpm()
+    b.rtc(NOW)
+    laptop_disk(b)
+    b.finish()
+
+
+def thinkpad_amd_laptop() -> None:
+    b = Builder("thinkpad-amd-laptop")
+    b.dmi(sys_vendor="LENOVO", product_name="21CQ", product_version="ThinkPad T14s Gen 3", bios_vendor="LENOVO", bios_version="R22ET41W (1.16 )",
+          bios_date="02/01/2024", board_vendor="LENOVO", board_name="21CQ", chassis_type=10)
+    b.cpu(vendor_id="AuthenticAMD", model_name="AMD Ryzen 7 PRO 6850U with Radeon Graphics", family=25, model=68, stepping=1, flags=FLAGS_ZEN2_MOBILE, threads=16, cores=8)
+    b.memory(32_000_000 - 1_000_000, 27_500_000, 0)
+    b.efi(secure_boot=False, setup_mode=False, boot_entries=("Windows Boot Manager",))
+    b.pci("0000:33:00.0", "030000", "1002", "1681", "amdgpu", boot_vga=True, parent="0000:00:08.1")
+    b.drm("card0", "0000:33:00.0", {"eDP-1": ("connected", make_edid(1920, 1200, 301, 188, "LEN40B2", "LEN"), "1920x1200\n")}, parent="0000:00:08.1")
+    b.supply("BAT0", "Battery", scope="System", status="Discharging", capacity=77)
+    b.charge_limit("BAT0", 100)
+    b.supply("AC", "Mains", online=False)
+    b.backlight("amdgpu_bl0")
+    b.input_device("AT Translated Set 2 keyboard", "sysrq kbd leds event0")
+    b.input_device("SYNA8016:00 06CB:CE2D Touchpad", "mouse0 event5", bus="0018", vendor="06cb", product="ce2d")
+    b.input_device("Lid Switch", "event1")
+    b.usb("1-3", "06cb", "00fc", "ff", ("ff",), manufacturer="Synaptics", label="Prometheus MIS Touch Fingerprint Reader")
+    b.bluetooth()
+    b.platform_driver("thinkpad_acpi")
+    b.platform_profile()
+    b.led("tpacpi::kbd_backlight")
+    b.sleep("[s2idle] deep", 2)
+    b.tpm()
+    b.rtc(NOW)
+    laptop_disk(b)
+    b.finish()
+
+
 def build_all() -> None:
     FIXTURES.mkdir(parents=True, exist_ok=True)
-    for build in (qemu_q35_virtio, old_bios_sata_radeon, thinkpad_intel_nvidia_hybrid, amd_laptop_sof, vmware_guest, intel_rst_hidden_nvme):
+    for build in (qemu_q35_virtio, old_bios_sata_radeon, thinkpad_intel_nvidia_hybrid, amd_laptop_sof, vmware_guest, intel_rst_hidden_nvme,
+                  asus_rog_laptop, razer_blade_laptop, arc_ultra_convertible, thinkpad_amd_laptop):
         build()
 
 

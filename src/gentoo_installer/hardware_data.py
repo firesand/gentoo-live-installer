@@ -10,6 +10,7 @@ preferred over these tables by the callers.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from typing import Iterable, Mapping
 
 # ---------------------------------------------------------------------------
@@ -72,29 +73,51 @@ def gpu_vendor(vendor_id: str) -> str:
 
 # NVIDIA chip names in pci.ids start with the codename: AD102, GA104, TU117M, GP108M ...
 _NVIDIA_CHIP_RE = re.compile(r"^\s*(?P<chip>[A-Z]{1,3}\d{1,4})", re.I)
-_NVIDIA_TURING_PLUS = ("TU", "GA", "AD", "GH", "GB")
+_NVIDIA_TURING = ("TU",)
+_NVIDIA_AMPERE_PLUS = ("GA", "AD", "GH")  # Ampere, Ada Lovelace, Hopper
+_NVIDIA_BLACKWELL = ("GB",)
 _NVIDIA_MAXWELL_VOLTA = ("GM", "GP", "GV")
 _NVIDIA_KEPLER = ("GK",)
 _NVIDIA_FERMI = ("GF",)
 
-# Generation labels the planner understands.
-NVIDIA_GENERATIONS = ("turing+", "maxwell-volta", "kepler", "fermi", "older", "")
+# Generation labels the planner understands. "turing+" is the older, coarser label (Turing or newer, not told apart);
+# the probe no longer produces it, but a saved profile or a hand-made one may still carry it.
+NVIDIA_GENERATIONS = ("blackwell", "ampere_plus", "turing", "turing+", "maxwell-volta", "kepler", "fermi", "older", "")
+# Generations the open kernel modules (and the 595 branch) drive.
+OPEN_MODULE_GENERATIONS = frozenset({"blackwell", "ampere_plus", "turing", "turing+"})
+# Generations that have a proprietary driver in the tree at all.
+PROPRIETARY_GENERATIONS = OPEN_MODULE_GENERATIONS | {"maxwell-volta"}
+# Turing or newer without the Ampere test: RTD3 with the closed modules is a Turing question.
+AMPERE_PLUS_GENERATIONS = frozenset({"blackwell", "ampere_plus"})
+
+
+def is_turing_plus(generation: str) -> bool:
+    """Turing or newer (RTX 20 series and up, including every Blackwell card)."""
+    return generation in OPEN_MODULE_GENERATIONS
 
 
 def nvidia_generation_by_id(device_id: str) -> str:
     """Coarse generation from the PCI device id, used when pci.ids has no name.
 
-    NVIDIA allocated increasing id ranges per architecture: everything from
-    0x1e00 up is Turing or newer, 0x1340-0x1dff is Maxwell, Pascal and Volta.
-    Below that is Kepler or older, which share one outcome (no proprietary
-    branch in the tree), so they are not told apart here.
+    NVIDIA allocated increasing id ranges per architecture, with a few overlaps
+    (GA100 at 0x20b0 sits among the Turing ids, TU116 at 0x2182 above it); the
+    ranges below follow the supported-gpus list of the 615 driver
+    (tests/hardware/data/nvidia-supported-gpus-slice.json checks every row).
+    0x2900 and up is Blackwell, 0x2200-0x28ff Ampere, Hopper and Ada, 0x1e00-0x21ff
+    Turing (and GA100), 0x1340-0x1dff Maxwell, Pascal and Volta. Below that is
+    Kepler or older, which share one outcome (no proprietary branch in the tree),
+    so they are not told apart here.
     """
     try:
         value = int(device_id.lower().removeprefix("0x"), 16)
     except ValueError:
         return ""
+    if value >= 0x2900:
+        return "blackwell"
+    if value >= 0x2200 or 0x20B0 <= value <= 0x20FF:
+        return "ampere_plus"
     if value >= 0x1E00:
-        return "turing+"
+        return "turing"
     if value >= 0x1340:
         return "maxwell-volta"
     return "older"
@@ -103,7 +126,8 @@ def nvidia_generation_by_id(device_id: str) -> str:
 def classify_nvidia(name: str, device_id: str = "") -> tuple[str, bool]:
     """Return (generation, guessed) for an NVIDIA GPU.
 
-    The pci.ids name ("AD102 [GeForce RTX 4090]") is authoritative. A device
+    The pci.ids name ("AD102 [GeForce RTX 4090]") is authoritative, and wins over
+    the id (GA100 is Ampere although its id is in the Turing range). A device
     that is not in the database falls back to the id range and is flagged as
     guessed so the planner can warn instead of trusting it.
     """
@@ -111,8 +135,12 @@ def classify_nvidia(name: str, device_id: str = "") -> tuple[str, bool]:
     if match:
         chip = match.group("chip").upper()
         prefix = re.match(r"[A-Z]+", chip).group(0)  # type: ignore[union-attr]
-        if prefix in _NVIDIA_TURING_PLUS:
-            return "turing+", False
+        if prefix in _NVIDIA_BLACKWELL:
+            return "blackwell", False
+        if prefix in _NVIDIA_AMPERE_PLUS:
+            return "ampere_plus", False
+        if prefix in _NVIDIA_TURING:
+            return "turing", False
         if prefix in _NVIDIA_MAXWELL_VOLTA:
             return "maxwell-volta", False
         if prefix in _NVIDIA_KEPLER:
@@ -163,7 +191,10 @@ def amd_is_integrated(name: str) -> bool:
 _INTEL_GEN3 = re.compile(r"\b(?:82915|82945|82G33|82G35|82Q35|82Q33|945G|945GM|Pineview|Cedarview|GMA\s*3\d{3}|Atom Processor [DN][2-5][0-9x]{2,3})", re.I)
 _INTEL_GEN4_5 = re.compile(r"\b(?:82Q963|82G965|82946|82G41|G41|G45|GM45|GL40|Q45|Q43|Eaglelake|Cantiga|Ironlake|Arrandale|Clarkdale|4 Series|Core Processor Integrated Graphics|Mobile 4 Series)", re.I)
 _INTEL_GEN6_7 = re.compile(r"\b(Sandy ?Bridge|Ivy ?Bridge|Haswell|Valleyview|Bay ?Trail|2nd Generation Core|3rd Gen Core|4th Gen Core|Atom Processor Z36|Atom Processor E3800)", re.I)
-_INTEL_DISCRETE = re.compile(r"\b(DG[12]|Arc|BMG|Battlemage|Alchemist|Iris Xe MAX|Data Center GPU|Flex)\b", re.I)
+# A bare "Intel Arc Graphics" (Meteor Lake 8086:7d55, Lunar Lake 8086:64a0) is the processor's own graphics; the discrete cards
+# carry a model ("Arc A770", "Arc B580", "Arc Pro A40") or the codename DG1/DG2/BMG.
+_INTEL_DISCRETE = re.compile(r"\b(DG[12]|BMG|Battlemage|Alchemist|Ponte Vecchio|Iris Xe MAX|Data Center GPU|Flex)\b|\bArc(?: Pro)? [AB]\d", re.I)
+INTEL_IGPU_SLOT_SUFFIX = ":00:02.0"  # the integrated graphics always sits at bus 0, device 2
 
 
 def classify_intel_gpu(name: str) -> str:
@@ -178,7 +209,10 @@ def classify_intel_gpu(name: str) -> str:
     return "gen8+"
 
 
-def intel_is_discrete(name: str) -> bool:
+def intel_is_discrete(name: str, slot: str = "") -> bool:
+    """Whether an Intel GPU is a separate card. The slot is the stronger evidence: 00:02.0 is the processor's own graphics."""
+    if slot.lower().endswith(INTEL_IGPU_SLOT_SUFFIX):
+        return False
     return bool(_INTEL_DISCRETE.search(name or ""))
 
 
@@ -187,18 +221,59 @@ def intel_is_discrete(name: str) -> bool:
 # ---------------------------------------------------------------------------
 
 NVIDIA_ATOM = "x11-drivers/nvidia-drivers"
+DIST_KERNELS = frozenset({"gentoo-kernel-bin", "gentoo-kernel"})
+@dataclass(frozen=True)
+class DesktopTraits:
+    """What the hardware plan needs to know about a desktop. The desktop registry (B14) will own this; until it exists the table is here."""
+
+    graphical: bool = True
+    ppd_ui: bool = False  # has its own power-profile switcher, so power-profiles-daemon (or tlp-pd) is what it talks to
+    wayland: bool = False  # has a Wayland session the NVIDIA driver must support
+    toolkit: str = ""  # qt | gtk | "" (what a vendor front end should be built with)
+    min_ram_gib: float = 0.0  # below this the desktop feels slow
+    hidpi: str = ""  # who scales it: self (the desktop), xsettings, xresources, sway or "" (nothing to do)
+    brings_noto: bool = False  # its package set already installs media-fonts/noto
+
+
+DESKTOP_TRAITS: dict[str, DesktopTraits] = {
+    "minimal": DesktopTraits(graphical=False),
+    "kde": DesktopTraits(ppd_ui=True, wayland=True, toolkit="qt", min_ram_gib=4, hidpi="self", brings_noto=True),
+    "gnome": DesktopTraits(ppd_ui=True, wayland=True, toolkit="gtk", min_ram_gib=4, hidpi="self"),
+    "gnome-light": DesktopTraits(ppd_ui=True, wayland=True, toolkit="gtk", min_ram_gib=3, hidpi="self"),
+    "xfce": DesktopTraits(toolkit="gtk", hidpi="xsettings"),
+    "cinnamon": DesktopTraits(ppd_ui=True, toolkit="gtk", min_ram_gib=3, hidpi="self"),
+    "mate": DesktopTraits(toolkit="gtk", hidpi="self"),
+    "lxqt": DesktopTraits(toolkit="qt", hidpi="xresources"),
+    "sway": DesktopTraits(wayland=True, toolkit="gtk", hidpi="sway"),
+    "i3": DesktopTraits(toolkit="gtk", hidpi="xresources"),
+}
+
+
+def desktop_traits(desktop: str) -> DesktopTraits:
+    """Traits of a desktop; an unknown name is treated as a plain graphical desktop."""
+    return DESKTOP_TRAITS.get(desktop, DesktopTraits())
+
+
+WAYLAND_DESKTOPS = frozenset(name for name, traits in DESKTOP_TRAITS.items() if traits.wayland)
+QT_DESKTOPS = frozenset(name for name, traits in DESKTOP_TRAITS.items() if traits.toolkit == "qt")
+# One sentence for the three places that refuse an out-of-tree kernel module under Secure Boot signing: the plan, the GUI and the text installer.
+# {what} names the thing that is refused ("The NVIDIA driver's kernel modules", "OpenRazer").
+SECURE_BOOT_MODULES_MESSAGE = (
+    "{what} cannot be used together with Secure Boot signing: it is built outside the kernel, so its modules carry no signature the firmware trusts. "
+    "A kernel that enforces signatures refuses to load them, and one that does not marks itself as tainted. "
+    "Turn Secure Boot signing off, or leave this out. Signed modules are not available yet.")
 # Branch -> what the tree offers. The licence is a table, not read at install
 # time: the Portage tree is not on the live image. tests/hardware/test_tree_evidence.py
 # re-checks every row against the pinned snapshot.
 NVIDIA_BRANCHES: dict[str, dict[str, object]] = {
     "595": {
-        "generations": ("turing+",),
+        "generations": ("turing", "ampere_plus", "blackwell", "turing+"),
         "license": "NVIDIA-2025",
         "mask": "",  # newest stable branch: nothing to hold back
         "label": "595 (current, open kernel modules)",
     },
     "580": {
-        "generations": ("maxwell-volta", "turing+"),
+        "generations": ("maxwell-volta", "turing", "ampere_plus", "turing+"),  # not Blackwell: 580 has no support for it
         "license": "NVIDIA-2025",
         # Keep later @world updates on the long-term branch that still
         # supports Maxwell, Pascal and Volta.
@@ -208,9 +283,45 @@ NVIDIA_BRANCHES: dict[str, dict[str, object]] = {
 }
 
 
+# Video memory of the cards that have a lot of it (MiB), by marketing name; the first match wins, so the longer names come first.
+# Laptop versions of a card have less memory than the desktop card of the same name, so a name with "Laptop" or "Mobile" is not matched.
+_VRAM_BY_NAME: tuple[tuple[re.Pattern[str], int], ...] = tuple((re.compile(pattern, re.I), mib) for pattern, mib in (
+    (r"RTX 5090", 32768), (r"RTX 5080", 16384), (r"RTX 5070 Ti", 16384), (r"RTX 5070", 12288),
+    (r"RTX 4090", 24576), (r"RTX 4080", 16384), (r"RTX 4070 Ti SUPER", 16384), (r"RTX 4070 Ti", 12288), (r"RTX 4070 SUPER", 12288), (r"RTX 4070", 12288),
+    (r"RTX 3090", 24576), (r"RTX 3080 Ti", 12288), (r"RTX 3080", 10240), (r"RTX 3070", 8192),
+    (r"TITAN RTX", 24576), (r"TITAN V\b", 12288), (r"TITAN Xp", 12288), (r"RTX 2080 Ti", 11264), (r"RTX A6000", 49152), (r"RTX A5000", 24576),
+))
+
+
+def nvidia_vram_mib(name: str) -> int:
+    """Video memory of a known desktop card from its name (0 when it is not in the table or is a laptop version)."""
+    if re.search(r"mobile|laptop|max-q", name or "", re.I):
+        return 0
+    return next((mib for pattern, mib in _VRAM_BY_NAME if pattern.search(name or "")), 0)
+
+
+def vram_from_resources(text: str) -> int:
+    """The video memory implied by a PCI device's ``resource`` file: its largest prefetchable memory window, when that is 2 GiB or more.
+
+    A card with a small window (no resizable BAR) reports 256 MiB there, which says nothing about its memory, so it gives 0.
+    """
+    best = 0
+    for line in text.splitlines():
+        parts = line.split()
+        if len(parts) < 3:
+            continue
+        try:
+            start, end, flags = (int(part, 16) for part in parts[:3])
+        except ValueError:
+            continue
+        if flags & 0x200 and flags & 0x2000 and end > start:  # memory, prefetchable
+            best = max(best, (end - start + 1) // (1 << 20))
+    return best if best >= 2048 else 0
+
+
 def nvidia_branch_for(generation: str) -> str:
     """Default proprietary branch for a GPU generation, '' when none is offered."""
-    if generation == "turing+":
+    if generation in OPEN_MODULE_GENERATIONS:
         return "595"
     if generation == "maxwell-volta":
         return "580"
@@ -406,8 +517,77 @@ USB_CLASS_PRINTER = "07"
 USB_CLASS_WIRELESS = "e0"
 
 GAME_CONTROLLER_RE = re.compile(r"controller|dualsense|dualshock|gamepad|joystick|x-box|xbox|8bitdo|joy-con", re.I)
+PEN_RE = re.compile(r"\bpen\b|stylus", re.I)
+TABLET_SWITCH_RE = re.compile(r"tablet mode|tablet-mode|lid/tablet", re.I)
 TOUCHPAD_RE = re.compile(r"touchpad|trackpad|synaptics|elan.*(?:tp|pad)|alps|cirque", re.I)
 TOUCHSCREEN_RE = re.compile(r"touchscreen|touch screen|goodix|wacom.*touch|ilitek|egalax|elan.*touch|atmel.*touch|hid.*touch", re.I)
+
+# -- vendors (DMI) and USB devices that have a tool of their own ---------------------------------------------------------
+
+# (pattern on sys_vendor, then board_vendor) -> vendor family. The first match wins; a generic OEM string ("System manufacturer",
+# "To Be Filled By O.E.M.") matches nothing here, and the board vendor is tried instead. Never a serial or a UUID.
+_VENDOR_FAMILIES: tuple[tuple[re.Pattern[str], str], ...] = tuple((re.compile(pattern, re.I), family) for pattern, family in (
+    (r"^asus", "asus"), (r"^razer", "razer"), (r"^lenovo", "lenovo"), (r"^(?:dell|alienware)", "dell"), (r"^(?:hp\b|hewlett)", "hp"),
+    (r"^framework", "framework"), (r"^system76", "system76"), (r"^(?:tuxedo|tux computers)", "tuxedo"), (r"^microsoft", "microsoft"),
+    (r"^apple", "apple"), (r"^micro-star|^msi\b", "msi"), (r"^acer", "acer"), (r"^gigabyte", "gigabyte"), (r"^samsung", "samsung"),
+    (r"^huawei", "huawei"), (r"^(?:schenker|xmg)", "schenker"), (r"^clevo", "clevo"), (r"^lg electronics", "lg"), (r"^toshiba|^dynabook", "toshiba"),
+    (r"^fujitsu", "fujitsu"), (r"^google", "google"), (r"^intel", "intel"),
+))
+
+
+def vendor_family(sys_vendor: str, board_vendor: str = "") -> str:
+    """Normalised maker of the machine from DMI (asus, razer, lenovo, dell, hp, framework ...), '' when unknown or generic."""
+    for text in (sys_vendor, board_vendor):
+        for pattern, family in _VENDOR_FAMILIES:
+            if pattern.search(text.strip()):
+                return family
+    return ""
+
+
+def vendor_oem(family: str, product_name: str, product_version: str = "") -> str:
+    """The product line inside a family: rog, tuf, thinkpad, legion, victus, blade, surface, t2 ... ('' when there is none to tell)."""
+    text = f"{product_name} {product_version}".lower()
+    lines = {
+        "asus": (("tuf", "tuf"), ("rog", "rog"), ("zephyrus", "rog"), ("strix", "rog"), ("flow ", "rog")),
+        "lenovo": (("thinkpad", "thinkpad"), ("legion", "legion"), ("ideapad", "ideapad"), ("yoga", "yoga"), ("loq", "loq")),
+        "hp": (("victus", "victus"), ("omen", "omen"), ("elitebook", "elitebook"), ("probook", "probook")),
+        "razer": (("blade", "blade"),),
+        "microsoft": (("surface", "surface"),),
+        "dell": (("xps", "xps"), ("alienware", "alienware"), ("latitude", "latitude")),
+        "apple": (("macbook", "macbook"), ("imac", "imac"), ("mac mini", "macmini")),
+    }.get(family, ())
+    return next((line for needle, line in lines if needle in text), "")
+
+
+# USB vendor ids that have software of their own; the value is the key the plan and the Devices card use.
+USB_VENDORS: dict[str, str] = {
+    "1532": "razer", "0b05": "asus", "046d": "logitech", "1b1c": "corsair", "1038": "steelseries", "054c": "sony", "045e": "microsoft",
+    "057e": "nintendo", "28de": "valve", "056a": "wacom", "256c": "huion", "28bd": "xp-pen",
+}
+# ASUS USB devices are told apart by product id: only the Aura (addressable RGB) controllers are of interest for RGB tools.
+ASUS_AURA_PRODUCTS = frozenset({"1867", "1872", "18a3", "18f3", "1939", "19af", "1aa6", "1ad6", "1a52", "1bed", "1a63"})
+# Sony, Nintendo and Valve make game controllers on these ids; Microsoft also makes keyboards and mice, so its Xbox pads are
+# recognised by product id or by name.
+CONTROLLER_VENDORS = frozenset({"054c", "057e", "28de"})
+XBOX_PRODUCTS = frozenset({"028e", "028f", "02d1", "02dd", "02e0", "02e3", "02ea", "02fd", "0719", "0b00", "0b05", "0b12", "0b13", "0b20", "0b21", "0b22"})
+TABLET_VENDORS = frozenset({"056a", "256c", "28bd"})
+HINT_ONLY_USB = {"corsair": "Corsair", "steelseries": "SteelSeries"}  # only a text hint: no packaged tool the installer sets up
+
+
+def usb_role(vendor: str, product: str, name: str = "") -> str:
+    """Key of a USB device worth a tool: razer, aura, logitech, controller, tablet, corsair, steelseries ... ('' for the rest)."""
+    vendor, product = vendor.lower(), product.lower()
+    key = USB_VENDORS.get(vendor, "")
+    if vendor == "0b05":
+        return "aura" if product in ASUS_AURA_PRODUCTS else ""
+    if vendor in CONTROLLER_VENDORS:
+        return "controller"
+    if vendor == "045e":
+        return "controller" if product in XBOX_PRODUCTS or GAME_CONTROLLER_RE.search(name or "") else ""
+    if vendor in TABLET_VENDORS:
+        return "tablet"
+    return key
+
 
 # Drivers that are interface-specific ethernet over USB or phones (tethering).
 TETHERING_DRIVERS = frozenset({"rndis_host", "cdc_ether", "ipheth", "cdc_ncm"})

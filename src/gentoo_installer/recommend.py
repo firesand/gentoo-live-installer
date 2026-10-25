@@ -18,6 +18,7 @@ import math
 from dataclasses import dataclass
 from typing import Any, Mapping
 
+from . import devices
 from . import hardware_data as data
 from .hardware import HardwareProfile, gpu_label, is_hybrid
 from .manifest import InstallManifest, Storage
@@ -195,7 +196,7 @@ def recommend(profile: HardwareProfile | Mapping[str, Any] | None, manifest: Ins
             out.append(Recommendation("rec.low_memory_desktop", "warning",
                                       f"This PC has {gib:.1f} GiB of memory. A graphical desktop is not recommended; choose Minimal (no desktop) and keep compressed RAM swap on.",
                                       "system.desktop", "minimal"))
-        elif gib < 4 and desktop in ("kde", "gnome"):
+        elif gib < data.desktop_traits(desktop).min_ram_gib and desktop in ("kde", "gnome", "gnome-light", "cinnamon"):
             out.append(Recommendation("rec.tight_memory", "info",
                                       f"This PC has {gib:.1f} GiB of memory. {desktop.upper()} will feel slow; Xfce needs less.", "system.desktop", "xfce"))
         if manifest.options.install_hwmonux and nominal_ram_gib(total_kib) < HWMONUX_COMFORTABLE_GIB:
@@ -234,13 +235,15 @@ def recommend(profile: HardwareProfile | Mapping[str, Any] | None, manifest: Ins
 
     # Graphics
     nvidia = [gpu for gpu in hw.gpus if gpu.vendor == "nvidia"]
-    if nvidia and hardware.gpu_driver in ("auto", "nouveau") and not hw.machine.hypervisor:
+    if nvidia and hardware.gpu_driver in ("auto", "nouveau") and not hardware.nvidia_license_accepted and not hw.machine.hypervisor:
         branch = data.nvidia_branch_for(nvidia[0].generation)
         if branch:
+            modules = "closed kernel modules" if branch == "580" else "open kernel modules"
+            card = gpu_label(nvidia[0]) if nvidia[0].name else "your NVIDIA card"
             out.append(Recommendation("rec.nvidia_proprietary", "info",
-                                      f"The NVIDIA proprietary driver (version {branch}) is available for {gpu_label(nvidia[0]) if nvidia[0].name else 'your NVIDIA card'}. "
-                                      "The open driver works everywhere; the proprietary one is faster for games and CUDA, but it is non-free and needs you to accept NVIDIA's licence.",
-                                      "hardware.gpu_driver", "nvidia"))
+                                      f"The NVIDIA proprietary driver (version {branch}, {modules}) fits {card}. It gives the best 3D and games, but it is non-free software: "
+                                      "accept NVIDIA's licence on the Hardware page to use it, otherwise the open nouveau driver is used.",
+                                      "hardware.gpu_driver", "auto" if hardware.gpu_driver == "nouveau" else ""))
         elif nvidia[0].generation in ("kepler", "fermi", "older"):
             out.append(Recommendation("rec.nvidia_legacy", "info", "This NVIDIA card is too old for a supported proprietary driver; the open nouveau driver will be used."))
     if any(gpu.vendor == "intel" and gpu.generation == "gen3" for gpu in hw.gpus) and manifest.portage.binhost:
@@ -262,8 +265,9 @@ def recommend(profile: HardwareProfile | Mapping[str, Any] | None, manifest: Ins
 
     # Displays
     dpi = recommend_dpi(hw.displays)
-    if dpi > 96 and hardware.hidpi == "auto" and desktop == "xfce":
-        out.append(Recommendation("rec.hidpi", "info", f"The screen is dense ({dpi} dpi); Xfce will be set to {dpi} dpi so text and buttons are readable.", "hardware.hidpi", f"dpi:{dpi}"))
+    if dpi > 96 and hardware.hidpi == "auto" and data.desktop_traits(desktop).hidpi in ("xsettings", "xresources", "sway"):
+        out.append(Recommendation("rec.hidpi", "info", f"The screen is dense ({dpi} dpi); {desktop.upper() if desktop in ('kde', 'gnome', 'lxqt') else desktop.capitalize()} "
+                                  f"will be set to {dpi} dpi so text and buttons are readable.", "hardware.hidpi", f"dpi:{dpi}"))
     return out
 
 
@@ -285,6 +289,9 @@ def defaults_for(profile: HardwareProfile | Mapping[str, Any] | None, manifest: 
         changes["storage.swap_mib"] = recommend_swap_mib(hw.memory.total_kib, zram=zram, hibernate=manifest.hardware.hibernate)
     if not hw.errors_for("usb") and not hw.bluetooth.present and manifest.options.bluetooth:
         changes["options.bluetooth"] = False
+    if (hw.machine.vendor_family in devices.LVFS_VENDORS and hw.machine.form_factor in ("laptop", "tablet") and not hw.machine.hypervisor
+            and not manifest.hardware.fwupd):
+        changes["hardware.fwupd"] = True  # Dell, HP, Lenovo, Framework and System76 publish their firmware updates on the LVFS
     if hw.machine.hypervisor and manifest.options.microcode:
         changes["options.microcode"] = False  # the hypervisor owns the CPU microcode
     # A disk that moves to other screens keeps the default font; so does a font the user chose.
@@ -298,7 +305,11 @@ def defaults_for(profile: HardwareProfile | Mapping[str, Any] | None, manifest: 
             if getattr(manifest.hardware, name) == "auto" and scalars.get(key) not in (None, "", "auto"):
                 changes[f"hardware.{name}"] = scalars[key]
         if manifest.hardware.gpu_driver == "auto":
-            changes["hardware.gpu_driver"] = "nouveau"
+            plan = _plan(manifest, hw)
+            if plan.scalars.get("gpu_driver") == "nvidia":
+                changes["hardware.gpu_driver"] = "nvidia"  # Automatic with the licence ticked and a supported card
+            elif not any(issue.code == "hw.nvidia_skipped" for issue in plan.warnings):
+                changes["hardware.gpu_driver"] = "nouveau"  # a skipped NVIDIA driver stays on Automatic: the licence tick would switch it on
     return changes
 
 
