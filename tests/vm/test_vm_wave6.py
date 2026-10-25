@@ -437,3 +437,27 @@ def test_a_closed_port_is_an_error_not_a_status():
         port = probe.getsockname()[1]
     answer = w6.fetch_https(port, "rescue", "x")
     assert answer.status is None and answer.error
+
+
+# What the first real run of the AI rescue entry showed (2026-10-26): sudo ran the launcher on a pty of its own, ps cut the user
+# name to "rescue-+", and the check's own shell (its command line holds "tmux list-clients") was owned by root.
+REAL_SESSION = """1 agent /dev/pts/1 /home/rescue-ai
+2 shell /dev/pts/2 /home/rescue-ai
+---
+/dev/pts/0 pts/0 pts/0 tty1 tty1 tty1
+---
+rescue-ai tmux -u new-session -A -s rescue -n agent
+rescue-ai tmux: server (/tmp/tmux-999/default)
+"""
+
+
+def test_the_console_client_may_sit_on_sudos_pty_above_tty1() -> None:
+    result = w6.parse_session_probe(0, REAL_SESSION)
+    assert result.success, result.error
+    assert not w6.parse_session_probe(0, REAL_SESSION.replace("tty1 tty1 tty1", "pts/3 ? ?")).success, "a client that does not reach tty1 is no console client"
+
+
+def test_the_process_checks_count_tmux_and_ttyd_by_name_with_whole_user_names() -> None:
+    assert w6.TMUX_PS_COMMAND == "ps -C tmux -o user:32=,args=" and w6.SHARE_PS_COMMAND == "ps -C ttyd -o user:32=,args="
+    assert w6.TMUX_PS_COMMAND in w6.session_command() and "#{client_pid}" in w6.session_command()
+    assert not w6.parse_session_probe(0, REAL_SESSION.replace("rescue-ai tmux: server", "root tmux: server")).success

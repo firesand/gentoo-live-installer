@@ -163,7 +163,7 @@ class Stick:
             (r"gentoo-rescue-share status", self.share_status),
             (r"gentoo-rescue-share stop", self.share_stop),
             (r"gentoo-rescue-share", self.share_start),
-            (r"ps -eo user=,args= \| grep '\[t\]tyd'", self.ttyd_ps),
+            (r"ps -C ttyd -o user:32=,args=", self.ttyd_ps),
             (r"gentoo-rescue-agents status", self.agents_status_cli),
             (r"gentoo-rescue-agents install claude </dev/null", lambda c, m: (1, "gentoo-rescue-agents: do not run this as root.\n")),
             (r"agents\.load_pins\(\)\.items", self.real_pins),

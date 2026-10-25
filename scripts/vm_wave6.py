@@ -169,13 +169,20 @@ class Window:
 
 
 SESSION_WINDOWS = "tmux list-windows -t {session} -F '#{{window_index}} #{{window_name}} #{{pane_tty}} #{{pane_current_path}}'"
-SESSION_CLIENTS = "tmux list-clients -t {session} -F '#{{client_tty}}'"
+SESSION_CLIENTS = "tmux list-clients -t {session} -F '#{{client_tty}} #{{client_pid}}'"
+# The terminals of a client's ancestors: sudo (use_pty, the default of sudo 1.9.14 and later) runs the launcher on a pty of its
+# own and relays it to tty1, so the console's client sits on /dev/pts/N with a root sudo on tty1 above it (the first real run).
+CLIENT_CHAIN = ('while read -r tty pid; do chain=""; c="$pid"; while [ -n "$c" ] && [ "$c" -gt 1 ] 2>/dev/null; do '
+                'chain="$chain $(ps -o tty= -p "$c" | tr -d " ")"; c="$(ps -o ppid= -p "$c" | tr -d " ")"; done; echo "$tty$chain"; done')
+# -C: by program name, so the shell that runs this check (its command line holds "tmux list-clients") is not counted;
+# user:32: ps cuts longer names to 8 characters ("rescue-+") by default.
+TMUX_PS_COMMAND = "ps -C tmux -o user:32=,args="
 
 
 def session_command(home: str = AI_HOME) -> str:
     """Windows, clients and every tmux process, in three sections separated by ``---``."""
-    return (f"{as_ai(SESSION_WINDOWS.format(session=SESSION), home)}; echo ---; {as_ai(SESSION_CLIENTS.format(session=SESSION), home)}; "
-            "echo ---; ps -eo user=,args= | grep '[t]mux'")
+    return (f"{as_ai(SESSION_WINDOWS.format(session=SESSION), home)}; echo ---; {as_ai(SESSION_CLIENTS.format(session=SESSION), home)} | {CLIENT_CHAIN}; "
+            f"echo ---; {TMUX_PS_COMMAND}")
 
 
 def parse_session_probe(returncode: int, output: str, home: str = AI_HOME) -> ProbeResult:
@@ -202,9 +209,11 @@ def parse_session_probe(returncode: int, output: str, home: str = AI_HOME) -> Pr
             problems.append(f"window {window.name} runs on {window.tty}, not on a pty: an agent must never have a VT as its terminal")
         if window.path != home:
             problems.append(f"window {window.name} starts in {window.path}, not in {home}")
-    clients = [line.strip() for line in clients_text.strip().splitlines() if line.strip()]
-    if "/dev/tty1" not in clients:
-        problems.append(f"no tmux client is attached on /dev/tty1 (clients: {', '.join(clients) or 'none'})")
+    client_lines = [line.split() for line in clients_text.strip().splitlines() if line.strip()]
+    clients = [fields[0] for fields in client_lines]
+    on_console = any(fields[0] == "/dev/tty1" or "tty1" in fields[1:] for fields in client_lines)  # directly, or through sudo's pty
+    if not on_console:
+        problems.append(f"no tmux client is attached on /dev/tty1, directly or through sudo (clients: {', '.join(clients) or 'none'})")
     owners = sorted({line.split(None, 1)[0] for line in ps_text.strip().splitlines() if line.strip()})
     if not owners:
         problems.append("no tmux process was found")
@@ -585,7 +594,7 @@ def mount_flow(hands: Hands) -> Report:
 
 SHARE_START = "gentoo-rescue-share --minutes 5"
 SHARE_READ_ONLY = "gentoo-rescue-share --read-only --minutes 5"
-SHARE_PS_COMMAND = "ps -eo user=,args= | grep '[t]tyd'"
+SHARE_PS_COMMAND = "ps -C ttyd -o user:32=,args="  # by program name, with the whole user name (see TMUX_PS_COMMAND)
 ADDRESS_RE = re.compile(r"Address:\s+https://([\w.:-]+):(\d+)/")
 CREDENTIALS_RE = re.compile(r"(?m)^\W*User/password:\s*(\S+)\s*/\s*(\S+)\s*$")
 FINGERPRINT_LINE_RE = re.compile(r"Certificate \(SHA-256\):\s*(\S+)")
