@@ -92,8 +92,9 @@ def test_documentation_does_not_promise_what_the_kernel_cannot_do() -> None:
     for document in (README, USER_GUIDE, ISO_DOC):
         text = document.read_text()
         assert not re.search(r"safe[- ]graphics (entry|mode) (works|gives)", text, re.I)
-    assert "no generic framebuffer driver" in README.read_text()
-    assert "simpledrm" in USER_GUIDE.read_text()
+    # H1: the live kernel is built with a generic framebuffer DRM driver, so Safe graphics is a real desktop entry
+    assert "no generic framebuffer driver" not in README.read_text() and "Safe graphics" in README.read_text()
+    assert "simpledrm" in USER_GUIDE.read_text() and "Safe graphics" in USER_GUIDE.read_text()
 
 
 def test_hardware_facts_in_the_readme_match_the_image_contract() -> None:

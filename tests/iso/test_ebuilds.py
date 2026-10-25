@@ -169,7 +169,7 @@ def test_polkit_is_not_a_dependency_of_the_installer() -> None:
 
 def test_installer_ebuild_declares_optional_features_by_use_flag() -> None:
     text = ebuild_of(INSTALLER).read_text()
-    assert variable(text, "IUSE").split() == ["+btrfs", "+efi", "secureboot", "+xfs"]
+    assert variable(text, "IUSE").split() == ["+btrfs", "+efi", "safe-graphics", "secureboot", "+xfs"]
     rdepend = variable(text, "RDEPEND")
     for flag, atom in (("btrfs", "sys-fs/btrfs-progs"), ("efi", "sys-boot/efibootmgr"), ("secureboot", "app-crypt/sbsigntools"), ("xfs", "sys-fs/xfsprogs")):
         assert re.search(rf"{flag}\?\s*\([^)]*{re.escape(atom)}[^)]*\)", rdepend), flag

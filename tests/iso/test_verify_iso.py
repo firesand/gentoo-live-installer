@@ -469,6 +469,9 @@ def live_make_conf(tmp_path: Path, pins: dict[str, str]) -> str:
     return "".join(f'{k}="{v}"\n' for k, v in live.items())
 
 
+KERNEL_CONFIG = (ROOT / "packaging/gentoo-overlay/app-admin/gentoo-live-installer/files/live-safe-graphics.config").read_text() + "CONFIG_DRM_NOUVEAU=m\n# CONFIG_DRM_EFIDRM is not set\n"
+
+
 def build_iso(tmp_path: Path, flavor: str, live_make_conf: str, pins: dict[str, str], *, mutate=None) -> Path:
     work = tmp_path / "iso-work"
     tree = work / "tree"
@@ -482,6 +485,7 @@ def build_iso(tmp_path: Path, flavor: str, live_make_conf: str, pins: dict[str, 
     values = render.token_values(env, str(work), "2", "4")
     (tree / "boot/grub/grub.cfg").write_text(render.render_text((ROOT / "iso/cd_overlay/boot/grub/grub.cfg.in").read_text(), values))
     (tree / "boot/gentoo").write_bytes(b"kernel")
+    (tree / "boot/gentoo-config").write_text(KERNEL_CONFIG)
     (tree / "boot/gentoo.igz").write_bytes(initramfs(GOOD_INITRAMFS))
     (tree / "boot/grub/i386-pc/eltorito.img").write_bytes(b"\0" * 2048)
     (tree / "boot/grub/x86_64-efi/a.mod").write_bytes(b"x")
@@ -647,3 +651,21 @@ def test_the_contract_requires_sshd_everywhere_and_no_host_keys() -> None:
     assert "sshd|default" in verify.spec_list(verify.parse_spec((ROOT / "iso/specs/livecd-stage2.spec").read_text()), "livecd/rcadd")
     report = squashfs_report(LISTING + SSH_LISTING + "file etc/ssh/ssh_host_rsa_key.pub 0644 0 0\n", files=SSH_FILES)
     assert "squashfs.forbidden" in failed(report)
+
+
+@pytest.mark.skipif(tools_missing(), reason="xorriso, isoinfo, gensquashfs and rdsquashfs are needed")
+def test_an_image_whose_kernel_has_no_generic_drm_driver_fails(tmp_path: Path, live_make_conf: str, pins: dict[str, str]) -> None:
+    """H1: the kernel of gentoo-kernel-bin cannot show a Safe graphics desktop."""
+    def binary_kernel(entries, tree):
+        (tree / "boot/gentoo-config").write_text("# CONFIG_SYSFB_SIMPLEFB is not set\n# CONFIG_DRM_SIMPLEDRM is not set\nCONFIG_FB_EFI=y\n")
+
+    iso = build_iso(tmp_path, "release", live_make_conf, pins, mutate=binary_kernel)
+    report, _ = verify.verify(iso, flavor="release", workspace=ROOT, tools=verify.Tools(iso, tmp_path / "scratch"))
+    assert failed(report) == {"kernel.generic_drm"}
+
+    def no_config(entries, tree):
+        (tree / "boot/gentoo-config").unlink()
+
+    iso = build_iso(tmp_path / "second", "release", live_make_conf, pins, mutate=no_config)
+    report, _ = verify.verify(iso, flavor="release", workspace=ROOT, tools=verify.Tools(iso, tmp_path / "scratch2"))
+    assert {"iso.required_files", "kernel.config"} <= failed(report)

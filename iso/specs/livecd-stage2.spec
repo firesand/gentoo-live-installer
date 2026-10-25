@@ -77,7 +77,19 @@ livecd/empty:
 	/var/db/repos
 	/usr/src
 
+# The kernel is built from source (sys-kernel/gentoo-kernel, Catalyst merges it with USE=-initramfs and
+# runs dracut) and not taken as the binary package: the binary has no generic framebuffer DRM driver
+# (simpledrm, efidrm, vesadrm), so the "Safe graphics" menu entry (nomodeset) could not show a desktop.
+# The kernel-build eclass merges every /etc/kernel/config.d/*.config into its configuration. That
+# fragment (50-gentoo-live-safe-graphics.config) is installed by app-admin/gentoo-live-installer[safe-graphics]
+# in stage1, so it exists when this stage builds the kernel. Do NOT add a boot/kernel/gentoo/config key:
+# for a distribution kernel Catalyst copies that file into /etc/kernel/config.d with os.makedirs (no
+# exist_ok), which fails because the directory is already there. The "kerncache" option is not used either:
+# Catalyst's kernel cache compares /var/tmp/gentoo.config, which only a genkernel build writes, so for a
+# distribution kernel it would never hit. iso/portage/make.conf keeps the binary package of gentoo-kernel
+# out of the build (--usepkg-exclude), because a binary built without the fragment would be taken.
+# scripts/verify-iso.py reads boot/gentoo-config for the symbols. Costs about 30-60 minutes of build time.
 boot/kernel: gentoo
 boot/kernel/gentoo/distkernel: yes
-boot/kernel/gentoo/sources: sys-kernel/gentoo-kernel-bin
+boot/kernel/gentoo/sources: sys-kernel/gentoo-kernel
 boot/kernel/gentoo/dracut_args: --xz --no-hostonly -a dmsquash-live -a dmsquash-live-ntfs -a mdraid -o btrfs -o crypt -o i18n -o usrmount -o lunmask -o qemu -o qemu-net -o nvdimm -o multipath -i /lib/keymaps /lib/keymaps -I busybox

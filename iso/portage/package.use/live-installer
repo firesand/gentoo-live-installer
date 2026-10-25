@@ -21,4 +21,5 @@ sys-apps/util-linux -cryptsetup
 # The live image keeps AIO cooler support in HWMonux (the ebuild leaves it off by default
 # because liquidctl is ~amd64) and Secure Boot signing tools for the installer's checks.
 app-misc/hwmonux liquidctl
-app-admin/gentoo-live-installer secureboot
+# safe-graphics installs the kernel configuration fragment for the live kernel (see the stage2 spec).
+app-admin/gentoo-live-installer secureboot safe-graphics

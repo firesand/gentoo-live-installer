@@ -11,8 +11,11 @@ script opens the ISO read-only and checks what a user's PC will depend on:
     the volume label that grub.cfg searches for, the GRUB loaders for 64-bit and 32-bit UEFI;
   * boot/grub/grub.cfg: every `linux` line carries root=live:CDLABEL=<volume id> and the
     boot arguments of iso/pins.env, the default entry has no `dokeymap`, there are text-console,
-    repair, text-install, nomodeset and Memtest86+ entries (`gentoo.autostart=` only with `nox`),
-    no entry promises a "safe graphics" desktop;
+    repair, text-install, Safe graphics (nomodeset, with the desktop) and Memtest86+ entries
+    (`gentoo.autostart=` only with `nox`);
+  * boot/gentoo-config (the live kernel's configuration): a generic framebuffer DRM driver
+    (SYSFB_SIMPLEFB + DRM_SIMPLEDRM, or DRM_EFIDRM + DRM_VESADRM), built in or, as a module, in the
+    initramfs, so that "Safe graphics" has a display device under nomodeset;
   * the initramfs: dmsquash-live and the storage modules a live medium needs;
   * image.squashfs: the required files and commands, every service in livecd/rcadd as a
     runlevel link plus init script, no builder-owned files (uid/gid 1000), a locked root
@@ -448,6 +451,21 @@ def check_grub(
             argument,
             f"no entry passes all of: {argument}",
         )
+    safe = rules.get("safe_graphics")
+    if safe:
+        # The Safe graphics entry has to start the desktop with the generic display driver.
+        found = [e for e in linux_entries if e.title.lower().startswith(safe["title_prefix"].lower())]
+        report.expect(bool(found), "grub.safe_graphics", "", f"the boot menu has no '{safe['title_prefix']}' entry")
+        for entry in found:
+            words = {w for line in entry.linux for w in line.split()}
+            lacking = [a for a in safe.get("required_arguments", []) if a not in words]
+            extra = [a for a in safe.get("forbidden_arguments", []) if a in words]
+            report.expect(
+                not lacking and not extra,
+                "grub.safe_graphics_arguments",
+                entry.title,
+                f"'{entry.title}' must pass {', '.join(lacking) or 'its arguments'} and start the desktop (not {', '.join(extra) or 'nox'})",
+            )
     titles = [e.title.lower() for e in entries]
     for wanted in rules.get("required_titles", []):
         report.expect(wanted.lower() in titles, "grub.required_titles", wanted, f"the boot menu has no entry called '{wanted}'")
@@ -538,6 +556,62 @@ def check_initramfs(report: Report, names: Sequence[str], contract: Mapping[str,
     if has_dokeymap:
         count = sum(1 for n in names if n.startswith("usr/lib/keymaps/") and n.endswith(".map"))
         report.expect(count >= int(rules.get("min_keymaps", 20)), "initramfs.keymaps", f"{count} keymaps", f"only {count} console keymaps in the initramfs, but an entry asks for dokeymap")
+
+
+# ---------------------------------------------------------------------------
+# kernel configuration (boot/gentoo-config)
+
+
+def parse_kernel_config(text: str) -> dict[str, str]:
+    """CONFIG_NAME -> 'y', 'm', 'n' (written as "is not set") or the raw value of a string/number option."""
+    symbols: dict[str, str] = {}
+    for line in text.splitlines():
+        line = line.strip()
+        match = re.fullmatch(r"CONFIG_([A-Za-z0-9_]+)=(.*)", line)
+        if match:
+            symbols[match.group(1)] = match.group(2).strip('"')
+            continue
+        match = re.fullmatch(r"# CONFIG_([A-Za-z0-9_]+) is not set", line)
+        if match:
+            symbols[match.group(1)] = "n"
+    return symbols
+
+
+def check_kernel_config(report: Report, text: str, contract: Mapping[str, Any], initramfs: Sequence[str] | None) -> None:
+    """The live kernel must have a generic framebuffer DRM driver (H1: Safe graphics).
+
+    One family of the contract has to be complete. A driver built as a module must be in the
+    initramfs (initramfs is None when it could not be read, which is reported elsewhere)."""
+    rules = contract.get("kernel_config")
+    if not rules:
+        return
+    symbols = parse_kernel_config(text)
+    problems: list[str] = []
+    for family in rules.get("families", []):
+        missing = [
+            f"CONFIG_{name}={'|'.join(wanted.split('|'))} (is {symbols.get(name, 'absent')})"
+            for name, wanted in family["symbols"].items()
+            if symbols.get(name, "n") not in wanted.split("|")
+        ]
+        if not missing:
+            names = rules.get("module_names", {})
+            stems = {re.sub(r"\.ko(\.\w+)?$", "", Path(n).name).replace("_", "-") for n in (initramfs or []) if ".ko" in Path(n).name}
+            absent = [
+                names.get(name, name.lower()) for name in family["symbols"]
+                if symbols.get(name) == "m" and initramfs is not None and names.get(name, name.lower()).replace("_", "-") not in stems
+            ]
+            if absent:
+                problems.append(f"{family['name']}: {', '.join(absent)} is a module but not in the initramfs")
+                continue
+            report.passed("kernel.generic_drm", f"{family['name']} ({', '.join(f'{n}={symbols[n]}' for n in family['symbols'])})")
+            return
+        problems.append(f"{family['name']}: " + ", ".join(missing))
+    report.failed(
+        "kernel.generic_drm",
+        "the live kernel has no generic framebuffer DRM driver, so Safe graphics (nomodeset) cannot show a desktop. "
+        + "; ".join(problems)
+        + f". {rules.get('why', '')}".rstrip(),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -831,10 +905,18 @@ def verify(
     grub_text = tools.iso_read("/boot/grub/grub.cfg").decode(errors="replace")
     check_grub(report, grub_text, expected_volid, args, files, contract)
     has_dokeymap = any("dokeymap" in line.split() for line in grub_text.splitlines() if line.strip().startswith("linux"))
+    initramfs: list[str] | None = None
     try:
-        check_initramfs(report, initramfs_names(tools.iso_read("/boot/gentoo.igz")), contract, has_dokeymap)
+        initramfs = initramfs_names(tools.iso_read("/boot/gentoo.igz"))
+        check_initramfs(report, initramfs, contract, has_dokeymap)
     except VerifyError as exc:
         report.failed("initramfs.read", str(exc))
+    config_file = contract.get("kernel_config", {}).get("file")
+    if config_file:
+        try:
+            check_kernel_config(report, tools.iso_read("/" + config_file).decode(errors="replace"), contract, initramfs)
+        except VerifyError as exc:
+            report.failed("kernel.config", f"{config_file} cannot be read: {exc}")
 
     entries = parse_description(tools.squashfs_listing())
     check_squashfs(

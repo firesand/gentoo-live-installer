@@ -106,12 +106,20 @@ def test_the_menu_offers_no_speech_output(grub_text: str, entries) -> None:
     assert not [e.title for e in entries if re.search(r"accessib|speech|speak|braille", e.title, re.I)]
 
 
-def test_no_safe_graphics_entry(entries) -> None:
-    """H1: the live kernel has no simpledrm/efidrm, so nomodeset gives a text console only."""
+def test_safe_graphics_entry_starts_the_desktop_with_nomodeset(entries) -> None:
+    """H1: the live kernel has a generic framebuffer DRM driver, so nomodeset still gives a desktop."""
+    safe = [e for e in entries if e.title.lower().startswith("safe graphics")]
+    assert len(safe) == 1
+    words = safe[0].linux[0].split()
+    assert "nomodeset" in words and "nox" not in words and "dokeymap" not in words
+    assert not any("gentoo.autostart" in w for w in words)
+    # near the top of the menu: somebody with a black screen finds it without opening the submenu
+    assert [e.title for e in entries].index(safe[0].title) <= 3
+    # no entry claims to be text only while it starts the desktop with nomodeset
     for entry in entries:
-        assert "safe graphics" not in entry.title.lower()
-        if any("nomodeset" in l.split() for l in entry.linux):
-            assert "text" in entry.title.lower(), f"'{entry.title}' must say that it is text only"
+        for line in entry.linux:
+            if "nomodeset" in line.split() and "nox" not in line.split():
+                assert "text only" not in entry.title.lower(), entry.title
 
 
 def test_memtest_block_is_present_once_and_guarded(grub_text: str) -> None:
@@ -175,9 +183,17 @@ def test_dokeymap_in_the_default_entry_is_refused(grub_text: str, pins: dict[str
     assert "grub.default_entry" in {c.id for c in report.errors}
 
 
-def test_safe_graphics_promise_is_refused(grub_text: str, pins: dict[str, str]) -> None:
-    broken = grub_text.replace("Compatibility mode (text only", "Safe graphics (nomodeset", 1)
-    assert "grub.forbidden_titles" in {c.id for c in check(broken, pins).errors}
+def test_safe_graphics_entry_without_nomodeset_or_with_nox_is_refused(grub_text: str, pins: dict[str, str]) -> None:
+    line = next(l for l in grub_text.splitlines() if l.strip().startswith("linux") and l.rstrip().endswith("cdroot nomodeset"))
+    for broken_line in (line.replace(" nomodeset", ""), line + " nox"):
+        broken = grub_text.replace(line, broken_line, 1)
+        assert "grub.safe_graphics_arguments" in {c.id for c in check(broken, pins).errors}, broken_line
+
+
+def test_a_menu_without_safe_graphics_is_refused(grub_text: str, pins: dict[str, str]) -> None:
+    broken = grub_text.replace("Safe graphics (for a black screen or no picture)", "Something else", 1)
+    ids = {c.id for c in check(broken, pins).errors}
+    assert {"grub.safe_graphics", "grub.required_titles"} <= ids
 
 
 def test_duplicate_memtest_block_is_refused(grub_text: str, pins: dict[str, str]) -> None:

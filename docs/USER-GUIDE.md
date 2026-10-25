@@ -102,12 +102,12 @@ There is no entry for speech output or braille: the disc has no screen reader (s
 |---|---|
 | The firmware shows an error about signatures, or boots something else | Secure Boot is on (section 3). |
 | The stick is not in the boot menu | Write it again with `dd`, or with Rufus in DD mode. Try another USB port (USB 2 is more reliable than USB 3 on some PCs). On a very old PC enable "Legacy boot / CSM". |
-| The menu appears, then a black screen | Wait a minute (USB sticks are slow). Then restart and choose **Install in text mode** or **Repair a system (text console)**. They need no graphics driver. |
-| The PC freezes or loses the USB stick or NVMe disk during boot | More options, **Compatibility mode** (switches off PCIe, NVMe and USB power saving; the screen is a text console), or **Old firmware**. |
+| The menu appears, then a black screen | Wait a minute (USB sticks are slow). Then restart and choose **Safe graphics**: the same desktop on a generic display driver that works on almost every PC (no 3D, so it is slower). If that fails too, choose **Install in text mode** or **Repair a system (text console)**. They need no graphics driver. |
+| The PC freezes or loses the USB stick or NVMe disk during boot | More options, **Compatibility mode** (switches off PCIe, NVMe and USB power saving and uses the generic display driver), or **Old firmware**. |
 | It is very slow | Use **Desktop in RAM**, or a USB 3 stick in a USB 3 port. |
 | A message asks to "Load keymap" | That is a text console entry. Type one of the layout names shown on the screen (for example `de` or `fr`) or press Enter for the default. You have 10 seconds. |
 
-**Why the desktop sometimes does not start.** The live kernel (Linux 6.18) has no generic framebuffer graphics driver (`simpledrm`). A graphics chip that is too new for this kernel therefore gets no desktop. `nomodeset` does not help: it gives a text console, not a desktop. The text mode entries are the way around this. They do not need graphics. [ISO.md section 9](ISO.md#9-known-limits-and-follow-ups) has the details and the planned fix.
+**Why the desktop sometimes does not start.** A graphics chip that is newer than the live kernel (Linux 6.18) has no driver there, and the screen stays black. The **Safe graphics** entry starts the desktop through the generic display driver (`simpledrm`) that shows the picture the firmware already set up: no 3D and no choice of resolution, but it works on almost every PC. The text mode entries need no graphics at all. [ISO.md section 9](ISO.md#9-known-limits-and-follow-ups) has the details.
 
 ## 5. Network, keyboard and clock
 

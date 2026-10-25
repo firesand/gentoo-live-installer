@@ -15,7 +15,8 @@
       "efi/boot/bootia32.efi",
       "boot/grub/i386-pc/eltorito.img",
       "memtest64.bios",
-      "memtest.efi64"
+      "memtest.efi64",
+      "boot/gentoo-config"
     ],
     "required_dirs": [
       "boot/grub/i386-pc",
@@ -37,8 +38,18 @@
       "nomodeset pcie_aspm=off nvme_core.default_ps_max_latency_us=0 usbcore.autosuspend=-1"
     ],
     "autostart_values": ["rescue", "installer-text"],
-    "required_titles": ["Repair a system (text console)", "Install in text mode"],
-    "forbidden_titles": ["safe graphics"]
+    "required_titles": ["Safe graphics (for a black screen or no picture)", "Repair a system (text console)", "Install in text mode"],
+    "safe_graphics": {"title_prefix": "safe graphics", "required_arguments": ["nomodeset"], "forbidden_arguments": ["nox", "dokeymap"]},
+    "forbidden_titles": []
+  },
+  "kernel_config": {
+    "file": "boot/gentoo-config",
+    "why": "H1: without a generic framebuffer DRM driver, nomodeset leaves Xorg without any display device",
+    "families": [
+      {"name": "simpledrm", "symbols": {"SYSFB_SIMPLEFB": "y", "DRM_SIMPLEDRM": "y|m"}},
+      {"name": "efidrm and vesadrm", "symbols": {"DRM_EFIDRM": "y|m", "DRM_VESADRM": "y|m"}}
+    ],
+    "module_names": {"DRM_SIMPLEDRM": "simpledrm", "DRM_EFIDRM": "efidrm", "DRM_VESADRM": "vesadrm"}
   },
   "initramfs": {
     "required": [
