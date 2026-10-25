@@ -402,6 +402,15 @@ about hardware. Its public API only grows:
 * Live-medium autostart: the kernel command-line token `gentoo.autostart=installer-text` or
   `gentoo.autostart=rescue` makes the tty1 login run `sudo gentoo-installer-text` or
   `sudo gentoo-rescue` once; both boot entries use the plain `nox` token.
+  Wave 6 adds `gentoo.autostart=ai-rescue` (boot entry "AI rescue (text console)"), which runs `gentoo-rescue-ai` as root on tty1.
+* AI rescue stick (Wave 6, package `gentoo_rescue_ai`; user guide [RESCUE-AI.md](RESCUE-AI.md)). Console scripts: `gentoo-rescue-agents`, `-login`, `-ai`,
+  `-do`, `-approver`, `-mount`, `-share`. The security rules every part keeps: the approval password is read only by the root approver
+  (`gentoo-rescue-approver --vt N --socket /run/gentoo-rescue/do.sock --audit /var/log/gentoo-rescue/do.log`, started only by its OpenRC service in
+  the AI rescue entry) from its own root-owned VT, never from a terminal a `rescue-ai` process can read or write; `rescue-ai` has no sudo rule and
+  is in no privileged group; approval is per command; the agents' controlling terminal is a pty; the phone share can never approve; agents start in
+  `~rescue-ai` and never load project config from the broken disk. The per-boot password is `/run/gentoo-rescue/do-password` (root:root 0600). The
+  tree `src/gentoo_rescue_ai/data/root/` mirrors where its files go (`etc/gentoo-rescue/AGENTS.md`, `etc/claude-code/`, `etc/skel-rescue-ai/`) and is
+  installed as it is by the ISO packaging.
 
 ## Conventions for parallel work
 
@@ -476,4 +485,3 @@ never clears a value.
   `groups`, `user_services` (systemd only), `first_steps` (written to `~/first-steps.txt` by `Configurer.write_first_steps`). `Configurer.prepare_plan_repos` runs at the start of
   `install_desktop`; `write_plan_files` writes keywords, unmask and repos.conf.
 * **Devices** (`gentoo_installer/devices.py`): `device_offers(profile, manifest)` is the single list behind the Devices card, the plan and the tests.
-* Desktop traits (`hardware_data.DESKTOP_TRAITS`) stand in for the desktop registry (B14) until it exists.
