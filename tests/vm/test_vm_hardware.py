@@ -313,7 +313,7 @@ def test_the_only_rescue_scenario_installs_a_gentoo_first_and_breaks_it_three_wa
     scenario = vm.SCENARIO_MAP["rescue-gentoo"]
     assert scenario.repair == "cli" and not scenario.in_all and scenario.breaks == ("grub-cfg", "initramfs", "fstab-uuid")
     assert all(mode in vm.vm_rescue.BREAK_MODES for mode in scenario.breaks)
-    assert sorted(name for name in vm.SCENARIO_MAP if name.startswith("rescue-")) == ["rescue-gentoo"]
+    assert sorted(name for name in vm.SCENARIO_MAP if name.startswith("rescue-")) == ["rescue-chroot", "rescue-gentoo"]  # both start from a Gentoo install
     assert not hasattr(scenario, "image") and not hasattr(vm.vm_rescue, "IMAGES")
 
 

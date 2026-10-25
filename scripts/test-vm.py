@@ -48,6 +48,7 @@ import vm_iso  # noqa: E402
 import vm_matrix  # noqa: E402
 import vm_probes  # noqa: E402
 import vm_rescue  # noqa: E402
+import vm_wave5  # noqa: E402
 from vm_hw import VMHardware  # noqa: E402
 from vm_probes import ANSI_RE, ProbeResult, parse_probe_result, parse_receipt_probe, parse_swap_probe  # noqa: E402, F401
 from vm_qmp import (  # noqa: E402
@@ -200,6 +201,11 @@ class Scenario:
     extra_roles: tuple[str, ...] = ()   # what each extra disk is: "data" (the install writes to it) or "decoy" (must survive); default all decoys
     breaks: tuple[str, ...] = ()     # damage (vm_rescue.BREAK_MODES), each repaired before the next
     repair: str = ""                 # "" | "cli": repair with gentoo-rescue
+    # --- Wave 5 (docs/TESTING.md, interface I13) ---------------------------------------------------------------
+    ssh_password_login: bool = True  # accounts.ssh_password_login: False installs a keys-only sshd (sshd -T must say so)
+    chroot: bool = False             # after the install, boot the live ISO and run gentoo-chroot non-interactively against the disk
+    live_only: bool = False          # install nothing: boot the live ISO (as --live-only does)
+    live_checks: bool = False        # live_only: remote access (gentoo-remote-access on/off, password login) and fresh SSH host keys on a second boot
 
     @property
     def hostname(self) -> str:
@@ -280,6 +286,14 @@ SCENARIO_MAP = {
                                       note="manual layout across two disks (ESP and root on one, swap and /home on the other) next to a third disk that must survive"),
     "text-install": Scenario("text-install", "openrc", "uefi", install_mode="text", boot_entry="text", in_all=False,
                              note="the console installer: the ISO's text entry, then gentoo-installer-text with a device confirmation"),
+    # --- Wave 5 (interface I13) ----------------------------------------------------------------------------------
+    "ssh-keys-only": Scenario("ssh-keys-only", "openrc", "uefi", ssh_password_login=False, in_all=False,
+                              note="accounts.ssh_password_login=false: sshd -T must show password and keyboard-interactive login off, root login off"),
+    "live-remote-access": Scenario("live-remote-access", "openrc", "uefi", live_only=True, live_checks=True, in_all=False,
+                                   hardware=_hw(vga="none"),
+                                   note="the live ISO only: sshd at boot, gentoo-remote-access status/on/off with a password login from the host, fresh host keys on a second boot"),
+    "rescue-chroot": Scenario("rescue-chroot", "openrc", "uefi", chroot=True, in_all=False,
+                              note="a minimal Gentoo installed first, then gentoo-chroot run non-interactively from the live ISO (DNS, emerge --info, grub-mkconfig; nothing left mounted)"),
     # A rescue run: a Gentoo is installed first, then broken and repaired.
     "rescue-gentoo": Scenario("rescue-gentoo", "openrc", "uefi", breaks=("grub-cfg", "initramfs", "fstab-uuid"), repair="cli", in_all=False,
                               note="a minimal Gentoo installed first, then broken and repaired three times (menu file, initramfs, fstab)"),
@@ -415,6 +429,7 @@ def build_manifest(scenario: Scenario, ssh_public_key: str, companions: str = "b
     manifest.accounts.root_password = TEST_ROOT_PASSWORD
     manifest.accounts.disable_root_login = True
     manifest.accounts.ssh_authorized_keys = [ssh_public_key.strip()]
+    manifest.accounts.ssh_password_login = scenario.ssh_password_login
     manifest.options.install_hwmonux = companions == "both"
     manifest.options.install_portagehub = companions in {"both", "portagehub"}
     manifest.options.ssh = True
@@ -1342,6 +1357,7 @@ def installed_system_probes(manifest: InstallManifest, scenario: Scenario, *, wo
     if preset.manufacturer:
         probes.append(("dmi", "cat /sys/class/dmi/id/sys_vendor /sys/class/dmi/id/chassis_type",
                        lambda c, o: parse_dmi_probe(c, o, preset)))
+    probes.extend(vm_wave5.sshd_probes(manifest, scenario.init, password))
     if hardware_plan is not None:
         plan = dict(hardware_plan)
         atoms = [vm_probes.INTEL_MICROCODE, *vm_probes.GUEST_TOOL_ATOMS]
@@ -2395,7 +2411,95 @@ class ScenarioRunner:
         self.wait_for_ssh(self.args.ssh_user, "live", live)
         if self.boot_entry is not None:
             self.check_boot_entry()
+        self.check_live_network()
         return live
+
+    # --- Wave 5 (interface I13): network_status, remote access, host keys, gentoo-chroot -------------------------------
+
+    live_network: list[dict] | None = None
+
+    def check_live_network(self) -> dict:
+        """network_status runs for real in every VM: wired, so online with a route, DNS and no problem code. A daemon without it is a warning."""
+        records = self.__dict__.setdefault("live_network", [])
+        code, log = self.ssh(self.args.ssh_user, vm_wave5.network_status_command(), f"live-network-status-{len(records) + 1}.log", self.args.command_timeout)
+        probe = vm_wave5.parse_network_status_probe(code, log.read_text(errors="replace"))
+        record = probe.record()
+        records.append(record)
+        if not probe.success and probe.advisory:
+            print(f"WARNING {self.scenario.name}: {probe.name}: {probe.error}", file=sys.stderr)
+        elif not probe.success:
+            raise HarnessError(f"network_status in the live system: {probe.error}; see {log}")
+        return record
+
+    def password_login(self, password: str) -> tuple[int, str]:
+        """A password login as the live user from the host, with the harness key out of the way (SSH_ASKPASS, never the command line)."""
+        askpass = self.run_dir / "askpass.sh"
+        askpass.write_text(vm_wave5.askpass_script(password))
+        askpass.chmod(0o700)
+        argv = vm_wave5.password_login_arguments(self.args.ssh_binary, self.args.ssh_host, self.args.ssh_port, "gentoo",
+                                                 str(self.run_dir / "known_hosts.live-password"))
+        log = self.run_dir / "live-password-login.log"
+        self.logs.append(log)
+        try:
+            done = subprocess.run(argv, capture_output=True, text=True, timeout=self.args.command_timeout, stdin=subprocess.DEVNULL,
+                                  env={**os.environ, **vm_wave5.password_login_environment(str(askpass))})
+            code, text = done.returncode, done.stdout + done.stderr
+        except subprocess.TimeoutExpired:
+            code, text = 124, "the password login timed out"
+        finally:
+            askpass.unlink(missing_ok=True)
+        with log.open("a") as handle:
+            handle.write(f"exit {code}\n{text.replace(password, '<password>')}\n")
+        return code, text
+
+    def check_live_remote_access(self) -> dict:
+        """gentoo-remote-access on the booted live medium: off at boot, on opens a password login, off closes it (vm_wave5.live_remote_access_flow)."""
+        counter = {"n": 0}
+
+        def run(command: str) -> tuple[int, str]:
+            counter["n"] += 1
+            code, log = self.ssh(self.args.ssh_user, command, f"live-remote-{counter['n']:02d}.log", self.args.command_timeout)
+            return code, log.read_text(errors="replace")
+
+        report = vm_wave5.live_remote_access_flow(run, self.password_login).to_dict()
+        (self.run_dir / "live-remote-access.json").write_text(json.dumps(report, indent=2) + "\n")
+        return report
+
+    def live_host_keys(self, label: str) -> dict[str, str]:
+        code, log = self.ssh(self.args.ssh_user, vm_wave5.HOST_KEYS_COMMAND, f"live-host-keys-{label}.log", self.args.command_timeout)
+        return vm_wave5.parse_host_keys(code, log.read_text(errors="replace"))
+
+    def live_remote_and_host_keys(self, live: VMProcess, live_result: dict) -> tuple[VMProcess, list[str]]:
+        """Remote access on this boot, the host keys of two boots of the same ISO compared. Returns the VM of the last boot and the problems."""
+        problems: list[str] = []
+        remote = self.check_live_remote_access()
+        live_result["remote_access"] = remote
+        problems += [f"remote access: {problem}" for problem in remote["problems"]]
+        first = self.live_host_keys("boot-1")
+        self.power_off_live(live)
+        live = self.boot_live()  # launch() starts the second boot with a fresh known_hosts: a changed host key must not stop the harness
+        second = self.live_host_keys("boot-2")
+        mismatch = vm_wave5.host_key_problems([first, second])
+        live_result["host_keys"] = {"boot_1": first, "boot_2": second, "problems": mismatch}
+        problems += [f"host keys: {problem}" for problem in mismatch]
+        return live, problems
+
+    def chroot_check(self, result: dict, target: VMProcess) -> None:
+        """Stop the installed system, boot the live ISO and run gentoo-chroot with its commands on standard input; nothing may stay mounted."""
+        self.stop_vm(target)
+        manifest = InstallManifest.load(self.run_dir / "manifest.json")
+        live = self.boot_live()
+        evidence: dict = {"command": vm_wave5.chroot_command()}
+        result["chroot"] = evidence
+        code, log = self.ssh(self.args.ssh_user, vm_wave5.chroot_command(), "chroot-session.log", max(600, self.args.command_timeout),
+                             stdin=vm_wave5.chroot_input(manifest.system.bootloader).encode())
+        problems = vm_wave5.chroot_problems(code, log.read_text(errors="replace"), manifest.system.bootloader)
+        done, cleanup_log = self.ssh(self.args.ssh_user, vm_rescue.cleanup_command(self.target_device), "chroot-cleanup.log", self.args.command_timeout)
+        problems += vm_rescue.cleanup_problems(done, cleanup_log.read_text(errors="replace"))
+        evidence.update(exit=code, log=log.name, problems=problems)
+        self.power_off_live(live)
+        if problems:
+            raise HarnessError("gentoo-chroot in the live system: " + "; ".join(problems) + f"; see {log}")
 
     # --- an entry of the ISO's boot menu (--boot-entry) ----------------------------------------------------------
 
@@ -2725,7 +2829,7 @@ class ScenarioRunner:
             if getattr(self.args, "target_image", None):
                 return self.run_on_existing_image(result, mode, command)
             self.prepare_boot_entry(result)
-            if getattr(self.args, "live_only", False):
+            if getattr(self.args, "live_only", False) or self.scenario.live_only:
                 return self.run_live_smoke(result)
             self.create_disks()
             live = self.boot_live()
@@ -2761,6 +2865,8 @@ class ScenarioRunner:
                 target = self.rescue_cycles(result, target, modes, command)
             if self.fresh_nvram_wanted():
                 target = self.fresh_nvram_check(result, target)
+            if self.scenario.chroot:
+                self.chroot_check(result, target)
             if decoys:
                 target.cleanup()  # every VM is stopped: the image files can be compared safely
                 self.check_decoy_images(decoys)
@@ -2796,6 +2902,10 @@ class ScenarioRunner:
                 live_result["gui"] = {"environment": sorted(self.gui_environment())}
             except HarnessError as exc:
                 problems.append(f"the graphical live session did not start on this display adapter: {exc}")
+        if self.scenario.live_checks:
+            live, extra = self.live_remote_and_host_keys(live, live_result)
+            problems += extra
+        live_result["network_status"] = list(self.live_network or [])
         live_result["problems"] = problems
         self.power_off_live(live)
         if problems:
@@ -3024,6 +3134,10 @@ def hardware_problems(scenario: Scenario, install_mode: str | None) -> list[str]
         problems.append("--vga none leaves the graphical installer without a display; use --install-mode cli")
     if scenario.luks and scenario.hardware.vga == "none":
         problems.append("--vga none leaves no screen for the keystroke LUKS unlock; add console=ttyS0 and use the serial unlock")
+    if scenario.chroot and scenario.luks:
+        problems.append("gentoo-chroot asks for the LUKS passphrase on the console, which the non-interactive check does not drive; use an unencrypted scenario")
+    if scenario.live_checks and not scenario.live_only:
+        problems.append("the remote access and host key checks run on the live ISO only (live_only)")
     return [f"{scenario.name}: {problem}" for problem in problems]
 
 

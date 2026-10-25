@@ -312,6 +312,7 @@ def test_corrupt_saved_manifest_does_not_bypass_vm_cleanup_or_result_saving(tmp_
     guest = Guest()
     runner.start_vm = lambda live: runner.vms.append(guest) or guest
     runner.wait_for_ssh = lambda *_args: None
+    runner.check_live_network = lambda: {}  # Wave 5: network_status of the live daemon (covered in test_vm_wave5_runs)
 
     def fail_install(**_kwargs):
         (tmp_path / "manifest.json").write_text("not json")

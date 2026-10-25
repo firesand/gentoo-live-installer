@@ -158,6 +158,9 @@ them and even when the harness is killed with SIGKILL (the kernel sends QEMU SIG
 | `uefi-manual-two-disks` | a manual layout across two disks (ESP and root on the first, swap and `/home` on the second) next to a third disk that must stay byte for byte as it was |
 | `text-install` | the console installer: the ISO's text entry, then `gentoo-installer-text` with a device confirmation |
 | `rescue-gentoo` | a minimal Gentoo installed first, then broken and repaired three times (menu file, initramfs, fstab) |
+| `ssh-keys-only` | `accounts.ssh_password_login=false`: `sshd -T` of the installed system must show password and keyboard-interactive login off and root login off (interface I10) |
+| `live-remote-access` | the live ISO only: sshd runs at boot, `gentoo-remote-access status/on/off` with a password login as `gentoo` from the host, fresh SSH host keys on a second boot (interface I9) |
+| `rescue-chroot` | a minimal Gentoo installed first, then `gentoo-chroot` run non-interactively from the live ISO: it finds the system, mounts it, runs commands with working DNS and leaves nothing mounted (interface I12) |
 
 The validated four set `hardware.guest_tools=none`, explicit build jobs and no microcode so that
 nothing automatic changes their configuration; the new scenarios use the installer's `auto`
@@ -224,6 +227,7 @@ Information (`world-drift`) is kept in `result.json` and is neither.
 | `world-drift` | nothing: the same command's upgrades, new packages and reinstalls are only counted and listed (`world_drift` in `result.json`). Right after an install they come from a tree that is newer than the stage3 (new versions, changed USE defaults), not from the installer | information: never a finding, never a failure, also under `--strict-probes` |
 | `install-degraded` | the installer's final event reports no `degraded` parts (a desktop package or the NVIDIA driver that failed) and no `warnings` (a cleanup that failed after a good install). The finding carries the installer's own reasons, whole (also `install.completed` in `result.json`) | finding; a failure under `--strict-probes`: a part that did not install is a real problem |
 | `dmi` | the VM shows the DMI identity the scenario asked for | failure |
+| `sshd-service`, `sshd-config` | sshd runs and is enabled at boot (`rc-service sshd status` and `rc-update show default`, or `systemctl is-active` and `is-enabled`); `sudo sshd -T` says `permitrootlogin no`, no empty passwords, and a password login is possible exactly when `accounts.ssh_password_login` is true (password authentication, or keyboard-interactive with PAM, which is how Gentoo's own drop-in asks for passwords) | failure; no sudo: finding |
 | `sudo`, `root-lock` | the new user can use sudo with the password; root's password is locked as asked | finding |
 
 `--no-world-probe` skips the world probe (minutes on a desktop); `--world-timeout` bounds it.
@@ -235,6 +239,44 @@ After the install the harness copies two files out of the live system, also when
 failed: `daemon-stderr.log` (`/var/log/gentoo-installerd.log`) and `hardware-plan.json`;
 `install-artifacts.json` says what was found. A completed event with `bootable: false` makes a
 "successful" install a failure.
+
+### The live medium and the rescue chroot (Wave 5, interface I13)
+
+`scripts/vm_wave5.py` holds the commands and the parsers; the orchestration is in `ScenarioRunner` (`check_live_network`,
+`check_live_remote_access`, `live_remote_and_host_keys`, `chroot_check`). The text of `gentoo-remote-access` and `gentoo-chroot`
+is read tolerantly (an `ssh gentoo@ADDRESS` line, a `Password:` line, `SHA256:` fingerprints, a `Remote access (SSH): enabled`
+line); a format the parsers cannot read is reported as "could not tell", never as a pass. If the iso owner words it differently,
+change `STATE_LINE_RE` and friends in `vm_wave5.py` and the recorded text in `tests/vm/test_vm_wave5.py`.
+
+* **`network_status` in every VM.** Every `boot_live` asks the live daemon for `network_status` (a short Python program that speaks the
+  daemon's socket protocol; no client library is needed in the guest). The VM is wired, so the answer must be `online`, `default_route`
+  and `dns` true, a connected ethernet device and no problem code. A daemon without `network.v1` (answer `proto.unsupported_action`) is
+  a warning on stderr and an advisory record in `result.json` (`live.network_status`), not a failure.
+* **`live-remote-access`** (use `--live-only`-style runs; the scenario implies it, with no display):
+  `rc-service sshd status` must say started at boot; `gentoo-remote-access status` must show remote access off; `on` must print the
+  password, an `ssh gentoo@ADDRESS` line and key fingerprints, and a password login as `gentoo` must work from the host; `off` must
+  make the same password fail with "Permission denied" (any other failure, such as a refused connection, is "inconclusive" and fails);
+  sshd keeps running. The host login uses plain `ssh` with `PubkeyAuthentication=no` and the password through `SSH_ASKPASS` with
+  `SSH_ASKPASS_REQUIRE=force` (OpenSSH 8.4 or newer on the host, no `sshpass`): the harness key cannot answer for the password, and the
+  password is on no command line and in no record (the generated password of a throw-away live medium does appear in the per-step logs
+  `live-remote-NN.log`, like everything else the guest prints). The ISO is then shut down and booted a second time: the fingerprints of
+  `/etc/ssh/ssh_host_*_key.pub` must differ per key type between the two boots (`live.host_keys` in `result.json`).
+  Needs the **testkey ISO** (root key login for the harness) built from the tree that has `gentoo-remote-access`.
+* **`rescue-chroot`**: after the install and the usual probes the installed VM is stopped, the live ISO is booted and
+  `gentoo-chroot` (no session argument) is started with this on standard input: `y` (the answer to its one read-write question; a tool
+  that does not ask just gets an unknown command), then marker commands (`echo "CHROOT-FOUND-$((6*7))"`; the number is computed, so the echo
+  of a typed command cannot pass for its output), `getent hosts distfiles.gentoo.org`, `emerge --info >/dev/null`, `grub-mkconfig -o /dev/null`
+  (GRUB installs only) and `exit`. Required: all markers, `/etc/gentoo-release` read inside, exit status 0, and then the cleanup check of
+  the rescue runs (`vm_rescue.cleanup_command`): nothing mounted below `/mnt/rescue`, no session file left behind, no read-only flag, no
+  `rescue-*` device-mapper volume. Encrypted installs are refused (the passphrase prompt is on the console).
+
+Commands for the lead (each needs the testkey ISO and its private key; see "Running a scenario"):
+
+```sh
+python3 scripts/test-vm.py --scenario live-remote-access --iso build/test-dist/<iso> --ssh-host 127.0.0.1 --ssh-port 40222 --ssh-private-key "$testkey" --memory 2048
+python3 scripts/test-vm.py --scenario ssh-keys-only      --iso build/test-dist/<iso> --ssh-host 127.0.0.1 --ssh-port 40222 --ssh-private-key "$testkey" --no-world-probe
+python3 scripts/test-vm.py --scenario rescue-chroot      --iso build/test-dist/<iso> --ssh-host 127.0.0.1 --ssh-port 40222 --ssh-private-key "$testkey" --no-world-probe
+```
 
 ### Making the machine different
 

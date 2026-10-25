@@ -89,6 +89,21 @@ def receipt_for(vm, scenario_name: str, firmware: str | None = None) -> str:
     return json.dumps(receipt, indent=2) + "\n"
 
 
+OPENRC_SSHD = " * status: started\n---\n            sshd |      default\n"
+SYSTEMD_SSHD = "active\n---\nenabled\n"
+NETWORK_STATUS_ANSWER = json.dumps({"events": [{"type": "result", "version": 1, "data": {
+    "online": True, "mirror": True, "default_route": True, "dns": True, "wifi_present": False, "wifi_enabled": False, "rfkill_hard": False,
+    "devices": [{"name": "ens3", "kind": "ethernet", "state": "connected", "driver": "virtio_net", "connection": "Wired connection 1",
+                 "ipv4": ["10.0.2.15/24"], "ipv6": []}], "problem": "", "message": ""}}]}) + "\n"
+
+
+def sshd_t(manifest) -> str:
+    """What ``sshd -T`` prints on a machine installed from this manifest (Gentoo's PAM drop-in turns passwords into keyboard-interactive)."""
+    password = bool(manifest.accounts.ssh_password_login)
+    return ("port 22\nusepam yes\npermitrootlogin no\npubkeyauthentication yes\npasswordauthentication no\n"
+            f"kbdinteractiveauthentication {'yes' if password else 'no'}\npermitemptypasswords no\n")
+
+
 GUEST_TOOLS = ("app-emulation/qemu-guest-agent", "app-emulation/spice-vdagent", "app-emulation/open-vm-tools", "app-emulation/virtualbox-guest-additions")
 
 
@@ -186,6 +201,10 @@ def guest_rules(vm, scenario_name: str, *, guard: str = "vm_disk_guard", install
         {"user": "^vmtest$", "match": r"emerge --color=n -pvuDN @world$", "stdout": WORLD_CLEAN},
         {"user": "^vmtest$", "match": r"^findmnt -rno TARGET,SOURCE", "stdout": layout_output(vm, scenario_name) if scenario.manual else ""},
         {"user": "^vmtest$", "match": r"^sh -c .* sh sys-firmware/intel-microcode", "stdout": package_database(plan)},
+        # Wave 5 (I13): sshd on the installed system, network_status in the live system
+        {"user": "^vmtest$", "match": r"^(?:rc-service sshd status|systemctl is-active sshd)", "stdout": SYSTEMD_SSHD if scenario.init == "systemd" else OPENRC_SSHD},
+        {"user": "^vmtest$", "match": r"sshd -T$", "stdout": sshd_t(scenario_manifest(vm, scenario_name, firmware))},
+        {"user": "^root$", "match": r"network_status", "stdout": NETWORK_STATUS_ANSWER},
     ]
     if companions == "portagehub":  # HWMonux is switched off: its absence is what the probe looks for
         rules.append({"user": "^vmtest$", "match": r"app-misc.*glob.*hwmonux-", "stdout": "absent\n"})
