@@ -9,7 +9,8 @@ import ast
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-SOURCES = [*sorted((ROOT / "src").rglob("*.py")), *sorted((ROOT / "scripts").glob("*.py")), *sorted((ROOT / "apps/hwmonux").rglob("*.py"))]
+SOURCES = [*sorted((ROOT / "src").rglob("*.py")), *sorted((ROOT / "scripts").glob("*.py")), *sorted((ROOT / "apps/hwmonux").rglob("*.py")),
+           *sorted((ROOT / "tests").rglob("*.py"))]  # in tests a second definition silently drops the first test or helper
 
 
 def _allowed(node: ast.FunctionDef | ast.AsyncFunctionDef) -> bool:

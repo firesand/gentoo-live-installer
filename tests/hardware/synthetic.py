@@ -729,7 +729,7 @@ def blackwell_desktop_rtx5090() -> None:
                    note=f"{SYNTHESIZED}; GB202 RTX 5090 (10de:2b85): only the open kernel modules of the newest branch can drive it")
 
 
-def asus_rog_laptop(name: str, *, eco: bool) -> None:
+def asus_rog_zephyrus_mux(name: str, *, eco: bool) -> None:
     """ROG Zephyrus: Intel iGPU + RTX 3070 Ti Laptop behind a MUX switch. eco=True is the same laptop with the dGPU switched off in firmware."""
     b = Builder(name)
     b.dmi(sys_vendor="ASUSTeK COMPUTER INC.", product_name="ROG Zephyrus M16 GU603ZW_GU603ZW", product_version="1.0",
@@ -780,11 +780,11 @@ def asus_rog_laptop(name: str, *, eco: bool) -> None:
 
 
 def asus_rog_zephyrus_intel_nvidia_mux() -> None:
-    asus_rog_laptop("asus-rog-zephyrus-intel-nvidia-mux", eco=False)
+    asus_rog_zephyrus_mux("asus-rog-zephyrus-intel-nvidia-mux", eco=False)
 
 
 def asus_rog_zephyrus_eco() -> None:
-    asus_rog_laptop("asus-rog-zephyrus-eco", eco=True)
+    asus_rog_zephyrus_mux("asus-rog-zephyrus-eco", eco=True)
 
 
 def razer_blade_intel_nvidia() -> None:
