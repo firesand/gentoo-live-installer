@@ -918,3 +918,15 @@ def test_the_devices_the_user_chose_reach_the_plan(make_window):
     window.customize.save_manifest()
     plan = hardware_page.hardware_plan(window.manifest, window.info.hardware)
     assert "app-misc/openrgb" in plan.optional_atoms and "sys-apps/openrazer" in plan.optional_atoms and {"plugdev", "i2c"} <= set(plan.groups)
+
+
+def test_the_licence_box_and_the_saved_licence_agree_after_leaving_and_returning_to_automatic(make_window):
+    manifest = InstallManifest()
+    manifest.hardware.nvidia_license_accepted = True
+    window = make_window(info=machine("asus-desktop-rtx4090"), manifest=manifest)
+    tab = tab_of(window)
+    tab.gpu_driver.set_value("nouveau")
+    tab.gpu_driver.set_value("auto")
+    window.customize.save_manifest()
+    assert tab.nvidia_license.isChecked() is False
+    assert window.manifest.hardware.nvidia_license_accepted is False

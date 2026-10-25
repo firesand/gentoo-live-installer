@@ -358,3 +358,28 @@ def test_hidpi_is_set_for_every_desktop_that_does_not_scale_itself():
         assert text in files_of(result)[path], desktop
     for desktop in ("kde", "gnome", "gnome-light", "cinnamon"):
         assert not [f for f in files_of(hwplan.plan(manifest(system={"desktop": desktop}), machine)) if "hidpi" in f or f.endswith(".Xresources") or "xsettings" in f], desktop
+
+
+def test_openrazer_with_a_manual_kernel_does_not_pull_a_second_kernel():
+    result = plan_for("asus-desktop-rtx4090", manifest(system={"kernel": "gentoo-sources", "initramfs": "dracut"}))
+    assert "dist-kernel" not in result.package_use.get(RAZER, [])
+    assert any("@module-rebuild" in step for step in result.first_steps)
+    default = plan_for("asus-desktop-rtx4090")
+    assert "dist-kernel" in default.package_use[RAZER]
+    none = plan_for("asus-desktop-rtx4090", manifest(system={"kernel": "gentoo-sources", "initramfs": "none", "bootloader": "none"}))
+    assert "dist-kernel" not in none.package_use.get(RAZER, [])
+
+
+def test_thunderbolt_on_kde_with_openrc_enables_boltd():
+    machine = profile(form="laptop", gpus=(gpu("amd", "gcn3+", boot=True, integrated=True),))
+    machine["peripherals"] = {"thunderbolt": True}
+    kde = hwplan.plan(manifest(system={"init": "openrc"}), machine)
+    assert ("boltd", "default") in kde.optional_services
+    systemd = hwplan.plan(manifest(system={"init": "systemd"}), machine)
+    assert ("boltd", "default") not in systemd.optional_services
+
+
+def test_the_safe_graphics_first_step_does_not_promise_an_exact_menu_title():
+    result = plan_for("asus-desktop-rtx4090", manifest(hardware={"nvidia_license_accepted": True}))
+    step = next(s for s in result.first_steps if "safe graphics" in s)
+    assert "(safe graphics)" not in step and "Gentoo Linux" not in step

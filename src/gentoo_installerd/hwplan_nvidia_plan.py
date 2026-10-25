@@ -18,7 +18,7 @@ from .hwplan_nvidia import NvidiaDecision
 
 SAFE_GRAPHICS_TITLE = "Gentoo Linux (safe graphics)"
 # The boot entry that starts when the NVIDIA driver misbehaves: no kernel mode setting, none of the NVIDIA modules, no nouveau.
-# The boot stage builds the entry from scalars["safe_graphics"].
+# The boot stage should build the entry from scalars["safe_graphics"]; the wording of the first step does not depend on the exact title.
 SAFE_GRAPHICS_CMDLINE = (
     "nomodeset",
     "modprobe.blacklist=nvidia,nvidia_drm,nvidia_modeset,nvidia_uvm,nouveau",
@@ -134,7 +134,7 @@ class NvidiaPlanMixin:
                       "if the driver misbehaves.")
         self.p.scalars["safe_graphics"] = {"title": SAFE_GRAPHICS_TITLE, "cmdline": list(SAFE_GRAPHICS_CMDLINE)}
         self.p.scalars["nvidia_flavour"] = flavour
-        self.first_step(f'If the screen stays black after an update, choose "{SAFE_GRAPHICS_TITLE}" in the boot menu; it starts without the NVIDIA driver.')  # type: ignore[attr-defined]
+        self.first_step(f'If the screen stays black after an update, choose the boot menu entry that says safe graphics; it starts without the NVIDIA driver.')  # type: ignore[attr-defined]
         self.first_step("The NVIDIA modules are rebuilt by emerge after every kernel update (USE=dist-kernel). If an update reports that the build failed, "  # type: ignore[attr-defined]
                         "run: emerge --ask @module-rebuild")
 

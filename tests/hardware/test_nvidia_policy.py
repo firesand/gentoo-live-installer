@@ -178,7 +178,7 @@ def test_a_failed_build_leaves_a_retry_hint_for_first_steps_txt():
     assert "emerge --ask x11-drivers/nvidia-drivers" in hint[5] and "download.nvidia.com" in hint[5]
     assert hint[2].rstrip().endswith("exit 0")                       # best effort, never a failure
     assert result.scalars["first_user"] == "ada"
-    assert any("Gentoo Linux (safe graphics)" in line for line in result.first_steps)
+    assert any("entry that says safe graphics" in line for line in result.first_steps)
     assert any("@module-rebuild" in line for line in result.first_steps)
 
 

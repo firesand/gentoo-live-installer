@@ -91,7 +91,11 @@ class DevicePlanMixin:
         if not self.device("openrazer"):
             return
         self.p.optional_atoms.append("sys-apps/openrazer")
-        self.use("sys-apps/openrazer", "dist-kernel")  # type: ignore[attr-defined]  # the kernel module is rebuilt with every kernel update
+        if self.m.system.kernel in data.DIST_KERNELS:
+            self.use("sys-apps/openrazer", "dist-kernel")  # type: ignore[attr-defined]  # the kernel module is rebuilt with every kernel update
+        else:
+            # dist-kernel would pull virtual/dist-kernel, a second kernel next to the user's own.
+            self.first_step("Razer devices: after every kernel change run: emerge --ask @module-rebuild")  # type: ignore[attr-defined]
         self.p.groups.append("plugdev")
         # The ebuild only ships an example autostart file (/usr/share/openrazer/openrazer-daemon.desktop) and a systemd user unit; nothing starts the
         # daemon by itself. The link is made after the package is installed, and it is a no-op when the package failed to build.
@@ -139,8 +143,8 @@ class DevicePlanMixin:
             self.use("kde-plasma/plasma-meta", "thunderbolt")  # type: ignore[attr-defined]  # pulls plasma-thunderbolt and bolt
         else:
             self.p.optional_atoms.append("sys-apps/bolt")
-            if self.init == "openrc":
-                self.service("boltd", optional=True)  # type: ignore[attr-defined]
+        if self.init == "openrc":
+            self.service("boltd", optional=True)  # type: ignore[attr-defined]  # only systemd starts bolt through D-Bus
 
     def pen(self) -> None:
         if not self.device("wacom"):

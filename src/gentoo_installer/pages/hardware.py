@@ -587,8 +587,6 @@ class HardwareTab(QWidget):
                 self.nvidia_license.blockSignals(True)
                 self.nvidia_license.setChecked(False)
                 self.nvidia_license.blockSignals(False)
-            else:
-                self._touched.discard("nvidia_license_accepted")
         self.refresh()
         self.changed.emit()
 

@@ -183,7 +183,7 @@
      ]
     ],
     "first_steps": [
-     "If the screen stays black after an update, choose \"Gentoo Linux (safe graphics)\" in the boot menu; it starts without the NVIDIA driver.",
+     "If the screen stays black after an update, choose the boot menu entry that says safe graphics; it starts without the NVIDIA driver.",
      "The NVIDIA modules are rebuilt by emerge after every kernel update (USE=dist-kernel). If an update reports that the build failed, run: emerge --ask @module-rebuild"
     ],
     "kernel_cmdline": [],
@@ -357,7 +357,7 @@
      ]
     ],
     "first_steps": [
-     "If the screen stays black after an update, choose \"Gentoo Linux (safe graphics)\" in the boot menu; it starts without the NVIDIA driver.",
+     "If the screen stays black after an update, choose the boot menu entry that says safe graphics; it starts without the NVIDIA driver.",
      "The NVIDIA modules are rebuilt by emerge after every kernel update (USE=dist-kernel). If an update reports that the build failed, run: emerge --ask @module-rebuild"
     ],
     "kernel_cmdline": [],
