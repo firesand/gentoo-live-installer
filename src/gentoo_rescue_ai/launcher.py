@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any, Callable, Sequence
 
 from . import AI_USER, DO_PASSWORD_FILE, TARGET_PREFIXES, TMUX_SESSION
+from . import preflight as checks
 from .agents import AGENTS, installed_version
 
 GUIDE_PATH = "/etc/gentoo-rescue/AGENTS.md"
@@ -250,7 +251,8 @@ def show_password_once(prompts: Prompts, password_file: str = DO_PASSWORD_FILE) 
 
 
 def main(argv: Sequence[str] | None = None, *, prompts: Prompts | None = None, run: Callable[[Sequence[str]], int] | None = None, net: NetCall = daemon_call,
-         home: str | None = None, password_file: str = DO_PASSWORD_FILE, skel: Path | None = None, require_root: bool = True) -> int:
+         home: str | None = None, password_file: str = DO_PASSWORD_FILE, skel: Path | None = None, require_root: bool = True,
+         preflight: Callable[[], list[str]] | None = None) -> int:
     arguments = list(sys.argv[1:] if argv is None else argv)
     prompts = prompts or Prompts()
     choice = arguments[0] if arguments else None
@@ -277,6 +279,13 @@ def main(argv: Sequence[str] | None = None, *, prompts: Prompts | None = None, r
     home = home or home_of()
     os.makedirs(home, exist_ok=True)
     prepare_home(home, skel, owner if os.geteuid() == 0 else None)
+    problems = (preflight or checks.check)() if (require_root or preflight is not None) else []
+    if problems:
+        prompts.say("\nThis image does not meet the safety rules of the AI rescue stick:")
+        for problem in problems:
+            prompts.say(f"  - {problem}")
+        if prompts.ask("Type yes to start anyway (the agents are then NOT kept away from root): ").lower() != "yes":
+            return 1
     show_password_once(prompts, password_file)
     online = offer_network(prompts, net)
     if prompts.yes("\nOpen your Gentoo system now (gentoo-rescue-mount)? You type a disk passphrase here, nowhere else."):
