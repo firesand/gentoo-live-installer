@@ -16,7 +16,7 @@ S="${WORKDIR}/${P}"
 LICENSE="GPL-2+"
 SLOT="0"
 KEYWORDS="amd64"
-IUSE="+btrfs +efi secureboot +xfs"
+IUSE="+btrfs +efi safe-graphics secureboot +xfs"
 RESTRICT="mirror fetch"
 
 # Everything the daemon and the repair tool run: REQUIRED_TOOLS and OPTIONAL_TOOLS in
@@ -35,9 +35,11 @@ RDEPEND="
 	app-crypt/gnupg
 	app-portage/cpuid2cpuflags
 	dev-python/pyside[gui,widgets,${PYTHON_USEDEP}]
+	net-misc/openssh
 	sec-keys/openpgp-keys-gentoo-release
 	sys-apps/coreutils
 	sys-apps/gptfdisk
+	sys-apps/iproute2
 	sys-apps/kmod
 	sys-apps/nvme-cli
 	sys-apps/pciutils
@@ -92,6 +94,17 @@ src_install() {
 	if [[ -d ${S}/src/gentoo_installerd/rescue ]]; then
 		domenu "${S}/data/gentoo-rescue.desktop"
 		dobin "${FILESDIR}/gentoo-chroot"
+	fi
+	# Console form of the live disc's remote access (I9): sshd runs at boot, this sets or
+	# removes the password of the live user and prints the addresses and key fingerprints.
+	dobin "${FILESDIR}/gentoo-remote-access"
+	if use safe-graphics; then
+		# The live kernel is built from sys-kernel/gentoo-kernel by Catalyst in stage2; the
+		# kernel-build eclass merges this fragment, so the kernel has a generic framebuffer
+		# DRM driver and the "Safe graphics" boot entry (nomodeset) shows a desktop. Only the
+		# live disc sets the flag: on an installed system the fragment would change its kernels.
+		insinto /etc/kernel/config.d
+		newins "${FILESDIR}/live-safe-graphics.config" 50-gentoo-live-safe-graphics.config
 	fi
 	newinitd "${FILESDIR}/gentoo-installerd.initd" gentoo-installerd
 	newconfd "${FILESDIR}/gentoo-installerd.confd" gentoo-installerd

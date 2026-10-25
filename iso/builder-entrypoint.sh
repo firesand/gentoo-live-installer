@@ -109,6 +109,21 @@ prepare_source_archives() {
 	done
 }
 
+# copy_vendored_distfiles OVERLAY DEST: the distfiles named by the committed Manifests of vendored
+# packages (the fetch above verified them) go next to the project's own archives, so that an
+# installation without a network builds those packages too.
+copy_vendored_distfiles() {
+	local manifest name
+	for manifest in "$1"/*/*/Manifest; do
+		[[ -f ${manifest} ]] || continue
+		while read -r name; do
+			[[ -n ${name} ]] || continue
+			[[ -f ${DISTDIR}/${name} ]] || die "the distfile ${name} of ${manifest#"$1"/} is missing from ${DISTDIR}"
+			cp -a --no-preserve=ownership -- "${DISTDIR}/${name}" "$2/"
+		done < <(awk '$1 == "DIST" { print $2 }' "${manifest}")
+	done
+}
+
 prepare_portage() {
 	local ebuild overlay_copy="${BUILD_DIR}/root_overlay/usr/local/share/gentoo-installer/overlay"
 	copy_tree_without_owner "${WORKSPACE}/packaging/gentoo-overlay" "${BUILD_DIR}/overlay"
@@ -119,8 +134,16 @@ prepare_portage() {
 	cp -a --no-preserve=ownership -- "${DISTDIR}"/gentoo-live-installer-*.tar.zst "${DISTDIR}"/hwmonux-*.tar.zst \
 		"${DISTDIR}"/portagehub-*.tar.zst "${BUILD_DIR}/root_overlay/usr/local/share/gentoo-installer/distfiles/"
 	for ebuild in "${BUILD_DIR}"/overlay/*/*/*.ebuild; do
-		env DISTDIR="${DISTDIR}" ebuild "${ebuild}" manifest
+		if [[ -f ${ebuild%/*}/Manifest ]]; then
+			# A vendored package (hardware item I01) ships its Manifest: that file is the pin. Fetching
+			# checks the tarball against it and fails on any difference; `manifest` would write
+			# whatever the server sent today.
+			env DISTDIR="${DISTDIR}" ebuild "${ebuild}" fetch
+		else
+			env DISTDIR="${DISTDIR}" ebuild "${ebuild}" manifest
+		fi
 	done
+	copy_vendored_distfiles "${BUILD_DIR}/overlay" "${BUILD_DIR}/root_overlay/usr/local/share/gentoo-installer/distfiles"
 	# The installed target needs the same authenticated distfile manifests.
 	copy_tree_without_owner "${BUILD_DIR}/overlay" "${overlay_copy}"
 
@@ -141,7 +164,9 @@ prepare_portage() {
 }
 
 # A test ISO carries a temporary root SSH key for the VM harness. Its name, its volume
-# label and its login screens say so; scripts/verify-iso.py insists on all of it.
+# label and its login screens say so; scripts/verify-iso.py insists on all of it. sshd itself
+# is in livecd/rcadd of the spec on every flavour; the test drop-in 90-installer-vm-test.conf
+# sorts before the live image's own 9999999gentoo-livecd.conf and wins (sshd takes the first value).
 configure_test_access() {
 	local key="${GENTOO_TEST_SSH_PUBLIC_KEY:-}" banner file
 	[[ -n ${key} ]] || return 0
@@ -165,16 +190,6 @@ EOF
 		install -m 0644 "${BUILD_DIR}/${file}.banner" "${BUILD_DIR}/root_overlay/etc/${file}"
 		rm -f "${BUILD_DIR}/${file}.banner"
 	done
-	python3 - "${BUILD_DIR}/livecd-stage2.spec" <<'PY'
-import pathlib
-import sys
-path = pathlib.Path(sys.argv[1])
-text = path.read_text()
-needle = "\tgentoo-installerd|default\n"
-if needle not in text:
-    raise SystemExit("cannot find the live service list")
-path.write_text(text.replace(needle, needle + "\tsshd|default\n", 1))
-PY
 }
 
 fetch_and_verify_seed() {

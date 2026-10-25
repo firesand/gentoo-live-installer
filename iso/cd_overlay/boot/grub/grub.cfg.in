@@ -18,9 +18,12 @@
 #    /etc/profile.d/20-gentoo-autostart.sh (iso/root_overlay): the first login on tty1 then
 #    starts "sudo gentoo-rescue" or "sudo gentoo-installer-text" once. The kernel ignores
 #    a parameter with a dot. Only the two text entries below carry them.
-#  * No "safe graphics" entry: the live kernel has no generic framebuffer DRM driver
-#    (simpledrm or efidrm), so nomodeset cannot give a working desktop. Entries that need
-#    nomodeset say that they are text-only.
+#  * "Safe graphics" (nomodeset) works because the live kernel is sys-kernel/gentoo-kernel built
+#    with the fragment files/50-gentoo-live-safe-graphics.config of app-admin/gentoo-live-installer:
+#    SYSFB_SIMPLEFB + DRM_SIMPLEDRM (or EFIDRM/VESADRM) are built in, so the firmware framebuffer is a
+#    DRM device that Xorg's modesetting driver uses when nomodeset keeps the native drivers (nouveau,
+#    amdgpu, i915, ...) away. scripts/verify-iso.py reads boot/gentoo-config for those symbols.
+#    The other entries that carry nomodeset use the same generic driver.
 #  * The Memtest86+ block mirrors memtest_grub() of Catalyst's iso-bootloader-setup.sh for the
 #    two images this ISO builds (64-bit BIOS and UEFI; sys-apps/memtest86+ has no bios32 USE
 #    flag set). Catalyst copies the files to the ISO root, so the entries are tested at boot.
@@ -50,6 +53,12 @@ menuentry 'Desktop in RAM (needs 6 GiB RAM, the USB stick can be removed)' --cla
 	initrd /boot/gentoo.igz
 }
 
+menuentry 'Safe graphics (for a black screen or no picture)' --class gnu-linux --class os {
+	search --no-floppy --set=root -l @VOLID@
+	linux /boot/gentoo @BOOTARGS@ root=live:CDLABEL=@VOLID@ rd.live.dir=/ rd.live.squashimg=image.squashfs cdroot nomodeset
+	initrd /boot/gentoo.igz
+}
+
 menuentry 'Repair a system (text console)' --class gnu-linux --class os {
 	search --no-floppy --set=root -l @VOLID@
 	linux /boot/gentoo @BOOTARGS@ root=live:CDLABEL=@VOLID@ rd.live.dir=/ rd.live.squashimg=image.squashfs cdroot nox dokeymap gentoo.autostart=rescue
@@ -75,7 +84,7 @@ submenu 'More options (troubleshooting)' --class gnu-linux --class os {
 		initrd /boot/gentoo.igz
 	}
 
-	menuentry 'Compatibility mode (text only, PCIe/NVMe/USB power saving off)' --class gnu-linux --class os {
+	menuentry 'Compatibility mode (generic display driver, PCIe/NVMe/USB power saving off)' --class gnu-linux --class os {
 		search --no-floppy --set=root -l @VOLID@
 		linux /boot/gentoo @BOOTARGS@ root=live:CDLABEL=@VOLID@ rd.live.dir=/ rd.live.squashimg=image.squashfs cdroot nomodeset pcie_aspm=off nvme_core.default_ps_max_latency_us=0 usbcore.autosuspend=-1
 		initrd /boot/gentoo.igz
@@ -87,7 +96,7 @@ submenu 'More options (troubleshooting)' --class gnu-linux --class os {
 		initrd /boot/gentoo.igz
 	}
 
-	menuentry 'Old firmware (no ACPI or APIC, text only)' --class gnu-linux --class os {
+	menuentry 'Old firmware (no ACPI or APIC, generic display driver)' --class gnu-linux --class os {
 		search --no-floppy --set=root -l @VOLID@
 		linux /boot/gentoo @BOOTARGS@ root=live:CDLABEL=@VOLID@ rd.live.dir=/ rd.live.squashimg=image.squashfs cdroot acpi=off noapic nomodeset
 		initrd /boot/gentoo.igz

@@ -32,6 +32,11 @@ seconds.
   Desktop in RAM                  copies the disc to memory first (needs 6
                                   GiB of RAM); afterwards you can remove the
                                   stick
+  Safe graphics                   the desktop with a generic display driver
+                                  (no 3D, no fancy resolution). Choose it
+                                  when the normal entry shows a black screen
+                                  or no picture. It works with any graphics
+                                  chip the firmware can show a picture on.
   Repair a system (text console)  no desktop. Starts the repair tool for
                                   a Gentoo system that does not start. It
                                   works with any graphics chip. It asks for
@@ -48,8 +53,8 @@ seconds.
     Verbose boot                  shows kernel and initramfs messages
     Compatibility mode            switches off PCIe, NVMe and USB power
                                   saving for machines that freeze or lose
-                                  drives. It also disables the graphics
-                                  driver, so you get a text console only.
+                                  drives. It also uses the generic display
+                                  driver, like "Safe graphics".
     Serial console                text console on COM1 at 115200 baud
     Old firmware                  no ACPI and no APIC (very old computers)
     IOMMU off                     for boards that hang with DMA remapping
@@ -67,7 +72,9 @@ section 8.
 3. THE SCREEN STAYS BLACK OR THE DESKTOP DOES NOT APPEAR
 --------------------------------------------------------
 Wait a minute: starting from a USB stick is slow. If nothing appears,
-restart and choose "Install in text mode" (to install Gentoo) or "Repair a
+restart and choose "Safe graphics": it starts the same desktop with a
+generic display driver that works on almost every PC (no 3D, so it is slower).
+If that does not help either, choose "Install in text mode" (to install Gentoo) or "Repair a
 system (text console)" (to fix a Gentoo system that does not start). Both work
 without a graphics driver, so they work on every PC. The tool starts by
 itself after you have chosen the keyboard layout. Choose "Text console only"
@@ -80,9 +87,8 @@ were tested.
 Wired networks connect by themselves. For Wi-Fi click the network icon in
 the panel or run "nmtui" in a terminal. The clock is corrected automatically
 once the network is up. On a network with a login page (hotel, campus) open
-the web browser launcher in the panel: it starts the text browser Links in a
-terminal, which handles simple login pages (pages that need JavaScript
-cannot be completed with it).
+Firefox from the application menu (the Handbook button in the panel opens it
+too). On the text console the text browser Links does simple login pages.
 
 5. KEYBOARD LAYOUT
 ------------------
@@ -137,8 +143,9 @@ you select them.
   nox                             do not start the desktop (text console)
   dokeymap                        ask for a console keyboard layout while
                                   booting
-  nomodeset                       do not load the graphics driver (text
-                                  console only)
+  nomodeset                       do not load the graphics chip's driver;
+                                  the generic display driver is used
+                                  (the "Safe graphics" entry)
   nosound                         do not load sound
   nodhcp                          do not start the old DHCP helper (already
                                   set)

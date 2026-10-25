@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Gentoo Handbook
+GenericName=Installation guide
+Comment=Read the official Gentoo Handbook for AMD64 in the web browser (needs the network)
+Exec=exo-open --launch WebBrowser https://wiki.gentoo.org/wiki/Handbook:AMD64
+Icon=help-browser
+Terminal=false
+Categories=Network;Documentation;
+Keywords=gentoo;handbook;manual;help;install;
+StartupNotify=true

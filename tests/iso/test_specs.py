@@ -22,6 +22,7 @@ SERVICE_PACKAGE = {
     "NetworkManager": "net-misc/networkmanager",
     "chronyd": "net-misc/chrony",
     "gentoo-installerd": "app-admin/gentoo-live-installer",
+    "sshd": "net-misc/openssh",
 }
 IMPLICIT_PACKAGES = {"sys-apps/systemd-utils", "sys-apps/dbus"}
 # Packages the hardware support and the repair tool need on the live medium.
@@ -97,6 +98,7 @@ def test_stage2_rcadd_is_well_formed_and_complete() -> None:
     assert "chronyd|default" in rcadd
     assert not [item for item in rcadd if item.startswith("acpid|")]
     assert "gentoo-installerd|default" in rcadd
+    assert "sshd|default" in rcadd  # I9: reachable from another computer on every flavour
 
 
 def test_stage2_boot_arguments_come_from_the_pins(pins: dict[str, str]) -> None:

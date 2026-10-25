@@ -36,6 +36,7 @@ for command_path in \
 	/usr/bin/gentoo-installer \
 	/usr/bin/gentoo-installerd \
 	/usr/bin/hwmonux \
+	/usr/bin/gentoo-remote-access \
 	/usr/bin/portagehub \
 	/usr/libexec/portagehub-helper \
 	/usr/libexec/polkit-gnome-authentication-agent-1; do
@@ -89,9 +90,34 @@ grep -q '^[[:space:]]*event_activation[[:space:]]*=[[:space:]]*0' /etc/lvm/lvmlo
 	|| fail "/etc/lvm/lvmlocal.conf must disable event activation"
 grep -q '^AUTO -all$' /etc/mdadm.conf || fail "/etc/mdadm.conf must contain 'AUTO -all'"
 grep -q '^ACPI="no"$' /etc/conf.d/autoconfig || fail "/etc/conf.d/autoconfig must keep acpid off"
+[[ -x /etc/init.d/sshd ]] || fail "sshd is not installed"
+[[ -f /etc/ssh/sshd_config.d/10-gentoo-live.conf ]] || fail "the sshd drop-in that refuses empty passwords is missing"
 [[ -x /etc/init.d/chronyd ]] || fail "chronyd is not installed"
 [[ -f /etc/elogind/logind.conf.d/50-gentoo-live.conf ]] || fail "the logind lid/idle drop-in is missing"
 [[ -f /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/thunar-volman.xml ]] || fail "the thunar-volman defaults are missing"
+
+# The live desktop's look (wave 5). The themes, icons and fonts that xsettings.xml, xfwm4.xml and
+# the greeter name must be installed, or the desktop would silently fall back to the defaults.
+for look_file in \
+	/usr/share/themes/Arc-Dark/gtk-3.0/gtk.css \
+	/usr/share/themes/Arc-Dark/xfwm4/themerc \
+	/usr/share/icons/Papirus-Dark/index.theme \
+	/usr/bin/firefox-bin; do
+	[[ -e "${look_file}" ]] || fail "The desktop look needs ${look_file}, which is missing"
+done
+fc-cache -f >/dev/null 2>&1 || true
+for font_family in "Fira Sans" "JetBrains Mono"; do
+	fc-match -f '%{family}\n' "${font_family}" | grep -q "${font_family}" || fail "The font ${font_family} is not installed"
+done
+# xfdesktop shows /usr/share/backgrounds/xfce/xfce-x.svg on every monitor that has no setting of its
+# own, and per-monitor settings depend on connector names, so the default picture becomes Indigo
+# silk. A new xfdesktop that names another file must stop the build, not leave the old wallpaper.
+default_backdrop=/usr/share/backgrounds/xfce/xfce-x.svg
+grep -aqF "${default_backdrop}" /usr/bin/xfdesktop \
+	|| fail "xfdesktop no longer names ${default_backdrop}: update iso/fsscript-stage2.sh and docs/ISO.md"
+[[ -f /usr/share/backgrounds/gentoo-live/indigo-silk.svg ]] || fail "the Indigo silk wallpaper is missing"
+install -d -m 0755 /usr/share/backgrounds/xfce
+ln -sfn ../gentoo-live/indigo-silk.svg "${default_backdrop}"
 
 # The boot menu offers Memtest86+; Catalyst copies these two files to the ISO root.
 for memtest in /boot/memtest86plus/memtest64.bios /boot/memtest86plus/memtest.efi64; do

@@ -96,7 +96,7 @@ def test_the_entries_keep_the_dracut_arguments_in_catalysts_order(entries, pins:
 def test_the_contract_names_exactly_the_values_the_menu_uses(entries) -> None:
     used = {word.split("=", 1)[1] for e in entries.values() for line in e.linux for word in line.split() if word.startswith("gentoo.autostart=")}
     assert used == set(CONTRACT["grub"]["autostart_values"]) == {"rescue", "installer-text"}
-    assert {REPAIR, TEXT_INSTALL} == set(CONTRACT["grub"]["required_titles"])
+    assert {REPAIR, TEXT_INSTALL} <= set(CONTRACT["grub"]["required_titles"])  # plus Safe graphics (H1)
 
 
 # --- the verifier refuses what would break the console hook ------------------------------------

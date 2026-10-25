@@ -215,6 +215,9 @@ def test_release_flavour_refuses_test_access_and_needs_a_locked_root() -> None:
     release_with_key = LISTING + "file root/.ssh/authorized_keys 0600 0 0\n"
     assert "flavor.release" in failed(squashfs_report(release_with_key, flavor="release", files=shadow))
     assert "flavor.release" not in failed(squashfs_report(LISTING.replace("etc/runlevels/default/sshd", "x/y"), flavor="release", files=shadow))
+    # I9: sshd itself is on every flavour now; only the test key, its drop-in and host keys are test access
+    assert "flavor.release" not in failed(squashfs_report(LISTING, flavor="release", files=shadow))
+    assert "flavor.release" in failed(squashfs_report(LISTING + "file etc/ssh/ssh_host_ed25519_key 0600 0 0\n", flavor="release", files=shadow))
     unlocked = {"/etc/shadow": "root::20000::::::\n"}
     assert "flavor.root_locked" in failed(squashfs_report(LISTING, flavor="release", files=unlocked))
     assert "flavor.root_locked" not in failed(squashfs_report(LISTING, flavor="release", files=shadow))
@@ -423,8 +426,6 @@ def image_entries(flavor: str, live_make_conf: str) -> dict[str, tuple[str, int,
         add(relative, mode=0o755 if os.access(file, os.X_OK) else 0o644, extra=file.read_text())
     spec = verify.parse_spec((ROOT / "iso/specs/livecd-stage2.spec").read_text())
     services = verify.spec_list(spec, "livecd/rcadd") + [f"{s}|{l}" for s, l in CONTRACT["squashfs"]["implicit_services"]]
-    if flavor == "testkey":
-        services.append("sshd|default")
     for item in services:
         service, _, level = item.partition("|")
         add(f"etc/init.d/{service}", mode=0o755, extra="#!/sbin/openrc-run\n")
@@ -436,7 +437,7 @@ def image_entries(flavor: str, live_make_conf: str) -> dict[str, tuple[str, int,
         if path not in entries:
             kind = item.get("type", "file").split("|")[0]
             mode = int(item["mode"], 8) if item.get("mode") else 0o755 if item.get("executable") or kind == "dir" else 0o644
-            add(path, kind, mode)
+            add(path, kind, mode, extra="/target" if kind == "slink" else "")
     for command in CONTRACT["squashfs"]["commands"]:
         add(f"usr/bin/{command}", mode=0o755)
     for package in CONTRACT["squashfs"]["required_packages"]:
@@ -454,7 +455,7 @@ def image_entries(flavor: str, live_make_conf: str) -> dict[str, tuple[str, int,
     if flavor == "testkey":
         add("root/.ssh/authorized_keys", mode=0o600, extra="ssh-ed25519 AAAA\n")
         add("etc/gentoo-installer-vm-test")
-        add("etc/ssh/sshd_config.d/90-installer-vm-test.conf")
+        add("etc/ssh/sshd_config.d/90-installer-vm-test.conf", extra="PermitRootLogin prohibit-password\nPasswordAuthentication no\n")
     return entries
 
 
@@ -466,6 +467,9 @@ def live_make_conf(tmp_path: Path, pins: dict[str, str]) -> str:
     live = {k: v for k, v in assignments.items() if k in wrapper_keys.LIVE_KEYS}
     live["FEATURES"] = " ".join(w for w in live["FEATURES"].split() if w != "buildpkg")
     return "".join(f'{k}="{v}"\n' for k, v in live.items())
+
+
+KERNEL_CONFIG = (ROOT / "packaging/gentoo-overlay/app-admin/gentoo-live-installer/files/live-safe-graphics.config").read_text() + "CONFIG_DRM_NOUVEAU=m\n# CONFIG_DRM_EFIDRM is not set\n"
 
 
 def build_iso(tmp_path: Path, flavor: str, live_make_conf: str, pins: dict[str, str], *, mutate=None) -> Path:
@@ -481,6 +485,7 @@ def build_iso(tmp_path: Path, flavor: str, live_make_conf: str, pins: dict[str, 
     values = render.token_values(env, str(work), "2", "4")
     (tree / "boot/grub/grub.cfg").write_text(render.render_text((ROOT / "iso/cd_overlay/boot/grub/grub.cfg.in").read_text(), values))
     (tree / "boot/gentoo").write_bytes(b"kernel")
+    (tree / "boot/gentoo-config").write_text(KERNEL_CONFIG)
     (tree / "boot/gentoo.igz").write_bytes(initramfs(GOOD_INITRAMFS))
     (tree / "boot/grub/i386-pc/eltorito.img").write_bytes(b"\0" * 2048)
     (tree / "boot/grub/x86_64-efi/a.mod").write_bytes(b"x")
@@ -588,3 +593,79 @@ def test_growth_over_the_previous_build_is_a_warning(tmp_path: Path, live_make_c
     assert "[WARN] iso.size" in grown.stdout and "1 warnings" in grown.stdout
     same = run(iso.stat().st_size)
     assert same.returncode == 0 and "[ok  ] iso.size" in same.stdout and "0 warnings" in same.stdout
+
+
+# --- I9: sshd on every flavour, no host keys, the first value in name order -------------------------
+
+SSH_LISTING = (
+    "dir etc/ssh 0755 0 0\ndir etc/ssh/sshd_config.d 0755 0 0\n"
+    "file etc/ssh/sshd_config.d/10-gentoo-live.conf 0644 0 0\n"
+    "file etc/ssh/sshd_config.d/9999999gentoo-livecd.conf 0644 0 0\n"
+    "file etc/ssh/sshd_config.d/9999999gentoo-pam.conf 0644 0 0\n"
+)
+SSH_FILES = {
+    "/etc/ssh/sshd_config.d/10-gentoo-live.conf": "# live\nPermitEmptyPasswords no\n",
+    "/etc/ssh/sshd_config.d/9999999gentoo-livecd.conf": "PermitRootLogin Yes\n",
+    "/etc/ssh/sshd_config.d/9999999gentoo-pam.conf": "UsePAM yes\nPasswordAuthentication no\n",
+}
+
+
+def sshd_failed(listing: str, files: dict[str, str], flavor: str = "release") -> bool:
+    shadow = {"/etc/shadow": "root:!:20000::::::\n"}
+    return "squashfs.sshd" in failed(squashfs_report(LISTING + listing, flavor=flavor, files={**shadow, **files}))
+
+
+def test_release_sshd_refuses_empty_passwords_first() -> None:
+    assert not sshd_failed(SSH_LISTING, SSH_FILES)
+    # a drop-in that sorts before and allows empty passwords wins over ours
+    early = SSH_LISTING + "file etc/ssh/sshd_config.d/05-open.conf 0644 0 0\n"
+    assert sshd_failed(early, {**SSH_FILES, "/etc/ssh/sshd_config.d/05-open.conf": "PermitEmptyPasswords yes\n"})
+    # no drop-in sets it at all
+    assert sshd_failed(SSH_LISTING, {**SSH_FILES, "/etc/ssh/sshd_config.d/10-gentoo-live.conf": "# nothing\n"})
+    # a setting inside a Match block is not the global one
+    assert sshd_failed(SSH_LISTING, {**SSH_FILES, "/etc/ssh/sshd_config.d/10-gentoo-live.conf": "Match User x\nPermitEmptyPasswords no\n"})
+    assert sshd_failed("", {})  # no drop-in directory in the image
+
+
+def test_testkey_sshd_needs_the_key_only_root_login_first() -> None:
+    files = {**SSH_FILES, "/etc/ssh/sshd_config.d/90-installer-vm-test.conf": "PermitRootLogin prohibit-password\n"}
+    listing = SSH_LISTING + "file etc/ssh/sshd_config.d/90-installer-vm-test.conf 0644 0 0\n"
+    assert not sshd_failed(listing, files, "testkey")
+    # without the test drop-in the live package's PermitRootLogin Yes would be the first value
+    assert sshd_failed(SSH_LISTING, SSH_FILES, "testkey")
+
+
+def test_sshd_first_value_reads_in_name_order_and_ignores_comments() -> None:
+    entries = verify.parse_description(SSH_LISTING + "file etc/ssh/sshd_config.d/00-a.conf 0644 0 0\n")
+    files = {**SSH_FILES, "/etc/ssh/sshd_config.d/00-a.conf": "# PermitEmptyPasswords yes\n  permitemptypasswords no # why\n"}
+    value, where = verify.sshd_first_value(entries, lambda path: files[path].encode(), "PermitEmptyPasswords")
+    assert (value, where) == ("no", "etc/ssh/sshd_config.d/00-a.conf")
+    assert verify.sshd_first_value(entries, lambda path: files[path].encode(), "PermitRootLogin")[0] == "Yes"
+
+
+def test_the_contract_requires_sshd_everywhere_and_no_host_keys() -> None:
+    contract = json.loads((ROOT / "iso/image-contract.json").read_text())
+    assert not [p for p in contract["flavor"]["testkey_required"] if p.endswith("/sshd")]
+    assert "etc/ssh/ssh_host_*" in contract["squashfs"]["forbidden"]
+    assert contract["squashfs"]["sshd_first_values"]["release"] == {"PermitEmptyPasswords": "no"}
+    assert "sshd|default" in verify.spec_list(verify.parse_spec((ROOT / "iso/specs/livecd-stage2.spec").read_text()), "livecd/rcadd")
+    report = squashfs_report(LISTING + SSH_LISTING + "file etc/ssh/ssh_host_rsa_key.pub 0644 0 0\n", files=SSH_FILES)
+    assert "squashfs.forbidden" in failed(report)
+
+
+@pytest.mark.skipif(tools_missing(), reason="xorriso, isoinfo, gensquashfs and rdsquashfs are needed")
+def test_an_image_whose_kernel_has_no_generic_drm_driver_fails(tmp_path: Path, live_make_conf: str, pins: dict[str, str]) -> None:
+    """H1: the kernel of gentoo-kernel-bin cannot show a Safe graphics desktop."""
+    def binary_kernel(entries, tree):
+        (tree / "boot/gentoo-config").write_text("# CONFIG_SYSFB_SIMPLEFB is not set\n# CONFIG_DRM_SIMPLEDRM is not set\nCONFIG_FB_EFI=y\n")
+
+    iso = build_iso(tmp_path, "release", live_make_conf, pins, mutate=binary_kernel)
+    report, _ = verify.verify(iso, flavor="release", workspace=ROOT, tools=verify.Tools(iso, tmp_path / "scratch"))
+    assert failed(report) == {"kernel.generic_drm"}
+
+    def no_config(entries, tree):
+        (tree / "boot/gentoo-config").unlink()
+
+    iso = build_iso(tmp_path / "second", "release", live_make_conf, pins, mutate=no_config)
+    report, _ = verify.verify(iso, flavor="release", workspace=ROOT, tools=verify.Tools(iso, tmp_path / "scratch2"))
+    assert {"iso.required_files", "kernel.config"} <= failed(report)

@@ -59,6 +59,8 @@ livecd/packages:
 	gnome-extra/polkit-gnome
 	gui-libs/display-manager-init
 	media-fonts/dejavu
+	media-fonts/fira-sans
+	media-fonts/jetbrains-mono
 	media-libs/mesa
 	net-misc/chrony
 	net-misc/networkmanager
@@ -122,6 +124,7 @@ livecd/packages:
 	sys-process/htop
 	sys-process/lsof
 	sys-process/psmisc
+	www-client/firefox-bin
 	www-client/links
 	x11-apps/setxkbmap
 	x11-apps/xrandr
@@ -130,6 +133,10 @@ livecd/packages:
 	x11-misc/lightdm
 	x11-misc/lightdm-gtk-greeter
 	x11-terms/xfce4-terminal
+	x11-themes/arc-theme
+	x11-themes/papirus-icon-theme
 	xfce-base/xfce4-meta
+	xfce-extra/xfce4-notifyd
+	xfce-extra/xfce4-pulseaudio-plugin
 	xfce-extra/xfce4-whiskermenu-plugin
 	xfce-extra/xfce4-xkb-plugin
