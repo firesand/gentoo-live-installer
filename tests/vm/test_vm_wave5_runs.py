@@ -115,10 +115,10 @@ def test_an_sshd_that_still_takes_passwords_fails_a_keys_only_install(lab):
 
 
 def chroot_rules(output: str = CHROOT_OK, *, writable_output: str | None = None, clean: str = CLEAN, **kwargs) -> list[dict]:
-    """Two sessions: ``gentoo-chroot --read-only`` (no CHROOT-WRITE line, none is asked for) and ``gentoo-chroot`` (answered with y, writes)."""
+    """Two sessions: ``gentoo-chroot --read-only`` (no CHROOT-WRITE line, none is asked for) and ``gentoo-chroot --writable`` (writes)."""
     read_only = output.replace("(chroot) CHROOT-WRITE-42\n", "")
     return [{"user": "^root$", "match": r"^gentoo-chroot --read-only$", "stdin_to": "chroot-input-read-only.txt", "stdout": read_only},
-            {"user": "^root$", "match": r"^gentoo-chroot$", "stdin_to": "chroot-input-writable.txt", "stdout": writable_output or output},
+            {"user": "^root$", "match": r"^gentoo-chroot --writable$", "stdin_to": "chroot-input-writable.txt", "stdout": writable_output or output},
             {"user": "^root$", "match": "HARNESS_FS_ROOT", "stdout": clean}] + guest_rules(vm, "rescue-chroot", sudo=True, **kwargs)
 
 
@@ -129,7 +129,7 @@ def test_the_rescue_chroot_scenario_runs_both_sessions_with_commands_on_standard
     sessions = lab.result()["chroot"]["sessions"]
     assert [(item["mode"], item["problems"], item["exit"]) for item in sessions] == [("read-only", [], 0), ("writable", [], 0)]
     typed = (run / "fake-guest" / "chroot-input-writable.txt").read_text()
-    assert typed.splitlines()[0] == "y" and typed.rstrip().endswith("exit") and "emerge --info" in typed and "grub-mkconfig" in typed and "touch /root/" in typed
+    assert typed.splitlines()[0] != "y" and typed.rstrip().endswith("exit") and "emerge --info" in typed and "grub-mkconfig" in typed and "touch /root/" in typed
     read_only = (run / "fake-guest" / "chroot-input-read-only.txt").read_text()
     assert not read_only.startswith("y") and "touch" not in read_only
 

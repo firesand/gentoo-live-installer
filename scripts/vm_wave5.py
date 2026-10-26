@@ -385,11 +385,13 @@ CHROOT_MARKERS = {
 
 
 def chroot_input(bootloader: str = "grub", *, writable: bool = True) -> str:
-    """What is typed into ``gentoo-chroot``: the answer to its one y/N question (when it asks), then the commands, then ``exit``.
+    """What is typed into ``gentoo-chroot``: the commands, then ``exit``.
 
     The markers are computed (``$((6*7))``), so the text of a command that the shell echoes can never pass for its output.
+    No answer is typed: without a terminal gentoo-chroot asks nothing and stays read-only unless --writable is given (the first real
+    run typed "y" for a question that never came, and the "writable" session was read-only).
     """
-    lines = ["y"] if writable else []
+    lines: list[str] = []
     names = ["found", "release", "dns", "emerge"] + (["grub"] if bootloader == "grub" else []) + (["write"] if writable else [])
     lines += [CHROOT_MARKERS[name][0] for name in names]
     lines.append("exit")
@@ -397,7 +399,7 @@ def chroot_input(bootloader: str = "grub", *, writable: bool = True) -> str:
 
 
 def chroot_command(*, writable: bool = True) -> str:
-    return "gentoo-chroot" + ("" if writable else " --read-only")
+    return "gentoo-chroot " + ("--writable" if writable else "--read-only")
 
 
 def chroot_problems(returncode: int, output: str, bootloader: str = "grub", *, writable: bool = True) -> list[str]:

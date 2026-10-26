@@ -443,15 +443,16 @@ Common fixes: emerge --sync ...   Type exit to leave; the system is unmounted fo
 """
 
 
-def test_the_chroot_input_answers_the_question_runs_the_commands_and_exits():
+def test_the_chroot_input_runs_the_commands_and_exits():
+    """No answer is typed: without a terminal gentoo-chroot asks nothing (the first real run typed "y" for a question that never came)."""
     text = w5.chroot_input("grub")
     lines = text.splitlines()
-    assert lines[0] == "y" and lines[-1] == "exit" and text.endswith("\n")
+    assert lines[0] != "y" and lines[-1] == "exit" and text.endswith("\n")
     assert any("emerge --info" in line for line in lines) and any("grub-mkconfig" in line for line in lines) and any(line.startswith("touch /root/") for line in lines)
     assert not any("grub-mkconfig" in line for line in w5.chroot_input("systemd-boot").splitlines())
     read_only = w5.chroot_input("grub", writable=False).splitlines()
     assert read_only[0] != "y" and not any(line.startswith("touch") for line in read_only), "a read-only session neither answers a question nor writes"
-    assert w5.chroot_command() == "gentoo-chroot" and w5.chroot_command(writable=False) == "gentoo-chroot --read-only"
+    assert w5.chroot_command() == "gentoo-chroot --writable" and w5.chroot_command(writable=False) == "gentoo-chroot --read-only"
 
 
 def test_a_session_that_found_mounted_resolved_and_ended_passes():
