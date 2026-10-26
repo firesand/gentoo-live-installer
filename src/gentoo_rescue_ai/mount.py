@@ -20,7 +20,7 @@ from typing import Any, Sequence
 from gentoo_installerd.rescue import cli
 from gentoo_installerd.rescue.client import RescueClient, RescueClientError, Transport
 
-from . import TARGET_LINK
+from . import STATE_DIR, TARGET_LINK
 
 MAX_ROUNDS = 8  # unlock / activate rounds: a nested stack (RAID in LUKS in LVM) needs a few, never an endless loop
 
@@ -33,8 +33,24 @@ def parse(argv: Sequence[str]) -> argparse.Namespace:
     return parser.parse_args(list(argv))
 
 
+KEEP_RECORD = Path(STATE_DIR) / "mnt-gentoo-keep"  # the keepdir markers make_link set aside, for remove_link
+
+
 def cli_args(*argv: str) -> argparse.Namespace:
     return cli.build_parser().parse_args(list(argv))
+
+
+def keep_markers(folder: Path) -> list[str] | None:
+    """The names in ``folder`` when all of them are Portage's empty keepdir markers (``.keep_<category>_<package>-<slot>``), else None.
+
+    On the live image /mnt/gentoo holds .keep_app-misc_livecd-tools-0: such a folder counts as empty (the first VM run of
+    gentoo-rescue-mount could not link it, "Directory not empty")."""
+    names = []
+    for entry in folder.iterdir():
+        if not (entry.name.startswith(".keep") and entry.is_file() and not entry.is_symlink() and entry.stat().st_size == 0):
+            return None
+        names.append(entry.name)
+    return names
 
 
 def make_link(link: str, target: str) -> str:
@@ -44,7 +60,15 @@ def make_link(link: str, target: str) -> str:
         if path.is_symlink():
             path.unlink()
         elif path.is_dir():
-            path.rmdir()  # only an empty folder
+            markers = keep_markers(path)
+            if markers is None:
+                return f"{link} is a folder with content, so it is left alone; the system is at {target}"
+            for name in markers:
+                (path / name).unlink()
+            path.rmdir()
+            if markers:
+                KEEP_RECORD.parent.mkdir(parents=True, exist_ok=True)
+                KEEP_RECORD.write_text("".join(f"{name}\n" for name in markers), encoding="utf-8")
         elif path.exists():
             return f"{link} exists and is not a link or an empty folder; the system is at {target}"
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -55,13 +79,18 @@ def make_link(link: str, target: str) -> str:
 
 
 def remove_link(link: str, base_dir: str) -> None:
-    """Remove our link and put back the empty folder the live system had there: /mnt/gentoo is also the installer's mount point."""
+    """Remove our link and put back the folder the live system had there, with its keepdir markers: /mnt/gentoo is also the
+    installer's mount point."""
     path = Path(link)
     if path.is_symlink() and os.path.realpath(path).startswith(os.path.realpath(base_dir) + os.sep):
         path.unlink()
     if not path.exists() and not path.is_symlink() and path.parent.is_dir():
         try:
             path.mkdir(mode=0o755)
+            for name in KEEP_RECORD.read_text(encoding="utf-8").split() if KEEP_RECORD.exists() else []:
+                if name.startswith(".keep") and "/" not in name:
+                    (path / name).touch()
+            KEEP_RECORD.unlink(missing_ok=True)
         except OSError:
             pass
 
@@ -163,7 +192,7 @@ def run(ctx: cli.Context, args: argparse.Namespace, link: str = TARGET_LINK, bas
     say(f"Your Gentoo system is open at {link if not problem else path}" + (" (read-only)" if info.get("mode", "ro") != "rw" else " (read-write)") + f", session {sid}.")
     if problem:
         say(f"  ! {problem}")
-    say(f"  look around:    ls {link}/etc")
+    say(f"  look around:    ls {(link if not problem else path)}/etc")
     say(f"  a shell inside: gentoo-chroot {sid}      (the Handbook's chroot; read-only unless you add --writable)")
     say(f"  repair:         gentoo-rescue diagnose {sid}, then plan and run: nothing is written before you confirm a plan")
     say("  when finished:  gentoo-rescue-mount --unmount")

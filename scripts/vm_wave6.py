@@ -587,7 +587,8 @@ def mount_flow(hands: Hands) -> Report:
     report.step("with the disk mounted, no process of rescue-ai works inside it", probe.success, probe.error)
     code, output = hands.run(UNMOUNT_COMMAND, "unmount")
     # an empty folder is what the live system had there (the installer's mount point): only a link or content is left over
-    _code, left = hands.run(f"if [ -L {TARGET_LINK} ] || [ -n \"$(ls -A {TARGET_LINK} 2>/dev/null)\" ]; then echo LEFT; fi; grep -c /mnt/rescue /proc/mounts; true",
+    _code, left = hands.run(f"if [ -L {TARGET_LINK} ] || [ -n \"$(ls -A {TARGET_LINK} 2>/dev/null | grep -v '^\\.keep')\" ]; then echo LEFT; fi; "
+                            "grep -c /mnt/rescue /proc/mounts; true",
                             "unmount-proof")
     report.step("--unmount releases it and removes /mnt/gentoo", code == 0 and "LEFT" not in left, f"exit {code}: {_tail(output)}" if code != 0 or "LEFT" in left else "")
     return report

@@ -89,7 +89,7 @@ def test_a_real_folder_with_content_at_the_link_path_is_never_removed(tmp_path) 
     link.mkdir()
     (link / "precious").write_text("x")
     problem = mount.make_link(str(link), "/mnt/rescue/r1")
-    assert "not a link or an empty folder" in problem or "could not create" in problem
+    assert "folder with content" in problem or "not a link or an empty folder" in problem or "could not create" in problem
     assert (link / "precious").exists()
     empty = tmp_path / "empty"
     empty.mkdir()
@@ -135,3 +135,21 @@ def test_unmount_puts_back_the_empty_folder_the_installer_mounts_into(lab_factor
     assert code == 0 and link.is_symlink()
     run_mount(lab, tmp_path, "--unmount")
     assert link.is_dir() and not link.is_symlink() and not any(link.iterdir())
+
+
+def test_a_folder_with_only_portage_keepdir_markers_counts_as_empty_and_gets_them_back(tmp_path, monkeypatch) -> None:
+    """The live image's /mnt/gentoo holds .keep_app-misc_livecd-tools-0 (the first VM run: "Directory not empty")."""
+    monkeypatch.setattr(mount, "KEEP_RECORD", tmp_path / "state" / "mnt-gentoo-keep")
+    base = tmp_path / "rescue"
+    (base / "r1").mkdir(parents=True)
+    link = tmp_path / "gentoo"
+    link.mkdir()
+    (link / ".keep_app-misc_livecd-tools-0").touch()
+    assert mount.make_link(str(link), str(base / "r1")) == "" and link.is_symlink()
+    mount.remove_link(str(link), str(base))
+    assert link.is_dir() and not link.is_symlink() and [p.name for p in link.iterdir()] == [".keep_app-misc_livecd-tools-0"]
+    # a marker with content, or any other file, is content: the folder is left alone
+    other = tmp_path / "other"
+    other.mkdir()
+    (other / ".keep_x").write_text("not empty")
+    assert "folder with content" in mount.make_link(str(other), str(base / "r1")) and (other / ".keep_x").exists()
