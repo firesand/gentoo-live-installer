@@ -117,3 +117,21 @@ def test_the_base_folder_is_made_walkable_for_the_agents(lab_factory, tmp_path) 
     base.chmod(0o700)
     code, *_ = run_mount(lab, tmp_path, answers=["y"])
     assert code == 0 and base.stat().st_mode & 0o005 == 0o005
+
+
+def test_without_a_terminal_the_command_itself_is_the_yes_and_the_mount_stays_read_only(lab_factory, tmp_path) -> None:
+    """Approved on the approver's console through gentoo-rescue-do, nobody can answer a question: the first VM run ended with
+    "Nothing was mounted. Re-run with --yes" (status 4)."""
+    lab, _ = uefi_gentoo_lab(lab_factory)
+    code, out, err, link = run_mount(lab, tmp_path, interactive=False)
+    assert code == 0, out + err
+    assert link.is_symlink() and "read-only" in out
+    assert not lab.system.commands_with("mount", "rw") and not lab.system.commands_with("mount", "remount")
+
+
+def test_unmount_puts_back_the_empty_folder_the_installer_mounts_into(lab_factory, tmp_path) -> None:
+    lab, _ = uefi_gentoo_lab(lab_factory)
+    code, _, _, link = run_mount(lab, tmp_path, answers=["y"])
+    assert code == 0 and link.is_symlink()
+    run_mount(lab, tmp_path, "--unmount")
+    assert link.is_dir() and not link.is_symlink() and not any(link.iterdir())

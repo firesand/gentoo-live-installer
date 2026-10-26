@@ -55,9 +55,15 @@ def make_link(link: str, target: str) -> str:
 
 
 def remove_link(link: str, base_dir: str) -> None:
+    """Remove our link and put back the empty folder the live system had there: /mnt/gentoo is also the installer's mount point."""
     path = Path(link)
     if path.is_symlink() and os.path.realpath(path).startswith(os.path.realpath(base_dir) + os.sep):
         path.unlink()
+    if not path.exists() and not path.is_symlink() and path.parent.is_dir():
+        try:
+            path.mkdir(mode=0o755)
+        except OSError:
+            pass
 
 
 def sessions_of(ctx: cli.Context) -> list[dict[str, Any]]:
@@ -127,7 +133,10 @@ def run(ctx: cli.Context, args: argparse.Namespace, link: str = TARGET_LINK, bas
         if candidate is None:
             say("No Gentoo system was opened. Nothing was changed.")
             return cli.EXIT_NOT_FOUND
-        code = cli.cmd_mount(ctx, cli_args("mount", candidate["id"]))
+        # A person at the console sees the plan and answers "Mount read-only? [Y/n]". Without a terminal (approved on the approver's
+        # console through gentoo-rescue-do, where nobody can answer) running the command was the yes: the mount is read-only, and
+        # read-write keeps the engine's typed confirmation (--writable). Before, such a run mounted nothing and ended with status 4.
+        code = cli.cmd_mount(ctx, cli_args("mount", candidate["id"], *(() if ctx.console.interactive else ("--yes",))))
         if code != cli.EXIT_OK:
             return code
         sessions = sessions_of(ctx)

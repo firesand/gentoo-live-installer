@@ -158,7 +158,7 @@ class Stick:
             (r"gentoo-rescue-mount --unmount", self.unmount),
             (r"gentoo-rescue-mount </dev/null", self.mount),
             (r"readlink /mnt/gentoo", lambda c, m: mount_proof(options="ro,relatime" if self.mount_ro else "rw,relatime", rc=self.mount_rc)),
-            (r"\[ -e /mnt/gentoo \]", lambda c, m: "0\n" if not self.mounted else "LEFT\n1\n"),
+            (r"\[ -L /mnt/gentoo \]", lambda c, m: "0\n" if not self.mounted else "LEFT\n1\n"),
             (r"ls -A /run/gentoo-rescue-share", lambda c, m: ""),
             (r"gentoo-rescue-share status", self.share_status),
             (r"gentoo-rescue-share stop", self.share_stop),
