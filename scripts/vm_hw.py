@@ -182,14 +182,15 @@ def block_size_options(hardware: VMHardware) -> str:
     return f",logical_block_size={hardware.sector_size},physical_block_size={hardware.sector_size}"
 
 
-def disk_device_arguments(hardware: VMHardware, drive: str, serial: str, index: int = 0) -> list[str]:
+def disk_device_arguments(hardware: VMHardware, drive: str, serial: str, index: int = 0, bootindex: int | None = None) -> list[str]:
     """The ``-device`` options that attach the already declared ``-drive ...,id=<drive>`` on the chosen bus.
 
     ``index`` numbers the disks of one VM so controllers and ports do not collide. An empty
-    serial leaves the property out (virtio only; see VMHardware.problems()).
+    serial leaves the property out (virtio only; see VMHardware.problems()). ``bootindex`` makes the
+    disk a boot device QEMU names to the firmware (the installed disk when it boots by itself).
     """
     bus = hardware.disk_bus
-    ident = f",serial={serial}" if serial else ""
+    ident = (f",serial={serial}" if serial else "") + (f",bootindex={bootindex}" if bootindex is not None else "")
     sizes = block_size_options(hardware)
     if bus == "virtio":
         return ["-device", f"virtio-blk-pci,drive={drive}{ident}{sizes}"]
@@ -209,8 +210,10 @@ def disk_device_arguments(hardware: VMHardware, drive: str, serial: str, index: 
     if hardware.sector_size == 512:  # nvme: the controller needs a serial
         return ["-device", f"nvme,drive={drive}{ident}"]
     controller = f"nvme{index}"
-    return ["-device", f"nvme,id={controller}{ident}",
-            "-device", f"nvme-ns,drive={drive},bus={controller},nsid=1{sizes}"]
+    serial_only = f",serial={serial}" if serial else ""
+    boot = f",bootindex={bootindex}" if bootindex is not None else ""
+    return ["-device", f"nvme,id={controller}{serial_only}",
+            "-device", f"nvme-ns,drive={drive},bus={controller},nsid=1{sizes}{boot}"]
 
 
 def display_arguments(hardware: VMHardware) -> list[str]:

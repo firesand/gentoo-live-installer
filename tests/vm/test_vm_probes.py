@@ -479,3 +479,20 @@ def test_a_plan_inside_the_daemons_record_is_judged_like_a_bare_one():
 ])
 def test_a_record_without_a_real_plan_is_not_a_plan(text):
     assert vm_probes.parse_hardware_plan_file(text) is None
+
+
+# The empty-NVRAM boot of the first Wave 6 matrix (2026-10-26): OVMF makes its own option for the disk, with the device path only.
+OVMF_LOG_DEVICE_ONLY = (
+    'BdsDxe: loading Boot0001 "UEFI Misc Device" from PciRoot(0x0)/Pci(0x2,0x0)\r\n'
+    'BdsDxe: starting Boot0001 "UEFI Misc Device" from PciRoot(0x0)/Pci(0x2,0x0)\r\n'
+)
+
+
+def test_a_device_path_without_a_file_is_the_removable_fallback():
+    assert vm_probes.booted_through_fallback(OVMF_LOG_DEVICE_ONLY)
+    nvme = OVMF_LOG_DEVICE_ONLY.replace("PciRoot(0x0)/Pci(0x2,0x0)", "PciRoot(0x0)/Pci(0x2,0x0)/NVMe(0x1,00-00-00-00-00-00-00-00)")
+    assert vm_probes.booted_through_fallback(nvme)
+    # an entry the installer registered names its file, and the firmware's own option for a partition is not the fallback either
+    assert not vm_probes.booted_through_fallback(OVMF_LOG_DEVICE_ONLY.replace('"UEFI Misc Device" from PciRoot(0x0)/Pci(0x2,0x0)',
+                                                                             '"Gentoo" from HD(1,GPT,AAAA,0x800,0x200000)/\\EFI\\Gentoo\\grubx64.efi'))
+    assert not vm_probes.booted_through_fallback('BdsDxe: starting Boot0003 "UEFI Shell" from Fv(7CB8BDC9)/FvFile(7C04A583)\r\n')

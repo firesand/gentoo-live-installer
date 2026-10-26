@@ -643,7 +643,10 @@ def qemu_command(
         "-m", str(memory_mib),
         "-smp", str(cpus),
         "-drive", f"file={disk},if=none,id=target,format=qcow2",
-        *vm_hw.disk_device_arguments(hw, "target", TARGET_SERIAL if hw.disk_serial else "", 0),
+        # The installed disk is QEMU's boot device when it boots by itself. Without it, a live boot (strict boot order, the CD
+        # alone) lets OVMF drop the installer's "Gentoo" entry, and the next boot of the disk started the EFI Shell instead of the
+        # disk's fallback (the first Wave 6 rescue-gentoo run, after a repair that had worked).
+        *vm_hw.disk_device_arguments(hw, "target", TARGET_SERIAL if hw.disk_serial else "", 0, bootindex=None if live else 0),
     ]
     for index, _ in enumerate(hw.extra_disks, start=1):
         extra = extra_disk_path(run_dir, index)

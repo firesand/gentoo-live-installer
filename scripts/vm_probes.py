@@ -247,9 +247,20 @@ def firmware_boot_choices(serial_text: str) -> list[dict[str, str]]:
 
 
 def booted_through_fallback(serial_text: str) -> bool:
-    """Whether the last boot option OVMF started was the removable-media path."""
+    """Whether the last boot option OVMF started was the removable-media path.
+
+    Older OVMF names the file (``.../\\EFI\\BOOT\\BOOTX64.EFI``). With an empty NVRAM the OVMF of 2026 makes its own option for the
+    disk ("UEFI Misc Device", "UEFI QEMU HARDDISK ...") with the device path alone, ``PciRoot(0x0)/Pci(0x2,0x0)``; a device path
+    without a file is started through that same default file (UEFI spec 3.5.1.1). The first Wave 6 matrix saw only that form.
+    """
     choices = firmware_boot_choices(serial_text)
-    return bool(choices) and choices[-1]["path"].upper().endswith("\\EFI\\BOOT\\BOOTX64.EFI")
+    if not choices:
+        return False
+    path, name = choices[-1]["path"], choices[-1]["name"]
+    if path.upper().endswith("\\EFI\\BOOT\\BOOTX64.EFI"):
+        return True
+    # the firmware's own entry for a whole device: a PCI device path, no partition, no file (the UEFI Shell is in the firmware, Fv(...))
+    return name.startswith("UEFI ") and path.startswith("PciRoot(") and "\\" not in path and "HD(" not in path.upper()
 
 
 # --- the boot flag of a BIOS install ----------------------------------------------------------------------------------------------
