@@ -151,6 +151,7 @@ grep -q '^ACPI="no"$' /etc/conf.d/autoconfig || fail "/etc/conf.d/autoconfig mus
 for look_file in \
 	/usr/share/themes/Arc-Dark/gtk-3.0/gtk.css \
 	/usr/share/themes/Arc-Dark/xfwm4/themerc \
+	/usr/share/themes/Default-xhdpi/xfwm4/themerc \
 	/usr/share/icons/Papirus-Dark/index.theme \
 	/usr/bin/firefox-bin; do
 	[[ -e "${look_file}" ]] || fail "The desktop look needs ${look_file}, which is missing"

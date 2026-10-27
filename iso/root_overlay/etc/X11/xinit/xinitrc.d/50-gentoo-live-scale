@@ -2,7 +2,7 @@
 #
 # lightdm's Xsession sources this before Xfce and the installer start. A screen 3200 pixels wide or
 # more (4K, 5K) gets scale 2 for GTK (panel, file manager, Firefox) and Qt (the installer, HWMonux,
-# PortageHub), and a larger mouse pointer. "gentoo.scale=1" or "gentoo.scale=2" on the kernel command
+# PortageHub), a larger mouse pointer and larger window frames. "gentoo.scale=1" or "gentoo.scale=2" on the kernel command
 # line overrides it. The first real PC of RC1 had a 4K monitor, and the text was tiny.
 # GENTOO_SCALE_CMDLINE is for the tests of the disc.
 gentoo_live_scale=
@@ -24,5 +24,8 @@ if [ "${gentoo_live_scale}" -gt 1 ]; then
 	export GDK_SCALE="${gentoo_live_scale}"
 	export QT_SCALE_FACTOR="${gentoo_live_scale}"
 	export XCURSOR_SIZE=$((24 * gentoo_live_scale))
+	# twice as large window frames (xfwm4 does not scale its theme); the folder holds nothing else,
+	# so autostart entries and menus are found where they always are
+	export XDG_CONFIG_DIRS="/etc/xdg/gentoo-live-hidpi:${XDG_CONFIG_DIRS:-/etc/xdg}"
 fi
 unset gentoo_live_scale gentoo_live_word gentoo_live_width

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<!-- Window frames at scale 2 (4K and larger). 50-gentoo-live-scale puts this folder in front of
+     XDG_CONFIG_DIRS, and xfconf lays it over /etc/xdg/xfce4/xfconf/xfce-perchannel-xml/xfwm4.xml,
+     so only the theme changes. Arc-Dark has no HiDPI frames: its 1x buttons were 2.5 mm wide on a
+     27-inch 4K screen. Default-xhdpi (xfwm4) is twice as large and takes its colours from the
+     Arc-Dark GTK theme. -->
+<channel name="xfwm4" version="1.0">
+  <property name="general" type="empty">
+    <property name="theme" type="string" value="Default-xhdpi"/>
+  </property>
+</channel>

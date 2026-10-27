@@ -230,9 +230,10 @@ def test_every_overlay_file_is_covered_by_the_image_contract() -> None:
         "etc/pam.d/su", "etc/gentoo-rescue/AGENTS.md", "etc/claude-code/CLAUDE.md", "etc/claude-code/managed-settings.json", "etc/skel-rescue-ai",
         "usr/bin/gentoo-rescue-agents", "usr/bin/gentoo-rescue-login", "usr/bin/gentoo-rescue-ai", "usr/bin/gentoo-rescue-do",
         "usr/bin/gentoo-rescue-approver", "usr/bin/gentoo-rescue-mount", "usr/bin/gentoo-rescue-share",
-        # the desktop look: files of the packages arc-theme, papirus-icon-theme, firefox-bin, xfdesktop, thunar, gparted
-        # and xfce4-terminal (test_desktop_look.py checks them against the tree)
+        # the desktop look: files of the packages arc-theme, xfwm4 (the HiDPI frames), papirus-icon-theme, firefox-bin, xfdesktop,
+        # thunar, gparted and xfce4-terminal (test_desktop_look.py checks them against the tree)
         "usr/share/backgrounds/xfce/xfce-x.svg", "usr/share/themes/Arc-Dark/gtk-3.0/gtk.css", "usr/share/themes/Arc-Dark/xfwm4/themerc",
+        "usr/share/themes/Default-xhdpi/xfwm4/themerc",
         "usr/share/icons/Papirus-Dark/index.theme", "usr/bin/firefox-bin", "usr/share/applications/xfce4-terminal.desktop",
         "usr/share/applications/thunar.desktop", "usr/share/applications/gparted.desktop",
     }
