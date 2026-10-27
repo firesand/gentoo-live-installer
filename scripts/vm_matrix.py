@@ -73,6 +73,9 @@ WAVE3 = Matrix("wave3", "Wave 3 acceptance: other hardware, other disks, a Gento
     MatrixEntry("bios-sata-minimal", "bios-sata-minimal", 4096, 2, (*STRICT, *PORTAGEHUB), 30,
                 "an old PC: SeaBIOS, SATA, Intel NIC, standard VGA, the boot flag of the disk"),
     MatrixEntry("text-install", "text-install", 4096, 2, (*STRICT, *UEFI, *PORTAGEHUB), 30, "the ISO's text entry and gentoo-installer-text with a device confirmation"),
+    MatrixEntry("secure-boot-live", "secure-boot-live", 4096, 2, (*STRICT, *PORTAGEHUB), 10,
+                "the ISO as a USB stick with Secure Boot on (Microsoft's keys): MokManager enrolls the disc's own key, and the second start "
+                "reaches the desktop with Secure Boot enabled (RC3; RC1 was refused by the first real laptop with Secure Boot on)"),
 ))
 MATRICES: dict[str, Matrix] = {WAVE3.name: WAVE3}
 

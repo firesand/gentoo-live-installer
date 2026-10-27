@@ -24,7 +24,8 @@ Is it the right key? "View key 0" shows a [Fingerprint]. It must be the
 same as in the .secureboot.txt file published next to the ISO you
 downloaded. Every new version of the disc has a new key, so a new version
 needs these steps once more. The key of an old version only allows that old
-version; you can leave it, or remove it with "sudo mokutil --delete".
+version; you can leave it. To remove it later: "sudo mokutil --delete" with
+its .cer file, then confirm on the blue screen at the next start.
 
 If the PC still says "Secure Boot Violation" or skips the stick
 ---------------------------------------------------------------

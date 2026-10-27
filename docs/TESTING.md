@@ -640,6 +640,7 @@ caller (ISO, SSH key, timeouts) are passed to every job.
 | `bios` | `bios`: re-acceptance; the boot flag of the disk is read | PortageHub | 4 GiB | 2 | 30 |
 | `bios-sata-minimal` | `bios-sata-minimal`; the boot flag of the disk is read | PortageHub | 4 GiB | 2 | 30 |
 | `text-install` | `text-install` | PortageHub | 4 GiB | 2 | 30 |
+| `secure-boot-live` | `secure-boot-live`: the ISO as a USB stick with Secure Boot on; MokManager enrolls the disc's key, no install | PortageHub | 4 GiB | 2 | 10 |
 
 **Companions.** Only the `defaults` entry installs HWMonux. It is the entry that has the memory for
 PySide (12 GiB, one build job, 4096 MiB of swap, which is also what the installer's guided defaults

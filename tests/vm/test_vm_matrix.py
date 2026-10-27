@@ -16,7 +16,7 @@ from tests.vm.helpers import load_vm_module
 vm = load_vm_module()
 
 EXPECTED = ["defaults", "rescue-gentoo", "uefi-nvme-luks-openrc", "systemd", "openrc", "uefi-luks", "uefi-luks-lvm", "uefi-manual-two-disks", "bios",
-            "bios-sata-minimal", "text-install"]
+            "bios-sata-minimal", "text-install", "secure-boot-live"]
 
 
 # --- the data -----------------------------------------------------------------------------------------------------
@@ -24,7 +24,8 @@ EXPECTED = ["defaults", "rescue-gentoo", "uefi-nvme-luks-openrc", "systemd", "op
 def test_wave3_has_every_scenario_the_plan_names_and_each_exactly_once():
     wave3 = vm_matrix.MATRICES["wave3"]
     assert [entry.name for entry in wave3.entries] == EXPECTED and len({entry.name for entry in wave3.entries}) == len(wave3.entries)
-    wanted = {"defaults", "bios-sata-minimal", "uefi-nvme-luks-openrc", "uefi-manual-two-disks", "openrc", "systemd", "uefi-luks", "uefi-luks-lvm", "bios", "rescue-gentoo"}
+    wanted = {"defaults", "bios-sata-minimal", "uefi-nvme-luks-openrc", "uefi-manual-two-disks", "openrc", "systemd", "uefi-luks", "uefi-luks-lvm", "bios", "rescue-gentoo",
+              "secure-boot-live"}  # RC3: a release must start with Secure Boot on, on every new key
     assert wanted <= {entry.scenario for entry in wave3.entries}
     assert all(entry.scenario in vm.SCENARIO_MAP for entry in wave3.entries)
     assert not [entry.name for entry in wave3.entries if entry.name.startswith("rescue-") and entry.name != "rescue-gentoo"]  # only Gentoo is repaired: no cloud image of another distribution
