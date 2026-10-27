@@ -690,6 +690,7 @@ class Hardware(_Migrating):
     battery_charge_limit: int = 0  # 0 (none) | 60 | 80
     lid_action: str = "suspend"  # suspend | lock | ignore
     vendor_workarounds: bool = False
+    tuning: bool = True  # memory, disk, Wi-Fi, audio, touchpad and watchdog settings after CachyOS (gentoo_installerd/hwplan_tuning.py)
 
     _MIGRATE: ClassVar[dict[str, Callable[[Any], Any]]] = {
         "gpu_driver": _renamed("open", "nouveau"),

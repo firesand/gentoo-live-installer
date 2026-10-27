@@ -478,9 +478,11 @@ def test_ssh_is_no_longer_a_tools_tab_box(customize):
 
 
 def test_gaming_is_off_by_default_and_the_status_is_honest(customize):
+    from gentoo_installerd import gaming_readiness
+
     window, tab = customize
     assert tab.gaming_buttons["off"].isChecked() and window.manifest.options.gaming == "off"
-    assert "24 October 2026" in tab.gaming_status.text() and "not playable on Linux" in tab.gaming_status.text()
+    assert gaming_readiness.STATUS_DATE in tab.gaming_status.text() and "not playable on Linux" in tab.gaming_status.text()
     tab.save_tools()
     assert window.manifest.options.gaming == "off"
     assert not tab.gaming_accept.isVisibleTo(tab) and not tab.gaming_tweaks.isVisibleTo(tab)

@@ -750,7 +750,8 @@ def test_invariants_hold_for_every_machine_and_setting():
         if result.driver_atoms:
             assert result.package_license[NV] == ["NVIDIA-2025"] and "dist-kernel" in result.package_use[NV]
         else:
-            assert NV not in result.package_license and not result.kernel_cmdline
+            tuning_zram = result.scalars["tuning"] == "on" and result.scalars["zram"] == "yes"
+            assert NV not in result.package_license and result.kernel_cmdline == (["zswap.enabled=0"] if tuning_zram else [])
         assert set(result.skel_files()) | set(result.system_files()) == set(result.files)
     assert count > 1000
 

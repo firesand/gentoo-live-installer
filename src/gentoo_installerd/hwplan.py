@@ -40,6 +40,7 @@ from .hwissue import Issue
 from .hwplan_devices import DevicePlanMixin, device_issues
 from .hwplan_nvidia import NvidiaDecision, nvidia_decision
 from .hwplan_session import SessionPlanMixin
+from .hwplan_tuning import TuningPlanMixin
 from .hwplan_nvidia_plan import NVK_GENERATIONS, NvidiaPlanMixin, nvidia_policy_issues, rtd3_blocker
 
 PLAN_SCHEMA = 2
@@ -260,7 +261,7 @@ _detected = is_detected
 # Plan
 # ---------------------------------------------------------------------------
 
-class _Planner(NvidiaPlanMixin, DevicePlanMixin, SessionPlanMixin):
+class _Planner(NvidiaPlanMixin, DevicePlanMixin, SessionPlanMixin, TuningPlanMixin):
     def __init__(self, manifest: InstallManifest, hw: HardwareProfile) -> None:
         self.m = manifest
         self.hw = hw
@@ -278,6 +279,7 @@ class _Planner(NvidiaPlanMixin, DevicePlanMixin, SessionPlanMixin):
         self.proprietary = ""  # nvidia branch when the proprietary path is active
         self.firmware_reasons: list[str] = []
         self.fonts: tuple[str, str] | None = None  # (atom, what it covers) when the locale needs a font package
+        self.tuning_lines: list[str] = []  # the summary lines of the system tuning, one per file
 
     # -- accumulation helpers ---------------------------------------------------------------------------------------
 
@@ -340,6 +342,7 @@ class _Planner(NvidiaPlanMixin, DevicePlanMixin, SessionPlanMixin):
         self.display()
         self.locale()
         self.session()
+        self.tuning()
         self.companions()
         self.finish()
         return p
@@ -856,6 +859,7 @@ class _Planner(NvidiaPlanMixin, DevicePlanMixin, SessionPlanMixin):
             lines.append(f"Display: {s['hidpi'][4:]} dpi interface scale for {self.desktop.upper() if self.desktop in ('kde', 'gnome', 'lxqt') else self.desktop.capitalize()}")
         if self.fonts:
             lines.append(f"Fonts: {self.fonts[0].rsplit('/', 1)[1]} for {self.fonts[1]}")
+        lines.extend(self.tuning_lines)
         if self.p.warnings:
             lines.extend(issue.message for issue in self.p.warnings if issue.severity != "info")
         return lines

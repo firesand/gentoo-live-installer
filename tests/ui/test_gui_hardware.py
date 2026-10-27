@@ -291,6 +291,17 @@ def test_a_removable_target_disk_suggests_portable(make_window):
     assert "portable" in tab_of(window).advice.text()
 
 
+def test_system_tuning_is_on_in_the_guided_view_and_one_click_turns_it_off(make_window):
+    window = make_window(info=machine("thinkpad-amd-laptop"))
+    tab = tab_of(window)
+    box = tab.controls["tuning"]
+    assert isinstance(box, QCheckBox) and box.isChecked() and tab.row_shown("tuning") and tab.cards["tuning"].isVisibleTo(tab)
+    assert "Tuning: /etc/sysctl.d/80-installer-tuning.conf" in tab.plan_text.text()
+    box.setChecked(False)
+    window.customize.save_manifest()
+    assert window.manifest.hardware.tuning is False and "Tuning:" not in tab.plan_text.text()
+
+
 def test_choices_reach_the_manifest_and_change_the_plan(make_window):
     window = make_window(info=machine("amd-laptop-sof"))
     window.mode.setCurrentIndex(1)

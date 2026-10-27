@@ -30,6 +30,36 @@
       "/etc/bluetooth/main.conf.d/10-installer.conf",
       "# Written by the Gentoo installer.\n[Policy]\nAutoEnable=true\n",
       420
+     ],
+     [
+      "/etc/sysctl.d/80-installer-tuning.conf",
+      "# System tuning, written by the Gentoo installer, values from CachyOS-Settings. Delete this file to go back to the kernel's values.\n# A leading \"-\" lets a kernel without the setting skip it (systemd-sysctl and procps sysctl both read it so).\n# Keep more of the directory and file-name cache in memory.\nvm.vfs_cache_pressure = 50\n# Write changed data to disk early and in smaller amounts, so a large copy does not stall the desktop.\nvm.dirty_bytes = 268435456\nvm.dirty_background_bytes = 67108864\nvm.dirty_writeback_centisecs = 1500\n# A longer queue for received network packets.\n-net.core.netdev_max_backlog = 4096\n# The NMI watchdog costs CPU time and power, and a desktop or laptop does not need it.\n-kernel.nmi_watchdog = 0\n",
+      420
+     ],
+     [
+      "/etc/udev/rules.d/60-installer-ioschedulers.rules",
+      "# I/O schedulers by disk type, written by the Gentoo installer, values from CachyOS-Settings. Delete this file to use the kernel's choice.\n# Hard disks: BFQ keeps the desktop responsive while the disk is busy.\nACTION==\"add|change\", SUBSYSTEM==\"block\", KERNEL==\"sd[a-z]*\", ATTR{queue/rotational}==\"1\", ATTR{queue/scheduler}=\"bfq\"\n# SATA SSDs, SD and eMMC cards: mq-deadline.\nACTION==\"add|change\", SUBSYSTEM==\"block\", KERNEL==\"sd[a-z]*|mmcblk[0-9]*\", ATTR{queue/rotational}==\"0\", ATTR{queue/scheduler}=\"mq-deadline\"\n# NVMe SSDs: Kyber, which keeps reads quick while much is written.\nACTION==\"add|change\", SUBSYSTEM==\"block\", KERNEL==\"nvme[0-9]*n[0-9]*\", ATTR{queue/rotational}==\"0\", ATTR{queue/scheduler}=\"kyber\"\n",
+      420
+     ],
+     [
+      "/etc/tmpfiles.d/installer-thp.conf",
+      "# Transparent huge pages, written by the Gentoo installer, values from CachyOS-Settings. Delete this file to use the kernel's values.\n# A program that asks for huge pages gets them without waiting for memory to be compacted.\nw! /sys/kernel/mm/transparent_hugepage/defrag - - - - defer+madvise\n# Split a huge page again when most of it (80 percent) is unused, so that memory is not wasted.\nw! /sys/kernel/mm/transparent_hugepage/khugepaged/max_ptes_none - - - - 409\n",
+      420
+     ],
+     [
+      "/etc/udev/rules.d/80-installer-audio-power.rules",
+      "# Audio power saving only on battery, written by the Gentoo installer, values from CachyOS-Settings: on the charger it makes some laptops crackle.\nACTION==\"add\", SUBSYSTEM==\"sound\", KERNEL==\"card*\", DRIVERS==\"snd_hda_intel\", RUN+=\"/usr/local/libexec/installer-audio-power\"\nACTION==\"add|change\", SUBSYSTEM==\"power_supply\", ENV{POWER_SUPPLY_TYPE}==\"Mains\", RUN+=\"/usr/local/libexec/installer-audio-power\"\n",
+      420
+     ],
+     [
+      "/usr/local/libexec/installer-audio-power",
+      "#!/bin/sh\n# Audio power saving only on battery, written by the Gentoo installer, values from CachyOS-Settings.\n# udev runs this when the sound card appears and when the charger is plugged in or out (/etc/udev/rules.d/80-installer-audio-power.rules).\nparam=/sys/module/snd_hda_intel/parameters/power_save\n[ -w \"$param\" ] || exit 0\nmains=0\nonline=0\nfor supply in /sys/class/power_supply/*; do\n\t[ \"$(cat \"$supply/type\" 2>/dev/null)\" = Mains ] || continue\n\tmains=1\n\t[ \"$(cat \"$supply/online\" 2>/dev/null)\" = 1 ] && online=1\ndone\nif [ \"$mains\" = 1 ] && [ \"$online\" = 0 ]; then\n\techo 1 > \"$param\"\nelse\n\techo 0 > \"$param\"\nfi\nexit 0\n",
+      493
+     ],
+     [
+      "/etc/modprobe.d/installer-watchdog.conf",
+      "# Watchdog timers, written by the Gentoo installer, values from CachyOS-Settings: a desktop or laptop does not use them, and without them it starts and stops a little faster.\n# Delete this file to load them again.\nblacklist iTCO_wdt\nblacklist sp5100_tco\nblacklist wdat_wdt\n",
+      420
      ]
     ],
     "kernel_cmdline": [],
@@ -107,6 +137,7 @@
      "target": "this",
      "thermald": "no",
      "trim": "weekly",
+     "tuning": "on",
      "zram": "no"
     },
     "schema": 2,
@@ -117,7 +148,12 @@
      "Firmware: Linux firmware (AMD graphics, Bluetooth)",
      "Power: power-profiles-daemon",
      "Storage: weekly TRIM for the solid-state disk (cron)",
-     "Boot: fallback boot path is always written"
+     "Boot: fallback boot path is always written",
+     "Tuning: /etc/sysctl.d/80-installer-tuning.conf, memory and disk-write settings (applied by OpenRC's sysctl service)",
+     "Tuning: /etc/udev/rules.d/60-installer-ioschedulers.rules, BFQ for hard disks, mq-deadline for SATA SSDs and cards, Kyber for NVMe (udev)",
+     "Tuning: /etc/tmpfiles.d/installer-thp.conf, huge pages for programs that ask for them (applied by OpenRC's systemd-tmpfiles-setup service)",
+     "Tuning: /etc/udev/rules.d/80-installer-audio-power.rules, audio power saving only on battery, which stops crackling (udev)",
+     "Tuning: /etc/modprobe.d/installer-watchdog.conf, the unused watchdog timers are not loaded"
     ],
     "warnings": []
    }
@@ -156,6 +192,36 @@
       "/etc/bluetooth/main.conf.d/10-installer.conf",
       "# Written by the Gentoo installer.\n[Policy]\nAutoEnable=true\n",
       420
+     ],
+     [
+      "/etc/sysctl.d/80-installer-tuning.conf",
+      "# System tuning, written by the Gentoo installer, values from CachyOS-Settings. Delete this file to go back to the kernel's values.\n# A leading \"-\" lets a kernel without the setting skip it (systemd-sysctl and procps sysctl both read it so).\n# Keep more of the directory and file-name cache in memory.\nvm.vfs_cache_pressure = 50\n# Write changed data to disk early and in smaller amounts, so a large copy does not stall the desktop.\nvm.dirty_bytes = 268435456\nvm.dirty_background_bytes = 67108864\nvm.dirty_writeback_centisecs = 1500\n# A longer queue for received network packets.\n-net.core.netdev_max_backlog = 4096\n# The NMI watchdog costs CPU time and power, and a desktop or laptop does not need it.\n-kernel.nmi_watchdog = 0\n",
+      420
+     ],
+     [
+      "/etc/udev/rules.d/60-installer-ioschedulers.rules",
+      "# I/O schedulers by disk type, written by the Gentoo installer, values from CachyOS-Settings. Delete this file to use the kernel's choice.\n# Hard disks: BFQ keeps the desktop responsive while the disk is busy.\nACTION==\"add|change\", SUBSYSTEM==\"block\", KERNEL==\"sd[a-z]*\", ATTR{queue/rotational}==\"1\", ATTR{queue/scheduler}=\"bfq\"\n# SATA SSDs, SD and eMMC cards: mq-deadline.\nACTION==\"add|change\", SUBSYSTEM==\"block\", KERNEL==\"sd[a-z]*|mmcblk[0-9]*\", ATTR{queue/rotational}==\"0\", ATTR{queue/scheduler}=\"mq-deadline\"\n# NVMe SSDs: Kyber, which keeps reads quick while much is written.\nACTION==\"add|change\", SUBSYSTEM==\"block\", KERNEL==\"nvme[0-9]*n[0-9]*\", ATTR{queue/rotational}==\"0\", ATTR{queue/scheduler}=\"kyber\"\n",
+      420
+     ],
+     [
+      "/etc/tmpfiles.d/installer-thp.conf",
+      "# Transparent huge pages, written by the Gentoo installer, values from CachyOS-Settings. Delete this file to use the kernel's values.\n# A program that asks for huge pages gets them without waiting for memory to be compacted.\nw! /sys/kernel/mm/transparent_hugepage/defrag - - - - defer+madvise\n# Split a huge page again when most of it (80 percent) is unused, so that memory is not wasted.\nw! /sys/kernel/mm/transparent_hugepage/khugepaged/max_ptes_none - - - - 409\n",
+      420
+     ],
+     [
+      "/etc/udev/rules.d/80-installer-audio-power.rules",
+      "# Audio power saving only on battery, written by the Gentoo installer, values from CachyOS-Settings: on the charger it makes some laptops crackle.\nACTION==\"add\", SUBSYSTEM==\"sound\", KERNEL==\"card*\", DRIVERS==\"snd_hda_intel\", RUN+=\"/usr/local/libexec/installer-audio-power\"\nACTION==\"add|change\", SUBSYSTEM==\"power_supply\", ENV{POWER_SUPPLY_TYPE}==\"Mains\", RUN+=\"/usr/local/libexec/installer-audio-power\"\n",
+      420
+     ],
+     [
+      "/usr/local/libexec/installer-audio-power",
+      "#!/bin/sh\n# Audio power saving only on battery, written by the Gentoo installer, values from CachyOS-Settings.\n# udev runs this when the sound card appears and when the charger is plugged in or out (/etc/udev/rules.d/80-installer-audio-power.rules).\nparam=/sys/module/snd_hda_intel/parameters/power_save\n[ -w \"$param\" ] || exit 0\nmains=0\nonline=0\nfor supply in /sys/class/power_supply/*; do\n\t[ \"$(cat \"$supply/type\" 2>/dev/null)\" = Mains ] || continue\n\tmains=1\n\t[ \"$(cat \"$supply/online\" 2>/dev/null)\" = 1 ] && online=1\ndone\nif [ \"$mains\" = 1 ] && [ \"$online\" = 0 ]; then\n\techo 1 > \"$param\"\nelse\n\techo 0 > \"$param\"\nfi\nexit 0\n",
+      493
+     ],
+     [
+      "/etc/modprobe.d/installer-watchdog.conf",
+      "# Watchdog timers, written by the Gentoo installer, values from CachyOS-Settings: a desktop or laptop does not use them, and without them it starts and stops a little faster.\n# Delete this file to load them again.\nblacklist iTCO_wdt\nblacklist sp5100_tco\nblacklist wdat_wdt\n",
+      420
      ]
     ],
     "kernel_cmdline": [],
@@ -233,6 +299,7 @@
      "target": "this",
      "thermald": "no",
      "trim": "weekly",
+     "tuning": "on",
      "zram": "no"
     },
     "schema": 2,
@@ -244,6 +311,11 @@
      "Power: power-profiles-daemon",
      "Storage: weekly TRIM for the solid-state disk (cron)",
      "Boot: fallback boot path is always written",
+     "Tuning: /etc/sysctl.d/80-installer-tuning.conf, memory and disk-write settings (applied by OpenRC's sysctl service)",
+     "Tuning: /etc/udev/rules.d/60-installer-ioschedulers.rules, BFQ for hard disks, mq-deadline for SATA SSDs and cards, Kyber for NVMe (udev)",
+     "Tuning: /etc/tmpfiles.d/installer-thp.conf, huge pages for programs that ask for them (applied by OpenRC's systemd-tmpfiles-setup service)",
+     "Tuning: /etc/udev/rules.d/80-installer-audio-power.rules, audio power saving only on battery, which stops crackling (udev)",
+     "Tuning: /etc/modprobe.d/installer-watchdog.conf, the unused watchdog timers are not loaded",
      "The proprietary NVIDIA driver was not installed because it does not fit this PC or these settings (nvidia_no_gpu). The open driver is used."
     ],
     "warnings": [
@@ -276,6 +348,36 @@
       "/etc/portage/package.env/installer-hardware",
       "# Written by the Gentoo installer: packages that need a lot of memory per compile job.\ndev-python/pyside installer-memory\ndev-qt/qtwebengine installer-memory\nllvm-core/llvm installer-memory\nllvm-core/clang installer-memory\nnet-libs/webkit-gtk installer-memory\n",
       420
+     ],
+     [
+      "/etc/sysctl.d/80-installer-tuning.conf",
+      "# System tuning, written by the Gentoo installer, values from CachyOS-Settings. Delete this file to go back to the kernel's values.\n# A leading \"-\" lets a kernel without the setting skip it (systemd-sysctl and procps sysctl both read it so).\n# Keep more of the directory and file-name cache in memory.\nvm.vfs_cache_pressure = 50\n# Write changed data to disk early and in smaller amounts, so a large copy does not stall the desktop.\nvm.dirty_bytes = 268435456\nvm.dirty_background_bytes = 67108864\nvm.dirty_writeback_centisecs = 1500\n# A longer queue for received network packets.\n-net.core.netdev_max_backlog = 4096\n# The NMI watchdog costs CPU time and power, and a desktop or laptop does not need it.\n-kernel.nmi_watchdog = 0\n",
+      420
+     ],
+     [
+      "/etc/udev/rules.d/60-installer-ioschedulers.rules",
+      "# I/O schedulers by disk type, written by the Gentoo installer, values from CachyOS-Settings. Delete this file to use the kernel's choice.\n# Hard disks: BFQ keeps the desktop responsive while the disk is busy.\nACTION==\"add|change\", SUBSYSTEM==\"block\", KERNEL==\"sd[a-z]*\", ATTR{queue/rotational}==\"1\", ATTR{queue/scheduler}=\"bfq\"\n# SATA SSDs, SD and eMMC cards: mq-deadline.\nACTION==\"add|change\", SUBSYSTEM==\"block\", KERNEL==\"sd[a-z]*|mmcblk[0-9]*\", ATTR{queue/rotational}==\"0\", ATTR{queue/scheduler}=\"mq-deadline\"\n# NVMe SSDs: Kyber, which keeps reads quick while much is written.\nACTION==\"add|change\", SUBSYSTEM==\"block\", KERNEL==\"nvme[0-9]*n[0-9]*\", ATTR{queue/rotational}==\"0\", ATTR{queue/scheduler}=\"kyber\"\n",
+      420
+     ],
+     [
+      "/etc/tmpfiles.d/installer-thp.conf",
+      "# Transparent huge pages, written by the Gentoo installer, values from CachyOS-Settings. Delete this file to use the kernel's values.\n# A program that asks for huge pages gets them without waiting for memory to be compacted.\nw! /sys/kernel/mm/transparent_hugepage/defrag - - - - defer+madvise\n# Split a huge page again when most of it (80 percent) is unused, so that memory is not wasted.\nw! /sys/kernel/mm/transparent_hugepage/khugepaged/max_ptes_none - - - - 409\n",
+      420
+     ],
+     [
+      "/etc/udev/rules.d/80-installer-audio-power.rules",
+      "# Audio power saving only on battery, written by the Gentoo installer, values from CachyOS-Settings: on the charger it makes some laptops crackle.\nACTION==\"add\", SUBSYSTEM==\"sound\", KERNEL==\"card*\", DRIVERS==\"snd_hda_intel\", RUN+=\"/usr/local/libexec/installer-audio-power\"\nACTION==\"add|change\", SUBSYSTEM==\"power_supply\", ENV{POWER_SUPPLY_TYPE}==\"Mains\", RUN+=\"/usr/local/libexec/installer-audio-power\"\n",
+      420
+     ],
+     [
+      "/usr/local/libexec/installer-audio-power",
+      "#!/bin/sh\n# Audio power saving only on battery, written by the Gentoo installer, values from CachyOS-Settings.\n# udev runs this when the sound card appears and when the charger is plugged in or out (/etc/udev/rules.d/80-installer-audio-power.rules).\nparam=/sys/module/snd_hda_intel/parameters/power_save\n[ -w \"$param\" ] || exit 0\nmains=0\nonline=0\nfor supply in /sys/class/power_supply/*; do\n\t[ \"$(cat \"$supply/type\" 2>/dev/null)\" = Mains ] || continue\n\tmains=1\n\t[ \"$(cat \"$supply/online\" 2>/dev/null)\" = 1 ] && online=1\ndone\nif [ \"$mains\" = 1 ] && [ \"$online\" = 0 ]; then\n\techo 1 > \"$param\"\nelse\n\techo 0 > \"$param\"\nfi\nexit 0\n",
+      493
+     ],
+     [
+      "/etc/modprobe.d/installer-watchdog.conf",
+      "# Watchdog timers, written by the Gentoo installer, values from CachyOS-Settings: a desktop or laptop does not use them, and without them it starts and stops a little faster.\n# Delete this file to load them again.\nblacklist iTCO_wdt\nblacklist sp5100_tco\nblacklist wdat_wdt\n",
+      420
      ]
     ],
     "first_steps": [
@@ -294,7 +396,8 @@
     ],
     "optional_atoms": [
      "sys-firmware/sof-firmware",
-     "sys-apps/fwupd"
+     "sys-apps/fwupd",
+     "net-wireless/wireless-regdb"
     ],
     "optional_services": [
      [
@@ -403,6 +506,8 @@
      "target": "portable",
      "thermald": "no",
      "trim": "off",
+     "tuning": "on",
+     "wifi_country": "",
      "zram": "no"
     },
     "schema": 2,
@@ -412,7 +517,13 @@
      "Graphics: AMD Radeon 680M - open AMD driver",
      "Firmware: Linux firmware (a portable install can meet any hardware, AMD graphics, Bluetooth)",
      "Audio: Sound Open Firmware (many laptop audio chips need it)",
-     "Boot: fallback boot path is always written"
+     "Boot: fallback boot path is always written",
+     "Tuning: /etc/sysctl.d/80-installer-tuning.conf, memory and disk-write settings (applied by OpenRC's sysctl service)",
+     "Tuning: /etc/udev/rules.d/60-installer-ioschedulers.rules, BFQ for hard disks, mq-deadline for SATA SSDs and cards, Kyber for NVMe (udev)",
+     "Tuning: /etc/tmpfiles.d/installer-thp.conf, huge pages for programs that ask for them (applied by OpenRC's systemd-tmpfiles-setup service)",
+     "Tuning: the wireless regulatory database; the time zone UTC names no single country, so the access points tell it",
+     "Tuning: /etc/udev/rules.d/80-installer-audio-power.rules, audio power saving only on battery, which stops crackling (udev)",
+     "Tuning: /etc/modprobe.d/installer-watchdog.conf, the unused watchdog timers are not loaded"
     ],
     "warnings": []
    }
@@ -444,6 +555,36 @@
      [
       "/etc/skel/.config/xfce4/xfconf/xfce-perchannel-xml/xsettings.xml",
       "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\n<channel name=\"xsettings\" version=\"1.0\">\n  <property name=\"Xft\" type=\"empty\">\n    <property name=\"DPI\" type=\"int\" value=\"168\"/>\n  </property>\n</channel>\n",
+      420
+     ],
+     [
+      "/etc/sysctl.d/80-installer-tuning.conf",
+      "# System tuning, written by the Gentoo installer, values from CachyOS-Settings. Delete this file to go back to the kernel's values.\n# A leading \"-\" lets a kernel without the setting skip it (systemd-sysctl and procps sysctl both read it so).\n# Keep more of the directory and file-name cache in memory.\nvm.vfs_cache_pressure = 50\n# Write changed data to disk early and in smaller amounts, so a large copy does not stall the desktop.\nvm.dirty_bytes = 268435456\nvm.dirty_background_bytes = 67108864\nvm.dirty_writeback_centisecs = 1500\n# A longer queue for received network packets.\n-net.core.netdev_max_backlog = 4096\n# The NMI watchdog costs CPU time and power, and a desktop or laptop does not need it.\n-kernel.nmi_watchdog = 0\n",
+      420
+     ],
+     [
+      "/etc/udev/rules.d/60-installer-ioschedulers.rules",
+      "# I/O schedulers by disk type, written by the Gentoo installer, values from CachyOS-Settings. Delete this file to use the kernel's choice.\n# Hard disks: BFQ keeps the desktop responsive while the disk is busy.\nACTION==\"add|change\", SUBSYSTEM==\"block\", KERNEL==\"sd[a-z]*\", ATTR{queue/rotational}==\"1\", ATTR{queue/scheduler}=\"bfq\"\n# SATA SSDs, SD and eMMC cards: mq-deadline.\nACTION==\"add|change\", SUBSYSTEM==\"block\", KERNEL==\"sd[a-z]*|mmcblk[0-9]*\", ATTR{queue/rotational}==\"0\", ATTR{queue/scheduler}=\"mq-deadline\"\n# NVMe SSDs: Kyber, which keeps reads quick while much is written.\nACTION==\"add|change\", SUBSYSTEM==\"block\", KERNEL==\"nvme[0-9]*n[0-9]*\", ATTR{queue/rotational}==\"0\", ATTR{queue/scheduler}=\"kyber\"\n",
+      420
+     ],
+     [
+      "/etc/tmpfiles.d/installer-thp.conf",
+      "# Transparent huge pages, written by the Gentoo installer, values from CachyOS-Settings. Delete this file to use the kernel's values.\n# A program that asks for huge pages gets them without waiting for memory to be compacted.\nw! /sys/kernel/mm/transparent_hugepage/defrag - - - - defer+madvise\n# Split a huge page again when most of it (80 percent) is unused, so that memory is not wasted.\nw! /sys/kernel/mm/transparent_hugepage/khugepaged/max_ptes_none - - - - 409\n",
+      420
+     ],
+     [
+      "/etc/tlp.d/80-installer-audio.conf",
+      "# Audio power saving, written by the Gentoo installer, values from CachyOS-Settings: off on the charger, where it makes some laptops crackle; TLP keeps it on battery.\nSOUND_POWER_SAVE_ON_AC=0\n",
+      420
+     ],
+     [
+      "/etc/X11/xorg.conf.d/50-installer-touchpad.conf",
+      "# Tap to click on the touchpad, written by the Gentoo installer, values from CachyOS-Settings. The desktop's mouse and touchpad settings can still turn it off.\nSection \"InputClass\"\n\tIdentifier \"installer touchpad tapping\"\n\tMatchIsTouchpad \"on\"\n\tMatchDevicePath \"/dev/input/event*\"\n\tDriver \"libinput\"\n\tOption \"Tapping\" \"on\"\nEndSection\n",
+      420
+     ],
+     [
+      "/etc/modprobe.d/installer-watchdog.conf",
+      "# Watchdog timers, written by the Gentoo installer, values from CachyOS-Settings: a desktop or laptop does not use them, and without them it starts and stops a little faster.\n# Delete this file to load them again.\nblacklist iTCO_wdt\nblacklist sp5100_tco\nblacklist wdat_wdt\n",
       420
      ]
     ],
@@ -524,6 +665,7 @@
      "target": "this",
      "thermald": "no",
      "trim": "weekly",
+     "tuning": "on",
      "zram": "no"
     },
     "schema": 2,
@@ -541,7 +683,13 @@
      "Power: TLP",
      "Storage: weekly TRIM for the solid-state disk (fstrim.timer)",
      "Boot: fallback boot path is always written",
-     "Display: 168 dpi interface scale for Xfce"
+     "Display: 168 dpi interface scale for Xfce",
+     "Tuning: /etc/sysctl.d/80-installer-tuning.conf, memory and disk-write settings (applied by systemd-sysctl)",
+     "Tuning: /etc/udev/rules.d/60-installer-ioschedulers.rules, BFQ for hard disks, mq-deadline for SATA SSDs and cards, Kyber for NVMe (udev)",
+     "Tuning: /etc/tmpfiles.d/installer-thp.conf, huge pages for programs that ask for them (applied by systemd-tmpfiles-setup)",
+     "Tuning: /etc/tlp.d/80-installer-audio.conf, no audio power saving on the charger (TLP)",
+     "Tuning: /etc/X11/xorg.conf.d/50-installer-touchpad.conf, tap to click on the touchpad",
+     "Tuning: /etc/modprobe.d/installer-watchdog.conf, the unused watchdog timers are not loaded"
     ],
     "user_services": [
      [

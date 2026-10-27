@@ -317,6 +317,10 @@ SPECS: tuple[Spec, ...] = (
          hint="Makes text and buttons readable on a dense screen. KDE and GNOME scale by themselves."),
     Spec("pipewire_alsa", "Let old audio programs use PipeWire", "check", advanced=True, group="display",
          hint="Installs the ALSA plug-in of PipeWire for programs that only speak ALSA."),
+    Spec("tuning", "System tuning (settings from CachyOS)", "check", group="tuning",
+         hint="Quicker memory and disk settings, the Wi-Fi country from your time zone, no audio crackling on the charger, tap to click on a "
+              "laptop's touchpad and no unused watchdog timers. It works the same with OpenRC and systemd; every file is listed under "
+              "'What the installer will set up'. Turn it off to keep Gentoo's defaults."),
     Spec("guest_tools", "Install guest tools for this virtual machine", "check", group="vm",
          hint="Clipboard sharing, automatic screen size and a clean shutdown from the host."),
 )
@@ -420,7 +424,7 @@ class HardwareTab(QWidget):
 
         self.cards: dict[str, Card] = {"graphics": self.graphics}
         for group, title in (("power", "Laptop and power"), ("memory", "Memory and storage"), ("boot", "Boot and firmware"),
-                             ("display", "Screen, sound and printing"), ("vm", "Virtual machine")):
+                             ("display", "Screen, sound and printing"), ("tuning", "System tuning"), ("vm", "Virtual machine")):
             card = Card(title, "")
             form = self._form()
             card.content.addLayout(form)

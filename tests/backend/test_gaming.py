@@ -3,7 +3,12 @@
 from __future__ import annotations
 
 import re
+import shutil
+import struct
+import subprocess
 from pathlib import Path
+
+import pytest
 
 from gentoo_installerd import gaming_readiness as gr
 from gentoo_installerd.configure import choice_problems
@@ -187,8 +192,8 @@ def states(rows):
 def test_a_pc_that_meets_everything_checkable(tmp_path):
     fake_pc(tmp_path)
     got = states(gr.check_this_pc(tmp_path, live=False))
-    assert got == {"Secure Boot": "yes", "TPM 2.0": "yes", "IOMMU": "yes", "Measured boot": "unknown", "Kernel lockdown": "yes",
-                   "BPF security module": "yes", "kexec": "yes", "Signed kernel and modules": "unknown"}
+    assert got == {"Secure Boot": "yes", "TPM 2.0": "yes", "IOMMU": "yes", "Measured boot": "unknown", "Machine Owner Keys (MOK)": "unknown",
+                   "Kernel lockdown": "yes", "BPF security module": "yes", "kexec": "yes", "Signed kernel and modules": "no"}
 
 
 def test_a_bare_pc_has_no_exceptions_and_says_what_is_missing(tmp_path):
@@ -202,6 +207,47 @@ def test_individual_failures(tmp_path):
     fake_pc(tmp_path, secure_boot=False, tpm="1", lockdown="[none] integrity confidentiality", lsm="lockdown,yama", kexec="0")
     got = states(gr.check_this_pc(tmp_path, live=False))
     assert got["Secure Boot"] == "no" and got["TPM 2.0"] == "no" and got["Kernel lockdown"] == "no" and got["BPF security module"] == "no" and got["kexec"] == "no"
+
+
+def test_an_iommu_in_pass_through_mode_does_not_count(tmp_path):
+    fake_pc(tmp_path)
+    for group, kind in (("0", "DMA-FQ"), ("1", "identity")):
+        (tmp_path / f"sys/kernel/iommu_groups/{group}").mkdir(parents=True)
+        (tmp_path / f"sys/kernel/iommu_groups/{group}/type").write_text(kind + "\n")
+    row = next(row for row in gr.check_this_pc(tmp_path, live=False) if row.name == "IOMMU")
+    assert row.state == "no" and "pass-through" in row.detail
+
+
+def _certificate(tmp_path: Path, name: str) -> bytes:
+    der = tmp_path / f"{len(list(tmp_path.glob('*.der')))}.der"
+    subprocess.run(["openssl", "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1", "-subj", f"/CN={name}/", "-outform", "DER",
+                    "-keyout", str(tmp_path / "key.pem"), "-out", str(der)], check=True, capture_output=True)
+    return der.read_bytes()
+
+
+def _mok_list(*certificates: bytes) -> bytes:
+    """efivarfs MokListRT: 4 attribute bytes, then one EFI_SIGNATURE_LIST per certificate (owner GUID + DER)."""
+    data = b""
+    for der in certificates:
+        size = 16 + len(der)
+        data += bytes(16) + struct.pack("<III", 28 + size, 0, size) + bytes(range(16)) + der
+    return b"\x06\x00\x00\x00" + data
+
+
+@pytest.mark.skipif(shutil.which("openssl") is None, reason="needs openssl")
+def test_the_mok_row_names_the_keys_and_flags_this_discs_own(tmp_path):
+    fake_pc(tmp_path / "pc")
+    mok = tmp_path / "pc" / gr.EFI_MOK_LIST
+    fedora = _certificate(tmp_path, "Fedora Secure Boot CA")
+    mok.write_bytes(_mok_list(fedora))
+    row = gr.mok(tmp_path / "pc")
+    assert row.state == "unknown" and "Fedora Secure Boot CA" in row.detail
+    mok.write_bytes(_mok_list(fedora, _certificate(tmp_path, "Gentoo installer live disc 2026-10-27 07:49 UTC")))
+    row = gr.mok(tmp_path / "pc")
+    assert row.state == "no" and "Gentoo installer live disc 2026-10-27 07:49 UTC" in row.detail and "mokutil --delete" in row.detail
+    mok.write_bytes(b"\x06\x00\x00\x00")
+    assert gr.mok(tmp_path / "pc").state == "yes"
+    assert gr.mok(tmp_path / "bios").state == "unknown"  # no shim, no list to read
 
 
 def test_live_session_kernel_rows_are_decided_after_the_installation(tmp_path):
@@ -224,8 +270,11 @@ def texts():
 
 def test_the_status_is_dated_honest_and_complete():
     status = gr.FORTNITE_STATUS
-    assert "24 October 2026" in status and "not playable on Linux" in status
-    assert "Secondary sources report" in status and "inference" in status and gr.EPIC_URL in status
+    assert "27 October 2026" in status and "not playable on Linux" in status
+    assert "Secondary sources report" in status and gr.EPIC_URL in status
+    assert "Gentoo is not on that list" in status and "every key enrolled in its MOK list" in status
+    assert all(key in status for key in gr.RECOGNIZED_KEYS) and "Gentoo" not in " ".join(gr.RECOGNIZED_KEYS)
+    assert "will not run on Gentoo" in gr.CARD_INTRO
     assert len(gr.FORTNITE_REQUIREMENTS) == 8
     for word in ("signed kernel", "Secure Boot", "TPM 2.0", "measured boot", "IOMMU", "lockdown", "kexec", "BPF"):
         assert word.lower() in status.lower(), word
