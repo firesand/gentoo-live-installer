@@ -126,6 +126,7 @@
       {"path": "usr/share/applications/gentoo-installer.desktop", "type": "file"},
       {"path": "etc/ssh/sshd_config.d/10-gentoo-live.conf", "type": "file"},
       {"path": "usr/bin/gentoo-remote-access", "type": "file|slink", "executable": true},
+      {"path": "usr/bin/gentoo-live-report", "type": "file|slink", "executable": true},
       {"path": "usr/bin/gentoo-rescue", "type": "file|slink", "when_source": {"path": "pyproject.toml", "contains": "gentoo-rescue ="}},
       {"path": "usr/bin/gentoo-rescue-gui", "type": "file|slink", "when_source": {"path": "pyproject.toml", "contains": "gentoo-rescue-gui ="}},
       {"path": "usr/bin/gentoo-installer-text", "type": "file|slink", "when_source": {"path": "pyproject.toml", "contains": "gentoo-installer-text ="}},

@@ -1,0 +1,48 @@
+#!/bin/bash
+# A short report about the graphics and the desktop of the live disc, for a bug report.
+#
+#     sudo gentoo-live-report         print it and save it as /tmp/gentoo-live-report.txt
+#     sudo gentoo-live-report DIR     also copy that file to DIR (a mounted USB stick, say)
+#
+# It reads only: the kernel command line, the graphics cards and their drivers, the kernel's
+# graphics messages, the errors of the X server and the display manager's log. It holds no
+# serial numbers and no passwords. Nothing is changed.
+set -u
+
+out=/tmp/gentoo-live-report.txt
+
+if [ "$(id -u)" -ne 0 ]; then
+	printf 'gentoo-live-report: the kernel messages need administrator rights: sudo gentoo-live-report\n' >&2
+	exit 1
+fi
+
+{
+	echo "== gentoo-live-report $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+	echo "== kernel: $(uname -r)"
+	echo "== kernel command line"
+	cat /proc/cmdline
+	echo "== graphics cards and their drivers"
+	lspci -nnk 2>/dev/null | grep -A3 -iE ' (vga|3d|display) '
+	echo "== display manager"
+	rc-service display-manager status 2>&1
+	echo "== kernel messages about graphics"
+	dmesg 2>/dev/null | grep -iE 'nouveau|nvidia|amdgpu|radeon|i915|[^a-z]xe[ :]|drm|simpledrm|efifb|vesafb|gsp|fbcon' | tail -45
+	echo "== X server: errors and warnings"
+	grep -hE '\((EE|WW)\)' /var/log/Xorg.0.log /var/log/lightdm/x-0.log 2>/dev/null | head -45
+	echo "== X server: driver lines"
+	grep -hE 'LoadModule|Matched|Loading /usr/lib64/xorg/modules/drivers|Driver for|screen\(s\)' /var/log/Xorg.0.log /var/log/lightdm/x-0.log 2>/dev/null | head -25
+	echo "== display manager log"
+	tail -25 /var/log/lightdm/lightdm.log 2>/dev/null
+} > "${out}" 2>&1
+
+cat "${out}"
+if [ -n "${1:-}" ]; then
+	if cp -- "${out}" "$1/"; then
+		sync
+		printf '\nSaved to %s/%s\n' "$1" "${out##*/}"
+	else
+		printf '\ngentoo-live-report: could not copy the report to %s\n' "$1" >&2
+	fi
+else
+	printf '\nSaved to %s (copy it to a USB stick: sudo gentoo-live-report /path/of/the/stick)\n' "${out}"
+fi

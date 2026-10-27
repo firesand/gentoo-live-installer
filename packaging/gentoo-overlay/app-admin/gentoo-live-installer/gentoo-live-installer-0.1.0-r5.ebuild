@@ -112,6 +112,8 @@ src_install() {
 	# Console form of the live disc's remote access (I9): sshd runs at boot, this sets or
 	# removes the password of the live user and prints the addresses and key fingerprints.
 	dobin "${FILESDIR}/gentoo-remote-access"
+	# A short report about the graphics and the desktop, for a bug report (when the desktop does not start).
+	dobin "${FILESDIR}/gentoo-live-report"
 	if use safe-graphics; then
 		# The live kernel is built from sys-kernel/gentoo-kernel by Catalyst in stage2; the
 		# kernel-build eclass merges this fragment, so the kernel has a generic framebuffer

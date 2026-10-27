@@ -9,7 +9,7 @@ import os
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 from PySide6.QtCore import QProcess, QSettings, QThread, QTimer, Qt, QUrl, Signal
 from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QGuiApplication, QKeySequence, QShortcut
@@ -1058,12 +1058,32 @@ def bootstrap_session(manifest: InstallManifest) -> None:
         keyboard.apply_layout(system.keyboard_layout, system.keyboard_variant, system.keyboard_options, system.keyboard_model)
 
 
+NO_DESKTOP_TEXT = """gentoo-installer needs the graphical desktop, and none is running on this screen.
+On the live disc the desktop starts by itself; here it did not start, which is usually the graphics driver.
+  Try again:            sudo rc-service display-manager restart
+  Or restart the PC and choose "Safe graphics (for a black screen or no picture)" in the boot menu.
+  Or install without a desktop: sudo gentoo-installer-text
+What went wrong is in /var/log/Xorg.0.log and /var/log/lightdm/lightdm.log."""
+
+
+def graphical_session(environ: Mapping[str, str] | None = None) -> bool:
+    """Whether Qt has a screen to open a window on: an X or Wayland display, or a platform chosen on purpose (QT_QPA_PLATFORM).
+
+    Without one Qt aborts with its own words about the xcb plugin (the first test on a real PC, started from the text console
+    after the desktop had not come up)."""
+    env = os.environ if environ is None else environ
+    return bool(env.get("DISPLAY") or env.get("WAYLAND_DISPLAY") or env.get("QT_QPA_PLATFORM"))
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Guided AMD64 Gentoo live installer")
     parser.add_argument("--socket", default=os.environ.get("GENTOO_INSTALLER_SOCKET", DEFAULT_SOCKET))
     parser.add_argument("--manifest", help="Load an installation manifest")
     parser.add_argument("--mode", choices=("install", "repair"), default="install", help="Open the installer wizard or the repair tools")
     args = parser.parse_args(argv)
+    if not graphical_session():
+        print(NO_DESKTOP_TEXT, file=sys.stderr)
+        return 3
     app = QApplication(sys.argv[:1])
     app.setApplicationName("Gentoo Installer")
     app.setOrganizationName("GentooLive")
