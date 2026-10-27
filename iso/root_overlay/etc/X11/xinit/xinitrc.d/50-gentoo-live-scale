@@ -1,0 +1,28 @@
+# The live desktop on a high-resolution screen: everything twice as large, so that it can be read.
+#
+# lightdm's Xsession sources this before Xfce and the installer start. A screen 3200 pixels wide or
+# more (4K, 5K) gets scale 2 for GTK (panel, file manager, Firefox) and Qt (the installer, HWMonux,
+# PortageHub), and a larger mouse pointer. "gentoo.scale=1" or "gentoo.scale=2" on the kernel command
+# line overrides it. The first real PC of RC1 had a 4K monitor, and the text was tiny.
+# GENTOO_SCALE_CMDLINE is for the tests of the disc.
+gentoo_live_scale=
+for gentoo_live_word in $(cat "${GENTOO_SCALE_CMDLINE:-/proc/cmdline}" 2>/dev/null); do
+	case "${gentoo_live_word}" in
+		gentoo.scale=1 | gentoo.scale=2 | gentoo.scale=3) gentoo_live_scale=${gentoo_live_word#gentoo.scale=} ;;
+	esac
+done
+if [ -z "${gentoo_live_scale}" ]; then
+	# the widest connected output: "HDMI-1 connected primary 3840x2160+0+0 (...) 600mm x 340mm"
+	gentoo_live_width=$(xrandr --current 2>/dev/null | awk '/ connected/ { for (i = 1; i <= NF; i++) if ($i ~ /^[0-9]+x[0-9]+\+/) { split($i, size, "x"); if (size[1] + 0 > widest) widest = size[1] + 0 } } END { print widest + 0 }')
+	if [ "${gentoo_live_width:-0}" -ge 3200 ]; then
+		gentoo_live_scale=2
+	else
+		gentoo_live_scale=1
+	fi
+fi
+if [ "${gentoo_live_scale}" -gt 1 ]; then
+	export GDK_SCALE="${gentoo_live_scale}"
+	export QT_SCALE_FACTOR="${gentoo_live_scale}"
+	export XCURSOR_SIZE=$((24 * gentoo_live_scale))
+fi
+unset gentoo_live_scale gentoo_live_word gentoo_live_width
