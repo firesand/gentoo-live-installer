@@ -17,7 +17,10 @@ chown -R gentoo:users /home/gentoo
 passwd -d gentoo
 passwd -l root
 usermod -a -G gentoo-installer gentoo
-printf 'DISPLAYMANAGER="lightdm"\n' > /etc/conf.d/display-manager
+# rc_need="udev-settle": the desktop starts only when udev has loaded the graphics drivers and their firmware. On the first
+# real PC (RTX 4090, nouveau with its GSP firmware read from the USB stick) one boot showed only the text console: X had
+# started before the driver was ready. The next boot of the same stick reached the desktop.
+printf 'DISPLAYMANAGER="lightdm"\nrc_need="udev-settle"\n' > /etc/conf.d/display-manager
 if [[ -f /etc/gentoo-installer-vm-test ]]; then
 	# An impossible password permits key-only SSH without unlocking a password.
 	usermod -p '*' root

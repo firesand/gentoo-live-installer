@@ -58,3 +58,10 @@ def test_the_report_needs_root_and_says_so(tmp_path) -> None:
     write_executable(bin_dir / "id", "#!/bin/sh\necho 1000\n")
     result = subprocess.run(["bash", str(REPORT)], capture_output=True, text=True, env={**os.environ, "PATH": f"{bin_dir}:{os.environ['PATH']}"}, check=False)
     assert result.returncode == 1 and "sudo gentoo-live-report" in result.stderr
+
+
+def test_the_desktop_waits_for_udev_to_load_the_graphics_drivers() -> None:
+    """One boot of RC1 on an RTX 4090 showed only the text console (X before nouveau and its firmware were ready)."""
+    fsscript = (ROOT / "iso/fsscript-stage2.sh").read_text()
+    line = next(line for line in fsscript.splitlines() if "/etc/conf.d/display-manager" in line and line.startswith("printf"))
+    assert 'DISPLAYMANAGER="lightdm"' in line and 'rc_need="udev-settle"' in line
