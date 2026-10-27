@@ -1459,6 +1459,9 @@ def installed_system_probes(manifest: InstallManifest, scenario: Scenario, *, wo
         atoms = [vm_probes.INTEL_MICROCODE, *vm_probes.GUEST_TOOL_ATOMS]
         probes.append(("hardware-plan", vm_probes.package_check_command(atoms),
                        lambda c, o: vm_probes.parse_hardware_probe(c, o, plan, manifest, degraded)))
+        tuning = vm_probes.tuning_expected(plan)
+        if tuning is not None:  # the plan of an ISO without system tuning has no scalars.tuning
+            probes.append(("tuning", vm_probes.TUNING_COMMAND, lambda c, o: vm_probes.parse_tuning_probe(c, o, tuning), password))
     if world:
         probes.append(("world", vm_probes.WORLD_COMMAND, vm_probes.parse_world_probe, password, world_timeout))
     return probes

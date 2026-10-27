@@ -578,3 +578,78 @@ def parse_hardware_plan_file(text: str) -> dict[str, Any] | None:
     if isinstance(record, dict) and isinstance(record.get("plan"), dict):
         record = record["plan"]
     return record if isinstance(record, dict) and "schema" in record else None
+
+
+# --- system tuning (gentoo_installerd/hwplan_tuning.py) ----------------------------------------------------------------
+
+# One "key value" line per fact; the sysctl --system run (as root, it only applies the files again) reports a key no kernel has.
+TUNING_COMMAND = r"""for f in vm/vfs_cache_pressure vm/dirty_bytes vm/swappiness vm/page-cluster; do printf 'sysctl %s %s\n' "$f" "$(cat /proc/sys/$f)"; done
+printf 'thp_defrag %s\n' "$(cat /sys/kernel/mm/transparent_hugepage/defrag 2>/dev/null)"
+printf 'thp_ptes %s\n' "$(cat /sys/kernel/mm/transparent_hugepage/khugepaged/max_ptes_none 2>/dev/null)"
+for q in /sys/block/*/queue/scheduler; do d=${q#/sys/block/}; d=${d%%/*}; printf 'sched %s %s %s\n' "$d" "$(cat /sys/block/$d/queue/rotational)" "$(cat $q)"; done
+if [ -r /sys/module/snd_hda_intel/parameters/power_save ]; then printf 'hda %s\n' "$(cat /sys/module/snd_hda_intel/parameters/power_save)"; fi
+printf 'cmdline %s\n' "$(cat /proc/cmdline)"
+sudo -S -p '' sysctl --system 2>&1 >/dev/null | sed 's/^/sysctl_error /'
+true"""
+SCHEDULER_FOR = ((re.compile(r"sd[a-z]+"), "1", "bfq"), (re.compile(r"sd[a-z]+|mmcblk\d+"), "0", "mq-deadline"), (re.compile(r"nvme\d+n\d+"), "0", "kyber"))
+
+
+def tuning_expected(plan: Mapping[str, Any]) -> dict[str, bool] | None:
+    """What the plan asked for: None when tuning is off or the plan predates it (an older ISO)."""
+    scalars = plan.get("scalars") or {}
+    if scalars.get("tuning") != "on":
+        return None
+    paths = {item[0] if isinstance(item, (list, tuple)) else item.get("path") for item in plan.get("files") or []}
+    return {"zram": scalars.get("zram") == "yes", "schedulers": "/etc/udev/rules.d/60-installer-ioschedulers.rules" in paths,
+            "thp": "/etc/tmpfiles.d/installer-thp.conf" in paths, "audio": "/etc/udev/rules.d/80-installer-audio-power.rules" in paths}
+
+
+def tuning_problems(output: str, expected: Mapping[str, bool]) -> list[str]:
+    facts: dict[str, str] = {}
+    schedulers: list[tuple[str, str, str]] = []
+    problems: list[str] = []
+    for line in output.splitlines():
+        key, _, rest = line.partition(" ")
+        if key == "sysctl":
+            name, _, value = rest.partition(" ")
+            facts[name] = value.strip()
+        elif key == "sched":
+            parts = rest.split(" ", 2)
+            if len(parts) == 3:
+                device, rotational, choices = parts
+                bracketed = re.search(r"\[([^\]]+)\]", choices)
+                schedulers.append((device, rotational, bracketed.group(1) if bracketed else choices.strip()))
+        elif key == "sysctl_error":
+            problems.append(f"sysctl --system: {rest.strip()}")
+        else:
+            facts[key] = rest.strip()
+    for name, want in (("vm/vfs_cache_pressure", "50"), ("vm/dirty_bytes", "268435456")):
+        if facts.get(name) != want:
+            problems.append(f"{name} is {facts.get(name)!r}, the tuning sets {want}")
+    if expected.get("zram"):
+        for name, want in (("vm/swappiness", "150"), ("vm/page-cluster", "0")):
+            if facts.get(name) != want:
+                problems.append(f"{name} is {facts.get(name)!r}, zram's setting is {want}")
+        if "zswap.enabled=0" not in facts.get("cmdline", "").split():
+            problems.append("zswap.enabled=0 is not on the kernel command line, although zram is on")
+    if expected.get("thp"):
+        if "[defer+madvise]" not in facts.get("thp_defrag", ""):
+            problems.append(f"transparent_hugepage/defrag is {facts.get('thp_defrag')!r}, the tuning sets defer+madvise")
+        if facts.get("thp_ptes") != "409":
+            problems.append(f"khugepaged/max_ptes_none is {facts.get('thp_ptes')!r}, the tuning sets 409")
+    if expected.get("schedulers"):
+        for device, rotational, active in schedulers:
+            scheduler = next((name for pattern, rota, name in SCHEDULER_FOR if pattern.fullmatch(device) and rota == rotational), None)
+            if scheduler and active != scheduler:
+                problems.append(f"{device} uses the {active} scheduler, the tuning sets {scheduler}")
+    if expected.get("audio") and facts.get("hda", "0") != "0":
+        problems.append(f"snd_hda_intel power_save is {facts.get('hda')}, it should be 0 without a battery")
+    return problems
+
+
+def parse_tuning_probe(returncode: int, output: str, expected: Mapping[str, bool]) -> ProbeResult:
+    result = parse_probe_result("tuning", returncode, output)
+    if not result.success:
+        return result
+    problems = tuning_problems(result.output, expected)
+    return ProbeResult("tuning", not problems, result.output, "; ".join(problems))
