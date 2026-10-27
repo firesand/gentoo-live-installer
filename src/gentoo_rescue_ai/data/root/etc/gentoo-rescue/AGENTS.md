@@ -54,7 +54,7 @@ Reading the mounted target as yourself works for files that are world-readable (
 - **systemd-boot**: `bootctl`, entries in `/efi/loader/entries` (on Gentoo from `sys-apps/systemd[boot]` or `sys-apps/systemd-utils[boot]`: check what is installed).
 - **EFI stub / UKI**: `efibootmgr`, `installkernel` with the `uki` USE flag, no menu at all.
 - **rEFInd** exists but is uncommon. **Limine** (`sys-boot/limine`) is in the Gentoo tree only as a testing (`~amd64`) package and is rare on Gentoo: check that it is really installed (`/boot/limine.conf`, `limine` in `/var/db/pkg`) before assuming it, and do not suggest it as a fix.
-- **Secure Boot**: shim and MOK (`mokutil`), signed kernels with `sbsigntools`. This live disc itself needs Secure Boot off.
+- **Secure Boot**: shim and MOK (`mokutil`), signed kernels with `sbsigntools`. This live disc starts through Fedora's shim with its own per-version key in the MOK list (`mokutil --list-enrolled` shows "Gentoo installer live disc ..."); `mokutil --sb-state` tells whether Secure Boot is on. A Gentoo installed with GRUB by this disc is not signed and needs Secure Boot off.
 - A Legacy BIOS PC needs a boot loader on the disk (`grub-install /dev/sdX`); a UEFI PC needs a file on the ESP and a firmware entry (`efibootmgr -v`). Check `/sys/firmware/efi` to know which this live session booted with.
 
 ## 6. Kernel and initramfs

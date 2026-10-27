@@ -1,0 +1,11 @@
+SecureBoot enabled
+--- enrolled
+        Issuer: C=US, ST=Massachusetts, L=Cambridge, O=Red Hat, Inc., OU=Fedora Secure Boot CA 20200709, CN=fedoraca
+        Subject: C=US, ST=Massachusetts, L=Cambridge, O=Red Hat, Inc., OU=Fedora Secure Boot CA 20200709, CN=fedoraca
+        Issuer: CN=Gentoo installer live disc test.iso 2026-10-27 04:19 UTC
+        Subject: CN=Gentoo installer live disc test.iso 2026-10-27 04:19 UTC
+--- export
+a3b384810d48f1666d5df01c0684c5f5325b57ef5dee5223d9bf66aeefef332e  MOK-0001.der
+cd8ad5a5e9ea0cbd225b6d15a58b733fc4f9266f3f3ec23edbc8b1647cdcd1c4  MOK-0002.der
+--- dmesg
+[    0.003947] Secure boot enabled

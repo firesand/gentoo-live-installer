@@ -211,7 +211,7 @@ required_files=(
 	iso/lib/overlay.sh
 	iso/lib/run.sh
 	iso/cd_overlay/boot/grub/grub.cfg.in
-	iso/cd_overlay/SECURE-BOOT-OFF.txt
+	iso/cd_overlay/SECURE-BOOT.txt
 	iso/specs/livecd-stage1.spec
 	iso/specs/livecd-stage2.spec
 	scripts/verify-iso.py

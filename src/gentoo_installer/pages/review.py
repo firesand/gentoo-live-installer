@@ -25,11 +25,17 @@ from .. import desktops, diagnostics, layout
 from ..manifest import InstallManifest
 from ..system_info import DiskInfo, SystemInfo, tools_for_selection
 from ..widgets import Card, FlowLayout, Page, wrapped_label
+from .boot_section import firmware_secure_boot
 from .help import AdvancedSection
 from .hardware import CAPACITY_CODES, blocking_findings, hardware_plan, plan_lines
 from .system import FAMILY_DESKTOP_SUPPORT, FAMILY_LABELS, UNVERIFIED_FAMILIES, stage_family
 
 LOG = logging.getLogger("gentoo_installer.review")
+BOOT_LOADER_NAMES = {"grub": "GRUB", "systemd-boot": "systemd-boot", "efi-stub": "the EFI stub", "none": "your own boot loader"}
+# The disc itself starts with Secure Boot on (shim and its own key, iso/sign-secure-boot.py); the system it installs does not, unless it is signed.
+SECURE_BOOT_UNSIGNED = ("Secure Boot is on in this PC, and the new system starts with {loader}, which is not signed: the PC will refuse to start it. "
+                        "Turn Secure Boot off in the firmware setup before the first start of the new system, "
+                        "or go back to Base system and choose systemd-boot with Secure Boot signing.")
 
 
 def disk_description(disk: DiskInfo | None, path: str) -> str:
@@ -98,6 +104,8 @@ def manifest_warnings(manifest: InstallManifest, info: SystemInfo | None = None)
         warnings.extend(storage_capacity(manifest, info)[1])
         if manifest.storage.firmware == "bios" and info.uefi:
             warnings.append("Legacy BIOS was chosen on a computer started in UEFI mode: the installed system boots only through the firmware's CSM/legacy mode.")
+        if manifest.storage.firmware == "uefi" and not system.secure_boot and firmware_secure_boot(info) == "enabled":
+            warnings.append(SECURE_BOOT_UNSIGNED.format(loader=BOOT_LOADER_NAMES.get(system.bootloader, system.bootloader)))
         if manifest.storage.device_id_kind == "path":
             warnings.append("The target disk has no serial number; it is recognised by its hardware path, size and model.")
         for finding in info.warnings:

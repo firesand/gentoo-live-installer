@@ -14,7 +14,7 @@ Contents: [what you need](#1-what-you-need) · [write the disc](#2-write-the-dis
 * For an installation: a wired network if you can (Wi-Fi works too), power for a laptop, and time. Most packages come as binaries. Even so, a desktop installation takes from half an hour to several hours.
 * Disk space for the new system: 8 GiB for a minimal system, 14 GiB for Xfce, 18 GiB for GNOME, 24 GiB for KDE Plasma. More if you compile packages yourself. The installer shows what it needs.
 * For an installation that keeps Windows: a backup, and the BitLocker recovery key if Windows uses BitLocker.
-* **Secure Boot turned off** (section 3).
+* Nothing to change for **Secure Boot**: with it on, the first start needs one step on a blue screen (section 3).
 
 The disc does not change anything on your disks until you start an installation or a repair. The installer shows the disk it will erase before it does anything.
 
@@ -43,9 +43,20 @@ A release can also come with signatures (`.sha512.asc` and `.manifest.json.asc`)
 
 ## 3. Start the disc
 
-### Turn Secure Boot off
+### Secure Boot
 
-The boot loader of this disc is not signed with a key that PC firmware trusts. With **Secure Boot on**, the firmware refuses it before anything of ours runs. You see "Secure Boot violation", "Invalid signature detected" or "Selected boot image did not authenticate". Or the firmware quietly skips the stick. Turn Secure Boot off:
+The disc starts with **Secure Boot** on or off. With it off, nothing is special. With it on, the first start on a PC shows blue screens once (shim's MokManager). The disc's first program, shim, is Fedora's and signed by Microsoft. GRUB and Linux after it are signed with a key made for this one version of the disc, and the PC has to learn that key:
+
+1. "Verification failed: (0x1A) Security Violation": press Enter (OK).
+2. "Shim UEFI key management, Press any key to perform MOK management": press a key within 10 seconds. If you miss it, start the PC again.
+3. "Perform MOK management": choose **Enroll key from disk**.
+4. Choose **GENTOO_EFI**, then the file **ENROLL_THIS_KEY_IN_MOKMANAGER.cer**.
+5. "[Enroll MOK]": **View key 0** shows the key. Its *Fingerprint* must be the one in the `.secureboot.txt` file published next to the ISO. Then choose **Continue**.
+6. "Enroll the key(s)?": **Yes**. Then **Reboot**.
+
+The private half of the key is destroyed when the disc is built, so it can sign nothing else. Every new version of the disc has a new key and needs these steps once more. An old key allows only its old version; `sudo mokutil --delete` removes it, or you can leave it.
+
+**If the PC still says "Secure Boot Violation" or skips the stick**, it trusts only Windows and not Microsoft's key for other systems. Look in the firmware setup for "Allow Microsoft 3rd Party UEFI CA" (some Lenovo, Dell, HP and Surface models) and turn it on. Or turn Secure Boot off:
 
 1. Restart and press the setup key right after power on:
 
@@ -54,21 +65,22 @@ The boot loader of this disc is not signed with a key that PC firmware trusts. W
    | Dell | F2 | F12 |
    | HP | Esc, then F10 | Esc, then F9 |
    | Lenovo | F1 or F2 (ThinkPad: Enter, then F1) | F12 |
-   | ASUS | F2 or Del | F8 or Esc |
+   | ASUS desktop board | Del or F2 | F8 |
+   | ASUS laptop (ROG, TUF, Zenbook, Vivobook) | F2 (EZ Mode: F7 for Advanced) | Esc |
    | Acer | F2 | F12 (enable it in setup first) |
    | MSI | Del | F11 |
    | Microsoft Surface | hold Volume Up while pressing the power button | hold Volume Down |
 
-2. Find **Secure Boot** (under Security, Boot or Authentication). Set it to **Disabled**. Some firmware first needs an administrator password. Some need "OS type: Windows UEFI" changed to "Other OS".
+2. Find **Secure Boot** (under Security, Boot or Authentication). Set it to **Disabled** (ASUS laptops: Security, Secure Boot, Secure Boot Control). Some firmware first needs an administrator password. Some need "OS type: Windows UEFI" changed to "Other OS".
 3. Save and exit (usually F10).
 
-On a PC with **Windows BitLocker or "Device encryption"**: look up the recovery key before you change firmware settings (<https://aka.ms/myrecoverykey>). Windows may ask for it at the next start. Intel Macs with a T2 chip: in the Startup Security Utility choose "No Security" and allow external media. The internal SSD of these Macs is not visible to this Linux.
+On a PC with **Windows BitLocker or "Device encryption"**: look up the recovery key before you change firmware settings (<https://aka.ms/myrecoverykey>). Windows may ask for it at the next start. Enrolling the disc's key (steps 1 to 6) does not change the firmware's own Secure Boot settings. Intel Macs with a T2 chip: in the Startup Security Utility choose "No Security" and allow external media. The internal SSD of these Macs is not visible to this Linux. Memtest86+ is not signed: with Secure Boot on, its UEFI menu entry is hidden.
 
 ### Secure Boot and the system you install
 
-Only the live disc needs Secure Boot off. What happens to the new system depends on its boot loader:
+The disc's key is only for the disc. What happens to the new system depends on its boot loader:
 
-* **GRUB (the default)** does not work with Secure Boot. The PC will not start it while Secure Boot is on. Leave Secure Boot off on that PC, or choose another boot loader.
+* **GRUB (the default)** is not signed. The PC will not start it while Secure Boot is on. Turn Secure Boot off before the first start of the new system, or choose another boot loader. When Secure Boot is on, the installer says so on the Readiness and Review pages.
 * **systemd-boot or the EFI stub, with a Unified Kernel Image and your own signing key**, can work with Secure Boot. This is an advanced choice. You make the key and the certificate. The installer signs the boot files with them. You add the certificate to the firmware's key list (the installer says where it left the file). The proprietary NVIDIA driver cannot be combined with this, because its kernel modules would not be signed.
 
 ### UEFI or BIOS (CSM)?
@@ -104,7 +116,7 @@ There is no entry for speech output or braille: the disc has no screen reader (s
 
 | What you see | What to do |
 |---|---|
-| The firmware shows an error about signatures, or boots something else | Secure Boot is on (section 3). |
+| The firmware shows an error about signatures, or boots something else | Secure Boot is on and this PC does not trust Microsoft's key for other systems (section 3: "Allow Microsoft 3rd Party UEFI CA", or turn Secure Boot off). A blue "Verification failed" screen is the normal first start: section 3. |
 | The stick is not in the boot menu | Write it again with `dd`, or with Rufus in DD mode. Try another USB port (USB 2 is more reliable than USB 3 on some PCs). On a very old PC enable "Legacy boot / CSM". |
 | The menu appears, then a black screen | Wait a minute (USB sticks are slow). Then restart and choose **Safe graphics**: the same desktop on a generic display driver that works on almost every PC (no 3D, so it is slower). If that fails too, choose **Install in text mode** or **Repair a system (text console)**. They need no graphics driver. |
 | The PC freezes or loses the USB stick or NVMe disk during boot | More options, **Compatibility mode** (switches off PCIe, NVMe and USB power saving and uses the generic display driver), or **Old firmware**. |

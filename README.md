@@ -11,15 +11,17 @@ The installer follows the official Gentoo Handbook for AMD64 and links to it. SS
 
 The repository holds the wizard and the root daemon (`src/`), the ISO build (`iso/`, `scripts/build-iso.sh`), the Portage overlay (`packaging/`), two companion apps (`apps/portagehub`, `apps/hwmonux`) and the disposable-VM test harness (`scripts/test-vm.py`). Nothing here claims a tested install on real hardware: [docs/TESTING.md](docs/TESTING.md) lists what has run and what has not.
 
-## Before you boot it: Secure Boot must be off
+## Before you boot it: Secure Boot
 
-This disc cannot start while **Secure Boot** is on. Its boot loader is not signed with a key that PC firmware trusts. The firmware refuses it ("Secure Boot violation", "Invalid signature detected") or silently skips the stick. This is the most common reason a live USB "does not work".
+The disc starts with **Secure Boot** on or off. With Secure Boot on, the first start on a PC shows blue screens once, because the PC has to learn the key of this disc:
 
-1. Restart and open the firmware setup (F2, Del, F10, F12 or Esc right after power on).
-2. Set **Secure Boot** to *Disabled* (often under Security or Boot; some firmware first wants an administrator password or "Other OS" mode).
-3. Save, and boot the stick again.
+1. "Verification failed": press Enter. "Press any key to perform MOK management": press a key within 10 seconds.
+2. Choose **Enroll key from disk**, then **GENTOO_EFI**, then `ENROLL_THIS_KEY_IN_MOKMANAGER.cer`.
+3. **Continue**, **Yes**, **Reboot**. The disc then starts on that PC like any other.
 
-On a PC that runs **Windows with BitLocker or "Device encryption"**, look up your recovery key first (<https://aka.ms/myrecoverykey>): changing firmware settings can make Windows ask for it. The same text is on the disc as `SECURE-BOOT-OFF.txt`. [docs/USER-GUIDE.md](docs/USER-GUIDE.md) says what the installed system supports (GRUB does not work with Secure Boot).
+The first program on the disc is Fedora's shim, signed by Microsoft. The boot menu (GRUB) and Linux are signed with a key made for this one version of the disc. Its private half is destroyed when the build ends, so every version needs this step once. "View key 0" shows a fingerprint that must match the `.secureboot.txt` file published next to the ISO.
+
+If the PC still refuses the stick ("Secure Boot Violation"), it trusts only Windows: turn on "Allow Microsoft 3rd Party UEFI CA" in the firmware setup, or set Secure Boot to *Disabled* there (F2, Del, F10, F12 or Esc right after power on). On a PC that runs **Windows with BitLocker or "Device encryption"**, look up your recovery key first (<https://aka.ms/myrecoverykey>): changing Secure Boot can make Windows ask for it. The same text is on the disc as `SECURE-BOOT.txt`. The installed Gentoo starts with GRUB, which is not signed: turn Secure Boot off before its first start, or choose systemd-boot with Secure Boot signing ([docs/USER-GUIDE.md](docs/USER-GUIDE.md)).
 
 ## The boot menu
 

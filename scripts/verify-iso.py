@@ -9,6 +9,9 @@ script opens the ISO read-only and checks what a user's PC will depend on:
 
   * El Torito: exactly one BIOS and one UEFI boot image, a hybrid MBR/GPT for USB sticks,
     the volume label that grub.cfg searches for, the GRUB loaders for 64-bit and 32-bit UEFI;
+  * Secure Boot (iso/sign-secure-boot.py): /efi.img holds shim signed by Microsoft, MokManager, the
+    signed GRUB with SBAT data and the certificate that the ISO root has too; GRUB, the kernel and the
+    /efi/boot copies verify against that certificate (sbverify, mtools, openssl);
   * boot/grub/grub.cfg: every `linux` line carries root=live:CDLABEL=<volume id> and the
     boot arguments of iso/pins.env, the default entry has no `dokeymap`, there are text-console,
     repair, text-install, Safe graphics (nomodeset, with the desktop) and Memtest86+ entries
@@ -234,6 +237,48 @@ class Tools:
     def squashfs_root_stat(self) -> str:
         return self._run(["rdsquashfs", "-s", "/", str(self.squashfs())]).decode(errors="replace")
 
+    def secure_boot_report(self, spec: Mapping[str, Any]) -> dict[str, Any]:
+        """What check_secure_boot judges, read with mtools, openssl and sbverify (iso/sign-secure-boot.py wrote it)."""
+        os.environ["MTOOLS_SKIP_CHECK"] = "1"
+        work = self.workdir / "secure-boot"
+        shutil.rmtree(work, ignore_errors=True)
+        work.mkdir(parents=True)
+        image = self.extract(spec["efi_image"], work / "efi.img")
+        listing = self._run(["mdir", "-/", "-b", "-i", str(image), "::/"]).decode(errors="replace")
+        efi_files = sorted(line.strip()[3:] for line in listing.splitlines() if line.strip().startswith("::/") and not line.strip().endswith("/"))
+
+        def efi_file(name: str) -> Path:
+            target = work / ("efi-" + name.replace("/", "_"))
+            if not target.exists():
+                self._run(["mcopy", "-n", "-i", str(image), f"::/{name}", str(target)])
+            return target
+
+        def any_file(name: str) -> Path:
+            return self.extract(name, work / ("iso-" + name.strip("/").replace("/", "_"))) if name.startswith("/") else efi_file(name)
+
+        present = {name.upper() for name in efi_files}
+        result: dict[str, Any] = {"efi_files": efi_files, "verified": {}, "copies": {}}
+        certificate = self.extract(spec["certificate"], work / "certificate.cer")
+        on_efi = Path(spec["certificate"]).name
+        result["certificate_matches"] = on_efi.upper() in present and efi_file(on_efi).read_bytes() == certificate.read_bytes()
+        pem = work / "certificate.pem"
+        self._run(["openssl", "x509", "-inform", "DER", "-in", str(certificate), "-out", str(pem)])
+        result["certificate_subject"] = self._run(["openssl", "x509", "-noout", "-subject", "-in", str(pem)]).decode(errors="replace").strip()
+        result["shim_signers"] = (self._run(["sbverify", "--list", str(efi_file(spec["shim"]))]).decode(errors="replace")
+                                  if spec["shim"].upper() in present else "")
+        for name in spec.get("signed_with_certificate", []):
+            if not name.startswith("/") and name.upper() not in present:
+                result["verified"][name] = False
+                continue
+            proc = subprocess.run(["sbverify", "--cert", str(pem), str(any_file(name))], capture_output=True, check=False)
+            result["verified"][name] = proc.returncode == 0
+        grub = efi_file(spec["grub"]).read_bytes() if spec["grub"].upper() in present else b""
+        result["grub_sbat"] = grub[grub.find(b"sbat,1,"):].split(b"\0", 1)[0].decode(errors="replace") if b"sbat,1," in grub else ""
+        for tree_copy, efi_name in spec.get("iso_tree_copies", {}).items():
+            result["copies"][tree_copy] = efi_name.upper() in present and any_file(tree_copy).read_bytes() == efi_file(efi_name).read_bytes()
+        shutil.rmtree(work, ignore_errors=True)
+        return result
+
 
 # ---------------------------------------------------------------------------
 # El Torito and ISO contents
@@ -308,6 +353,34 @@ def check_iso(report: Report, iso_files: Iterable[str], boot: ElTorito, contract
     forbidden = [name for name in contract.get("forbidden_files", []) if any(fnmatch.fnmatch(f, name) for f in files)]
     report.expect(not forbidden, "iso.forbidden_files", "", "must not be in the ISO: " + ", ".join(forbidden))
     return files
+
+
+def check_secure_boot(report: Report, found: Mapping[str, Any], spec: Mapping[str, Any]) -> None:
+    """The UEFI chain of iso/sign-secure-boot.py: shim signed by Microsoft, GRUB and the kernel signed with the disc's own certificate."""
+    present = {name.upper() for name in found.get("efi_files", [])}
+    missing = [name for name in spec.get("efi_files", []) if name.upper() not in present]
+    report.expect(not missing, "secure_boot.efi_files", f"{len(spec.get('efi_files', []))} files in {spec.get('efi_image')}",
+                  f"missing from {spec.get('efi_image')}: {', '.join(missing)}")
+    report.expect(bool(found.get("certificate_matches")), "secure_boot.certificate", found.get("certificate_subject", ""),
+                  f"{spec.get('certificate')} is missing from {spec.get('efi_image')} or differs from the copy there, "
+                  "so MokManager would enroll another key")
+    signers = [name for name in spec.get("shim_signers", []) if name in found.get("shim_signers", "")]
+    report.expect(bool(signers), "secure_boot.shim", "shim signed by " + ", ".join(signers),
+                  f"{spec.get('shim')} carries none of the Microsoft signatures {spec.get('shim_signers')}: firmware with Secure Boot on refuses it")
+    if signers and len(signers) < len(spec.get("shim_signers", [])):
+        report.failed("secure_boot.shim_both_cas", f"shim is signed only by {', '.join(signers)}: firmware that trusts only the other CA refuses it",
+                      severity="warning")
+    unverified = [name for name, ok in found.get("verified", {}).items() if not ok]
+    unverified += [name for name in spec.get("signed_with_certificate", []) if name not in found.get("verified", {})]
+    report.expect(not unverified, "secure_boot.signed", f"{len(spec.get('signed_with_certificate', []))} files verify against the disc's certificate",
+                  f"not signed with the disc's certificate: {', '.join(sorted(set(unverified)))}; shim would refuse them after the key is enrolled")
+    match = re.search(r"^grub,(\d+),", found.get("grub_sbat", ""), re.M)
+    generation = int(match.group(1)) if match else 0
+    minimum = int(spec.get("grub_sbat_generation_min", 1))
+    report.expect(generation >= minimum, "secure_boot.sbat", f"GRUB SBAT generation {generation}",
+                  f"{spec.get('grub')} has no SBAT data with grub generation {minimum} or later: shim refuses it")
+    stale = [name for name, same in found.get("copies", {}).items() if not same]
+    report.expect(not stale, "secure_boot.iso_tree", "the /efi/boot copies match", f"the ISO 9660 copies differ from {spec.get('efi_image')}: {', '.join(stale)}")
 
 
 # ---------------------------------------------------------------------------
@@ -1010,6 +1083,11 @@ def verify(
 
     boot = parse_el_torito(tools.el_torito_report())
     files = check_iso(report, tools.iso_files(), boot, contract.get("iso", {}), expected_volid)
+    if contract.get("secure_boot"):
+        try:
+            check_secure_boot(report, tools.secure_boot_report(contract["secure_boot"]), contract["secure_boot"])
+        except VerifyError as exc:
+            report.failed("secure_boot.read", str(exc))
     grub_text = tools.iso_read("/boot/grub/grub.cfg").decode(errors="replace")
     check_grub(report, grub_text, expected_volid, args, files, contract)
     has_dokeymap = any("dokeymap" in line.split() for line in grub_text.splitlines() if line.strip().startswith("linux"))

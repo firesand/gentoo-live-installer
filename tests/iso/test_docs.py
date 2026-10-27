@@ -15,16 +15,27 @@ BUILD_SCRIPT = (ROOT / "scripts/build-iso.sh").read_text()
 
 
 def test_secure_boot_is_on_the_first_screen_of_the_readme() -> None:
-    first_screen = "\n".join(README.read_text().splitlines()[:25])
-    assert "Secure Boot" in first_screen and "must be off" in first_screen.lower().replace("**", "")
+    """The one step a Secure Boot PC needs (MokManager) and the way out when the PC trusts only Windows, before anything else."""
+    first_screen = "\n".join(README.read_text().splitlines()[:25]).replace("**", "")
+    for needle in ("Secure Boot", "Enroll key from disk", "GENTOO_EFI", "ENROLL_THIS_KEY_IN_MOKMANAGER.cer", "Allow Microsoft 3rd Party UEFI CA", "BitLocker"):
+        assert needle in first_screen, needle
 
 
 def test_the_disc_carries_the_same_secure_boot_instructions() -> None:
-    notice = (ROOT / "iso/cd_overlay/SECURE-BOOT-OFF.txt").read_text()
-    for needle in ("Secure Boot", "BitLocker", "Disabled", "Apple Silicon"):
-        assert needle in notice
+    notice = (ROOT / "iso/cd_overlay/SECURE-BOOT.txt").read_text()
+    for needle in ("Secure Boot", "BitLocker", "Disabled", "Apple Silicon", "Enroll key from disk", "GENTOO_EFI",
+                   "ENROLL_THIS_KEY_IN_MOKMANAGER.cer", "Allow Microsoft 3rd Party UEFI CA", ".secureboot.txt", "ASUS laptop: F2 (boot menu Esc)"):
+        assert needle in notice, needle
     assert max(len(line) for line in notice.splitlines()) <= 80
-    assert "SECURE-BOOT-OFF.txt" in (ROOT / "iso/README-live.txt").read_text()
+    assert "SECURE-BOOT.txt" in (ROOT / "iso/README-live.txt").read_text()
+
+
+def test_the_names_on_the_blue_screens_are_the_names_the_signer_uses() -> None:
+    """MokManager lists the volume by its label and the file by its name: the instructions must say exactly those."""
+    signer = load_script("iso/sign-secure-boot.py", "sign_secure_boot")
+    for document in (ROOT / "iso/cd_overlay/SECURE-BOOT.txt", README, USER_GUIDE):
+        text = document.read_text()
+        assert signer.EFI_LABEL in text and signer.CERT_NAME in text, document.name
 
 
 @pytest.mark.parametrize("document", [README, USER_GUIDE, ISO_DOC])

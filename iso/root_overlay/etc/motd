@@ -17,5 +17,5 @@
  You are the user "gentoo" (no password, sudo works). Nothing on your disks
  is changed until you start an installation or a repair. Nobody can log in
  over SSH until a password is set on purpose. This disc is for 64-bit x86
- PCs; Secure Boot has to be off (see SECURE-BOOT-OFF.txt).
+ PCs, with Secure Boot on or off (see SECURE-BOOT.txt).
  Browser for the handbook: links https://wiki.gentoo.org/wiki/Handbook:AMD64

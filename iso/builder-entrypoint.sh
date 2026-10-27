@@ -393,6 +393,15 @@ publish_iso() {
 	size=$(stat -c %s "${built}")
 	((size > 10000000)) || die "Catalyst ISO is implausibly small"
 	isoinfo -d -i "${built}" > /dev/null
+	# Secure Boot: shim, a signed GRUB and a signed kernel, with a key made for this ISO only
+	# (destroyed again by the script). verify-iso.py checks the result like everything else.
+	log "Signing the UEFI boot files for Secure Boot (a key for this ISO only)"
+	rm -rf -- "${BUILD_DIR}/secure-boot"
+	python3 "${WORKSPACE}/iso/sign-secure-boot.py" "${built}" --work "${BUILD_DIR}/secure-boot" \
+		--cert-out "${BUILD_DIR}/secure-boot.cer" --summary "${BUILD_DIR}/secure-boot.json" \
+		--notice-out "${BUILD_DIR}/secure-boot.txt" \
+		|| die "the ISO could not be prepared for Secure Boot; nothing was published"
+	rm -rf -- "${BUILD_DIR}/secure-boot"
 	# An earlier build of the same ISO name is the reference for the "grew by more than 20
 	# percent" warning; it is replaced only after the checks have passed.
 	[[ ! -f ${DIST}/${ISO_NAME}.manifest.json ]] || previous=(--previous-manifest "${DIST}/${ISO_NAME}.manifest.json")
@@ -406,6 +415,10 @@ publish_iso() {
 	install -m 0644 "${built}" "${DIST}/.${ISO_NAME}.partial"
 	mv "${DIST}/.${ISO_NAME}.partial" "${DIST}/${ISO_NAME}"
 	install -m 0644 "${packages}" "${DIST}/${ISO_NAME}.packages.txt"
+	# The certificate MokManager enrolls and its fingerprint, published next to the ISO so that a user
+	# can compare it with "View key 0" (iso/cd_overlay/SECURE-BOOT.txt).
+	install -m 0644 "${BUILD_DIR}/secure-boot.cer" "${DIST}/${ISO_NAME}.secureboot.cer"
+	install -m 0644 "${BUILD_DIR}/secure-boot.txt" "${DIST}/${ISO_NAME}.secureboot.txt"
 	(
 		cd "${DIST}"
 		sha512sum "${ISO_NAME}" > "${ISO_NAME}.sha512"
@@ -417,7 +430,8 @@ publish_iso() {
 		--catalyst-version "$(catalyst_version)" --flavor "${ISO_FLAVOR}" --volid "${ISO_VOLID}" \
 		--verified "${verified}" --signature "${BUILD_DIR}/gentoo-signature.json" \
 		--stage1-mode "${STAGE1_MODE}" --stage1-receipt "${STAGE1_ARCHIVE}.receipt.json" \
-		--builder-image-id "${BUILDER_IMAGE_ID:-}" --distfiles "${DISTDIR}" --packages "${DIST}/${ISO_NAME}.packages.txt"
+		--builder-image-id "${BUILDER_IMAGE_ID:-}" --distfiles "${DISTDIR}" --packages "${DIST}/${ISO_NAME}.packages.txt" \
+		--secure-boot "${BUILD_DIR}/secure-boot.json"
 }
 
 # On failure: say whether the container ran out of memory, then hand the outputs back to

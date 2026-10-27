@@ -179,6 +179,21 @@ open(args[args.index("--packages-out") + 1], "w").write("sys-fs/lvm2-2.03.39\\n"
 open(os.environ["STUB_VERIFY_ARGS"], "w").write(json.dumps(args))
 """,
     )
+    # the real signer needs shim, sbsign and mtools (tests/iso/test_secure_boot.py tests it with a fake runner)
+    write_executable(
+        workspace / "iso/sign-secure-boot.py",
+        f"""#!{sys.executable}
+import json, os, sys
+args = sys.argv[1:]
+if os.environ.get("STUB_SIGN_FAIL"):
+    print("sign-secure-boot: stub failure", file=sys.stderr)
+    sys.exit(1)
+open(args[args.index("--cert-out") + 1], "wb").write(b"certificate")
+json.dump({{"certificate_sha256": "ab" * 32, "mokmanager_fingerprint": "D1 AB"}}, open(args[args.index("--summary") + 1], "w"))
+open(args[args.index("--notice-out") + 1], "w").write("Secure Boot key\\n")
+open(os.environ["STUB_SIGN_ARGS"], "w").write(json.dumps(args))
+""",
+    )
     return workspace
 
 
@@ -195,8 +210,9 @@ def publish(sandbox, workspace: Path, **env: str):
     (sandbox.dirs["build"] / "livecd-stage2.spec").write_text("livecd/rcadd:\n\tdbus|default\n")
     (sandbox.dirs["build"] / "gentoo-signature.json").write_text('{"verified": true, "signer_fpr": "' + "A" * 40 + '"}')
     result = sandbox.run(
-        "load_environment; STAGE1_MODE=reuse; STAGE1_ARCHIVE=/none; export STUB_VERIFY_ARGS; publish_iso",
-        WORKSPACE=str(workspace), STUB_VERIFY_ARGS=str(sandbox.tmp / "verify-args.json"), CATALYST_BUILDER_IMAGE="localhost/image:1", **env,
+        "load_environment; STAGE1_MODE=reuse; STAGE1_ARCHIVE=/none; export STUB_VERIFY_ARGS STUB_SIGN_ARGS; publish_iso",
+        WORKSPACE=str(workspace), STUB_VERIFY_ARGS=str(sandbox.tmp / "verify-args.json"), STUB_SIGN_ARGS=str(sandbox.tmp / "sign-args.json"),
+        CATALYST_BUILDER_IMAGE="localhost/image:1", **env,
     )
     return result, name
 
@@ -205,11 +221,16 @@ def test_publish_runs_the_verifier_and_writes_every_sidecar(sandbox, publish_wor
     result, name = publish(sandbox, publish_workspace)
     assert result.returncode == 0, result.stderr + result.stdout
     dist = sandbox.dirs["dist"]
-    assert {p.name for p in dist.iterdir()} == {name, f"{name}.sha512", f"{name}.blake2b", f"{name}.packages.txt", f"{name}.manifest.json"}
+    assert {p.name for p in dist.iterdir()} == {name, f"{name}.sha512", f"{name}.blake2b", f"{name}.packages.txt", f"{name}.manifest.json",
+                                                f"{name}.secureboot.cer", f"{name}.secureboot.txt"}
+    assert (dist / f"{name}.secureboot.cer").read_bytes() == b"certificate"
     manifest = json.loads((dist / f"{name}.manifest.json").read_text())
     assert manifest["flavor"] == "release" and manifest["verified"]["ok"] is True and manifest["stage1_mode"] == "reuse"
     assert manifest["reused_stage1"] is True and manifest["gentoo_repository"]["signature"]["verified"] is True
     assert manifest["packages_list"] == f"{name}.packages.txt" and manifest["volume_id"] == "GENTOO_INSTALLER_AMD64"
+    assert manifest["secure_boot"]["certificate_sha256"] == "ab" * 32
+    signed = json.loads((sandbox.tmp / "sign-args.json").read_text())
+    assert signed[0].endswith(name) and signed[0].startswith(str(sandbox.dirs["store"])), "Catalyst's ISO is signed in place, before it is verified"
     arguments = json.loads((sandbox.tmp / "verify-args.json").read_text())
     assert arguments[0].endswith(name) and arguments[arguments.index("--flavor") + 1] == "release"
     assert arguments[arguments.index("--spec") + 1] == str(sandbox.dirs["build"] / "livecd-stage2.spec")
@@ -229,6 +250,13 @@ def test_an_earlier_manifest_of_the_same_name_feeds_the_size_warning(sandbox, pu
     assert arguments[arguments.index("--previous-manifest") + 1] == str(earlier)
     # the stub verifier saw the old file; the new build has replaced it afterwards
     assert json.loads(earlier.read_text())["iso"]["size"] > 1
+
+
+def test_a_failed_secure_boot_signing_publishes_nothing(sandbox, publish_workspace: Path) -> None:
+    result, _ = publish(sandbox, publish_workspace, STUB_SIGN_FAIL="1")
+    assert result.returncode != 0 and "could not be prepared for Secure Boot" in result.stderr
+    assert not (sandbox.tmp / "verify-args.json").exists(), "an unsigned ISO is not even verified"
+    assert not sandbox.dirs["dist"].exists() or list(sandbox.dirs["dist"].iterdir()) == []
 
 
 def test_a_failed_verification_publishes_nothing(sandbox, publish_workspace: Path) -> None:

@@ -46,6 +46,7 @@ import vm_guest  # noqa: E402
 import vm_hw  # noqa: E402
 import vm_iso  # noqa: E402
 import vm_matrix  # noqa: E402
+import vm_mok  # noqa: E402
 import vm_probes  # noqa: E402
 import vm_rescue  # noqa: E402
 import vm_secureboot  # noqa: E402
@@ -219,6 +220,8 @@ class Scenario:
     screenshots: bool = False        # live_only: pictures of the live desktop and of every installer page at each size of --screenshot-sizes
     # --- Wave 6: the AI rescue stick (docs/TESTING.md, "The AI rescue stick") ----------------------------------------------------
     ai_rescue: str = ""              # "" | "live" (boot entry, security rules, gentoo-rescue-do, share, agents) | "full" (also: install first, then gentoo-rescue-mount)
+    # --- RC3: the live disc with Secure Boot on (iso/sign-secure-boot.py, scripts/vm_mok.py) ----------------------------------------------------
+    secure_boot_live: bool = False   # live_only on OVMF with Microsoft's keys: MokManager enrolls the disc's key, then the disc starts with Secure Boot on
 
     @property
     def hostname(self) -> str:
@@ -333,6 +336,12 @@ SCENARIO_MAP.update({
     "secure-boot-modules": Scenario("secure-boot-modules", "systemd", "uefi", bootloader="systemd-boot", secure_boot_install=True, in_all=False,
                                     hardware=_hw(secure_boot=True),
                                     note="systemd-boot with a UKI signed by the test key, booted under OVMF Secure Boot; an unsigned and a signed dummy module are loaded on gentoo-kernel-bin (evidence for B07 step 2)"),
+    # virtio-vga: with Secure Boot on, QEMU's standard VGA shows the GRUB menu garbled in screendumps (the menu itself works)
+    "secure-boot-live": Scenario("secure-boot-live", "openrc", "uefi", live_only=True, secure_boot_live=True, in_all=False,
+                                 hardware=_hw(secure_boot=True, live_usb=True, vga="virtio"), live_expect=(("firmware.secure_boot", "enabled"),),
+                                 note="the ISO as a USB stick on OVMF with Microsoft's keys (Secure Boot on): shim starts, MokManager enrolls "
+                                      "ENROLL_THIS_KEY_IN_MOKMANAGER.cer from GENTOO_EFI, and the second start reaches the desktop with Secure Boot "
+                                      "enabled and exactly the disc's certificate in the MOK list"),
 })
 SCENARIO_MAP.update({
     "ai-rescue-live": Scenario("ai-rescue-live", "openrc", "uefi", ai_rescue="live", boot_entry="ai-rescue", in_all=False,
@@ -657,7 +666,11 @@ def qemu_command(
     if live:
         # A directly booted kernel is itself the first boot device of QEMU (bootindex 0): a CD with bootindex=0 would conflict with it,
         # and the order does not matter because nothing is booted from a disk.
-        if cd_first and direct_boot is None:
+        if hw.live_usb and direct_boot is None:
+            # what a person boots: the ISO written to a stick; the firmware starts it through partition 2 of its hybrid GPT
+            args.extend(("-device", "qemu-xhci,id=livexhci", "-drive", f"file={iso},if=none,id=stick,format=raw,readonly=on",
+                         "-device", "usb-storage,bus=livexhci.0,drive=stick,removable=on,bootindex=0"))
+        elif cd_first and direct_boot is None:
             args.extend(("-drive", f"file={iso},if=none,id=cd0,media=cdrom,readonly=on,format=raw",
                          "-device", "ide-cd,drive=cd0,bootindex=0"))
         else:
@@ -1681,7 +1694,7 @@ class SerialChannel:
         with self.condition:
             return self.buffer
 
-    def wait_for(self, pattern: str, timeout: int, since: int = 0) -> int:
+    def wait_for(self, pattern: str, timeout: int, since: int = 0, what: str = "LUKS passphrase prompt") -> int:
         """Wait for a match at or after buffer offset ``since``; return the offset just past it.
 
         The buffer accumulates for the whole boot, so a caller that answers a prompt more than
@@ -1697,7 +1710,7 @@ class SerialChannel:
                     return match.end()
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    raise HarnessError(f"Timed out waiting for LUKS passphrase prompt; see {self.log}")
+                    raise HarnessError(f"Timed out waiting for {what}; see {self.log}")
                 self.condition.wait(min(remaining, 0.5))
 
     def send_line(self, value: str) -> None:
@@ -1969,6 +1982,8 @@ class ScenarioRunner:
             kind = self.scenario.extra_roles[index - 1] if index <= len(self.scenario.extra_roles) else "decoy"
             disks.append(vm_guard.DiskExpectation(role=f"{kind}-{index}", size=sizes[index],
                                                   serial=extra_disk_serial(index), **common))
+        if hardware.live_usb:  # the ISO itself, as a stick: the guest sees it as a disk
+            disks.append(vm_guard.DiskExpectation(role="live-stick", size=self.iso.stat().st_size, tran="usb", live_medium=True))
         return vm_guard.GuardSpec(disks=disks, nonce=self.nonce)
 
     def run_guard(self, log_name: str, *, blank: bool | None) -> dict:
@@ -2522,6 +2537,7 @@ class ScenarioRunner:
     # --- Wave 5 (interface I13): network_status, remote access, host keys, gentoo-chroot -------------------------------
 
     live_network: list[dict] | None = None
+    secure_boot_certificate_sha256 = ""   # secure-boot-live: the sha256 of the ISO's ENROLL_THIS_KEY_IN_MOKMANAGER.cer
 
     NETWORK_RETRY_SECONDS = 3.0   # the daemon's socket and DHCP are not ready the moment SSH is: ask again
     NETWORK_WAIT_SECONDS = 90.0
@@ -3146,6 +3162,8 @@ class ScenarioRunner:
                 return self.run_screenshots(result)
             if self.scenario.ai_rescue == "live":
                 return self.run_ai_rescue(result)
+            if self.scenario.secure_boot_live:
+                return self.run_secure_boot_live(result)
             if getattr(self.args, "live_only", False) or self.scenario.live_only:
                 return self.run_live_smoke(result)
             self.create_disks()
@@ -3201,9 +3219,48 @@ class ScenarioRunner:
         finally:
             self.finish_run(result)
 
-    def run_live_smoke(self, result: dict) -> dict:
-        """Boot the live ISO on this machine shape and check what the installer sees; install nothing."""
+    def run_secure_boot_live(self, result: dict) -> dict:
+        """The ISO as a USB stick with Secure Boot on: MokManager enrolls the disc's key (first start), then the live checks (second start)."""
+        if self.firmware is None or "sec" not in self.firmware.code.name:
+            raise HarnessError("secure-boot-live needs the Secure Boot build of OVMF with Microsoft's keys (OVMF_CODE.secboot.fd and OVMF_VARS.secboot.fd)")
+        certificate = self.run_dir / "disc-certificate.cer"
+        log = self.run_dir / "xorriso-certificate.log"
+        code = run_logged(("xorriso", "-osirrox", "on", "-indev", str(self.iso), "-extract", f"/{vm_mok.CERT_NAME}", str(certificate)),
+                          log, self.args.command_timeout)
+        if code != 0 or not certificate.is_file():
+            raise HarnessError(f"the ISO has no /{vm_mok.CERT_NAME}, so iso/sign-secure-boot.py did not sign it; see {log}")
+        self.secure_boot_certificate_sha256 = hashlib.sha256(certificate.read_bytes()).hexdigest()
         self.create_disks()
+        first = self.launch("live-mok", live=True)
+        screens: list[str] = []
+
+        def press(key: str) -> None:
+            vm_qmp.execute(self.run_dir / SOCKET_NAMES[1], "input-send-event", {"events": vm_qmp.key_events(key)})
+
+        def picture(index: int, pattern: str) -> None:  # what the person sees at each step, kept with the run
+            ppm = self.run_dir / f"mokmanager-{index + 1}.ppm"
+            try:
+                first.screendump(ppm)
+                (self.run_dir / f"mokmanager-{index + 1}.png").write_bytes(vm_shots.ppm_to_png(ppm.read_bytes()))
+                screens.append(f"mokmanager-{index + 1}.png")
+            except (HarnessError, OSError, ValueError):
+                pass
+            finally:
+                ppm.unlink(missing_ok=True)
+
+        serial = first.serial
+        assert serial is not None
+        answered = vm_mok.enroll(lambda pattern, timeout, since: serial.wait_for(pattern, timeout, since, what=f"MokManager: {pattern}"),
+                                 press, on_step=picture)
+        status = first.wait(120)  # MokManager's Reboot ends QEMU (-no-reboot); the variable store keeps the enrolled key
+        result["secure_boot"] = {"mokmanager_steps": len(answered), "screens": screens, "first_start_exit": status,
+                                 "certificate_sha256": self.secure_boot_certificate_sha256}
+        return self.run_live_smoke(result, create=False)
+
+    def run_live_smoke(self, result: dict, *, create: bool = True) -> dict:
+        """Boot the live ISO on this machine shape and check what the installer sees; install nothing."""
+        if create:
+            self.create_disks()
         live = self.boot_live()
         guard = self.run_guard("guest-disk-guard.log", blank=True)
         live_result: dict = {"guard": {"device": guard["target"]["path"], "size": guard["target"]["size"]}}
@@ -3229,6 +3286,11 @@ class ScenarioRunner:
         if self.scenario.live_checks:
             live, extra = self.live_remote_and_host_keys(live, live_result)
             problems += extra
+        if self.scenario.secure_boot_live:
+            code, log = self.ssh(self.args.ssh_user, vm_mok.SECURE_BOOT_PROBE, "live-secure-boot.log", self.args.command_timeout)
+            found = vm_mok.secure_boot_problems(log.read_text(errors="replace"), self.secure_boot_certificate_sha256)
+            live_result["secure_boot"] = {"problems": found}
+            problems += [f"Secure Boot: {problem}" for problem in found]
         live_result["network_status"] = list(self.live_network or [])
         live_result["problems"] = problems
         self.power_off_live(live)

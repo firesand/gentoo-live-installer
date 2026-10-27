@@ -31,6 +31,10 @@
 #  * The Memtest86+ block mirrors memtest_grub() of Catalyst's iso-bootloader-setup.sh for the
 #    two images this ISO builds (64-bit BIOS and UEFI; sys-apps/memtest86+ has no bios32 USE
 #    flag set). Catalyst copies the files to the ISO root, so the entries are tested at boot.
+#  * On UEFI this file is read by the signed GRUB of iso/sign-secure-boot.py (shim starts it). With
+#    Secure Boot on, GRUB sets lockdown=y, loads no modules from the disc (every module an entry
+#    needs must be in GRUB_MODULES there) and starts only signed programs: Memtest86+ is not
+#    signed, so its UEFI entry is hidden then.
 
 set default=0
 set gfxpayload=keep
@@ -133,10 +137,12 @@ if [ "x$grub_platform" = xpc ]; then
 	fi
 fi
 if [ "x$grub_platform" = xefi ]; then
-	if [ -e /memtest.efi64 ]; then
-		menuentry "Memtest86+ 64bit UEFI" {
-			chainloader "/memtest.efi64"
-		}
+	if [ "x$lockdown" != xy ]; then
+		if [ -e /memtest.efi64 ]; then
+			menuentry "Memtest86+ 64bit UEFI" {
+				chainloader "/memtest.efi64"
+			}
+		fi
 	fi
 	menuentry 'UEFI firmware settings' {
 		insmod efifwsetup

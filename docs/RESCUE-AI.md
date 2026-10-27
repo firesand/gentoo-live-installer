@@ -53,7 +53,7 @@ It is the same disc as the installer. Download the `.iso` and check the `.sha512
 
 Do not use tools that unpack the files onto the stick: that stick does not boot. If in doubt, use `dd`. The project's checks look at the image (it must be a hybrid image that boots in BIOS and UEFI mode); caligula, Etcher and Rufus were not run for this guide.
 
-**Secure Boot must be off** to start the stick, as for the installer ([USER-GUIDE.md](USER-GUIDE.md) section 3).
+**Secure Boot** can stay on: the first start on a PC needs one step on a blue screen (MokManager), as for the installer ([USER-GUIDE.md](USER-GUIDE.md) section 3).
 
 ## 4. Start it
 

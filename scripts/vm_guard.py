@@ -74,6 +74,7 @@ class DiskExpectation:
     log_sec: int = 512
     removable: bool | None = None
     blank: bool | None = None  # True: no partition table or filesystem; False: must have one; None: unchecked
+    live_medium: bool = False  # the live ISO as a USB stick (VMHardware.live_usb): read-only and in use by the live system, never a target
 
 
 @dataclass
@@ -211,6 +212,12 @@ def evaluate(spec: GuardSpec, devices: list[dict], *, by_path: dict[str, list[st
         facts = _describe(node, {"by_path": by_path.get(kname, []), "pci_vendor": pci_vendor.get(kname, ""),
                                  "has_signatures": signatures.get(kname)})
         report["disks"][expected.role] = facts
+        if expected.live_medium:  # exactly the ISO's size, on its bus, and attached read-only: mounted it is, and it is never erased
+            if expected.tran and facts["tran"] and facts["tran"] != expected.tran:
+                problems.append(f"the live medium {facts['path']} uses transport {facts['tran']!r}, expected {expected.tran!r}")
+            if not facts["read_only"]:
+                problems.append(f"the live medium {facts['path']} is writable; the harness attaches the ISO read-only")
+            continue
         if expected.serial and facts["serial"] != expected.serial:
             problems.append(f"{expected.role} {facts['path']} has serial {facts['serial']!r}, expected {expected.serial!r}")
         if expected.model is not None and facts["model"] != expected.model:

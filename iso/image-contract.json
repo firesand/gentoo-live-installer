@@ -9,9 +9,12 @@
       "image.squashfs",
       "livecd",
       "README.txt",
-      "SECURE-BOOT-OFF.txt",
+      "SECURE-BOOT.txt",
+    "ENROLL_THIS_KEY_IN_MOKMANAGER.cer",
       "efi.img",
       "efi/boot/bootx64.efi",
+    "efi/boot/grubx64.efi",
+    "efi/boot/mmx64.efi",
       "efi/boot/bootia32.efi",
       "boot/grub/i386-pc/eltorito.img",
       "memtest64.bios",
@@ -64,6 +67,18 @@
     ],
     "required_modules": ["isofs", "squashfs", "overlay", "loop", "usb-storage", "uas", "vmd", "sdhci-pci", "mmc-block", "dm-crypt", "raid1"],
     "min_keymaps": 20
+  },
+  "secure_boot": {
+    "why": "the disc starts with Secure Boot on (iso/sign-secure-boot.py): Fedora's shim signed by Microsoft, MokManager, and GRUB and the kernel signed with a key made for this ISO, whose certificate MokManager enrolls once",
+    "efi_image": "/efi.img",
+    "certificate": "/ENROLL_THIS_KEY_IN_MOKMANAGER.cer",
+    "efi_files": ["EFI/BOOT/BOOTX64.EFI", "EFI/BOOT/mmx64.efi", "EFI/BOOT/grubx64.efi", "EFI/BOOT/BOOTIA32.EFI", "ENROLL_THIS_KEY_IN_MOKMANAGER.cer"],
+    "shim": "EFI/BOOT/BOOTX64.EFI",
+    "shim_signers": ["Microsoft Corporation UEFI CA 2011", "Microsoft UEFI CA 2023"],
+    "signed_with_certificate": ["EFI/BOOT/grubx64.efi", "/boot/gentoo", "/efi/boot/grubx64.efi"],
+    "grub": "EFI/BOOT/grubx64.efi",
+    "grub_sbat_generation_min": 5,
+    "iso_tree_copies": {"/efi/boot/bootx64.efi": "EFI/BOOT/BOOTX64.EFI", "/efi/boot/mmx64.efi": "EFI/BOOT/mmx64.efi", "/efi/boot/grubx64.efi": "EFI/BOOT/grubx64.efi"}
   },
   "squashfs": {
     "required": [

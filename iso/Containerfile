@@ -43,6 +43,18 @@ RUN chmod 0755 /usr/local/sbin/verify-gentoo-snapshot \
     && git -C /tmp/gentoo.git archive "${GENTOO_TREEISH}" | tar -x -C /var/db/repos/gentoo \
     && rm -rf /tmp/gentoo.git
 
+# Step 3: Secure Boot for the live disc (iso/sign-secure-boot.py). Fedora's shim, signed by
+# Microsoft, becomes the disc's BOOTX64.EFI; GRUB and the kernel are signed with a key made for
+# this one build. A layer of its own, so the slow layers above stay cached.
+RUN printf 'sys-boot/shim -secureboot\n' > /etc/portage/package.use/shim \
+    && emerge --noreplace --verbose \
+        app-crypt/sbsigntools \
+        sys-boot/shim \
+        sys-fs/dosfstools \
+        sys-fs/mtools \
+    && test -s /usr/share/shim/BOOTX64.EFI && test -s /usr/share/shim/mmx64.efi \
+    && test -s /usr/share/grub/sbat.csv && test -d /usr/lib/grub/x86_64-efi
+
 COPY builder-entrypoint.sh /usr/local/sbin/build-gentoo-installer-iso
 RUN chmod 0755 /usr/local/sbin/build-gentoo-installer-iso
 

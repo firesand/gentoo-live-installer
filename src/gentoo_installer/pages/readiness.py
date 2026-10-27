@@ -320,7 +320,8 @@ class ReadinessPage(Page):
         status = "ok"
         if details.get("secure_boot") == "enabled":
             status = "warning"
-            text += ". Secure Boot is on: the installed system will not start unless it is signed. Turn Secure Boot off in the firmware settings."
+            text += (". Secure Boot is on. This disc starts with its own key, but the installed system starts only if it is signed: "
+                     "turn Secure Boot off in the firmware settings before its first start, or choose systemd-boot with Secure Boot signing (Base system).")
         self.rows["firmware"].set_status(status, text)
 
     def _hardware(self, info: SystemInfo) -> None:

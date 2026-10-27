@@ -44,8 +44,8 @@ def test_spec_and_boot_menu_share_volume_id_and_arguments(rendered: Path, pins: 
             assert pins["ISO_BOOTARGS"] in line
         if line.strip().startswith("search "):
             assert line.strip().endswith(pins["ISO_VOLID"])
-    assert (rendered / "cd_overlay/SECURE-BOOT-OFF.txt").read_text().startswith("SECURE BOOT MUST BE OFF")
-    assert "SECURE-BOOT-OFF.txt" in (rendered / "README-live.txt").read_text()
+    assert (rendered / "cd_overlay/SECURE-BOOT.txt").read_text().startswith("SECURE BOOT: ON OR OFF")
+    assert "SECURE-BOOT.txt" in (rendered / "README-live.txt").read_text()
 
 
 def test_paths_and_job_counts_are_substituted(rendered: Path) -> None:
@@ -120,6 +120,6 @@ def test_duplicate_or_missing_make_conf_key_is_an_error() -> None:
 
 
 def test_cd_overlay_files_without_suffix_are_copied_unchanged(rendered: Path) -> None:
-    source = ROOT / "iso/cd_overlay/SECURE-BOOT-OFF.txt"
-    assert (rendered / "cd_overlay/SECURE-BOOT-OFF.txt").read_bytes() == source.read_bytes()
+    source = ROOT / "iso/cd_overlay/SECURE-BOOT.txt"
+    assert (rendered / "cd_overlay/SECURE-BOOT.txt").read_bytes() == source.read_bytes()
     assert not (rendered / "cd_overlay/boot/grub/grub.cfg.in").exists()

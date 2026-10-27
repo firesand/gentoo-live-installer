@@ -7,8 +7,8 @@ or repair a Gentoo system that does not start. Nothing on your disks
 changes until you ask for it, and the installer shows what it will erase
 before it does anything.
 
-If the disc does not start at all, read SECURE-BOOT-OFF.txt first: Secure
-Boot has to be turned off for this disc.
+With Secure Boot on, the first start shows blue screens once: SECURE-BOOT.txt
+says what to choose. If the disc does not start at all, read it first.
 
 1. WRITING THE DISC
 -------------------

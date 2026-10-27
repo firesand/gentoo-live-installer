@@ -1,6 +1,7 @@
 """scripts/verify-iso.py: parsers, rules (one positive and one negative case each) and an end-to-end run."""
 from __future__ import annotations
 
+import copy
 import io
 import json
 import lzma
@@ -129,7 +130,7 @@ def test_iso_volume_label_must_match() -> None:
     assert "iso.volume_id" in failed(iso_report(volid="GENTOO_INSTALLER_TESTKEY"))
 
 
-@pytest.mark.parametrize("missing", ["efi/boot/bootia32.efi", "memtest64.bios", "SECURE-BOOT-OFF.txt", "boot/gentoo.igz"])
+@pytest.mark.parametrize("missing", ["efi/boot/bootia32.efi", "memtest64.bios", "SECURE-BOOT.txt", "boot/gentoo.igz"])
 def test_iso_required_files(missing: str) -> None:
     files = [f for f in GOOD_FILES if f != "/" + missing]
     report = iso_report(files=files)
@@ -505,9 +506,10 @@ def build_iso(tmp_path: Path, flavor: str, live_make_conf: str, pins: dict[str, 
     (tree / "boot/grub/x86_64-efi/a.mod").write_bytes(b"x")
     (tree / "boot/grub/i386-efi/a.mod").write_bytes(b"x")
     (tree / "boot/grub/themes/gentoo_frosted/theme.txt").write_text("x")
-    for name in ("efi/boot/bootx64.efi", "efi/boot/bootia32.efi", "memtest64.bios", "memtest.efi64", "livecd"):
+    for name in ("efi/boot/bootx64.efi", "efi/boot/bootia32.efi", "efi/boot/grubx64.efi", "efi/boot/mmx64.efi", "memtest64.bios", "memtest.efi64",
+                 "livecd", "ENROLL_THIS_KEY_IN_MOKMANAGER.cer"):
         (tree / name).write_bytes(b"x")
-    shutil.copy(ROOT / "iso/cd_overlay/SECURE-BOOT-OFF.txt", tree / "SECURE-BOOT-OFF.txt")
+    shutil.copy(ROOT / "iso/cd_overlay/SECURE-BOOT.txt", tree / "SECURE-BOOT.txt")
     (tree / "README.txt").write_text("readme")
     entries = image_entries(flavor, live_make_conf)
     if mutate:
@@ -531,12 +533,65 @@ def build_iso(tmp_path: Path, flavor: str, live_make_conf: str, pins: dict[str, 
     return iso
 
 
+# What Tools.secure_boot_report finds on a real signed ISO (iso/sign-secure-boot.py, checked in the builder image, which has sbverify):
+# the synthetic image has no shim, signed GRUB or kernel, so its Secure Boot part comes from here.
+GOOD_SECURE_BOOT = {
+    "efi_files": ["EFI/BOOT/BOOTIA32.EFI", "EFI/BOOT/BOOTX64.EFI", "EFI/BOOT/grubx64.efi", "EFI/BOOT/mmx64.efi", "ENROLL_THIS_KEY_IN_MOKMANAGER.cer"],
+    "certificate_matches": True,
+    "certificate_subject": "subject=CN=Gentoo installer live disc x.iso 2026-10-27 04:19 UTC",
+    "shim_signers": " - /C=US/ST=Washington/L=Redmond/O=Microsoft Corporation/CN=Microsoft Corporation UEFI CA 2011\n"
+                    " - /C=US/O=Microsoft Corporation/CN=Microsoft UEFI CA 2023\n",
+    "verified": {"EFI/BOOT/grubx64.efi": True, "/boot/gentoo": True, "/efi/boot/grubx64.efi": True},
+    "grub_sbat": "sbat,1,SBAT Version,sbat,1,https://github.com/rhboot/shim/blob/main/SBAT.md\ngrub,5,Free Software Foundation,grub,2.14,https://www.gnu.org/software/grub/\n",
+    "copies": {"/efi/boot/bootx64.efi": True, "/efi/boot/mmx64.efi": True, "/efi/boot/grubx64.efi": True},
+}
+
+
+class FixtureTools(verify.Tools):
+    def secure_boot_report(self, spec):
+        return copy.deepcopy(GOOD_SECURE_BOOT)
+
+
+def secure_boot_failures(**changes) -> set[str]:
+    found = copy.deepcopy(GOOD_SECURE_BOOT)
+    found.update(changes)
+    report = verify.Report()
+    verify.check_secure_boot(report, found, CONTRACT["secure_boot"])
+    return {check.id for check in report.checks if not check.ok}
+
+
+def test_a_signed_disc_passes_the_secure_boot_checks() -> None:
+    assert secure_boot_failures() == set()
+
+
+@pytest.mark.parametrize("changes, failure", [
+    ({"efi_files": ["EFI/BOOT/BOOTX64.EFI", "EFI/BOOT/grubx64.efi"]}, "secure_boot.efi_files"),  # no MokManager: nobody could enroll the key
+    ({"certificate_matches": False}, "secure_boot.certificate"),
+    ({"shim_signers": " - /CN=Fedora Secure Boot CA\n"}, "secure_boot.shim"),
+    ({"shim_signers": " - /CN=Microsoft Corporation UEFI CA 2011\n"}, "secure_boot.shim_both_cas"),
+    ({"verified": {"EFI/BOOT/grubx64.efi": True, "/boot/gentoo": False, "/efi/boot/grubx64.efi": True}}, "secure_boot.signed"),
+    ({"verified": {"EFI/BOOT/grubx64.efi": True}}, "secure_boot.signed"),  # a file that was never checked is not a signed file
+    ({"grub_sbat": "sbat,1,SBAT Version\ngrub,4,Free Software Foundation\n"}, "secure_boot.sbat"),  # shim revoked generation 4
+    ({"grub_sbat": ""}, "secure_boot.sbat"),
+    ({"copies": {"/efi/boot/bootx64.efi": False, "/efi/boot/mmx64.efi": True, "/efi/boot/grubx64.efi": True}}, "secure_boot.iso_tree"),
+])
+def test_each_broken_link_of_the_chain_is_named(changes, failure) -> None:
+    assert secure_boot_failures(**changes) == {failure}
+
+
+def test_only_one_microsoft_ca_is_a_warning_not_an_error() -> None:
+    found = dict(GOOD_SECURE_BOOT, shim_signers=" - /CN=Microsoft UEFI CA 2023\n")
+    report = verify.Report()
+    verify.check_secure_boot(report, found, CONTRACT["secure_boot"])
+    assert report.ok and [c.id for c in report.warnings] == ["secure_boot.shim_both_cas"]
+
+
 @pytest.mark.skipif(tools_missing(), reason="xorriso, isoinfo, gensquashfs and rdsquashfs are needed")
 @pytest.mark.parametrize("flavor", ["release", "testkey"])
 def test_a_synthetic_image_built_from_the_overlay_satisfies_the_contract(tmp_path: Path, live_make_conf: str, pins: dict[str, str], flavor: str) -> None:
     """The overlay, the specs, the menu template and the contract agree with each other."""
     iso = build_iso(tmp_path, flavor, live_make_conf, pins)
-    tools = verify.Tools(iso, tmp_path / "scratch")
+    tools = FixtureTools(iso, tmp_path / "scratch")
     # The repair tool's own files are only required when the source tree contains it.
     report, packages = verify.verify(iso, flavor=flavor, workspace=ROOT, tools=tools)
     assert report.ok, "\n".join(c.id + ": " + c.detail for c in report.errors)
@@ -551,18 +606,26 @@ def test_the_same_image_fails_when_something_is_taken_away(tmp_path: Path, live_
         (tree / "boot/grub/grub.cfg").write_text((FIXTURES / "grub_r19.cfg").read_text())
 
     iso = build_iso(tmp_path, "release", live_make_conf, pins, mutate=break_it)
-    report, _ = verify.verify(iso, flavor="release", workspace=ROOT, tools=verify.Tools(iso, tmp_path / "scratch"))
+    report, _ = verify.verify(iso, flavor="release", workspace=ROOT, tools=FixtureTools(iso, tmp_path / "scratch"))
     ids = failed(report)
     assert {"squashfs.services", "squashfs.ownership", "grub.entries", "squashfs.content"} <= ids
 
 
 @pytest.mark.skipif(tools_missing(), reason="xorriso, isoinfo, gensquashfs and rdsquashfs are needed")
+def contract_without_secure_boot(tmp_path: Path) -> Path:
+    """The command line on the synthetic image: this host has no sbverify, and the image no signed files (the checks above cover them)."""
+    contract = {key: value for key, value in CONTRACT.items() if key != "secure_boot"}
+    path = tmp_path / "contract.json"
+    path.write_text(json.dumps(contract))
+    return path
+
+
 def test_command_line_report_and_package_list(tmp_path: Path, live_make_conf: str, pins: dict[str, str]) -> None:
     iso = build_iso(tmp_path, "release", live_make_conf, pins)
     report_path, packages_path = tmp_path / "report.json", tmp_path / "packages.txt"
     result = subprocess.run(
         [sys.executable, str(ROOT / "scripts/verify-iso.py"), str(iso), "--json", str(report_path), "--packages-out", str(packages_path),
-         "--workdir", str(tmp_path / "w")],
+         "--workdir", str(tmp_path / "w"), "--contract", str(contract_without_secure_boot(tmp_path))],
         capture_output=True, text=True, check=False,
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -570,7 +633,8 @@ def test_command_line_report_and_package_list(tmp_path: Path, live_make_conf: st
     assert data["ok"] is True and data["flavor"] == "release" and data["errors"] == []
     assert "sys-fs/lvm2-1.0" in packages_path.read_text().split()
     assert not (tmp_path / "w/image.squashfs").exists(), "the 3 GiB copy of the image must be removed"
-    wrong = subprocess.run([sys.executable, str(ROOT / "scripts/verify-iso.py"), str(iso), "--flavor", "testkey", "--workdir", str(tmp_path / "w2")],
+    wrong = subprocess.run([sys.executable, str(ROOT / "scripts/verify-iso.py"), str(iso), "--flavor", "testkey", "--workdir", str(tmp_path / "w2"),
+                            "--contract", str(contract_without_secure_boot(tmp_path))],
                            capture_output=True, text=True, check=False)
     assert wrong.returncode == 1 and "FAIL" in wrong.stdout
     assert subprocess.run([sys.executable, str(ROOT / "scripts/verify-iso.py"), str(tmp_path / "missing.iso")], capture_output=True, check=False).returncode == 2
@@ -598,7 +662,8 @@ def test_growth_over_the_previous_build_is_a_warning(tmp_path: Path, live_make_c
     def run(previous_size: int) -> subprocess.CompletedProcess:
         previous.write_text(json.dumps({"iso": {"size": previous_size}}))
         return subprocess.run(
-            [sys.executable, str(ROOT / "scripts/verify-iso.py"), str(iso), "--previous-manifest", str(previous), "--workdir", str(tmp_path / "w")],
+            [sys.executable, str(ROOT / "scripts/verify-iso.py"), str(iso), "--previous-manifest", str(previous), "--workdir", str(tmp_path / "w"),
+             "--contract", str(contract_without_secure_boot(tmp_path))],
             capture_output=True, text=True, check=False,
         )
 
@@ -674,12 +739,12 @@ def test_an_image_whose_kernel_has_no_generic_drm_driver_fails(tmp_path: Path, l
         (tree / "boot/gentoo-config").write_text("# CONFIG_SYSFB_SIMPLEFB is not set\n# CONFIG_DRM_SIMPLEDRM is not set\nCONFIG_FB_EFI=y\n" + (FILES_DIR / "live-rescue-ai.config").read_text())
 
     iso = build_iso(tmp_path, "release", live_make_conf, pins, mutate=binary_kernel)
-    report, _ = verify.verify(iso, flavor="release", workspace=ROOT, tools=verify.Tools(iso, tmp_path / "scratch"))
+    report, _ = verify.verify(iso, flavor="release", workspace=ROOT, tools=FixtureTools(iso, tmp_path / "scratch"))
     assert failed(report) == {"kernel.generic_drm"}
 
     def no_config(entries, tree):
         (tree / "boot/gentoo-config").unlink()
 
     iso = build_iso(tmp_path / "second", "release", live_make_conf, pins, mutate=no_config)
-    report, _ = verify.verify(iso, flavor="release", workspace=ROOT, tools=verify.Tools(iso, tmp_path / "scratch2"))
+    report, _ = verify.verify(iso, flavor="release", workspace=ROOT, tools=FixtureTools(iso, tmp_path / "scratch2"))
     assert {"iso.required_files", "kernel.config"} <= failed(report)

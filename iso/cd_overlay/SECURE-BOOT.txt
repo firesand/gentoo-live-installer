@@ -1,0 +1,76 @@
+SECURE BOOT: ON OR OFF, THIS DISC STARTS
+========================================
+
+With Secure Boot off, nothing is special: the menu appears and the desktop
+starts.
+
+With Secure Boot on, the first start of this disc on a PC needs one step
+from you, on blue screens. The disc's first boot program (shim) is signed by
+Microsoft, so the PC runs it. The Gentoo boot menu and Linux after it are
+signed with a key that belongs to this one version of the disc, and the PC
+has to learn that key once:
+
+ 1. "Verification failed: (0x1A) Security Violation": press Enter (OK).
+ 2. "Shim UEFI key management, Press any key to perform MOK management":
+    press a key within 10 seconds. (Missed it? Start the PC again.)
+ 3. "Perform MOK management": choose "Enroll key from disk".
+ 4. Choose GENTOO_EFI, then the file ENROLL_THIS_KEY_IN_MOKMANAGER.cer.
+ 5. "[Enroll MOK]": "View key 0" shows the key (see below). Then choose
+    "Continue".
+ 6. "Enroll the key(s)?": choose "Yes".
+ 7. Choose "Reboot". From now on the disc starts on this PC like any other.
+
+Is it the right key? "View key 0" shows a [Fingerprint]. It must be the
+same as in the .secureboot.txt file published next to the ISO you
+downloaded. Every new version of the disc has a new key, so a new version
+needs these steps once more. The key of an old version only allows that old
+version; you can leave it, or remove it with "sudo mokutil --delete".
+
+If the PC still says "Secure Boot Violation" or skips the stick
+---------------------------------------------------------------
+Some PCs trust only Windows itself and not Microsoft's key for other
+systems. In the firmware setup, look for "Allow Microsoft 3rd Party UEFI CA"
+(Lenovo, some Dell, HP and Surface models) and turn it on. Or turn Secure
+Boot off:
+
+ 1. Restart and open the firmware setup (also called UEFI or BIOS setup).
+    Common keys, pressed right after power on: F2, Del, F10, F12, Esc.
+      Dell: F2 (boot menu F12)        HP: Esc, then F10 (boot menu F9)
+      Lenovo: F1 or F2, ThinkPad: Enter, then F1 (boot menu F12)
+      ASUS desktop: Del or F2 (boot menu F8)
+      ASUS laptop: F2 (boot menu Esc) Acer: F2 (boot menu F12)
+      MSI: Del (boot menu F11)        Microsoft Surface: hold Volume Up while
+                                      you press the power button
+ 2. Find "Secure Boot" (usually under Security, Boot or Authentication) and
+    set it to Disabled. Some firmware first wants an administrator password,
+    or the operating system type changed from "Windows UEFI mode" to
+    "Other OS".
+ 3. Save and exit (usually F10) and start from the USB stick again.
+
+Before you change firmware settings on a PC that runs Windows
+-------------------------------------------------------------
+* If Windows uses BitLocker or "Device encryption", changing firmware
+  settings (Secure Boot above all) can make Windows ask for its recovery key
+  at the next start. Look the key up first (https://aka.ms/myrecoverykey or
+  your IT department) and keep it at hand. Enrolling the key in step 1 to 7
+  does not change Secure Boot itself.
+
+The Gentoo you install
+----------------------
+The installed system starts with GRUB, which is not signed: with Secure
+Boot on, the PC refuses to start it. Turn Secure Boot off before the first
+start of the new system, or choose systemd-boot with Secure Boot signing in
+the installer (an advanced choice, see the user guide). The installer
+reminds you of this before it starts.
+
+Memtest86+ is not signed: with Secure Boot on, its UEFI entry is hidden.
+
+Computers that cannot run this disc
+-----------------------------------
+This disc is for 64-bit x86 computers (Intel and AMD, including 32-bit UEFI
+tablets, which need Secure Boot off). It cannot start on Apple Silicon Macs
+(M1 and later), on Windows PCs with Snapdragon or other ARM processors, or
+on Raspberry Pi boards. Intel Macs with a T2 chip: in the Startup Security
+Utility choose "No Security" and allow booting from external media.
+
+More help: README.txt on this disc.

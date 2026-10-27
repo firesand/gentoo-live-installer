@@ -6,7 +6,7 @@ manifest records what went into the ISO (pins, source archives, hashes of every 
 input) and what was checked. The fields of schema_version 1 that existed before are
 unchanged; the newer ones are additive: flavor, volume_id, verified, reused_stage1,
 stage1_mode, stage1_receipt_sha256, builder_image_id, gentoo_repository.signature,
-packages_list.
+packages_list, secure_boot.
 """
 from __future__ import annotations
 
@@ -67,6 +67,7 @@ def build_manifest(
     builder_image_id: str,
     distfiles: Path,
     packages_list: str | None,
+    secure_boot: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     archives = {path.name: digest(path, "sha256") for path in sorted(distfiles.glob("*.tar.zst"))}
     receipt_sha = digest(stage1_receipt, "sha256") if stage1_receipt and stage1_receipt.is_file() else None
@@ -106,6 +107,8 @@ def build_manifest(
         "stage1_receipt_sha256": receipt_sha,
         "verified": dict(verified) if verified else {"flavor": flavor, "checks": []},
         "packages_list": packages_list,
+        # iso/sign-secure-boot.py: the certificate MokManager enrolls (the private key no longer exists)
+        "secure_boot": dict(secure_boot) if secure_boot else None,
     }
 
 
@@ -123,6 +126,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--builder-image-id", default="")
     parser.add_argument("--distfiles", required=True, type=Path)
     parser.add_argument("--packages")
+    parser.add_argument("--secure-boot", help="the summary JSON of iso/sign-secure-boot.py")
     args = parser.parse_args(argv)
     iso_name = os.environ["ISO_NAME"]
     iso = args.dist / iso_name
@@ -140,6 +144,7 @@ def main(argv: list[str] | None = None) -> int:
         builder_image_id=args.builder_image_id,
         distfiles=args.distfiles,
         packages_list=Path(args.packages).name if args.packages else None,
+        secure_boot=read_json(args.secure_boot),
     )
     temporary = args.dist / f".{iso_name}.manifest.partial"
     temporary.write_text(json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8")

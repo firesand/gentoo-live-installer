@@ -311,7 +311,7 @@ def test_prepare_portage_builds_the_inputs_of_both_stages(sandbox) -> None:
     assert "--usepkg-exclude=app-misc/hwmonux" in lines[0] and "--jobs" not in lines[0]
     assert lines[1] == str(build / "portage/make.conf.extra")
     for name in ("livecd-stage1.spec", "livecd-stage2.spec", "README-live.txt", "fsscript-stage2.sh", "portage/make.conf", "portage/make.conf.extra",
-                 "cd_overlay/boot/grub/grub.cfg", "cd_overlay/SECURE-BOOT-OFF.txt", "root_overlay/etc/lvm/lvmlocal.conf", "overlay/profiles/repo_name"):
+                 "cd_overlay/boot/grub/grub.cfg", "cd_overlay/SECURE-BOOT.txt", "root_overlay/etc/lvm/lvmlocal.conf", "overlay/profiles/repo_name"):
         assert (build / name).is_file(), name
     shipped = build / "root_overlay/usr/local/share/gentoo-installer"
     assert (shipped / "overlay/app-misc/hwmonux/hwmonux-1.0.0-r1.ebuild").is_file()

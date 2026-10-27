@@ -42,6 +42,7 @@ class VMHardware:
     ovmf_vars: str = "persist"      # persist | fresh-on-target | readonly
     rtc: str = "utc"
     resolution: str = ""            # "1366x768": the display announces exactly this size (virtio, std and qxl adapters); "" leaves QEMU's default
+    live_usb: bool = False          # the live ISO is a USB stick written with dd (usb-storage on xHCI, booted through its GPT EFI partition), not a CD
 
     def problems(self) -> list[str]:
         found: list[str] = []

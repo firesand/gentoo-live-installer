@@ -33,7 +33,7 @@ livecd/fsscript: @BUILD_DIR@/fsscript-stage2.sh
 livecd/root_overlay: @BUILD_DIR@/root_overlay
 # Catalyst writes boot/grub/grub.cfg first and rsyncs this directory over the ISO tree
 # afterwards (setup_overlay runs after the bootloader step), so the project's menu and the
-# SECURE-BOOT-OFF.txt notice replace the generic ones. It must not contain snapshots/.
+# SECURE-BOOT.txt notice replace the generic ones. It must not contain snapshots/.
 livecd/overlay: @BUILD_DIR@/cd_overlay
 # Becomes /README.txt on the ISO (Catalyst's own text is a generic boot option list).
 livecd/readme: @BUILD_DIR@/README-live.txt
