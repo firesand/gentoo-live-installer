@@ -48,6 +48,7 @@ GRUB_MODULES = (
 )
 SHIM_FILES = {"BOOTX64.EFI": "BOOTX64.EFI", "mmx64.efi": "mmx64.efi"}  # /usr/share/shim name -> name on the disc
 # What grub-mkrescue (Catalyst) sets up and boot_options() writes again (xorriso -report_el_torito as_mkisofs).
+CN_MAX = 64  # RFC 5280 ub-common-name; openssl refuses a longer one
 CATALYST_BOOT = ("--grub2-mbr", "--protective-msdos-label", "-efi-boot-part --efi-boot-image", "-b '/boot/grub/i386-pc/eltorito.img'",
                  "--grub2-boot-info", "-e '/efi.img'")
 
@@ -117,6 +118,15 @@ def boot_options(original: Path, date: str) -> list[str]:
             "-eltorito-alt-boot", "-e", "/efi.img", "-no-emul-boot", "-efi-boot-part", "--efi-boot-image"]
 
 
+def certificate_subject(stamp: str) -> str:
+    """The key's name in MokManager and "mokutil --list-enrolled". The ISO name stays out: an X.509 common name holds at
+    most 64 characters, and the published .secureboot.txt names the ISO; the build time tells two versions apart."""
+    subject = f"Gentoo installer live disc {stamp}"
+    if len(subject) > CN_MAX or re.search(r"[^A-Za-z0-9 :-]", subject):
+        raise SignError(f"the certificate name {subject!r} is longer than {CN_MAX} characters or not plain text")
+    return subject
+
+
 def make_key(directory: Path, subject: str) -> tuple[Path, Path, Path]:
     key, pem, der = directory / "key.pem", directory / "cert.pem", directory / "cert.der"
     run("openssl", "req", "-new", "-x509", "-newkey", "rsa:2048", "-nodes", "-sha256", "-days", "3650", "-subj", subject,
@@ -157,7 +167,7 @@ def sign_iso(iso: Path, work: Path, cert_out: Path, tools: Tools = Tools()) -> d
         "-c", work / "early.cfg", "-o", work / "grubx64.unsigned.efi", *GRUB_MODULES)
 
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    subject = f"Gentoo installer live disc {iso.name} {stamp}"
+    subject = certificate_subject(stamp)
     secrets = secret_directory()
     try:
         key, pem, der = make_key(secrets, f"/CN={subject}/")

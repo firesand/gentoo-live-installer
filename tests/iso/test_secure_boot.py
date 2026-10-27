@@ -10,6 +10,8 @@ import hashlib
 from pathlib import Path
 import re
 import shlex
+import shutil
+import subprocess
 
 import pytest
 
@@ -119,7 +121,38 @@ def test_the_disc_is_signed_and_the_private_key_is_gone_afterwards(signing, monk
     assert len(fake.named("sbverify")) == 2
     assert summary["certificate_sha256"] == hashlib.sha256(b"0\x82 DER certificate").hexdigest()
     assert summary["mokmanager_fingerprint"] == sign.mokmanager_fingerprint(b"0\x82 DER certificate")
-    assert summary["marker"] == MARKER and summary["subject"].startswith("Gentoo installer live disc gentoo.iso ")
+    assert summary["marker"] == MARKER and summary["subject"] == sign.certificate_subject(summary["subject_date"])
+
+
+def test_the_key_name_fits_a_certificate_whatever_the_iso_is_called(signing, monkeypatch) -> None:
+    # RC3's first build: "CN=Gentoo installer live disc <98 characters with the ISO name>" made openssl refuse the key
+    tmp_path, iso, tools, _, _ = signing
+    long_name = iso.with_name("gentoo-installer-amd64-20261018T124555Z-TESTKEY.iso")
+    iso.rename(long_name)
+    fake = FakeTools(tmp_path)
+    monkeypatch.setattr(sign, "run", fake)
+    summary = sign.sign_iso(long_name, tmp_path / "work", tmp_path / "dist/x.secureboot.cer", tools)
+    (request,) = [argv for argv in fake.named("openssl") if "req" in argv]
+    common_name = request[request.index("-subj") + 1]
+    assert common_name == f"/CN={summary['subject']}/" and len(summary["subject"]) <= sign.CN_MAX
+    assert long_name.name not in common_name and "TESTKEY" not in common_name
+
+
+def test_the_key_name_is_short_plain_text() -> None:
+    assert sign.certificate_subject("2026-10-27 07:49 UTC") == "Gentoo installer live disc 2026-10-27 07:49 UTC"
+    for stamp in ("2026-10-27 07:49 UTC" + "x" * 40, "2026-10-27/CN=evil"):
+        with pytest.raises(sign.SignError, match="certificate name"):
+            sign.certificate_subject(stamp)
+
+
+@pytest.mark.skipif(shutil.which("openssl") is None, reason="needs openssl")
+def test_the_real_openssl_makes_a_code_signing_key_with_that_name(tmp_path) -> None:
+    subject = sign.certificate_subject("2026-10-27 07:49 UTC")
+    key, pem, der = sign.make_key(tmp_path, f"/CN={subject}/")
+    assert key.read_text().startswith("-----BEGIN PRIVATE KEY-----") and der.read_bytes()[:1] == b"0"
+    text = subprocess.run(["openssl", "x509", "-noout", "-subject", "-ext", "extendedKeyUsage,keyUsage", "-in", str(pem)],
+                          check=True, capture_output=True, text=True).stdout
+    assert f"subject=CN={subject}" in text and "Code Signing" in text and "Digital Signature" in text
 
 
 def test_a_failing_step_after_the_key_was_made_still_destroys_it(signing, monkeypatch) -> None:
@@ -215,11 +248,12 @@ def test_small_helpers() -> None:
 
 
 def test_the_published_notice_shows_the_fingerprint_like_mokmanager() -> None:
-    summary = {"mokmanager_fingerprint": "D1 AB AA 1A DC 0D 6C 9C F3 EB 66 72 A3 30 3E DF 31 76 37 98", "subject": "Gentoo installer live disc x.iso 2026-10-27 04:19 UTC",
+    summary = {"mokmanager_fingerprint": "D1 AB AA 1A DC 0D 6C 9C F3 EB 66 72 A3 30 3E DF 31 76 37 98", "subject": "Gentoo installer live disc 2026-10-27 04:19 UTC",
                "certificate_sha256": "ab" * 32}
     text = sign.notice("x.iso", summary)
     assert "[Fingerprint]  D1 AB AA 1A DC 0D 6C 9C F3 EB\n                 66 72 A3 30 3E DF 31 76 37 98\n" in text
-    assert "CN=Gentoo installer live disc x.iso" in text and "destroyed" in text
+    assert text.startswith("Secure Boot key of x.iso\n") and "CN=Gentoo installer live disc 2026-10-27 04:19 UTC\n" in text
+    assert "destroyed" in text
 
 
 def test_the_build_signs_before_verify_iso_and_publishes_the_certificate() -> None:
