@@ -452,10 +452,15 @@ class ReadinessPage(Page):
         findings = sorted((w for w in info.warnings if str(w.get("message", "")).strip()), key=lambda w: SEVERITY_ORDER.get(str(w.get("severity", "info")), 2))
         seen: set[str] = set()
         charger = ""
+        # The System clock row compares the clock with the network; when that says it is right, the probe's "not checked against the
+        # network yet" (the time service had not synchronised when the hardware was read) only contradicts it (the first real PC).
+        clock_ok = info.clock_status()[0] == "ok"
         for warning in findings:
             code = clean_code(str(warning.get("code", "")))
             severity = str(warning.get("severity", "info"))
             message = str(warning.get("message", "")).strip()
+            if code == "clock_unsynced" and clock_ok:
+                continue
             if code in CHARGER_CODES:
                 charger = charger or message  # an amber banner at the top of the page, not one more row
                 continue

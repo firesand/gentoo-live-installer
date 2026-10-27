@@ -440,7 +440,9 @@ def test_readiness_shows_a_row_for_the_computer(make_window):
 
 
 def test_warnings_are_listed_errors_first_with_the_fix_the_daemon_offers(make_window):
-    info = machine("amd-laptop-sof", daemon=DaemonState("running", features=frozenset({"hardware.v1"}), actions=frozenset({"sync_time", "reboot_firmware"})))
+    # synchronized_clock=False: the clock has not been compared with the network, so the probe's clock note stands
+    info = machine("amd-laptop-sof", synchronized_clock=False,
+                   daemon=DaemonState("running", features=frozenset({"hardware.v1"}), actions=frozenset({"sync_time", "reboot_firmware"})))
     window = readiness_window(make_window, info)
     page = window.readiness
     rows = [page.notes_box.itemAt(i).widget() for i in range(page.notes_box.count())]
@@ -452,6 +454,17 @@ def test_warnings_are_listed_errors_first_with_the_fix_the_daemon_offers(make_wi
     assert clock.action is not None and clock.action.text() == "Set clock from network"
     assert not any("charger" in row.detail.text() for row in rows)  # NET-06: the charger is an amber banner, not one more row
     assert not page.charger_banner.isHidden() and "charger" in page.charger_banner.text()
+
+
+def test_a_clock_the_network_check_found_right_gets_no_unchecked_note(make_window):
+    """The first real PC: the System clock row said "The clock matches the network time" and a hardware note below it said
+    "The clock has not been checked against the network yet" (the time service had not synchronised when the hardware was read)."""
+    info = machine("amd-laptop-sof", synchronized_clock=True, daemon=DaemonState("running", features=frozenset({"hardware.v1"}), actions=frozenset({"sync_time"})))
+    window = readiness_window(make_window, info)
+    page = window.readiness
+    rows = [page.notes_box.itemAt(i).widget() for i in range(page.notes_box.count())]
+    assert info.clock_status()[0] == "ok"
+    assert not any("not been checked against the network" in row.detail.text() for row in rows)
 
 
 def test_without_the_action_the_row_explains_what_to_do(make_window):
@@ -473,7 +486,7 @@ def test_a_button_of_a_finding_starts_the_daemon_action_and_shows_the_answer(mak
         return [{"type": "completed", "data": {"success": True}}]
 
     daemon = fake_daemon(handler)
-    info = machine("amd-laptop-sof", daemon=DaemonState("running", features=frozenset({"hardware.v1"}), actions=frozenset({"sync_time"})))
+    info = machine("amd-laptop-sof", synchronized_clock=False, daemon=DaemonState("running", features=frozenset({"hardware.v1"}), actions=frozenset({"sync_time"})))
     window = readiness_window(make_window, info)
     window.socket_path = daemon.path
     page = window.readiness
