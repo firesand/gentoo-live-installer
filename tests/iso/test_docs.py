@@ -30,6 +30,13 @@ def test_the_disc_carries_the_same_secure_boot_instructions() -> None:
     assert "SECURE-BOOT.txt" in (ROOT / "iso/README-live.txt").read_text()
 
 
+def test_an_old_disc_key_is_to_be_removed_not_left() -> None:
+    # EAC Linux v2 (2026-10) accepts only enrolled MOKs that Epic recognizes: a leftover disc key would fail it on that PC
+    for document in (ROOT / "iso/cd_overlay/SECURE-BOOT.txt", USER_GUIDE):
+        text = " ".join(document.read_text().split())
+        assert "you can leave it" not in text and "mokutil --delete" in text and "Easy Anti-Cheat Linux v2" in text, document.name
+
+
 def test_the_names_on_the_blue_screens_are_the_names_the_signer_uses() -> None:
     """MokManager lists the volume by its label and the file by its name: the instructions must say exactly those."""
     signer = load_script("iso/sign-secure-boot.py", "sign_secure_boot")

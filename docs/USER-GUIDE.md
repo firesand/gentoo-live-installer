@@ -54,7 +54,7 @@ The disc starts with **Secure Boot** on or off. With it off, nothing is special.
 5. "[Enroll MOK]": **View key 0** shows the key. Its *Fingerprint* must be the one in the `.secureboot.txt` file published next to the ISO. Then choose **Continue**.
 6. "Enroll the key(s)?": **Yes**. Then **Reboot**.
 
-The private half of the key is destroyed when the disc is built, so it can sign nothing else. Every new version of the disc has a new key and needs these steps once more. An old key allows only its old version, so you can leave it. To remove it, run `sudo mokutil --delete` with its `.cer` file and confirm on the blue screen at the next start.
+The private half of the key is destroyed when the disc is built, so it can sign nothing else. Every new version of the disc has a new key and needs these steps once more. An old key allows only its old version. Remove it when you no longer need that disc: run `sudo mokutil --delete` with its `.cer` file and confirm on the blue screen at the next start. Do it above all on a PC that is to run Linux games with Easy Anti-Cheat Linux v2 (announced October 2026): it accepts only keys Epic recognizes, and this disc's key is not one of them.
 
 **If the PC still says "Secure Boot Violation" or skips the stick**, it trusts only Windows and not Microsoft's key for other systems. Look in the firmware setup for "Allow Microsoft 3rd Party UEFI CA" (some Lenovo, Dell, HP and Surface models) and turn it on. Or turn Secure Boot off:
 

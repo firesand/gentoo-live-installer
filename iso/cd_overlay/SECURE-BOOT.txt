@@ -24,8 +24,10 @@ Is it the right key? "View key 0" shows a [Fingerprint]. It must be the
 same as in the .secureboot.txt file published next to the ISO you
 downloaded. Every new version of the disc has a new key, so a new version
 needs these steps once more. The key of an old version only allows that old
-version; you can leave it. To remove it later: "sudo mokutil --delete" with
-its .cer file, then confirm on the blue screen at the next start.
+version. Remove it when you no longer need that disc: "sudo mokutil --delete"
+with its .cer file, then confirm on the blue screen at the next start. Do it
+above all on a PC that is to run Linux games with Easy Anti-Cheat Linux v2
+(October 2026): it accepts only keys Epic recognizes, and this key is not one.
 
 If the PC still says "Secure Boot Violation" or skips the stick
 ---------------------------------------------------------------
