@@ -150,6 +150,11 @@ def package_database(plan: dict) -> str:
     return "".join(f"{'installed' if atom in wanted else 'absent'} {atom}\n" for atom in ("sys-firmware/intel-microcode", *GUEST_TOOLS))
 
 
+def kernel_database(manifest) -> str:
+    """What the kernel-provider probe prints where only the manifest's distribution kernel was installed."""
+    return "".join(f"{'installed' if atom == f'sys-kernel/{manifest.system.kernel}' else 'absent'} {atom}\n" for atom in vm_probes.DIST_KERNEL_PROVIDERS)
+
+
 def layout_output(vm, scenario_name: str) -> str:
     """What findmnt and swapon print on a machine laid out exactly as the scenario's manual manifest says."""
     manifest = vm.build_manifest(vm.SCENARIO_MAP[scenario_name], PUBLIC_KEY, data_disks=[("/dev/vdb", "GENTOO-VM-EXTRA-1")])
@@ -216,6 +221,7 @@ def guest_rules(vm, scenario_name: str, *, guard: str = "vm_disk_guard", install
         {"user": "^vmtest$", "match": r"emerge --color=n -pvuDN @world$", "stdout": WORLD_CLEAN},
         {"user": "^vmtest$", "match": r"^findmnt -rno TARGET,SOURCE", "stdout": layout_output(vm, scenario_name) if scenario.manual else ""},
         {"user": "^vmtest$", "match": r"^sh -c .* sh sys-firmware/intel-microcode", "stdout": package_database(plan)},
+        {"user": "^vmtest$", "match": r"^sh -c .* sh sys-kernel/gentoo-kernel ", "stdout": kernel_database(scenario_manifest(vm, scenario_name, firmware))},
         # Wave 5 (I13): sshd on the installed system, network_status in the live system
         {"user": "^vmtest$", "match": r"^(?:rc-service sshd status|systemctl is-active sshd)", "stdout": SYSTEMD_SSHD if scenario.init == "systemd" else OPENRC_SSHD},
         {"user": "^vmtest$", "match": r"sshd -T$", "stdout": sshd_t(scenario_manifest(vm, scenario_name, firmware))},

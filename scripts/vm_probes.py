@@ -566,6 +566,24 @@ def parse_hardware_probe(returncode: int, output: str, plan: Mapping[str, Any], 
     return ProbeResult("hardware-plan", not problems, result.output, "; ".join(problems))
 
 
+# virtual/dist-kernel's providers. RC3 emerged the firmware and microcode before the kernel, so Portage took the first one,
+# gentoo-kernel, and compiled it next to gentoo-kernel-bin (found in the RC4 VMs): exactly the chosen one must be installed.
+DIST_KERNEL_PROVIDERS = ("sys-kernel/gentoo-kernel", "sys-kernel/gentoo-kernel-bin", "sys-kernel/vanilla-kernel", "sys-kernel/gentoo-kernel-modprep")
+
+
+def parse_kernel_provider_probe(returncode: int, output: str, kernel: str) -> ProbeResult:
+    """package_check_command(DIST_KERNEL_PROVIDERS): the chosen distribution kernel is installed, and no other one."""
+    result = parse_probe_result("kernel-provider", returncode, output)
+    if not result.success:
+        return result
+    installed = {atom for kind, _, atom in (line.partition(" ") for line in result.output.splitlines()) if kind == "installed"}
+    wanted = f"sys-kernel/{kernel}"
+    problems = [] if wanted in installed else [f"{wanted} is not installed"]
+    if others := sorted(installed - {wanted}):
+        problems.append(f"{', '.join(others)} is installed next to {wanted}: a second kernel, built from source again with every update")
+    return ProbeResult("kernel-provider", not problems, result.output, "; ".join(problems))
+
+
 def parse_hardware_plan_file(text: str) -> dict[str, Any] | None:
     """The plan in the hardware-plan.json the daemon leaves in its state directory; None when it is absent or holds no plan.
 
@@ -584,6 +602,9 @@ def parse_hardware_plan_file(text: str) -> dict[str, Any] | None:
 # --- system tuning (gentoo_installerd/hwplan_tuning.py) ----------------------------------------------------------------
 
 # One "key value" line per fact; the sysctl --system run (as root, it only applies the files again) reports a key no kernel has.
+# A key written with a leading "-" may be refused: procps says 'setting key "K", ignoring: ...' (a VM without a hardware
+# NMI watchdog answers ENOTSUPP, "Unknown error 524", to kernel.nmi_watchdog), which is what the "-" is for.
+SYSCTL_TOLERATED = re.compile(r'sysctl: setting key "[^"]+", ignoring: ')
 TUNING_COMMAND = r"""for f in vm/vfs_cache_pressure vm/dirty_bytes vm/swappiness vm/page-cluster; do printf 'sysctl %s %s\n' "$f" "$(cat /proc/sys/$f)"; done
 printf 'thp_defrag %s\n' "$(cat /sys/kernel/mm/transparent_hugepage/defrag 2>/dev/null)"
 printf 'thp_ptes %s\n' "$(cat /sys/kernel/mm/transparent_hugepage/khugepaged/max_ptes_none 2>/dev/null)"
@@ -623,7 +644,8 @@ def tuning_problems(output: str, expected: Mapping[str, bool]) -> list[str]:
                 bracketed = re.search(r"\[([^\]]+)\]", choices)
                 schedulers.append((device, rotational, bracketed.group(1) if bracketed else choices.strip()))
         elif key == "sysctl_error":
-            problems.append(f"sysctl --system: {rest.strip()}")
+            if not SYSCTL_TOLERATED.match(rest.strip()):
+                problems.append(f"sysctl --system: {rest.strip()}")
         else:
             facts[key] = rest.strip()
     for name, want in (("vm/vfs_cache_pressure", "50"), ("vm/dirty_bytes", "268435456")):

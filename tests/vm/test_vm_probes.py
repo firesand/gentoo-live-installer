@@ -424,6 +424,18 @@ def test_the_package_check_asks_the_package_database_about_each_atom():
     assert "/var/db/pkg/${atom}" in command[2]
 
 
+def test_exactly_the_chosen_distribution_kernel_is_installed():
+    lines = lambda *installed: "".join(f"{'installed' if atom in installed else 'absent'} {atom}\n" for atom in vm_probes.DIST_KERNEL_PROVIDERS)  # noqa: E731
+    assert vm_probes.parse_kernel_provider_probe(0, lines("sys-kernel/gentoo-kernel-bin"), "gentoo-kernel-bin").success
+    # The RC4 VMs: the firmware emerge had pulled gentoo-kernel from source next to the binary kernel.
+    both = vm_probes.parse_kernel_provider_probe(0, lines("sys-kernel/gentoo-kernel", "sys-kernel/gentoo-kernel-bin"), "gentoo-kernel-bin")
+    assert not both.success and "sys-kernel/gentoo-kernel is installed next to sys-kernel/gentoo-kernel-bin" in both.error
+    missing = vm_probes.parse_kernel_provider_probe(0, lines(), "gentoo-kernel")
+    assert not missing.success and "sys-kernel/gentoo-kernel is not installed" in missing.error
+    names = {probe[0]: probe for probe in vm.installed_system_probes(manifest_of("openrc"), vm.SCENARIO_MAP["openrc"])}
+    assert shlex.split(names["kernel-provider"][1])[-4:] == list(vm_probes.DIST_KERNEL_PROVIDERS)
+
+
 def test_the_installed_system_must_match_the_plan():
     manifest = manifest_of("laptop-smbios")
     plan = plan_dict("qemu-q35-virtio", manifest)

@@ -55,6 +55,16 @@ def test_every_missing_setting_is_named():
     assert "vda" not in result.error and "sr0" not in result.error  # virtio disks and CD drives have no rule
 
 
+def test_a_refused_key_marked_with_a_dash_passes_and_an_unknown_one_does_not():
+    # The real OpenRC and systemd VMs of RC4: no hardware NMI watchdog, so kernel.nmi_watchdog (written "-kernel...") is refused.
+    refused = GOOD + 'sysctl_error sysctl: setting key "kernel.nmi_watchdog", ignoring: Unknown error 524\n'
+    assert vm_probes.parse_tuning_probe(0, refused, vm_probes.tuning_expected(nvme_plan())).success
+    for line in ('sysctl: "net.core.netdev_max_backlg" is an unknown key, ignoring',
+                 'sysctl: setting key "vm.vfs_cache_pressure": Invalid argument'):
+        result = vm_probes.parse_tuning_probe(0, GOOD + f"sysctl_error {line}\n", vm_probes.tuning_expected(nvme_plan()))
+        assert not result.success and line.removeprefix("sysctl: ") in result.error, line
+
+
 def test_without_zram_the_swap_values_are_not_checked():
     expected = vm_probes.tuning_expected(nvme_plan(zram="no"))
     output = GOOD.replace("swappiness 150", "swappiness 60").replace(" zswap.enabled=0", "")

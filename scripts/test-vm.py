@@ -1491,6 +1491,9 @@ def installed_system_probes(manifest: InstallManifest, scenario: Scenario, *, wo
         probes.append(("dmi", "cat /sys/class/dmi/id/sys_vendor /sys/class/dmi/id/chassis_type",
                        lambda c, o: parse_dmi_probe(c, o, preset)))
     probes.extend(vm_wave5.sshd_probes(manifest, scenario.init, password))
+    if f"sys-kernel/{manifest.system.kernel}" in vm_probes.DIST_KERNEL_PROVIDERS:
+        probes.append(("kernel-provider", vm_probes.package_check_command(vm_probes.DIST_KERNEL_PROVIDERS),
+                       lambda c, o: vm_probes.parse_kernel_provider_probe(c, o, manifest.system.kernel)))
     if scenario.secure_boot_install:  # B07 step 2: what does the kernel do with an unsigned and a signed module under Secure Boot?
         key, cert = secure_boot_keys or (b"", b"")
         probes.append(("secure-boot-modules", vm_secureboot.module_experiment_command(), vm_secureboot.parse_module_experiment_probe,
