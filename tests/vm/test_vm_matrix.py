@@ -50,27 +50,30 @@ def parsed(entry):
 def test_only_the_job_with_the_memory_for_pyside_installs_hwmonux():
     """HWMonux pulls PySide, which has no binary package: it is compiled on every install, for an hour, and a 4 GiB VM with two jobs gets the compiler killed (the first real runs)."""
     installing = list(vm_matrix.WAVE3.entries)
-    with_hwmonux = [entry for entry in installing if parsed(entry).companions == "both"]
+    with_hwmonux = [entry for entry in installing if "hwmonux" in vm.COMPANION_SETS[parsed(entry).companions]]
     assert [entry.name for entry in with_hwmonux] == ["defaults"]
     defaults = with_hwmonux[0]
     args = parsed(defaults)
+    assert args.companions == "all"  # what the installer installs by default
     assert defaults.memory_mib >= 12288 and args.build_jobs == 1 and args.swap_mib >= 4096  # what the desktop install gets, and a person's guided default
     for entry in installing:
         if entry is not defaults:
-            assert parsed(entry).companions == "portagehub", entry.name  # PortageHub is a Rust build that a 4 GiB VM does
+            # Rust builds that a 4 GiB VM does: PortageHub alone, or all three on the openrc and systemd jobs
+            assert parsed(entry).companions == ("rust" if entry.name in {"openrc", "systemd"} else "portagehub"), entry.name
 
 
 def test_the_callers_companions_reach_only_the_job_that_does_not_name_its_own():
-    """--companions is passed to every child (its default is 'both'), and the entry's option comes later: the install jobs keep PortageHub only."""
+    """--companions is passed to every child (its default is 'all'), and the entry's option comes later: the install jobs keep their own."""
     base = ["--matrix", "wave3", "--iso", "a.iso", "--ssh-host", "127.0.0.1", "--ssh-private-key", "k"]
-    for caller, defaults_gets in ((None, "both"), ("none", "none"), ("portagehub", "portagehub")):
+    for caller, defaults_gets in ((None, "all"), ("none", "none"), ("portagehub", "portagehub")):
         args = vm.build_parser().parse_args(base + (["--companions", caller] if caller else []))
         shared = vm_matrix.passthrough_arguments(args)
-        assert ["--companions", caller or "both"] in [shared[i:i + 2] for i in range(len(shared))]
+        assert ["--companions", caller or "all"] in [shared[i:i + 2] for i in range(len(shared))]
         chosen = {entry.name: vm.build_parser().parse_args(vm_matrix.job_argv(entry, port=40222, shared=[*shared, "--ssh-host", "127.0.0.1"])).companions
                   for entry in vm_matrix.WAVE3.entries}
         assert chosen["defaults"] == defaults_gets
-        assert {name: value for name, value in chosen.items() if name != "defaults"} == {name: "portagehub" for name in chosen if name != "defaults"}
+        assert {name: value for name, value in chosen.items() if name != "defaults"} == {
+            name: "rust" if name in {"openrc", "systemd"} else "portagehub" for name in chosen if name != "defaults"}
 
 
 def test_the_matrix_stays_within_its_memory_budget_with_two_jobs_at_a_time():
@@ -125,7 +128,7 @@ def test_the_callers_paths_keys_and_timeouts_are_passed_to_every_child():
 
 def test_the_plan_lists_every_job_with_its_sizing_and_the_cap():
     text = vm_matrix.format_plan(vm_matrix.WAVE3, vm_matrix.WAVE3.entries)
-    assert "at most 2 VMs at a time" in text and "3 GiB of host memory kept free" in text
+    assert "at most 2 VMs at a time" in text and "16 GiB of host memory kept free" in text
     for name in EXPECTED:
         assert name in text
     assert "12 GiB" in text and "minutes one after the other" in text
@@ -246,7 +249,7 @@ def test_the_hosts_free_memory_is_respected_with_the_margin(tmp_path):
     lab.entries = {"bios": entry}
     runner = vm_matrix.Scheduler([entry], directory=tmp_path, spawn=lab, clock=clock, sleep=clock.sleep, available_mib=lambda: free["mib"], budget_mib=99999)
     [skipped] = runner.run([])
-    assert skipped.status == "SKIPPED" and "not enough memory: 4096 MiB for the VM plus 3072 MiB kept free" in skipped.note and "the host has 7167 MiB" in skipped.note
+    assert skipped.status == "SKIPPED" and "not enough memory: 4096 MiB for the VM plus 16384 MiB kept free" in skipped.note and "the host has 20479 MiB" in skipped.note
     assert not lab.started
     free["mib"] += 1
     clock2 = Clock()

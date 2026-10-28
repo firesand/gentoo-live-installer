@@ -172,6 +172,18 @@ def test_extra_startup_options_and_the_config_snippet_are_saved(make_window):
     assert not valid and "CONFIG_NAME" in message
 
 
+def test_the_kernel_series_is_the_newest_by_default_and_the_long_term_one_can_be_chosen(make_window):
+    window, page = system_page(make_window)
+    window.mode.setCurrentIndex(1)
+    assert page.kernel_series.currentData() == "newest" and page.kernel_series.isEnabled()
+    page.kernel_series.setCurrentIndex(page.kernel_series.findData("longterm"))
+    valid, message = page.validate_page()
+    assert valid, message
+    assert window.manifest.system.kernel_series == "longterm"
+    page.kernel.set_value("gentoo-kernel")
+    assert page.kernel_series.isEnabled()
+
+
 def test_a_snippet_survives_switching_kernels(make_window):
     manifest = InstallManifest()
     manifest.system.kernel, manifest.system.kernel_config_snippet = "gentoo-kernel", "CONFIG_HZ_1000=y"

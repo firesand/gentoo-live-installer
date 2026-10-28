@@ -296,7 +296,7 @@ def test_system_tuning_is_on_in_the_guided_view_and_one_click_turns_it_off(make_
     tab = tab_of(window)
     box = tab.controls["tuning"]
     assert isinstance(box, QCheckBox) and box.isChecked() and tab.row_shown("tuning") and tab.cards["tuning"].isVisibleTo(tab)
-    assert "Tuning: /etc/sysctl.d/80-installer-tuning.conf" in tab.plan_text.text()
+    assert "Tuning: /etc/sysctl.d/60-installer-tuning.conf" in tab.plan_text.text()
     box.setChecked(False)
     window.customize.save_manifest()
     assert window.manifest.hardware.tuning is False and "Tuning:" not in tab.plan_text.text()

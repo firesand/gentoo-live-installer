@@ -20,6 +20,12 @@ KERNEL_HELP = {
     "gentoo-kernel": "Compiled on this PC, which takes a long time. Choose it if you want to add your own kernel settings.",
 }
 KERNEL_GUIDANCE = "Gentoo’s own kernel is the Handbook’s recommended start and updates automatically."
+KERNEL_SERIES = (
+    ("Newest Gentoo kernel (recommended)", "newest"),
+    ("Long-term kernel (stable, fewer changes)", "longterm"),
+)
+KERNEL_SERIES_HELP = ("The newest kernel supports the newest hardware best; an update brings each new kernel series as soon as Gentoo "
+                      "ships it. The long-term kernel is the one Gentoo marks stable: older, but it changes less.")
 INITRAMFS_LINE = "Initramfs: Dracut (required by Gentoo kernels, automatic)"
 
 BOOTLOADERS = (
@@ -179,6 +185,13 @@ class BootSection(QWidget):
         # --- more options ------------------------------------------------------------------------------------------
         self.more = AdvancedSection("system-boot", "More kernel and boot options")
         form = QFormLayout()
+        self.kernel_series = QComboBox()
+        for label, value in KERNEL_SERIES:
+            self.kernel_series.addItem(label, value)
+        series_row = QHBoxLayout()
+        series_row.addWidget(self.kernel_series, 1)
+        series_row.addWidget(HelpNote(KERNEL_SERIES_HELP, "Kernel"))
+        form.addRow("Kernel series", series_row)
         self.initramfs = QComboBox()
         self.initramfs.addItem("Dracut", "dracut")
         self.initramfs.addItem("ugrd (experimental) - not available yet", "ugrd")
@@ -237,6 +250,7 @@ class BootSection(QWidget):
         self._loading += 1
         try:
             self._load_kernel(system.kernel)
+            self._select_combo(self.kernel_series, system.kernel_series)
             self._select_combo(self.initramfs, system.initramfs)
             self.no_bootloader.setChecked(system.bootloader == "none")
             self.bootloader.set_value(system.bootloader if system.bootloader in {key for key, *_ in BOOTLOADERS} else "grub")
@@ -262,6 +276,7 @@ class BootSection(QWidget):
 
     def collect(self, system: System) -> None:
         system.kernel = self.kernel.value() or system.kernel
+        system.kernel_series = self.kernel_series.currentData() or system.kernel_series
         system.initramfs = self.initramfs.currentData()
         system.bootloader = "none" if self.no_bootloader.isChecked() else (self.bootloader.value() or "grub")
         system.dual_boot = self.dual_boot.isChecked()
@@ -383,6 +398,7 @@ class BootSection(QWidget):
             widget.setVisible(own_key)
         self.secure_nvidia_note.setVisible(secure and self.manifest.hardware.gpu_driver == "nvidia")
         self.config_snippet.setVisible(self.kernel.value() == "gentoo-kernel")
+        self.kernel_series.setEnabled(self.kernel.value() in {"gentoo-kernel-bin", "gentoo-kernel"})  # a kernel of your own has no series here
         self.snippet_label.setVisible(self.kernel.value() == "gentoo-kernel")
         self.fallback.setVisible(uefi and not none)
         reasons = [] if uefi else [BIOS_REASON]

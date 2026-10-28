@@ -1,5 +1,6 @@
 polkit.addRule(function(action, subject) {
-    if (action.id == "org.portagehub.helper" &&
+    if ((action.id == "org.portagehub.helper" || action.id == "org.gentoosettings.helper" ||
+         action.id == "org.kernelsmith.run-job") &&
         subject.active && subject.local && subject.isInGroup("wheel")) {
         return polkit.Result.YES;
     }

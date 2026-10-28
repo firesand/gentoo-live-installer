@@ -1,6 +1,6 @@
-"""scripts/sync-portagehub.sh: imports a commit of the user's PortageHub repository into apps/portagehub.
+"""scripts/sync-app.sh (and its scripts/sync-portagehub.sh): imports a commit of one of the user's applications into apps/.
 
-The source is a temporary git repository; nothing here touches the real one.
+The source is a temporary git repository; nothing here touches the real ones.
 """
 
 from __future__ import annotations
@@ -14,6 +14,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "scripts/sync-portagehub.sh"
+SYNC_APP = ROOT / "scripts/sync-app.sh"
 
 pytestmark = pytest.mark.skipif(shutil.which("git") is None or shutil.which("patch") is None, reason="needs git and patch")
 
@@ -55,6 +56,9 @@ def upstream(tmp_path: Path) -> Path:
             "dist/install.sh": "#!/bin/sh\n",
             "dist/portagehub.desktop": "[Desktop Entry]\n",
             "dist/gentoo/app-portage/portagehub/portagehub-0.4.0.ebuild": "# upstream's own ebuild\n",
+            "packaging/gentoo/sys-kernel/kernelsmith/kernelsmith-9999.ebuild": "# KernelSmith's own ebuild\n",
+            "docs/screenshots/home.png": "png",
+            "docs/guide.md": "guide\n",
             ".github/workflows/ci.yml": "name: ci\n",
             ".gitignore": "/target\n",
             "README.md": "readme\n",
@@ -197,4 +201,26 @@ def test_usage_errors() -> None:
     assert subprocess.run(["bash", str(SCRIPT), "--source"], capture_output=True, text=True).returncode == 2
     assert subprocess.run(["bash", str(SCRIPT), "a", "b"], capture_output=True, text=True).returncode == 2
     helped = subprocess.run(["bash", str(SCRIPT), "--help"], capture_output=True, text=True)
-    assert helped.returncode == 0 and "Usage: scripts/sync-portagehub.sh" in helped.stdout and "set -Eeuo" not in helped.stdout
+    assert helped.returncode == 0 and "Usage: scripts/sync-app.sh APP" in helped.stdout and "set -Eeuo" not in helped.stdout
+    assert "scripts/sync-portagehub.sh is `sync-app.sh portagehub`" in helped.stdout
+    for argv in ([], ["bogus"], ["--source", "x"]):
+        assert subprocess.run(["bash", str(SYNC_APP), *argv], capture_output=True, text=True).returncode == 2, argv
+
+
+@pytest.mark.parametrize(("app", "name"), [("gentoo-settings", "Gentoo Settings"), ("kernelsmith", "KernelSmith"), ("portagehub", "PortageHub")])
+def test_each_application_is_named_and_its_packaging_and_screenshots_stay_out(upstream: Path, tmp_path: Path, app: str, name: str) -> None:
+    dest = tmp_path / "apps" / app
+    result = subprocess.run(["bash", str(SYNC_APP), app, "--source", str(upstream), "--dest", str(dest), "--patches", str(tmp_path / "none")],
+                            capture_output=True, text=True, env=ENV)
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.startswith(f"{name} {run_git(upstream, 'rev-parse', 'HEAD')[:12]} Second state")
+    assert (dest / "docs/guide.md").is_file() and not (dest / "docs/screenshots").exists()
+    assert not (dest / "packaging/gentoo").exists() and not (dest / "dist/gentoo").exists()
+    recorded = (dest / "UPSTREAM").read_text().splitlines()[0]
+    assert recorded == ("source: https://github.com/firesand/kernelsmith.git" if app == "kernelsmith" else f"source: {upstream}")
+
+
+def test_the_default_patches_are_next_to_each_ebuild() -> None:
+    text = SYNC_APP.read_text()
+    for package in ("app-portage/portagehub", "app-admin/gentoo-settings", "sys-kernel/kernelsmith"):
+        assert f"package={package}" in text

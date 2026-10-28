@@ -79,29 +79,43 @@ package_version() {
 	printf '%s\n' "${file%-r[0-9]*}"
 }
 
+# The project's Rust applications: CATEGORY/NAME, the directory below apps/ and what of it a build needs.
+RUST_APPS=(
+	"app-portage/portagehub|portagehub|Cargo.toml Cargo.lock README.md SECURITY.md UPSTREAM src dist"
+	"app-admin/gentoo-settings|gentoo-settings|Cargo.toml Cargo.lock LICENSE README.md UPSTREAM src dist"
+	"sys-kernel/kernelsmith|kernelsmith|Cargo.toml Cargo.lock LICENSE README.md UPSTREAM crates packaging"
+)
+
 prepare_source_archives() {
 	local sources="${BUILD_DIR}/sources"
-	local installer hwmonux portagehub package
+	local installer hwmonux package entry atom app parts
+	local -a packages files
 	installer="gentoo-live-installer-$(package_version app-admin/gentoo-live-installer)"
 	hwmonux="hwmonux-$(package_version app-misc/hwmonux)"
-	portagehub="portagehub-$(package_version app-portage/portagehub)"
+	packages=("${installer}" "${hwmonux}")
 
-	install -d "${sources}/${installer}" "${sources}/${hwmonux}" "${sources}/${portagehub}" "${DISTDIR}"
+	install -d "${sources}/${installer}" "${sources}/${hwmonux}" "${DISTDIR}"
 	tar -C "${WORKSPACE}" --exclude=__pycache__ --exclude='*.pyc' -cf - pyproject.toml src data \
 		| tar -C "${sources}/${installer}" -xf -
 	tar -C "${WORKSPACE}/apps/hwmonux" --exclude=__pycache__ --exclude='*.pyc' -cf - \
 		pyproject.toml hwmonux.py sensors.py hwmonux.desktop \
 		| tar -C "${sources}/${hwmonux}" -xf -
-	tar -C "${WORKSPACE}/apps/portagehub" -cf - Cargo.toml Cargo.lock README.md SECURITY.md UPSTREAM src dist \
-		| tar -C "${sources}/${portagehub}" -xf -
 
-	install -d "${sources}/${portagehub}/.cargo"
-	(
-		cd "${sources}/${portagehub}"
-		CARGO_HOME="${CARGO_CACHE}" cargo vendor --locked --versioned-dirs vendor > .cargo/config.toml
-	)
+	# Each Rust application with its crates vendored, so that emerge builds it offline.
+	for entry in "${RUST_APPS[@]}"; do
+		IFS='|' read -r atom app parts <<<"${entry}"
+		read -ra files <<<"${parts}"
+		package="${atom#*/}-$(package_version "${atom}")"
+		install -d "${sources}/${package}/.cargo"
+		tar -C "${WORKSPACE}/apps/${app}" -cf - "${files[@]}" | tar -C "${sources}/${package}" -xf -
+		(
+			cd "${sources}/${package}"
+			CARGO_HOME="${CARGO_CACHE}" cargo vendor --locked --versioned-dirs vendor > .cargo/config.toml
+		)
+		packages+=("${package}")
+	done
 
-	for package in "${installer}" "${hwmonux}" "${portagehub}"; do
+	for package in "${packages[@]}"; do
 		tar --sort=name --mtime="@${SOURCE_DATE_EPOCH}" --clamp-mtime \
 			--owner=0 --group=0 --numeric-owner --format=gnu \
 			-C "${sources}" -cf "${DISTDIR}/${package}.tar" "${package}"
@@ -132,7 +146,8 @@ prepare_portage() {
 	copy_tree_without_owner "${WORKSPACE}/iso/fsscript-stage2.sh" "${BUILD_DIR}/fsscript-stage2.sh"
 	install -d "${BUILD_DIR}/root_overlay/usr/local/share/gentoo-installer/distfiles"
 	cp -a --no-preserve=ownership -- "${DISTDIR}"/gentoo-live-installer-*.tar.zst "${DISTDIR}"/hwmonux-*.tar.zst \
-		"${DISTDIR}"/portagehub-*.tar.zst "${BUILD_DIR}/root_overlay/usr/local/share/gentoo-installer/distfiles/"
+		"${DISTDIR}"/portagehub-*.tar.zst "${DISTDIR}"/gentoo-settings-*.tar.zst "${DISTDIR}"/kernelsmith-*.tar.zst \
+		"${BUILD_DIR}/root_overlay/usr/local/share/gentoo-installer/distfiles/"
 	for ebuild in "${BUILD_DIR}"/overlay/*/*/*.ebuild; do
 		if [[ -f ${ebuild%/*}/Manifest ]]; then
 			# A vendored package (hardware item I01) ships its Manifest: that file is the pin. Fetching

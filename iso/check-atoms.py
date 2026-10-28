@@ -34,7 +34,8 @@ import sys
 from typing import Iterable, Sequence
 
 ATOM = re.compile(r"^(?P<op>[<>=~!]*)(?P<name>[a-z0-9][a-z0-9+_.-]*/[A-Za-z0-9][A-Za-z0-9+_.-]*?)(?P<version>-[0-9][0-9A-Za-z._]*(?:-r[0-9]+)?)?(?P<slot>:[^\[\s]*)?(?P<use>\[[^\]]*\])?\*?$")
-LOCAL_PACKAGES = ("app-admin/gentoo-live-installer", "app-misc/hwmonux", "app-portage/portagehub", "acct-group/gentoo-installer")
+LOCAL_PACKAGES = ("app-admin/gentoo-live-installer", "app-misc/hwmonux", "app-portage/portagehub", "app-admin/gentoo-settings",
+                  "sys-kernel/kernelsmith", "acct-group/gentoo-installer")
 
 
 @dataclasses.dataclass

@@ -44,6 +44,9 @@ BINHOST_VARIANTS = ("auto", "generic", "v3")
 RSYNC_MODES = ("snapshot", "sync")
 WORLD_UPDATE_CHOICES = ("auto", "now", "later")
 KERNEL_CHOICES = ("gentoo-kernel-bin", "gentoo-kernel", "manual", "custom")
+# Which series a distribution kernel follows: the newest one (the testing keyword, so an update brings each new series as soon
+# as Gentoo ships it) or the long-term one that is stable (the user's choice of 2026-10-28: newest by default).
+KERNEL_SERIES_CHOICES = ("newest", "longterm")
 INITRAMFS_CHOICES = ("dracut", "ugrd", "none")
 BOOTLOADER_CHOICES = ("grub", "systemd-boot", "efi-stub", "none")
 SECURE_BOOT_MODES = ("off", "own-key", "create", "shim")
@@ -90,7 +93,15 @@ PUBLISHED_PROFILES = frozenset(
     for middle in ("", "/desktop", "/desktop/plasma", "/desktop/gnome", "/hardened", "/no-multilib", "/no-multilib/hardened")
     for suffix in ("", "/systemd")
 )
-COMPANIONS_ON_MINIMAL = "HWMonux and PortageHub are graphical applications and cannot start on a minimal system; they only add build time and disk space there."
+# The companion applications the live CD carries and installs on request: the Options field, the name people see, the package.
+COMPANION_APPS = (
+    ("install_hwmonux", "HWMonux", "app-misc/hwmonux"),
+    ("install_portagehub", "PortageHub", "app-portage/portagehub"),
+    ("install_gentoo_settings", "Gentoo Settings", "app-admin/gentoo-settings"),
+    ("install_kernelsmith", "KernelSmith", "sys-kernel/kernelsmith"),
+)
+COMPANIONS_ON_MINIMAL = ("HWMonux, PortageHub, Gentoo Settings and KernelSmith are graphical applications and cannot start on a minimal system; "
+                         "they only add build time and disk space there.")
 
 
 def stage_family(stage_variant: str) -> str:
@@ -413,6 +424,7 @@ class System(_Migrating):
     # "manual" is meant for command-line (headless) installs: the installer stops
     # after the initramfs configuration so a kernel can be installed by hand.
     kernel: str = "gentoo-kernel-bin"
+    kernel_series: str = "newest"  # KERNEL_SERIES_CHOICES; only a distribution kernel has one
     initramfs: str = "dracut"
     bootloader: str = "grub"
     secure_boot: bool = False
@@ -586,6 +598,8 @@ class Accounts:
 class Options(_Migrating):
     install_hwmonux: bool = True
     install_portagehub: bool = True
+    install_gentoo_settings: bool = True
+    install_kernelsmith: bool = True
     pipewire: bool = True
     bluetooth: bool = True
     printing: bool = True
@@ -598,6 +612,10 @@ class Options(_Migrating):
     shell_completion: bool = True
     # sysklogd | syslog-ng | metalog | none. Saved files with true/false load as syslog-ng/none.
     logger: str = "syslog-ng"
+
+    def companions(self) -> list[str]:
+        """The names of the companion applications that are installed, in COMPANION_APPS order."""
+        return [name for field_name, name, _ in COMPANION_APPS if getattr(self, field_name)]
     # KDE application set: "core" (file manager, terminal, editor, help) or
     # "full" (the complete kde-apps suite: games, education, multimedia, ...).
     kde_apps: str = "core"
@@ -977,6 +995,8 @@ class InstallManifest:
             errors.append(desktop_problem(system.stage_variant, system.desktop))
         if system.kernel not in KERNEL_CHOICES:
             errors.append("Unknown kernel selection")
+        if system.kernel_series not in KERNEL_SERIES_CHOICES:
+            errors.append("Unknown kernel series: choose newest or longterm")
         if system.initramfs == "genkernel":
             errors.append(GENKERNEL_MESSAGE)
         elif system.initramfs not in INITRAMFS_CHOICES:
@@ -1300,7 +1320,7 @@ class InstallManifest:
         family = stage_family(system.stage_variant)
         if desktops.unverified(system.desktop, family):
             advice.append(f"Not verified: {system.desktop.upper()} on a {FAMILY_LABELS[family]} stage3 may need extra USE changes during the installation.")
-        if system.desktop == "minimal" and (options.install_hwmonux or options.install_portagehub):
+        if system.desktop == "minimal" and options.companions():
             advice.append(COMPANIONS_ON_MINIMAL)
         if system.kernel == "manual":
             advice.append("A manual kernel: the installation stops after the boot configuration so you can install the kernel yourself with the command-line installer, then resume it.")
@@ -1327,5 +1347,5 @@ class InstallManifest:
             ("Portage", "Binary packages preferred" if self.portage.binhost else "Build from source"),
             ("Network", self.network.manager),
             ("Account", f"{self.accounts.username}@{self.accounts.hostname}"),
-            ("Companion apps", ", ".join(name for name, enabled in (("HWMonux", self.options.install_hwmonux), ("PortageHub", self.options.install_portagehub)) if enabled) or "None"),
+            ("Companion apps", ", ".join(self.options.companions()) or "None"),
         ]

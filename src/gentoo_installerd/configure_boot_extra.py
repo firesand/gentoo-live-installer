@@ -26,6 +26,10 @@ SAFE_GRAPHICS_CMDLINE_FILE = "etc/kernel/cmdline-safe"
 KERNEL_README = "etc/kernel/README"
 KERNEL_CONFIG_SNIPPET = "etc/kernel/config.d/00-installer.config"
 BOOT_PACKAGE_USE = "etc/portage/package.use/installer-boot"
+KERNEL_KEYWORDS = "etc/portage/package.accept_keywords/installer-kernel"
+# The newest distribution kernel is in the testing branch; these three packages are all it takes (the virtual is what
+# out-of-tree drivers such as NVIDIA rebuild against).
+NEWEST_KERNEL_KEYWORDS = ("sys-kernel/gentoo-kernel-bin", "sys-kernel/gentoo-kernel", "virtual/dist-kernel")
 
 # --- Secure Boot -------------------------------------------------------------------------------------------
 
@@ -93,6 +97,12 @@ class BootExtrasMixin(ConfigurerBase):
         if system.secure_boot:
             use_lines.append(f"sys-kernel/{system.kernel} secureboot" + (" modules-sign" if system.kernel == "gentoo-kernel" else ""))
         self.write(BOOT_PACKAGE_USE, "\n".join(use_lines) + "\n")
+        if system.kernel_series == "newest":
+            self.write(KERNEL_KEYWORDS, "\n".join([
+                "# Written by the Gentoo live installer: the newest Gentoo kernel, from the testing branch. A normal update",
+                "# (emerge --update --deep --newuse @world) brings each new kernel series as soon as Gentoo ships it.",
+                "# For the long-term kernel that is stable instead, delete this file and run the same update.",
+                *(f"{atom} ~amd64" for atom in NEWEST_KERNEL_KEYWORDS)]) + "\n")
         if snippet_applies(system):
             self.write(KERNEL_CONFIG_SNIPPET, "# Written by the Gentoo live installer; merged into Gentoo's standard kernel configuration.\n"
                        + system.kernel_config_snippet.strip("\n") + "\n")
@@ -111,6 +121,8 @@ class BootExtrasMixin(ConfigurerBase):
         system = manifest.system
         lines = ["Written by the Gentoo live installer.", "",
                  f"Kernel: sys-kernel/{system.kernel}, updated with the rest of the system (emerge --update @world).",
+                 (f"Series: the newest Gentoo kernel (the testing keyword in /{KERNEL_KEYWORDS}); each new series arrives with an update."
+                  if system.kernel_series == "newest" else "Series: the long-term kernel that is stable in Gentoo."),
                  "Startup options: /etc/kernel/cmdline (and GRUB_CMDLINE_LINUX in /etc/default/grub with GRUB)."]
         if system.bootloader != "grub" or system.uki:
             lines += ["", "Boot files: systemd-boot, the EFI stub and Unified Kernel Images load the kernel from the EFI system partition,",

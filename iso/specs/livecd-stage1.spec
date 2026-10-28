@@ -26,6 +26,7 @@ livecd/use:
 
 livecd/packages:
 	app-admin/gentoo-live-installer
+	app-admin/gentoo-settings
 	app-admin/sudo
 	app-admin/syslog-ng
 	app-admin/testdisk
@@ -135,6 +136,7 @@ livecd/packages:
 	sys-fs/ntfs3g
 	sys-fs/squashfs-tools
 	sys-fs/xfsprogs
+	sys-kernel/kernelsmith
 	sys-kernel/linux-firmware
 	sys-power/acpid
 	sys-process/htop

@@ -536,7 +536,8 @@ class StageInstallTests(unittest.TestCase):
 
     def test_tlp_is_installed_before_the_desktop_so_the_desktop_does_not_pull_in_the_daemon_it_blocks(self) -> None:
         plan = FakePlan(optional_atoms=[("TLP", ["sys-power/tlp"]), ("Guest tools", ["app-emulation/qemu-guest-agent"])])
-        m = target_manifest(system={"desktop": "kde"}, options={"pipewire": False, "bluetooth": False, "printing": False, "install_hwmonux": False, "install_portagehub": False})
+        m = target_manifest(system={"desktop": "kde"}, options={"pipewire": False, "bluetooth": False, "printing": False, "install_hwmonux": False, "install_portagehub": False,
+                                                                                                            "install_gentoo_settings": False, "install_kernelsmith": False})
         result = self.c.install_desktop(m, plan)
         emerges = self.emerges()
         tlp = next(index for index, line in enumerate(emerges) if line.endswith("sys-power/tlp"))
@@ -553,7 +554,8 @@ class StageInstallTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             c = configurer(temporary, runner)
             result = c.install_desktop(target_manifest(system={"desktop": "kde"}, options={"pipewire": False, "bluetooth": False, "printing": False,
-                                                           "install_hwmonux": False, "install_portagehub": False}), FakePlan(optional_atoms=[("TLP", ["sys-power/tlp"])]))
+                                                           "install_hwmonux": False, "install_portagehub": False, "install_gentoo_settings": False,
+                                                           "install_kernelsmith": False}), FakePlan(optional_atoms=[("TLP", ["sys-power/tlp"])]))
         self.assertTrue(any("sys-power/tlp (TLP) could not be installed" in item for item in result.degraded))
         self.assertTrue(any("kde-plasma/plasma-meta" in line for line in runner.lines()))
 

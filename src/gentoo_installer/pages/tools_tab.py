@@ -10,14 +10,14 @@ from PySide6.QtWidgets import (
 
 from .. import account_text as text
 from .. import recommend, system_info
-from ..manifest import InstallManifest
+from ..manifest import COMPANION_APPS, InstallManifest
 from ..widgets import Card, wrapped_label
 from .help import AdvancedSection, HelpNote
 
 if TYPE_CHECKING:
     from .hardware import HardwareTab
 
-COMPANIONS = ("install_hwmonux", "install_portagehub")
+COMPANIONS = tuple(field_name for field_name, _, _ in COMPANION_APPS)
 AUTO_PLACEHOLDER = "Leave empty: chosen for this computer"
 # HWMonux needs PySide6, and the binary host has no matching PySide6 package, so it is compiled on every installation.
 # The text installer says the same (textui/summary.py); a test keeps the two sentences equal.
@@ -83,7 +83,7 @@ class ToolsTabMixin:
     if TYPE_CHECKING:
         manifest: InstallManifest
         hardware: HardwareTab
-        _cleared_companions: tuple[bool, bool] | None
+        _cleared_companions: tuple[bool, ...] | None
 
     def _extras_tab(self) -> QWidget:
         page = QWidget()
@@ -96,6 +96,8 @@ class ToolsTabMixin:
         entries = [
             ("install_hwmonux", "HWMonux hardware monitor"),
             ("install_portagehub", "PortageHub package manager"),
+            ("install_gentoo_settings", "Gentoo Settings system tuning"),
+            ("install_kernelsmith", "KernelSmith kernel builder"),
             ("pipewire", "PipeWire audio"),
             ("bluetooth", "Bluetooth support"),
             ("printing", "Printing with CUPS"),
@@ -113,7 +115,8 @@ class ToolsTabMixin:
         self.checks["install_hwmonux"].toggled.connect(lambda _=False: self._update_hwmonux_note())
         card.content.addLayout(grid)
         self.companion_note = wrapped_label(
-            "HWMonux and PortageHub are graphical applications; they only start inside a desktop session. They are switched off for the minimal system, tick them again if you plan to add a desktop later.",
+            "HWMonux, PortageHub, Gentoo Settings and KernelSmith are graphical applications; they only start inside a desktop session. "
+            "They are switched off for the minimal system, tick them again if you plan to add a desktop later.",
             muted=True,
         )
         self.companion_note.hide()
@@ -315,11 +318,13 @@ class ToolsTabMixin:
         options = self.manifest.options
         self.manifest.system.desktop = desktop
         if desktop == "minimal":
-            if options.install_hwmonux or options.install_portagehub:
-                self._cleared_companions = (options.install_hwmonux, options.install_portagehub)
-                options.install_hwmonux = options.install_portagehub = False
+            if options.companions():
+                self._cleared_companions = tuple(getattr(options, field_name) for field_name in COMPANIONS)
+                for field_name in COMPANIONS:
+                    setattr(options, field_name, False)
         elif self._cleared_companions is not None:
-            options.install_hwmonux, options.install_portagehub = self._cleared_companions
+            for field_name, enabled in zip(COMPANIONS, self._cleared_companions):
+                setattr(options, field_name, enabled)
             self._cleared_companions = None
         self._load_checks()
         self._load_kde_apps()

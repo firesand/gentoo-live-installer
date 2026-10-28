@@ -333,6 +333,7 @@ The `repository` stage emits one `progress` event with `data.news = {"unread": N
 | `world_update` | `auto`, `now`, `later` | `later` | Was a bool: `true` loads as `now`, `false` as `later`. `auto` updates @world when the profile differs from the stage3's own or USE flags were set. |
 | `stage_auto` | bool | `true` | The System page picks the stage3 from the desktop and the 32-bit choice (Desktop stage3 for any desktop, Standard for Minimal, No-multilib without 32-bit support). A stage3 chosen by hand ends it. The daemon always reads `stage_variant`. |
 | `kernel` | adds `custom` | `gentoo-kernel-bin` | `custom` is refused with "not available yet" (the Your-turn pause of BOOT-10 is not built). `manual` stays a command-line flow. |
+| `kernel_series` | `newest`, `longterm` | `newest` | Distribution kernels only. `newest` writes `/etc/portage/package.accept_keywords/installer-kernel` (`sys-kernel/gentoo-kernel-bin`, `sys-kernel/gentoo-kernel` and `virtual/dist-kernel` with `~amd64`): the newest Gentoo kernel, and each new series with a normal update. `longterm` writes nothing, so the stable long-term kernel is installed. The NVIDIA branches the installer offers (580, 595) support both. |
 | `kernel_config_snippet` | string | `""` | `CONFIG_X=value` / `# CONFIG_X is not set` lines (at most 16 KiB). Written to `/etc/kernel/config.d/00-installer.config` for `gentoo-kernel` only. |
 | `initramfs` | `dracut`, `ugrd`, `none` | `dracut` | `genkernel` is refused with a plain message. Distribution kernels still require `dracut`; `ugrd` is refused with "not available yet". |
 | `hostonly` | bool | `false` | dracut host-only mode. `true` is refused with "not available yet" (the image is generic). |
@@ -357,6 +358,7 @@ The `repository` stage emits one `progress` event with `data.news = {"unread": N
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `ssh` | bool | **`true`** (was `false`) | sshd enabled on the installed system. |
+| `install_hwmonux`, `install_portagehub`, `install_gentoo_settings`, `install_kernelsmith` | bool | `true` | The companion applications (`COMPANION_APPS` in `manifest.py`): `app-misc/hwmonux`, `app-portage/portagehub`, `app-admin/gentoo-settings`, `sys-kernel/kernelsmith`, built from the live image's own overlay and source archives. All four are graphical: the minimal desktop switches them off in the wizard and warns when they are on. |
 | `logger` | `sysklogd`, `syslog-ng`, `metalog`, `none` | `syslog-ng` | Was a bool: `true` loads as `syslog-ng`, `false` as `none`. OpenRC installs and enables the chosen logger; systemd keeps its journal (no package). |
 | `cron` | `cronie`, `dcron`, `fcron`, `bcron`, `none` | `cronie` | Was a bool: `true` loads as `cronie`, `false` as `none`. `bcron` (no service script) and `fcron` with systemd (no unit) are refused; an OpenRC `syslog-ng` pulls `cronie` for logrotate even with `none`. |
 | `timesync` | `chrony`, `timesyncd`, `none` | `chrony` | The old bool `chrony` still loads (`true` = `chrony`, `false` = `none`); `timesyncd` needs systemd. |

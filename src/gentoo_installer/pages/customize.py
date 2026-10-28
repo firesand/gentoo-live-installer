@@ -37,7 +37,7 @@ class CustomizePage(PortageTabMixin, NetworkTabMixin, ToolsTabMixin, Page):
         self._loaded_license = ""
         self._loaded_jobs = (0, 0)
         self._source_loaded = ""
-        self._cleared_companions: tuple[bool, bool] | None = None
+        self._cleared_companions: tuple[bool, ...] | None = None
         tabs = QTabWidget()
         self.hardware = HardwareTab(manifest, info)
         tabs.addTab(self.hardware, "Hardware")

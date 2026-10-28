@@ -108,15 +108,27 @@ python3 scripts/test-vm.py --scenario openrc --iso build/test-dist/<iso> \
   --ssh-host 127.0.0.1 --ssh-port 40222 --ssh-private-key "$testkey"
 ```
 
-Memory rule: run one VM at a time (or let `--matrix` run two), leave 3 GiB of host memory free
-beyond `--memory`, and give desktop installs `--memory 12288 --build-jobs 1 --swap-mib 4096`.
-`--companions both|portagehub|none` chooses which companion apps the manifest installs (and which
-probes run). **`both`, the default, installs HWMonux, which pulls PySide: there is no binary package
-for it, so it is compiled from source on every install, for an hour or more, and one compile job
-needs several GiB.** The first real runs (4 GiB of memory, 512 MiB of swap, two jobs) had the compiler
-killed by the kernel (and, once, a guest that thrashed until SSH gave up). Treat `--companions both`
-like a desktop install, or use `--companions portagehub` (a Rust build that a 4 GiB VM does; the probe
-`disabled-hwmonux-absent` then checks that HWMonux really is not there).
+Memory rule: run one VM at a time (or let `--matrix` run two), leave 16 GiB of host memory free
+beyond `--memory` for the user's own programs (a VM does not start otherwise; `HOST_RESERVE_GIB`
+changes it), and give desktop installs `--memory 12288 --build-jobs 1 --swap-mib 4096`.
+
+CPU rule: the PC stays usable while VMs, ISO builds and test runs work. The harness lowers its own
+priority before it starts QEMU (`scripts/host_share.py`), `scripts/sandbox.sh` runs every sandboxed
+command through `scripts/low-priority.sh`, and `scripts/build-iso.sh` gives the build container
+Docker's lowest CPU weight. All of them stay off the CPUs numbered below `HOST_RESERVE_CPUS`
+(default 8, four P-cores with their second threads on the i9-14900K, so at most 24 of 32 threads)
+and run at nice 19, so the user's own programs come first. For a one-off heavy command outside
+those, use `scripts/low-priority.sh COMMAND...`.
+`--companions all|rust|both|portagehub|none` chooses which companion apps the manifest installs (and which
+probes run): `all` (the default, as the installer does) HWMonux, PortageHub, Gentoo Settings and KernelSmith;
+`rust` the three Rust ones; `both` HWMonux and PortageHub; `portagehub` PortageHub alone. Each one that is
+installed is run without a display (`hwmonux --dump`, `portagehub --self-test`, `gentoo-settings --status`,
+which must name the installed init system, and `kernelsmith detect`, which must report a Gentoo system with it);
+each one that is not gets a `disabled-NAME-absent` probe. **`all` and `both` install HWMonux, which pulls PySide:
+there is no binary package for it, so it is compiled from source on every install, for an hour or more, and one
+compile job needs several GiB.** The first real runs (4 GiB of memory, 512 MiB of swap, two jobs) had the compiler
+killed by the kernel (and, once, a guest that thrashed until SSH gave up). Treat `all` and `both` like a desktop
+install, or use `--companions rust` or `portagehub` (Rust builds that a 4 GiB VM does).
 `--install-mode gui` drives the real graphical installer as the live user,
 `--install-mode text` the console installer (below); `--check-resume` reruns the daemon with
 `--resume`; `--cancel-then-resume` (GUI mode) cancels at stage3 and resumes. `--keep` keeps the disk
@@ -620,7 +632,7 @@ If the session never appears, look at the screenshot first: the launcher stops a
 with its own SSH port (counted up from `--ssh-port`, or from 40222 when none is named, one per
 running job), its own signal handling and its own QEMU. **At most two VMs run at the same time**,
 in the order of the table below (the long installs first), and a job starts only when the memory of all running VMs plus its own stays within
-`--matrix-memory-budget` (default 24576 MiB) and the host has that much `MemAvailable` plus 3 GiB.
+`--matrix-memory-budget` (default 24576 MiB) and the host has that much `MemAvailable` plus 16 GiB.
 A job that cannot ever fit is skipped with the reason. Before the first job starts, the matrix
 checks what the last one needs: the SSH ports of all slots and the boot menu
 entries of the ISO; a missing input is a usage error (exit status 2), not a failure hours later.
@@ -629,11 +641,11 @@ caller (ISO, SSH key, timeouts) are passed to every job.
 
 | Entry | Scenario and options | Companions | RAM | CPUs | Minutes |
 |---|---|---|---|---|---|
-| `defaults` | `defaults`: KDE, UEFI, a virtio disk **without** a serial number (path identity), binhost; GUI install; `--disk-size 64 --build-jobs 1 --swap-mib 4096` | HWMonux and PortageHub | 12 GiB | 4 | 150 |
+| `defaults` | `defaults`: KDE, UEFI, a virtio disk **without** a serial number (path identity), binhost; GUI install; `--disk-size 64 --build-jobs 1 --swap-mib 4096` | all four: HWMonux, PortageHub, Gentoo Settings, KernelSmith | 12 GiB | 4 | 150 |
 | `rescue-gentoo` | `rescue-gentoo` | PortageHub | 4 GiB | 2 | 70 |
 | `uefi-nvme-luks-openrc` | `uefi-nvme-luks-openrc` | PortageHub | 4 GiB | 2 | 40 |
-| `systemd` | `systemd`: re-acceptance, the guided erase sequence changed in Wave 1 | PortageHub | 4 GiB | 2 | 30 |
-| `openrc` | `openrc`: re-acceptance | PortageHub | 4 GiB | 2 | 30 |
+| `systemd` | `systemd`: re-acceptance, the guided erase sequence changed in Wave 1; Gentoo Settings, KernelSmith and the System tuning on systemd | PortageHub, Gentoo Settings, KernelSmith (`rust`) | 4 GiB | 2 | 50 |
+| `openrc` | `openrc`: re-acceptance; Gentoo Settings, KernelSmith and the System tuning on OpenRC | PortageHub, Gentoo Settings, KernelSmith (`rust`) | 4 GiB | 2 | 50 |
 | `uefi-luks` | `uefi-luks`: re-acceptance | PortageHub | 4 GiB | 2 | 35 |
 | `uefi-luks-lvm` | `uefi-luks-lvm`: LUKS with LVM inside, a combination that no VM has booted yet | PortageHub | 4 GiB | 2 | 40 |
 | `uefi-manual-two-disks` | `uefi-manual-two-disks` | PortageHub | 4 GiB | 2 | 35 |
@@ -645,7 +657,8 @@ caller (ISO, SSH key, timeouts) are passed to every job.
 **Companions.** Only the `defaults` entry installs HWMonux. It is the entry that has the memory for
 PySide (12 GiB, one build job, 4096 MiB of swap, which is also what the installer's guided defaults
 give a person), and its point is "the untouched wizard installs everything it offers". Every other
-install entry runs with `--companions portagehub`: HWMonux does not depend on the disk, the firmware
+install entry runs with `--companions portagehub` (the `openrc` and `systemd` entries with `--companions rust`, so that
+each init system checks Gentoo Settings and KernelSmith too): HWMonux does not depend on the disk, the firmware
 or the network card that the entry is there to vary, and PySide would put an hour of compiling, and
 a memory limit that a 4 GiB VM does not meet, into every one of them. They still install PortageHub,
 and `disabled-hwmonux-absent` proves that the switched-off companion is not installed. The

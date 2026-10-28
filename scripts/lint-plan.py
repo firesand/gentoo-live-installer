@@ -221,7 +221,8 @@ def extended_cells() -> list[Cell]:
         Cell("xfce-openrc-doas", "openrc", "xfce", (("accounts.privilege", "doas"),)),
         Cell("gnome-systemd-dualboot", "systemd", "gnome", (("system.dual_boot", True),)),
         Cell("minimal-openrc-btrfs-nocompanions", "openrc", "minimal",
-             (("storage.filesystem", "btrfs"), ("options.install_hwmonux", False), ("options.install_portagehub", False))),
+             (("storage.filesystem", "btrfs"), ("options.install_hwmonux", False), ("options.install_portagehub", False),
+              ("options.install_gentoo_settings", False), ("options.install_kernelsmith", False))),
         Cell("minimal-openrc-xfs-lvm", "openrc", "minimal", (("storage.filesystem", "xfs"), ("storage.lvm", True))),
         Cell("minimal-systemd-luks", "systemd", "minimal", (("storage.luks", True), ("storage.luks_passphrase", "lint-passphrase"))),
         Cell("minimal-systemd-sdboot", "systemd", "minimal", (("system.bootloader", "systemd-boot"),)),
@@ -241,7 +242,7 @@ def extended_cells() -> list[Cell]:
         Cell("minimal-openrc-hardened", "openrc", "minimal", (("system.stage_variant", "amd64-hardened-openrc"),)),
         Cell("minimal-openrc-nomultilib", "openrc", "minimal",
              (("system.multilib", False), ("system.stage_variant", "amd64-nomultilib-openrc"), ("options.install_hwmonux", False),
-              ("options.install_portagehub", False))),
+              ("options.install_portagehub", False), ("options.install_gentoo_settings", False), ("options.install_kernelsmith", False))),
     ]
     return default_cells() + extra
 
@@ -395,7 +396,7 @@ def render_cell(cell: Cell, tree: Path, scratch: Path, plan=None, overlays: Sequ
     bundle = work / "bundle"
     (bundle / "distfiles").mkdir(parents=True)
     (bundle / "overlay").symlink_to(ROOT / "packaging" / "gentoo-overlay", target_is_directory=True)
-    for archive in ("hwmonux-1.0.0.tar.zst", "portagehub-0.4.0.tar.zst"):
+    for archive in ("hwmonux-1.0.0.tar.zst", "portagehub-0.4.0.tar.zst", "gentoo-settings-0.1.0.tar.zst", "kernelsmith-0.1.0.tar.zst"):
         (bundle / "distfiles" / archive).write_bytes(b"")
     target.mkdir()
     configurer = Configurer(DryRunRunner(), target, companion_bundle=bundle)

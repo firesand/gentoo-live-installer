@@ -64,7 +64,7 @@ def test_what_the_wizard_seeded_from_the_hardware_is_what_the_probes_judge(lab):
     """In detect mode the swap, Bluetooth, microcode and the companions are the wizard's choice for this machine: recorded, and then checked as chosen."""
     chosen = {"storage.device": "/dev/vda", "storage.swap_mib": 8192, "options.bluetooth": False, "options.microcode": False,
               "options.install_hwmonux": False, "options.install_portagehub": True}
-    lab.rules = gui_rules(detected=chosen) + guest_rules(vm, "defaults", swap_mib=8192, companions="portagehub")
+    lab.rules = gui_rules(detected=chosen) + guest_rules(vm, "defaults", swap_mib=8192, companions="rust")
     assert lab.run("--scenario", "defaults", "--install-mode", "gui", "--keep") == 0
     run, result = lab.run_dir(), lab.result()
     saved = json.loads((run / "manifest.json").read_text())
@@ -72,7 +72,8 @@ def test_what_the_wizard_seeded_from_the_hardware_is_what_the_probes_judge(lab):
     assert saved["options"]["bluetooth"] is False and saved["options"]["microcode"] is False
     harness = json.loads((run / "manifest-expected.json").read_text())  # what the harness asked for stays on record
     assert harness["storage"]["swap_mib"] == 4096 and harness["options"]["install_hwmonux"] is True and harness["options"]["microcode"] is True
-    assert result["companions"] == {"hwmonux": False, "portagehub": True}
+    # Gentoo Settings and KernelSmith are not seeded from the hardware: they stay as the harness asked (all four)
+    assert result["companions"] == {"hwmonux": False, "portagehub": True, "gentoo-settings": True, "kernelsmith": True}
     names = {probe["name"] for probe in result["probes"]}
     assert "disabled-hwmonux-absent" in names and "hwmonux" not in names and "portagehub" in names
     assert result["install"]["wizard_choices"] == {
@@ -86,7 +87,7 @@ def test_a_run_whose_wizard_chose_what_the_harness_expected_changes_nothing(lab)
     assert lab.run("--scenario", "defaults", "--install-mode", "gui", "--keep") == 0
     run = lab.run_dir()
     assert lab.result()["install"]["wizard_choices"] == {} and not (run / "manifest-expected.json").exists()
-    assert lab.result()["companions"] == {"hwmonux": True, "portagehub": True}
+    assert lab.result()["companions"] == {"hwmonux": True, "portagehub": True, "gentoo-settings": True, "kernelsmith": True}
 
 
 def test_only_detect_mode_takes_over_what_the_wizard_chose(lab):

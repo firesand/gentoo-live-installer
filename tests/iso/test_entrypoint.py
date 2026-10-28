@@ -317,9 +317,9 @@ def test_prepare_portage_builds_the_inputs_of_both_stages(sandbox) -> None:
     assert (shipped / "overlay/app-misc/hwmonux/hwmonux-1.0.0-r1.ebuild").is_file()
     assert sorted(p.name for p in (shipped / "distfiles").iterdir()) == sorted(p.name for p in sandbox.dirs["distfiles"].iterdir())
     ebuild_calls = [c for c in sandbox.commands() if c.startswith("ebuild ")]
-    # the project's own four packages get a generated Manifest; the vendored one is checked against its committed Manifest
-    assert len(ebuild_calls) == 5
-    assert sorted(c.rsplit(" ", 1)[1] for c in ebuild_calls) == ["fetch", "manifest", "manifest", "manifest", "manifest"]
+    # the project's own six packages get a generated Manifest; the vendored one is checked against its committed Manifest
+    assert len(ebuild_calls) == 7
+    assert sorted(c.rsplit(" ", 1)[1] for c in ebuild_calls) == ["fetch", *["manifest"] * 6]
     assert [c for c in ebuild_calls if c.endswith(" fetch")][0].split()[1].endswith("gnome-extra/iio-sensor-proxy/iio-sensor-proxy-3.9.ebuild")
     assert (shipped / "overlay/gnome-extra/iio-sensor-proxy/Manifest").is_file()
     assert (shipped / "distfiles/iio-sensor-proxy-3.9.tar.bz2").is_file()

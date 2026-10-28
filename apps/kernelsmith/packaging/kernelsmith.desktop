@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Kernelsmith
+GenericName=Kernel Builder
+Comment=Build a custom, optimized kernel for your PC — guided step by step
+Exec=kernelsmith
+Icon=kernelsmith
+Terminal=false
+Categories=System;Settings;
+Keywords=kernel;linux;gentoo;optimize;gaming;cachyos;bore;lto;
+StartupWMClass=kernelsmith

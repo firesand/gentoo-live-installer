@@ -17,9 +17,11 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Protocol, Sequence
 
+import host_share
+
 PARALLEL_MAX = 2                 # VMs at the same time, however many the caller asks for
 DEFAULT_BASE_PORT = 40222        # the first job's SSH port when the caller names none; a job next to it gets the next port
-MARGIN_MIB = 3072                # host memory that stays free beyond the VMs (docs/TESTING.md, "Memory rule")
+MARGIN_MIB = host_share.reserve_mib()  # memory that stays free for the user beyond the VMs (docs/TESTING.md, "Memory rule")
 DEFAULT_BUDGET_MIB = 24576       # the sum of the memory of all running VMs
 RUN_DIR_RE = re.compile(r"^RUN (\S+): logs in (.+)$", re.M)
 
@@ -50,8 +52,11 @@ UEFI = ("--fresh-nvram-check",)
 STRICT = ("--strict-probes",)
 # HWMonux pulls PySide, which has no binary package: it is compiled from source on every install, for an hour or more, and a
 # compile job needs more than a 4 GiB machine has (the first real runs had the compiler killed). Only the defaults job has the
-# memory for it (12 GiB, one build job, the guided swap), so every other install installs PortageHub alone (docs/TESTING.md).
+# memory for it (12 GiB, one build job, the guided swap), so every other install installs PortageHub alone (docs/TESTING.md),
+# except the openrc and systemd jobs: they install the three Rust applications (PortageHub, Gentoo Settings, KernelSmith),
+# so that both init systems check Gentoo Settings and KernelSmith next to the System tuning.
 PORTAGEHUB = ("--companions", "portagehub")
+RUST = ("--companions", "rust")
 
 WAVE3 = Matrix("wave3", "Wave 3 acceptance: other hardware, other disks, a Gentoo that is broken and repaired", (
     MatrixEntry("defaults", "defaults", 12288, 4,
@@ -62,8 +67,9 @@ WAVE3 = Matrix("wave3", "Wave 3 acceptance: other hardware, other disks, a Gento
                 "a minimal Gentoo installed, then broken three ways (menu file, initramfs, fstab) and repaired with gentoo-rescue"),
     MatrixEntry("uefi-nvme-luks-openrc", "uefi-nvme-luks-openrc", 4096, 2, (*STRICT, *UEFI, *PORTAGEHUB), 40,
                 "LUKS on OpenRC, NVMe, QXL display; swap must be a file inside the encrypted root"),
-    MatrixEntry("systemd", "systemd", 4096, 2, (*STRICT, *UEFI, *PORTAGEHUB), 30, "re-acceptance: the guided erase sequence changed in Wave 1"),
-    MatrixEntry("openrc", "openrc", 4096, 2, (*STRICT, *UEFI, *PORTAGEHUB), 30, "re-acceptance"),
+    MatrixEntry("systemd", "systemd", 4096, 2, (*STRICT, *UEFI, *RUST), 50,
+                "re-acceptance: the guided erase sequence changed in Wave 1; Gentoo Settings, KernelSmith and the System tuning on systemd"),
+    MatrixEntry("openrc", "openrc", 4096, 2, (*STRICT, *UEFI, *RUST), 50, "re-acceptance; Gentoo Settings, KernelSmith and the System tuning on OpenRC"),
     MatrixEntry("uefi-luks", "uefi-luks", 4096, 2, (*STRICT, *UEFI, *PORTAGEHUB), 35, "re-acceptance: LUKS on systemd, unlocked on the serial console"),
     MatrixEntry("uefi-luks-lvm", "uefi-luks-lvm", 4096, 2, (*STRICT, *UEFI, *PORTAGEHUB), 40,
                 "LUKS with LVM inside on OpenRC: the container is gentoo-crypt, the root volume gentoo-root; never booted before"),

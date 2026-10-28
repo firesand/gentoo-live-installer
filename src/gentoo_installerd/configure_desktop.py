@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from gentoo_installer import desktops
-from gentoo_installer.manifest import InstallManifest
+from gentoo_installer.manifest import COMPANION_APPS, InstallManifest
 from gentoo_installer.world import should_depclean, should_update_world
 
 from .configure_base import _plan_list
@@ -103,10 +103,7 @@ class DesktopMixin(PackagesMixin):
                 result.optional.extend(desktops.portal_atoms(system.desktop))
         if graphical:
             result.optional.extend(("sys-fs/exfatprogs", "sys-fs/ntfs3g"))
-        if options.install_hwmonux:
-            result.optional.append("app-misc/hwmonux")
-        if options.install_portagehub:
-            result.optional.append("app-portage/portagehub")
+        result.optional.extend(atom for field_name, _, atom in COMPANION_APPS if getattr(options, field_name))
         for group in _plan_list(plan, "optional_atoms"):
             if isinstance(group, str):
                 result.groups.append((group, [group]))

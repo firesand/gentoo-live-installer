@@ -100,7 +100,8 @@ class TestStageFamilies:
     @pytest.mark.parametrize("variant", ["amd64-nomultilib-openrc", "amd64-hardened-openrc"])
     def test_the_other_choices_are_allowed_but_gnome_and_xfce_come_with_a_warning(self, desktop, variant):
         m = with_changes(system__stage_variant=variant, system__desktop=desktop, system__multilib="nomultilib" not in variant,
-                         options__install_hwmonux=False, options__install_portagehub=False)
+                         options__install_hwmonux=False, options__install_portagehub=False,
+                         options__install_gentoo_settings=False, options__install_kernelsmith=False)
         assert m.validate() == []
         unverified = [text for text in m.warnings() if text.startswith("Not verified")]
         assert bool(unverified) == (desktop != "minimal")
@@ -292,7 +293,8 @@ class TestWarnings:
 
     def test_companions_on_a_minimal_system_are_only_build_time(self):
         assert manifest_module.COMPANIONS_ON_MINIMAL in with_changes(system__desktop="minimal").warnings()
-        assert manifest_module.COMPANIONS_ON_MINIMAL not in with_changes(system__desktop="minimal", options__install_hwmonux=False, options__install_portagehub=False).warnings()
+        assert manifest_module.COMPANIONS_ON_MINIMAL not in with_changes(system__desktop="minimal", options__install_hwmonux=False, options__install_portagehub=False,
+                         options__install_gentoo_settings=False, options__install_kernelsmith=False).warnings()
 
     def test_the_known_limits_are_stated(self):
         text = " ".join(with_changes(system__kernel="manual", system__initramfs="none", system__secure_boot=True, system__dual_boot=True,
@@ -319,3 +321,28 @@ class TestSummary:
         m = with_changes(storage__mode="manual", storage__luks=True, storage__luks_passphrase="long enough passphrase", storage__partitions=[
             Partition("/dev/sda1", "/efi", "vfat"), Partition("/dev/sda2", "/boot", "ext4"), Partition("/dev/sda3", "/", "ext4"), Partition("/dev/sda4", "/home", "ext4")])
         assert "NOT encrypted: /home" in self.row(m, "Encryption")
+
+
+class TestKernelSeries:
+    def test_the_newest_series_is_the_default_and_both_series_are_valid(self):
+        assert InstallManifest().system.kernel_series == "newest"
+        assert with_changes(system__kernel_series="longterm").validate() == []
+
+    def test_an_unknown_series_is_refused(self):
+        assert "Unknown kernel series: choose newest or longterm" in with_changes(system__kernel_series="lts").validate()
+
+    def test_a_saved_file_keeps_the_series(self, tmp_path):
+        saved = tmp_path / "manifest.json"
+        with_changes(system__kernel_series="longterm").save(saved, redact=False)
+        assert InstallManifest.load(saved).system.kernel_series == "longterm"
+
+
+class TestCompanions:
+    def test_all_four_are_installed_by_default_in_their_order(self):
+        assert InstallManifest().options.companions() == ["HWMonux", "PortageHub", "Gentoo Settings", "KernelSmith"]
+        assert [atom for _, _, atom in manifest_module.COMPANION_APPS] == [
+            "app-misc/hwmonux", "app-portage/portagehub", "app-admin/gentoo-settings", "sys-kernel/kernelsmith"]
+
+    def test_the_summary_names_them(self):
+        rows = dict(with_changes(options__install_hwmonux=False).summary())
+        assert rows["Companion apps"] == "PortageHub, Gentoo Settings, KernelSmith"

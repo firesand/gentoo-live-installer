@@ -219,6 +219,9 @@ def test_every_overlay_file_is_covered_by_the_image_contract() -> None:
     package_provided = {
         "etc/init.d/gentoo-installerd", "etc/init.d/chronyd", "usr/bin/gentoo-installer", "usr/bin/gentoo-installerd",
         "usr/bin/hwmonux", "usr/bin/portagehub", "usr/libexec/portagehub-helper", "usr/bin/gentoo-rescue",
+        "usr/bin/gentoo-settings", "usr/libexec/gentoo-settings-helper", "usr/share/applications/gentoo-settings.desktop",
+        "usr/share/polkit-1/actions/org.gentoosettings.helper.policy", "usr/bin/kernelsmith", "usr/share/applications/kernelsmith.desktop",
+        "usr/share/polkit-1/actions/org.kernelsmith.policy",
         "usr/bin/gentoo-rescue-gui", "usr/share/applications/gentoo-installer.desktop", "usr/share/applications/gentoo-rescue.desktop",
         "etc/modules-load.d/hwmonux.conf", "boot/memtest86plus/memtest64.bios", "boot/memtest86plus/memtest.efi64",
         "mnt/gentoo", "mnt/rescue", "home/gentoo", "usr/lib/modules", "usr/lib/firmware",

@@ -4,3 +4,8 @@ dev-python/hidapi ~amd64
 # libwebsockets >= 4.4 (the tree has 5.0.0 stable); -r2 is ~amd64 only and pins =libwebsockets-4.5*, the
 # series ttyd was released against, so a build cannot pick a libwebsockets that ttyd does not build with.
 =www-apps/ttyd-1.7.7-r2 ~amd64
+# The live disc boots the newest Gentoo kernel, not the long-term one that is stable (the user's choice of 2026-10-28):
+# it supports the newest hardware best, and installs follow the same series by default (system.kernel_series = newest).
+# gentoo-kernel pulls virtual/dist-kernel of its own version.
+sys-kernel/gentoo-kernel ~amd64
+virtual/dist-kernel ~amd64

@@ -10,7 +10,8 @@ from gentoo_installer import desktops
 
 from tests.backend.target_helpers import ScriptedRunner, configurer, mark_installed, read, target_manifest
 
-QUIET = {"bluetooth": False, "pipewire": False, "printing": False, "install_hwmonux": False, "install_portagehub": False}
+QUIET = {"bluetooth": False, "pipewire": False, "printing": False, "install_hwmonux": False, "install_portagehub": False,
+         "install_gentoo_settings": False, "install_kernelsmith": False}
 
 
 class Base(unittest.TestCase):

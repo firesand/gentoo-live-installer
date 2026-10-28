@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<longdescription lang="en">
+		Gentoo Settings brings the CachyOS-Settings performance and desktop tuning to Gentoo, on
+		OpenRC or systemd, as separate tweaks that can be switched on and off: zram, swappiness,
+		dirty bytes, I/O schedulers, transparent huge pages, watchdogs, audio power saving,
+		gaming limits and more. Every change is shown before it is applied; privileged actions go
+		through the gentoo-settings-helper program and its polkit policy.
+	</longdescription>
+</pkgmetadata>

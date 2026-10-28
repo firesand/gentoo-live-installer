@@ -1,4 +1,4 @@
-"""PORT: make.conf, package.use/env/license/accept_keywords, binhost and the PortageHub companions on the target."""
+"""PORT: make.conf, package.use/env/license/accept_keywords, binhost and the companion applications on the target."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from gentoo_installer import desktops
 from gentoo_installer.binhost import binhost_url, BINREPO_NAME, cpu_level_of, render_binrepos
 from gentoo_installer.licenses import effective_accept_license, render_package_license
 from gentoo_installer.makeopts import auto_make_opts as shared_auto_make_opts
-from gentoo_installer.manifest import ATOM_RE, InstallManifest, USE_TOKEN_RE
+from gentoo_installer.manifest import ATOM_RE, COMPANION_APPS, InstallManifest, USE_TOKEN_RE
 from gentoo_installer.mirrors import mirror_list
 from gentoo_installer.optimize import CPU_FLAGS_FILE, cpu_flags_of, cxxflags_value, native_wanted, render_cpu_flags, tuned_flags
 
@@ -21,7 +21,7 @@ from .proxy import make_conf_settings, proxy_environment
 from .runner import RunnerError
 
 
-COMPANION_ATOMS = ("app-misc/hwmonux", "app-portage/portagehub")
+COMPANION_ATOMS = tuple(atom for _, _, atom in COMPANION_APPS)
 
 
 # Written when the binary package signing keys could not be set up (getuto failed): every later render of make.conf then
@@ -288,9 +288,12 @@ class PortageMixin(ConfigurerBase):
             # NVIDIA sensors need NVML, which needs the licence-masked proprietary driver: the hardware plan
             # turns that flag on when the driver is really installed. USB sensors (liquidctl) are optional.
             _default_use(package_use, "app-misc/hwmonux", "-nvidia", "liquidctl")
-        if options.install_hwmonux or options.install_portagehub:
-            # Both companions can pull in Mesa[X], which requires libglvnd[X] on the minimal profile.
+        if options.companions():
+            # The companions can pull in Mesa[X], which requires libglvnd[X] on the minimal profile.
             _require_use(package_use, "media-libs/libglvnd", "X")
+        if options.install_kernelsmith:
+            # KernelSmith's window needs the X11 parts of libxkbcommon (its ebuild asks for libxkbcommon[X]).
+            _require_use(package_use, "x11-libs/libxkbcommon", "X")
         # The official binary QtWebEngine (KDE pulls it in) is built with bindist; without the flag the
         # binary is ignored and Chromium is compiled from source for hours. bindist only leaves out
         # proprietary codecs in embedded web views. Set with and without the binary host, so switching
@@ -302,8 +305,10 @@ class PortageMixin(ConfigurerBase):
         if storage.lvm:
             # lvm2[-lvm] installs only device-mapper, without the tools needed to activate the root volume.
             _require_use(package_use, "sys-fs/lvm2", "lvm")
-        if (options.install_portagehub or manifest.accounts.privilege == "run0") and system.init == "systemd":
-            # PortageHub's polkit dependency (and run0, which asks polkit) needs systemd's policykit support even on the minimal profile.
+        polkit_apps = options.install_portagehub or options.install_gentoo_settings or options.install_kernelsmith
+        if (polkit_apps or manifest.accounts.privilege == "run0") and system.init == "systemd":
+            # The polkit dependency of PortageHub, Gentoo Settings and KernelSmith (and run0, which asks polkit) needs systemd's
+            # policykit support even on the minimal profile.
             _require_use(package_use, "sys-apps/systemd", "policykit")
         if system.init == "systemd" and storage.luks:
             # Dracut's systemd-cryptsetup module needs the helper installed by systemd[cryptsetup].
@@ -411,7 +416,7 @@ class PortageMixin(ConfigurerBase):
         return ""
 
     def companion_archive(self, prefix: str) -> Path:
-        """The one hwmonux-*.tar.zst / portagehub-*.tar.zst in the live image's companion bundle."""
+        """The one <prefix>-*.tar.zst (hwmonux, portagehub, gentoo-settings, kernelsmith) in the live image's companion bundle."""
         matches = sorted((self.companion_bundle / "distfiles").glob(f"{prefix}-*.tar.zst"))
         if len(matches) != 1:
             found = ", ".join(path.name for path in matches) or "none"
@@ -419,7 +424,7 @@ class PortageMixin(ConfigurerBase):
         return matches[0]
 
     def configure_companion_overlay(self, manifest: InstallManifest) -> None:
-        if not (manifest.options.install_hwmonux or manifest.options.install_portagehub):
+        if not manifest.options.companions():
             return
         if self.dry_run:
             return
@@ -428,8 +433,9 @@ class PortageMixin(ConfigurerBase):
             raise ConfigurationError(f"Live companion overlay is missing: {overlay}")
         destination = self.path("var/db/repos/gentoo-live-installer")
         shutil.copytree(overlay, destination, dirs_exist_ok=True, symlinks=False)
-        for prefix, enabled in (("hwmonux", manifest.options.install_hwmonux), ("portagehub", manifest.options.install_portagehub)):
-            if enabled:
+        for field_name, _, atom in COMPANION_APPS:
+            if getattr(manifest.options, field_name):
+                prefix = atom.split("/", 1)[1]
                 source = self.companion_archive(prefix)
                 cache = self.path("var/cache/distfiles")
                 cache.mkdir(parents=True, exist_ok=True)

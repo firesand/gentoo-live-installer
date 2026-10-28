@@ -62,7 +62,7 @@ def test_rows_are_plain_and_grouped_by_step_with_edit_links(make_window):
                   "Language", "Time zone", "Keyboard", "Swap", "Filesystem tools", "Graphics driver", "Remote login (SSH)"):
         assert label in rows, label
     assert rows["Init system"] == ("Base system", "OpenRC")
-    assert rows["Kernel"][1] == "Gentoo prebuilt kernel"
+    assert rows["Kernel"][1] == "Gentoo prebuilt kernel · newest series"
     assert rows["Administrator tool"][1] == "sudo" and "wheel" in rows["Groups"][1]
     assert rows["Time zone"][0] == "Accounts" and rows["Swap"][0] == "Storage"
     edits = [b for b in review.findChildren(type(window.back)) if b.text() == "Edit"]

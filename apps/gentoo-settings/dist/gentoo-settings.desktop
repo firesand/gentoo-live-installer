@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Gentoo Settings
+GenericName=System Tuning
+Comment=CachyOS-style performance and desktop tweaks for Gentoo (OpenRC and systemd)
+Exec=gentoo-settings
+Icon=preferences-system
+Terminal=false
+Categories=Settings;
+Keywords=gentoo;cachyos;tuning;sysctl;zram;scheduler;openrc;systemd;
+StartupWMClass=gentoo-settings

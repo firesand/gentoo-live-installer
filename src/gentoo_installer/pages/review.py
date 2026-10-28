@@ -22,7 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from .. import desktops, diagnostics, layout
-from ..manifest import InstallManifest
+from ..manifest import COMPANIONS_ON_MINIMAL, InstallManifest
 from ..system_info import DiskInfo, SystemInfo, tools_for_selection
 from ..widgets import Card, FlowLayout, Page, wrapped_label
 from .boot_section import firmware_secure_boot
@@ -98,8 +98,8 @@ def manifest_warnings(manifest: InstallManifest, info: SystemInfo | None = None)
     family = stage_family(system.stage_variant)
     if desktops.unverified(system.desktop, family):
         warnings.append(f"Not verified: {system.desktop.upper()} on a {FAMILY_LABELS[family]} stage3 may need extra USE changes during the installation.")
-    if system.desktop == "minimal" and (options.install_hwmonux or options.install_portagehub):
-        warnings.append("HWMonux and PortageHub are graphical applications and cannot start on a minimal system; they only add build time and disk space there.")
+    if system.desktop == "minimal" and options.companions():
+        warnings.append(COMPANIONS_ON_MINIMAL)
     if info is not None:
         warnings.extend(storage_capacity(manifest, info)[1])
         if manifest.storage.firmware == "bios" and info.uefi:
@@ -334,20 +334,22 @@ def core_rows(manifest: InstallManifest, info: SystemInfo | None = None) -> dict
     rows[STEP_SYSTEM] += [
         ("Init system", INIT_NAMES.get(system.init, system.init)),
         ("Base", f"{system.stage_variant} · {manifest.effective_profile()}"),
-        ("Kernel", KERNEL_NAMES.get(system.kernel, system.kernel)),
+        ("Kernel", KERNEL_NAMES.get(system.kernel, system.kernel)
+         + ({"newest": " · newest series", "longterm": " · long-term series"}.get(system.kernel_series, "")
+            if system.kernel in {"gentoo-kernel-bin", "gentoo-kernel"} else "")),
         ("Initramfs", INITRAMFS_NAMES.get(system.initramfs, system.initramfs)),
         ("Desktop", system.desktop.upper() if system.desktop != "minimal" else "Minimal (no desktop)"),
         ("Boot menu", boot),
         ("Secure Boot", SECURE_BOOT_NAMES.get(system.secure_boot_mode, system.secure_boot_mode)),
     ]
-    companions = ", ".join(name for name, enabled in (("HWMonux", options.install_hwmonux), ("PortageHub", options.install_portagehub)) if enabled)
+    companions = ", ".join(options.companions())
     rows[STEP_CUSTOM] += [
         ("Graphics driver", graphics_driver_text(manifest, info)),
         *hardware_lines(manifest, info),
         ("Software source", "Binary packages preferred" if portage.binhost else "Build from source"),
         ("Network", {"networkmanager": "NetworkManager", "dhcpcd": "dhcpcd", "systemd-networkd": "systemd-networkd"}.get(manifest.network.manager, manifest.network.manager)),
         ("Remote login (SSH)", "On" if options.ssh else "Off"),
-        ("HWMonux and PortageHub", companions or "Not installed"),
+        ("Companion apps", companions or "Not installed"),
     ]
     variant = f" ({system.keyboard_variant})" if system.keyboard_variant else ""
     rows[STEP_ACCOUNTS] += [

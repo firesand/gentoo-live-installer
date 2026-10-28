@@ -75,6 +75,9 @@ for command_path in \
 	/usr/bin/gentoo-remote-access \
 	/usr/bin/portagehub \
 	/usr/libexec/portagehub-helper \
+	/usr/bin/gentoo-settings \
+	/usr/libexec/gentoo-settings-helper \
+	/usr/bin/kernelsmith \
 	/usr/libexec/polkit-gnome-authentication-agent-1; do
 	if [[ ! -x "${command_path}" ]]; then
 		fail "Required live application is missing: ${command_path}"

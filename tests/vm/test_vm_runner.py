@@ -23,7 +23,7 @@ vm = load_vm_module()
 
 pytestmark = pytest.mark.slow  # real processes and sockets: about a second per scenario
 ROOT = Path(__file__).resolve().parents[2]
-PROBES = {"init", "hostname", "user", "network", "dns", "portage", "hwmonux", "portagehub",
+PROBES = {"init", "hostname", "user", "network", "dns", "portage", "hwmonux", "portagehub", "gentoo-settings", "kernelsmith", "tuning",
           "firmware", "cmdline", "root-source", "swap", "receipt", "sudo", "root-lock",
           "install-degraded", "hardware-plan-file", "hardware-plan", "world-resolve", "world-drift", "sshd-service", "sshd-config"}
 ADVISORY = {"sudo", "root-lock"}
@@ -48,7 +48,7 @@ def test_cli_run_of_the_bios_scenario_passes_and_cleans_up(lab, capsys):
     assert all(probe["success"] for probe in result["probes"] if not probe["advisory"])
     # The fake guest has no sudo: advisory findings are recorded, not fatal.
     assert {probe["name"] for probe in result["advisory_findings"]} == ADVISORY
-    assert {probe["name"] for probe in result["companion_probes"]} == {"hwmonux", "portagehub"}
+    assert {probe["name"] for probe in result["companion_probes"]} == {"hwmonux", "portagehub", "gentoo-settings", "kernelsmith"}
     assert f"PASS bios: result {run / 'result.json'}" in capsys.readouterr().out
     # Two VMs were started: the live ISO first, then the installed disk alone.
     live = json.loads((run / "fake-qemu-argv-live.json").read_text())

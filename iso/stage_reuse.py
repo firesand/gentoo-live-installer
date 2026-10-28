@@ -10,7 +10,7 @@ the time. After every stage1 the builder writes a receipt next to the archive:
 and the next run compares it with the current inputs:
 
     reuse    nothing that went into stage1 changed: run stage2 only.
-    reseed   only the project's own packages changed (installer, HWMonux, PortageHub or
+    reseed   only the project's own packages changed (installer, HWMonux, PortageHub, Gentoo Settings, KernelSmith or
              their ebuilds): unpack the old stage1, let emerge reinstall exactly those
              packages, then run stage2. Packages are never removed this way, which is why
              the specs, the Portage configuration and the pins must be unchanged. The
@@ -69,6 +69,8 @@ LOCAL_PACKAGES: Mapping[str, str] = {
     "gentoo-live-installer": "app-admin/gentoo-live-installer",
     "hwmonux": "app-misc/hwmonux",
     "portagehub": "app-portage/portagehub",
+    "gentoo-settings": "app-admin/gentoo-settings",
+    "kernelsmith": "sys-kernel/kernelsmith",
 }
 OVERLAY = "packaging/gentoo-overlay"
 

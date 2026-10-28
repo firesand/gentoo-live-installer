@@ -58,7 +58,7 @@ def test_bounded_compiler_resources_survive_saved_manifest(tmp_path):
     rendered = render_make_conf(reloaded)
     assert "MAKEOPTS=-j1\n" in rendered
     assert "NINJAOPTS" not in rendered
-    assert vm.companion_selection(reloaded) == {"hwmonux": True, "portagehub": True}
+    assert vm.companion_selection(reloaded) == {"hwmonux": True, "portagehub": True, "gentoo-settings": True, "kernelsmith": True}
 
 
 @pytest.mark.parametrize(("jobs", "swap"), [(0, 512), (257, 512), (1, -1), (1, 131073)])
@@ -71,9 +71,11 @@ def test_invalid_compiler_resources_are_rejected(jobs, swap):
 @pytest.mark.parametrize(
     ("selection", "expected"),
     [
-        ("both", {"hwmonux": True, "portagehub": True}),
-        ("portagehub", {"hwmonux": False, "portagehub": True}),
-        ("none", {"hwmonux": False, "portagehub": False}),
+        ("all", {"hwmonux": True, "portagehub": True, "gentoo-settings": True, "kernelsmith": True}),
+        ("rust", {"hwmonux": False, "portagehub": True, "gentoo-settings": True, "kernelsmith": True}),
+        ("both", {"hwmonux": True, "portagehub": True, "gentoo-settings": False, "kernelsmith": False}),
+        ("portagehub", {"hwmonux": False, "portagehub": True, "gentoo-settings": False, "kernelsmith": False}),
+        ("none", {"hwmonux": False, "portagehub": False, "gentoo-settings": False, "kernelsmith": False}),
     ],
 )
 def test_companion_selection_is_written_to_manifest(selection, expected):
@@ -89,9 +91,23 @@ def test_companion_probe_plan_uses_saved_manifest_flags(tmp_path):
     reloaded = InstallManifest.load(saved)
 
     plan = vm.companion_probe_plan(reloaded)
-    assert [name for name, _, _ in plan] == ["disabled-hwmonux-absent", "portagehub"]
+    assert [name for name, _, _ in plan] == ["disabled-hwmonux-absent", "portagehub", "disabled-gentoo-settings-absent", "disabled-kernelsmith-absent"]
     assert "hwmonux --dump" not in plan[0][1]
     assert "portagehub --self-test" == plan[1][1]
+    assert "/var/db/pkg/app-admin" in plan[2][1] and "gentoo-settings-*" in plan[2][1]
+    assert "/var/db/pkg/sys-kernel" in plan[3][1] and "kernelsmith-*" in plan[3][1]
+
+
+def test_the_rust_companions_are_probed_without_a_display_on_each_init():
+    for scenario, label in (("openrc", "OpenRC"), ("systemd", "systemd")):
+        manifest = vm.build_manifest(vm.SCENARIO_MAP[scenario], PUBLIC_KEY, "rust")
+        plan = {name: (command, parse) for name, command, parse in vm.companion_probe_plan(manifest)}
+        assert plan["gentoo-settings"][0] == "gentoo-settings --status" and plan["kernelsmith"][0] == "kernelsmith detect"
+        assert plan["gentoo-settings"][1](0, f"init: {label} (detected)\nkernel: 7.2.13\n").success
+        assert not plan["gentoo-settings"][1](0, "init: unknown init (no clue)\n").success
+        assert plan["kernelsmith"][1](0, f"System      vm (Gentoo)\nInit        {label}\n").success
+        assert not plan["kernelsmith"][1](0, f"System      vm (not Gentoo)\nInit        {label}\n").success
+        assert "disabled-hwmonux-absent" in plan
 
 
 @pytest.mark.parametrize("key", ["", "not-a-key", "ssh-ed25519 bad;payload", "ssh-rsa\nsecond-line"])
@@ -178,9 +194,9 @@ def test_defaults_scenario_differs_from_the_wizard_defaults_only_in_disk_credent
         assert actual[path] == expected[path], path
 
 
-def test_the_defaults_scenario_probes_the_default_desktop_and_both_companions():
+def test_the_defaults_scenario_probes_the_default_desktop_and_every_companion():
     manifest = vm.build_manifest(vm.SCENARIO_MAP["defaults"], PUBLIC_KEY)
-    assert vm.companion_selection(manifest) == {"hwmonux": True, "portagehub": True}
+    assert vm.companion_selection(manifest) == {"hwmonux": True, "portagehub": True, "gentoo-settings": True, "kernelsmith": True}
     assert [name for name, _, _ in vm.desktop_probe_plan(manifest)] == ["desktop"]
     probes = {probe[0] for probe in vm.installed_system_probes(manifest, vm.SCENARIO_MAP["defaults"])}
     assert {"firmware", "cmdline", "root-source", "swap"} <= probes

@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<!--
+  Lets pkexec show a clear message when Kernelsmith runs a build, install or
+  uninstall job. Each job asks for the administrator password; nothing is cached.
+-->
+<policyconfig>
+  <vendor>Kernelsmith</vendor>
+  <action id="org.kernelsmith.run-job">
+    <description>Build, install or remove a custom kernel</description>
+    <message>Kernelsmith needs administrator rights to build, install or remove a kernel.</message>
+    <icon_name>kernelsmith</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">@BINDIR@/kernelsmith</annotate>
+    <annotate key="org.freedesktop.policykit.exec.allow_gui">true</annotate>
+  </action>
+</policyconfig>

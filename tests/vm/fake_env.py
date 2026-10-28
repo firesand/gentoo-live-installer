@@ -130,6 +130,20 @@ def boot_flag_report(vm, scenario_name: str, firmware: str | None = None, *, fla
     return {"holder": "/", "source": f"/dev/vda{partition}", "partition": partition, "disk": "/dev/vda", **vm_probes.decode_mbr(sector)}
 
 
+# guest_rules(companions=...): which companion applications the guest has
+COMPANIONS_INSTALLED = {True: {"hwmonux", "portagehub", "gentoo-settings", "kernelsmith"}, "rust": {"portagehub", "gentoo-settings", "kernelsmith"},
+                        "portagehub": {"portagehub"}, False: set()}
+
+
+def tuning_answer(plan: dict) -> str:
+    """What vm_probes.TUNING_COMMAND prints in a guest that the System tuning set up as the plan says (one virtio disk)."""
+    zram = (vm_probes.tuning_expected(plan) or {}).get("zram")
+    return "\n".join(["sysctl vm/vfs_cache_pressure 50", "sysctl vm/dirty_bytes 268435456",
+                      f"sysctl vm/swappiness {150 if zram else 60}", f"sysctl vm/page-cluster {0 if zram else 3}",
+                      "thp_defrag always defer [defer+madvise] madvise never", "thp_ptes 409", "sched vda 0 [none] mq-deadline kyber bfq",
+                      "cmdline BOOT_IMAGE=/vmlinuz root=UUID=0a1b2c3d ro" + (" zswap.enabled=0" if zram else "")]) + "\n"
+
+
 def package_database(plan: dict) -> str:
     """What the package check prints on a machine where every package of the plan was installed (and nothing else)."""
     wanted = {atom for field in ("early_atoms", "driver_atoms", "required_atoms", "optional_atoms") for atom in plan.get(field, [])}
@@ -150,7 +164,8 @@ def guest_rules(vm, scenario_name: str, *, guard: str = "vm_disk_guard", install
                 swap_mib: int = 512, firmware: str | None = None, sudo: bool = False, boot_flag: bool = True) -> list[dict]:
     """Rules for a guest that installs and boots successfully, in the order the harness needs them.
 
-    ``companions`` is True (both are installed and answer), "portagehub" (HWMonux is absent) or False (neither answers).
+    ``companions`` is True (all four are installed and answer), "rust" (all but HWMonux), "portagehub" (only PortageHub) or
+    False (none answers; the test supplies the absence rules). The ones that are not installed are absent from the package database.
     ``sudo`` gives the test user a working sudo: the probes that need it answer instead of ending up as findings,
     so a ``--strict-probes`` run of a good guest can pass. ``boot_flag`` says whether the BIOS disk carries its boot flag.
     """
@@ -214,8 +229,13 @@ def guest_rules(vm, scenario_name: str, *, guard: str = "vm_disk_guard", install
         sessions = f"/usr/share/xsessions:\n{vm_session.DESKTOPS[desktop]['session']}.desktop\n"
         rules += [{"user": "^vmtest$", "match": r"/usr/share/xsessions", "stdout": f"{sessions}\n---\n{started}\n---\nsystemd\nXorg\nsddm\nbash\n"},
                   {"user": "^vmtest$", "match": r"pactl info", "stdout": "Server Name: PulseAudio (on PipeWire 1.6.8)\n"}]
-    if companions == "portagehub":  # HWMonux is switched off: its absence is what the probe looks for
-        rules.append({"user": "^vmtest$", "match": r"app-misc.*glob.*hwmonux-", "stdout": "absent\n"})
+    installed = COMPANIONS_INSTALLED[companions]
+    if companions:  # the others are switched off: their absence is what the probes look for
+        rules += [{"user": "^vmtest$", "match": rf"{category}.*glob.*{name}-", "stdout": "absent\n"}
+                  for category, name in (("app-misc", "hwmonux"), ("app-portage", "portagehub"), ("app-admin", "gentoo-settings"),
+                                         ("sys-kernel", "kernelsmith")) if name not in installed]
+    if vm_probes.tuning_expected(plan) is not None:
+        rules.append({"user": "^vmtest$", "match": r"vm/vfs_cache_pressure vm/dirty_bytes", "stdout": tuning_answer(plan)})
     rules.append({"user": "^vmtest$", "match": r"/var/db/pkg/", "stdout": "plasma-meta\n"})
     guided = scenario_manifest(vm, scenario_name, firmware).storage
     if guided.firmware == "bios" and guided.mode == "erase":
@@ -226,10 +246,12 @@ def guest_rules(vm, scenario_name: str, *, guard: str = "vm_disk_guard", install
             {"user": "^vmtest$", "match": r"^sudo -S -p '' true$", "stdout": ""},
             {"user": "^vmtest$", "match": r"^sudo -S -p '' passwd -S root$", "stdout": f"root {'L' if locked else 'P'} 2026-10-24 0 99999 7 -1\n"},
         ]
-    if companions:
-        if companions != "portagehub":
-            rules.append({"user": "^vmtest$", "match": r"^hwmonux --dump$", "stdout": "vm-host\nSensor Value Min Max\n"})
-        rules.append({"user": "^vmtest$", "match": r"^portagehub --self-test$", "stdout": "repos: 1\ncatalog: 2\nvdb: 3\n"})
+    label = "systemd" if scenario.init == "systemd" else "OpenRC"
+    answers = {"hwmonux": (r"^hwmonux --dump$", "vm-host\nSensor Value Min Max\n"),
+               "portagehub": (r"^portagehub --self-test$", "repos: 1\ncatalog: 2\nvdb: 3\n"),
+               "gentoo-settings": (r"^gentoo-settings --status$", f"init: {label} (detected)\nkernel: 7.2.13-gentoo-dist\n"),
+               "kernelsmith": (r"^kernelsmith detect$", f"System      {scenario.hostname} (Gentoo)\nInit        {label}\n")}
+    rules += [{"user": "^vmtest$", "match": match, "stdout": stdout} for name, (match, stdout) in answers.items() if name in installed]
     rules.append({"user": "^vmtest$", "match": "nmcli", "stdout": STATIC_NETWORK + "\n"})
     return rules
 

@@ -64,8 +64,12 @@ def matrix_rows() -> dict[str, list[str]]:
 
 
 def documented_companions(entry) -> str:
-    """The companions an entry installs, as the table writes them."""
-    return "PortageHub" if "portagehub" in entry.options else "HWMonux and PortageHub"
+    """The companions an entry installs, as the table writes them (an entry without --companions gets the default, all)."""
+    if "portagehub" in entry.options:
+        return "PortageHub"
+    if "rust" in entry.options:
+        return "PortageHub, Gentoo Settings, KernelSmith (`rust`)"
+    return "all four: HWMonux, PortageHub, Gentoo Settings, KernelSmith"
 
 
 @pytest.mark.parametrize("entry", vm_matrix.WAVE3.entries, ids=lambda entry: entry.name)

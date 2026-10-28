@@ -16,6 +16,8 @@
 #   * D-Bus, polkit, the Docker socket and the user's agents (all below /run or $HOME) are out of reach, every
 #     capability is dropped and no_new_privs is set, so sudo, pkexec, su and the PortageHub helper cannot gain root.
 #   * every namespace is private (user, mount, pid, ipc, uts, cgroup, network) and the command dies with this script.
+#   * it runs at the lowest CPU and I/O priority and never on the CPUs kept for the user (scripts/low-priority.sh), so
+#     the PC stays usable while tests and builds run.
 #
 # Cargo keeps its downloads in .cache/cargo-home inside the checkout (CARGO_HOME), never in the user's ~/.cargo.
 # GENTOO_INSTALLER_SANDBOX=1 is set inside, so scripts can tell that they already run in it.
@@ -37,7 +39,7 @@ while (($#)); do
 			shift
 			;;
 		--) shift; break ;;
-		-h|--help) sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+		-h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
 		-*) echo "sandbox.sh: unknown option: $1" >&2; exit 2 ;;
 		*) break ;;
 	esac
@@ -141,7 +143,7 @@ args+=(
 	--unsetenv DOCKER_HOST
 	--unsetenv SUDO_ASKPASS
 )
-# bubblewrap replaces this script (exec), so signals and the terminal reach it exactly as before. It must not be
+# bubblewrap replaces this script (exec, through low-priority.sh's own execs), so signals and the terminal reach it exactly as before. It must not be
 # started as a background job: such a job ignores SIGINT, and every program inside would inherit that and could no
 # longer be stopped with Ctrl-C. A detached watcher removes the scratch directory once this process (then bwrap) is
 # gone; it keeps no stdout/stderr (callers that read our output would wait for it) and does not hold the lock.
@@ -152,4 +154,4 @@ trap - EXIT
 	exec bash -c 'while kill -0 "$1" 2>/dev/null; do sleep 1; done
 case $2 in */.cache/sandbox-tmp/run.*) rm -rf -- "$2" ;; esac' sandbox-cleanup "$$" "$scratch"
 ) &
-exec bwrap "${args[@]}" -- "$@"
+exec "$root/scripts/low-priority.sh" bwrap "${args[@]}" -- "$@"

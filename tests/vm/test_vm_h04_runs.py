@@ -15,7 +15,9 @@ vm = load_vm_module()
 pytestmark = pytest.mark.slow  # real processes and sockets
 
 ABSENT = [{"user": "^vmtest$", "match": r"app-misc.*glob.*hwmonux-", "stdout": "absent\n"},
-          {"user": "^vmtest$", "match": r"app-portage.*glob.*portagehub-", "stdout": "absent\n"}]  # --companions none
+          {"user": "^vmtest$", "match": r"app-portage.*glob.*portagehub-", "stdout": "absent\n"},
+          {"user": "^vmtest$", "match": r"app-admin.*glob.*gentoo-settings-", "stdout": "absent\n"},
+          {"user": "^vmtest$", "match": r"sys-kernel.*glob.*kernelsmith-", "stdout": "absent\n"}]  # --companions none
 MODULES = "virtio_net 40960 0 - Live 0x0\nvirtio_blk 24576 2 - Live 0x0\n"
 
 

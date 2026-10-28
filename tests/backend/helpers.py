@@ -56,6 +56,8 @@ def manifest() -> InstallManifest:
     result.accounts.root_password = "root-password"
     result.options.install_hwmonux = False
     result.options.install_portagehub = False
+    result.options.install_gentoo_settings = False
+    result.options.install_kernelsmith = False
     return result
 
 

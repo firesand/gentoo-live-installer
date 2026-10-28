@@ -6,7 +6,8 @@
 #   (default)          the fast steps, under a minute: Python and shell syntax, shellcheck and
 #                      ruff when installed, mypy against scripts/mypy-baseline.txt, and the pytest
 #                      suite without the tests marked slow
-#   --full             also: the whole pytest suite, cargo test and clippy for apps/portagehub,
+#   --full             also: the whole pytest suite, cargo test and clippy for apps/portagehub, cargo test for
+#                      apps/gentoo-settings and apps/kernelsmith,
 #                      the HWMonux smoke run, pkgcheck on a temporary copy of the overlay, the ISO
 #                      verifier's tests and scripts/lint-plan.py (each only when it exists)
 #   --update-baseline  rewrite scripts/mypy-baseline.txt and scripts/clippy-baseline.txt from the
@@ -45,8 +46,10 @@ if [ "${GENTOO_INSTALLER_SANDBOX:-0}" != 1 ]; then
         echo "check.sh: NO_SANDBOX=1: the steps run on the host, not in scripts/sandbox.sh" >&2
     elif scripts/sandbox.sh true 2> /dev/null; then
         if [ "$full" -eq 1 ] && [ "${SKIP_RUST:-0}" != 1 ] && command -v cargo > /dev/null 2>&1; then
-            echo "==> cargo fetch (portagehub crates, the only step with network)"
-            scripts/sandbox.sh --net cargo fetch --locked --quiet --manifest-path apps/portagehub/Cargo.toml || echo "    cargo fetch failed; the cargo steps will say why" >&2
+            echo "==> cargo fetch (the crates of PortageHub, Gentoo Settings and KernelSmith, the only step with network)"
+            for app in portagehub gentoo-settings kernelsmith; do
+                scripts/sandbox.sh --net cargo fetch --locked --quiet --manifest-path "apps/$app/Cargo.toml" || echo "    cargo fetch failed for $app; the cargo steps will say why" >&2
+            done
         fi
         exec scripts/test-slot.sh scripts/sandbox.sh "$0" "$@"
     else
@@ -149,6 +152,15 @@ step_cargo_test() {
     SKIP_EMERGE_TESTS=1 cargo test --quiet --manifest-path apps/portagehub/Cargo.toml $cargo_flags
 }
 
+step_cargo_test_apps() {
+    # Gentoo Settings and KernelSmith are the user's own projects, imported by scripts/sync-app.sh: their tests must pass
+    # here as they do upstream (clippy is upstream's business, so it does not run on them).
+    for app in gentoo-settings kernelsmith; do
+        # shellcheck disable=SC2086
+        cargo test --quiet --manifest-path "apps/$app/Cargo.toml" $cargo_flags || return 1
+    done
+}
+
 clippy_warnings() {
     # shellcheck disable=SC2086
     cargo clippy --manifest-path apps/portagehub/Cargo.toml $cargo_flags --all-targets --message-format=short 2>&1 \
@@ -223,6 +235,7 @@ if [ "$full" -eq 1 ]; then
         skip "cargo test / clippy" "SKIP_RUST=1 or cargo is not installed"
     else
         step "cargo test (portagehub)" step_cargo_test
+        step "cargo test (gentoo-settings, kernelsmith)" step_cargo_test_apps
         if cargo clippy --version > /dev/null 2>&1; then step "cargo clippy (portagehub)" step_cargo_clippy; else skip "cargo clippy" "clippy is not installed"; fi
     fi
     step "hwmonux --dump" step_hwmonux

@@ -19,7 +19,7 @@ from ..daemon_client import DaemonState
 from ..diagnostics import redact_url_userinfo
 from ..hardware import NicInfo
 from ..layout import human_size
-from ..manifest import KEYMAP_RE, InstallManifest, desktop_problem
+from ..manifest import COMPANION_APPS, KEYMAP_RE, InstallManifest, desktop_problem
 from .check import field_errors
 from .console import Console, GoBack, Option, Quit
 from .daemon import Daemon, DaemonError
@@ -690,10 +690,9 @@ class Wizard:
             break
         was_minimal = system.desktop == "minimal"
         system.desktop = picked
-        if system.desktop == "minimal":
-            options.install_hwmonux = options.install_portagehub = False  # graphical programs
-        elif was_minimal:
-            options.install_hwmonux = options.install_portagehub = True
+        if system.desktop == "minimal" or was_minimal:
+            for field_name, _, _ in COMPANION_APPS:  # graphical programs: off without a desktop, back on with one
+                setattr(options, field_name, system.desktop != "minimal")
         note = hwmonux_note(self.manifest, self.view)
         if note:  # HWMonux comes with every desktop; this program has no question for it, so it only says what it costs
             c.note(f'{note} To leave HWMonux out, use the graphical installer or a settings file with "install_hwmonux": false.')

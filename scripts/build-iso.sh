@@ -18,6 +18,8 @@ DOCKER_MIN_FREE_GIB=${DOCKER_MIN_FREE_GIB:-10}
 ISO_SECCOMP=${ISO_SECCOMP:-unconfined}
 ISO_KEEP_STAGE1=${ISO_KEEP_STAGE1:-2}
 PROC_MEMINFO=${PROC_MEMINFO:-/proc/meminfo}
+# Memory that stays available for the user's own programs beyond the build container (the user's rule of 2026-10-28).
+HOST_RESERVE_GIB=${HOST_RESERVE_GIB:-16}
 CHECK_ONLY=0
 CLEAN=0
 CLEAN_PACKAGES=0
@@ -35,7 +37,9 @@ Usage: scripts/build-iso.sh [options]
 Build the pinned Gentoo AMD64 installer and rescue ISO in Docker. No host block
 devices are mounted. Environment: JOBS, LOAD_AVERAGE, ISO_CACHE_DIR, ISO_DIST_DIR,
 ISO_LOG_DIR, BUILD_MEMORY (default 8g), BUILD_MIN_FREE_GIB (default 45), ISO_SECCOMP
-(unconfined or default), ISO_KEEP_STAGE1 (default 2).
+(unconfined or default), ISO_KEEP_STAGE1 (default 2), HOST_RESERVE_GIB (default 16:
+the build starts only while that much memory stays available beyond BUILD_MEMORY) and
+HOST_RESERVE_CPUS (default 8: CPUs the build never uses, see scripts/low-priority.sh).
 
   --check              Validate prerequisites and inputs without building or creating dirs.
   --reuse MODE         auto (default): reuse the stage1 of the last build when nothing that
@@ -153,6 +157,8 @@ fi
 [[ ${JOBS} =~ ^[1-9][0-9]*$ ]] || die "JOBS must be a positive integer"
 [[ ${LOAD_AVERAGE} =~ ^[0-9]+([.][0-9]+)?$ ]] || die "LOAD_AVERAGE must be numeric"
 [[ ${BUILD_MEMORY} =~ ^[1-9][0-9]*[mMgG]$ ]] || die "BUILD_MEMORY must look like 8g or 6144m"
+[[ ${HOST_RESERVE_GIB} =~ ^[0-9]+$ ]] || die "HOST_RESERVE_GIB must be a whole number of GiB"
+BUILD_CPUSET=$("${ROOT}/scripts/low-priority.sh" --cpus) || die "cannot work out the CPUs the build may use"
 [[ ${BUILD_MIN_FREE_GIB} =~ ^[0-9]+$ && ${ISO_DIST_MIN_FREE_GIB} =~ ^[0-9]+$ && ${DOCKER_MIN_FREE_GIB} =~ ^[0-9]+$ ]] \
 	|| die "BUILD_MIN_FREE_GIB, ISO_DIST_MIN_FREE_GIB and DOCKER_MIN_FREE_GIB must be whole numbers"
 [[ ${ISO_SECCOMP} == unconfined || ${ISO_SECCOMP} == default ]] || die "ISO_SECCOMP must be unconfined or default"
@@ -225,12 +231,22 @@ required_files=(
 	apps/portagehub/UPSTREAM
 	apps/portagehub/dist/portagehub.desktop
 	apps/portagehub/dist/org.portagehub.helper.policy
+	apps/gentoo-settings/Cargo.toml
+	apps/gentoo-settings/Cargo.lock
+	apps/gentoo-settings/UPSTREAM
+	apps/gentoo-settings/dist/gentoo-settings.desktop
+	apps/gentoo-settings/dist/org.gentoosettings.helper.policy
+	apps/kernelsmith/Cargo.toml
+	apps/kernelsmith/Cargo.lock
+	apps/kernelsmith/UPSTREAM
+	apps/kernelsmith/packaging/kernelsmith.desktop
+	apps/kernelsmith/packaging/org.kernelsmith.policy
 )
 for relative_path in "${required_files[@]}"; do
 	[[ -f ${ROOT}/${relative_path} ]] || die "required input is missing: ${relative_path}"
 done
 # Each local package has exactly one ebuild; its name carries the version and revision.
-for package in app-admin/gentoo-live-installer app-misc/hwmonux app-portage/portagehub; do
+for package in app-admin/gentoo-live-installer app-misc/hwmonux app-portage/portagehub app-admin/gentoo-settings sys-kernel/kernelsmith; do
 	ebuilds=("${ROOT}/packaging/gentoo-overlay/${package}/${package#*/}"-[0-9]*.ebuild)
 	[[ ${#ebuilds[@]} -eq 1 && -f ${ebuilds[0]} ]] \
 		|| die "${package} needs exactly one ebuild in packaging/gentoo-overlay (remove the old revision in the same change)"
@@ -238,6 +254,8 @@ done
 [[ -d ${ROOT}/src/gentoo_installer ]] || die "src/gentoo_installer is missing"
 [[ -d ${ROOT}/src/gentoo_installerd ]] || die "src/gentoo_installerd is missing"
 [[ -d ${ROOT}/apps/portagehub/src ]] || die "apps/portagehub/src is missing"
+[[ -d ${ROOT}/apps/gentoo-settings/src ]] || die "apps/gentoo-settings/src is missing (scripts/sync-app.sh gentoo-settings)"
+[[ -d ${ROOT}/apps/kernelsmith/crates ]] || die "apps/kernelsmith/crates is missing (scripts/sync-app.sh kernelsmith)"
 
 docker info --format '{{.ServerVersion}}' >/dev/null 2>&1 \
 	|| die "Docker daemon is unavailable or not accessible to $(id -un)"
@@ -289,18 +307,20 @@ check_free_space() {
 }
 check_free_space
 
-warn_if_memory_is_short() {
+refuse_if_memory_is_short() {
 	local want_kib have_kib
 	case ${BUILD_MEMORY: -1} in
 		m | M) want_kib=$((${BUILD_MEMORY%?} * 1024)) ;;
 		*) want_kib=$((${BUILD_MEMORY%?} * 1024 * 1024)) ;;
 	esac
 	have_kib=$(awk '/^MemAvailable:/ { print $2; exit }' "${PROC_MEMINFO}" 2>/dev/null || true)
-	if [[ ${have_kib} =~ ^[0-9]+$ ]] && ((have_kib < want_kib + 2 * 1024 * 1024)); then
-		warn "only $((have_kib / 1024)) MiB of memory are available; the build container may use ${BUILD_MEMORY} and the host needs 2 GiB more"
+	if [[ ! ${have_kib} =~ ^[0-9]+$ ]]; then
+		warn "cannot read the available memory from ${PROC_MEMINFO}; it is not checked"
+	elif ((have_kib < want_kib + HOST_RESERVE_GIB * 1024 * 1024)); then
+		die "only $((have_kib / 1024)) MiB of memory are available: the build container may use ${BUILD_MEMORY} and ${HOST_RESERVE_GIB} GiB stay free for your own programs (HOST_RESERVE_GIB); close something or try later"
 	fi
 }
-warn_if_memory_is_short
+refuse_if_memory_is_short
 
 if ((CHECK_ONLY)); then
 	printf 'build-iso: prerequisites and pinned inputs look valid; no build started.\n'
@@ -383,7 +403,11 @@ esac
 run_args=(run --init --platform linux/amd64 --name "${CONTAINER_NAME}"
 	--cap-add SYS_ADMIN --cap-add NET_ADMIN --cap-add MKNOD --cap-add SYS_CHROOT
 	--shm-size 1g --pids-limit 4096
-	--cpus "${JOBS}" --memory "${BUILD_MEMORY}" --memory-swap "${BUILD_MEMORY}")
+	--cpus "${JOBS}" --memory "${BUILD_MEMORY}" --memory-swap "${BUILD_MEMORY}"
+	--cpuset-cpus "${BUILD_CPUSET}" --cpu-shares 2)
+# --cpuset-cpus keeps the CPUs reserved for the user free; --cpu-shares 2 is Docker's lowest CPU weight, so the
+# user's own programs come first whenever both want the same CPU (the container's processes are dockerd's
+# children, so scripts/low-priority.sh around `docker run` would not reach them).
 # Catalyst needs mount(2) and chroot(2). The seccomp profile stays open until a build has
 # been shown to work with Docker's default one; AppArmor is only touched where it exists.
 if [[ ${ISO_SECCOMP} == unconfined ]]; then
@@ -408,7 +432,7 @@ run_args+=(
 if [[ ${ISO_FLAVOR} == testkey ]]; then
 	warn "TEST BUILD: this ISO has a temporary root ssh login and must never be distributed (${ISO_NAME})"
 fi
-note "starting Catalyst in container ${CONTAINER_NAME} (${BUILD_MEMORY} of memory, ${JOBS} jobs, mode ${build_mode}); this is a long build."
+note "starting Catalyst in container ${CONTAINER_NAME} (${BUILD_MEMORY} of memory, ${JOBS} jobs on CPUs ${BUILD_CPUSET} at the lowest priority, mode ${build_mode}); this is a long build."
 
 # Ctrl-C and `kill` stop the container (Catalyst gets its signal and the mounts go with
 # the container) instead of leaving it running.

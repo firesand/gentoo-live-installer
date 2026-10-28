@@ -77,11 +77,26 @@ def test_default_memory_and_cpu_limits(stubs) -> None:
     assert env["JOBS"] == "3" and env["LOAD_AVERAGE"] == "6"
 
 
-def test_low_host_memory_only_warns(stubs) -> None:
-    (stubs.tmp / "meminfo").write_text("MemAvailable: 4194304 kB\n")
+def test_the_build_starts_only_while_16_gib_stay_free_for_the_user(stubs) -> None:
     stubs.env["STUB_ISO_NAME"] = RELEASE_NAME
+    (stubs.tmp / "meminfo").write_text("MemAvailable: 20971520 kB\n")  # 20 GiB: 8 for the build leaves 12
     result = stubs.run()
-    assert result.returncode == 0 and "only 4096 MiB of memory are available" in result.stderr
+    assert result.returncode != 0 and not stubs.runs()
+    assert "only 20480 MiB of memory are available" in result.stderr and "16 GiB stay free" in result.stderr
+    assert stubs.run(extra_env={"HOST_RESERVE_GIB": "8"}).returncode == 0
+    (stubs.tmp / "meminfo").write_text("MemAvailable: 25165824 kB\n")  # 24 GiB: exactly enough
+    assert stubs.run().returncode == 0
+    assert stubs.run(extra_env={"HOST_RESERVE_GIB": "lots"}).returncode != 0
+
+
+def test_the_container_leaves_the_reserved_cpus_and_has_the_lowest_weight(stubs) -> None:
+    stubs.env["STUB_ISO_NAME"] = RELEASE_NAME
+    assert stubs.run(extra_env={"HOST_RESERVE_CPUS": "4"}).returncode == 0
+    run = stubs.runs()[0]
+    allowed = subprocess.run([str(ROOT / "scripts/low-priority.sh"), "--cpus"], capture_output=True, text=True,
+                             env={**os.environ, "HOST_RESERVE_CPUS": "4"}).stdout.strip()
+    assert option_values(run, "--cpuset-cpus") == [allowed] and option_values(run, "--cpu-shares") == ["2"]
+    assert not any(cpu in allowed.replace("-", ",").split(",") for cpu in "0123")
 
 
 def test_log_file_is_created_announced_and_filled(stubs) -> None:

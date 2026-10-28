@@ -41,6 +41,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from gentoo_installer.layout import luks_mapper_name  # noqa: E402
 from gentoo_installer.manifest import InstallManifest, Partition  # noqa: E402
+import host_share  # noqa: E402
 import vm_guard  # noqa: E402
 import vm_guest  # noqa: E402
 import vm_hw  # noqa: E402
@@ -388,22 +389,37 @@ class InstallResult:
 # HWMonux pulls PySide, which has no binary package. The first real runs (4096 MiB of memory, two build jobs, 512 MiB of swap) had
 # its compiler killed by the kernel; a desktop install gets 12288 MiB, one job and 4096 MiB of swap (docs/TESTING.md).
 PYSIDE_MEMORY_MIB = 8192
+# --companions: which companion applications the manifest installs. "all" is what the installer does by default; "rust" is
+# the three Rust applications, without HWMonux and its PySide build; "both" is the older HWMonux and PortageHub pair.
+COMPANION_SETS: dict[str, frozenset[str]] = {
+    "all": frozenset({"hwmonux", "portagehub", "gentoo-settings", "kernelsmith"}),
+    "rust": frozenset({"portagehub", "gentoo-settings", "kernelsmith"}),
+    "both": frozenset({"hwmonux", "portagehub"}),
+    "portagehub": frozenset({"portagehub"}),
+    "none": frozenset(),
+}
+# companion name -> the manifest's option
+COMPANION_FIELDS = {"hwmonux": "install_hwmonux", "portagehub": "install_portagehub", "gentoo-settings": "install_gentoo_settings",
+                    "kernelsmith": "install_kernelsmith"}
 
 
 def companion_memory_note(scenario: Scenario, args: argparse.Namespace) -> str:
     """A warning for a run that installs HWMonux in a machine too small to compile PySide ('' when there is nothing to say)."""
-    if getattr(args, "companions", "both") != "both" or args.memory >= PYSIDE_MEMORY_MIB:
+    companions = getattr(args, "companions", "all")
+    if "hwmonux" not in COMPANION_SETS.get(companions, frozenset()) or args.memory >= PYSIDE_MEMORY_MIB:
         return ""
-    return (f"NOTE {scenario.name}: --companions both installs HWMonux, which compiles PySide from source; the first real runs with {args.memory} MiB "
-            "of memory had the compiler killed. Use --companions portagehub, or --memory 12288 --build-jobs 1 --swap-mib 4096.")
+    return (f"NOTE {scenario.name}: --companions {companions} installs HWMonux, which compiles PySide from source; the first real runs with {args.memory} MiB "
+            "of memory had the compiler killed. Use --companions rust, or --memory 12288 --build-jobs 1 --swap-mib 4096.")
+
+
+def apply_companions(manifest: InstallManifest, companions: str) -> None:
+    for name, field_name in COMPANION_FIELDS.items():
+        setattr(manifest.options, field_name, name in COMPANION_SETS[companions])
 
 
 def companion_selection(manifest: InstallManifest) -> dict[str, bool]:
     """Read companion choices from the exact install manifest used by the VM."""
-    return {
-        "hwmonux": bool(manifest.options.install_hwmonux),
-        "portagehub": bool(manifest.options.install_portagehub),
-    }
+    return {name: bool(getattr(manifest.options, field_name)) for name, field_name in COMPANION_FIELDS.items()}
 
 
 def manual_partitions(device: str, firmware: str, data_device: str = "") -> list[Partition]:
@@ -417,7 +433,7 @@ def manual_partitions(device: str, firmware: str, data_device: str = "") -> list
     return rows
 
 
-def build_manifest(scenario: Scenario, ssh_public_key: str, companions: str = "both", *,
+def build_manifest(scenario: Scenario, ssh_public_key: str, companions: str = "all", *,
                    build_jobs: int | None = None, swap_mib: int | None = None,
                    device: str = TARGET_DEVICE, device_id: str = TARGET_SERIAL,
                    device_id_kind: str = "", data_disks: Sequence[tuple[str, str]] = ()) -> InstallManifest:
@@ -431,8 +447,8 @@ def build_manifest(scenario: Scenario, ssh_public_key: str, companions: str = "b
     """
     if not re.fullmatch(r"(?:ssh-(?:ed25519|rsa)|ecdsa-sha2-nistp(?:256|384|521)|sk-ssh-ed25519@openssh\.com) [A-Za-z0-9+/=]+(?: .*)?", ssh_public_key.strip()):
         raise HarnessError("The SSH public key is missing or invalid")
-    if companions not in {"both", "portagehub", "none"}:
-        raise HarnessError("Companions must be both, portagehub, or none")
+    if companions not in COMPANION_SETS:
+        raise HarnessError(f"Companions must be one of {', '.join(COMPANION_SETS)}")
     if (build_jobs is not None and not 1 <= build_jobs <= 256) or (swap_mib is not None and not 0 <= swap_mib <= 131072):
         raise HarnessError("Build jobs must be 1–256 and target swap must be 0–131072 MiB")
     manifest = InstallManifest()
@@ -448,8 +464,7 @@ def build_manifest(scenario: Scenario, ssh_public_key: str, companions: str = "b
         manifest.accounts.root_password = TEST_ROOT_PASSWORD
         manifest.accounts.ssh_authorized_keys = [ssh_public_key.strip()]
         manifest.options.ssh = True
-        manifest.options.install_hwmonux = companions == "both"
-        manifest.options.install_portagehub = companions in {"both", "portagehub"}
+        apply_companions(manifest, companions)
         if build_jobs is not None:
             manifest.portage.make_opts = f"-j{build_jobs}"
         if swap_mib is not None:
@@ -497,8 +512,7 @@ def build_manifest(scenario: Scenario, ssh_public_key: str, companions: str = "b
     manifest.accounts.disable_root_login = True
     manifest.accounts.ssh_authorized_keys = [ssh_public_key.strip()]
     manifest.accounts.ssh_password_login = scenario.ssh_password_login
-    manifest.options.install_hwmonux = companions == "both"
-    manifest.options.install_portagehub = companions in {"both", "portagehub"}
+    apply_companions(manifest, companions)
     manifest.options.ssh = True
     manifest.options.pipewire = bool(scenario.desktop)  # the desktop scenarios judge the sound server (audio-pactl)
     manifest.options.bluetooth = False
@@ -1104,6 +1118,29 @@ def parse_portagehub_self_test(returncode: int, output: str) -> ProbeResult:
     return result
 
 
+def parse_gentoo_settings_status(init: str, returncode: int, output: str) -> ProbeResult:
+    """`gentoo-settings --status` works without a display: its first line is the init system it detected."""
+    result = parse_probe_result("gentoo-settings", returncode, output)
+    if not result.success:
+        return result
+    first = result.output.strip().splitlines()[0] if result.output.strip() else ""
+    wanted = {"openrc": "OpenRC", "systemd": "systemd"}.get(init, init)
+    if not first.startswith(f"init: {wanted}"):
+        return ProbeResult("gentoo-settings", False, result.output, f"--status did not detect {wanted}: {first!r}")
+    return result
+
+
+def parse_kernelsmith_detect(init: str, returncode: int, output: str) -> ProbeResult:
+    """`kernelsmith detect` reads the hardware and the boot setup without a display."""
+    result = parse_probe_result("kernelsmith", returncode, output)
+    if not result.success:
+        return result
+    wanted = {"openrc": "OpenRC", "systemd": "systemd"}.get(init, init)
+    if "(Gentoo)" not in result.output or not re.search(rf"^Init\s+{re.escape(wanted)}\b", result.output, re.M | re.I):
+        return ProbeResult("kernelsmith", False, result.output, f"detect did not report a Gentoo system with {wanted}")
+    return result
+
+
 def parse_companion_absent(name: str, returncode: int, output: str) -> ProbeResult:
     result = parse_probe_result(f"disabled-{name}-absent", returncode, output)
     if result.success and result.output.strip() != "absent":
@@ -1116,10 +1153,14 @@ def companion_probe_plan(manifest: InstallManifest) -> list[tuple[str, str, Call
     """Build runtime/absence checks from the saved manifest's exact choices."""
     selected = companion_selection(manifest)
     plan: list[tuple[str, str, Callable[[int, str], ProbeResult]]] = []
-    for name, (category, command, parser) in {
+    init = manifest.system.init
+    checks: dict[str, tuple[str, str, Callable[[int, str], ProbeResult]]] = {
         "hwmonux": ("app-misc", "hwmonux --dump", parse_hwmonux_dump),
         "portagehub": ("app-portage", "portagehub --self-test", parse_portagehub_self_test),
-    }.items():
+        "gentoo-settings": ("app-admin", "gentoo-settings --status", functools.partial(parse_gentoo_settings_status, init)),
+        "kernelsmith": ("sys-kernel", "kernelsmith detect", functools.partial(parse_kernelsmith_detect, init)),
+    }
+    for name, (category, command, parser) in checks.items():
         if selected[name]:
             plan.append((name, command, parser))
         else:
@@ -2202,7 +2243,7 @@ class ScenarioRunner:
         if reinstall:  # a different layout over the first one: stale signatures at reused offsets
             swap_mib = (512 if swap_mib is None else swap_mib) + 256
         manifest = build_manifest(
-            self.scenario, self.public_key, getattr(self.args, "companions", "both"),
+            self.scenario, self.public_key, getattr(self.args, "companions", "all"),
             build_jobs=getattr(self.args, "build_jobs", None), swap_mib=swap_mib,
             device=device, device_id=device_id, device_id_kind=device_id_kind,
             data_disks=[(extra["path"], extra["approval"]) for extra in data],
@@ -2510,7 +2551,7 @@ class ScenarioRunner:
         probes = self.verify(label)
         strict = getattr(self.args, "strict_probes", False)
         result[key] = [probe.record() for probe in probes]
-        result["companion_probes"] = [probe.record() for probe in probes if probe.name in {"hwmonux", "portagehub"}]
+        result["companion_probes"] = [probe.record() for probe in probes if probe.name in COMPANION_FIELDS]
         result["disabled_companion_probes"] = [probe.record() for probe in probes if probe.name.startswith("disabled-")]
         result["advisory_findings"] = [probe.record() for probe in probes if not probe.success and probe.advisory]
         # What Portage would still change right after the install: information, kept from the first round of probes.
@@ -3680,9 +3721,11 @@ def build_parser() -> argparse.ArgumentParser:
                         help="UEFI: after the probes boot the installed disk once more with an empty NVRAM (it must start through EFI/BOOT/BOOTX64.EFI)")
     parser.add_argument("--no-world-probe", action="store_true", help="Skip 'emerge -pvuDN @world' in the installed system (minutes on a desktop)")
     parser.add_argument("--world-timeout", type=positive_int, default=1800, help="Seconds the world probe may take (default: 1800)")
-    parser.add_argument("--companions", choices=("both", "portagehub", "none"), default="both",
-                        help="Install HWMonux and PortageHub (both), only PortageHub, or neither. HWMonux compiles PySide from source: "
-                             "with both, give the VM --memory 12288 --build-jobs 1 --swap-mib 4096 (the wave3 matrix does so for the defaults job only)")
+    parser.add_argument("--companions", choices=tuple(COMPANION_SETS), default="all",
+                        help="Install every companion application (all, the installer's default), the three Rust ones without HWMonux "
+                             "(rust: PortageHub, Gentoo Settings, KernelSmith), HWMonux and PortageHub (both), only PortageHub, or none. "
+                             "HWMonux compiles PySide from source: with all or both, give the VM --memory 12288 --build-jobs 1 --swap-mib 4096 "
+                             "(the wave3 matrix does so for the defaults job only)")
     parser.add_argument("--gui-detect", action=argparse.BooleanOptionalAction, default=None,
                         help="GUI mode: leave firmware, partition table and disk to the GUI's own detection and assert what "
                              "it chose (default: on for the defaults scenario only)")
@@ -3877,6 +3920,10 @@ def _main(argv: Sequence[str] | None = None) -> int:
         return 0
     if args.iso is None:
         parser.error("--iso is required")
+    try:
+        host_share.lower_own_priority()  # QEMU, SSH and every matrix job inherit it
+    except ValueError as exc:
+        parser.error(str(exc))
     if args.matrix:
         if args.scenario or args.all:
             parser.error("--matrix runs its own scenarios")
@@ -3917,6 +3964,9 @@ def _main(argv: Sequence[str] | None = None) -> int:
             print(note, file=sys.stderr, flush=True)
     try:
         firmware = preflight(args, scenarios)
+        short = host_share.memory_problem(args.memory, available=host_share.available_mib(), reserve=host_share.reserve_mib())
+        if short:
+            raise HarnessError(short)
         public_key = public_key_from_private(args.ssh_keygen, args.ssh_private_key)
         build_manifest(scenarios[0], public_key, args.companions, build_jobs=args.build_jobs, swap_mib=args.swap_mib)
     except HarnessError as exc:

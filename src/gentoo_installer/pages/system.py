@@ -104,6 +104,7 @@ class SystemPage(Page):
         self.boot_section = BootSection(manifest)
         self.kernel = self.boot_section.kernel
         self.initramfs = self.boot_section.initramfs
+        self.kernel_series = self.boot_section.kernel_series
         self.kernel_guidance = self.boot_section.kernel_guidance
         self.bootloader = self.boot_section.bootloader
         self.dual_boot = self.boot_section.dual_boot

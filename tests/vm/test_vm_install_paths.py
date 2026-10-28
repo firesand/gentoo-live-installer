@@ -324,7 +324,8 @@ def test_an_install_with_portagehub_only_probes_portagehub_and_checks_that_hwmon
     result = lab.result()
     names = {probe["name"] for probe in result["probes"]}
     assert {"portagehub", "disabled-hwmonux-absent"} <= names and "hwmonux" not in names
-    assert result["companions"] == {"hwmonux": False, "portagehub": True}
+    assert result["companions"] == {"hwmonux": False, "portagehub": True, "gentoo-settings": False, "kernelsmith": False}
+    assert {"disabled-gentoo-settings-absent", "disabled-kernelsmith-absent"} <= names
     manifest = json.loads((lab.run_dir() / "fake-guest" / "manifest.json").read_text())["options"]
     assert (manifest["install_hwmonux"], manifest["install_portagehub"]) == (False, True)
 

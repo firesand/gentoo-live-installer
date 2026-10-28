@@ -485,7 +485,8 @@ def parse_world_probe(returncode: int, output: str) -> list[ProbeResult]:
 
 # --- a part the installer could not install -----------------------------------------------------------------------------------
 
-COMPANION_PACKAGES = {"hwmonux": "app-misc/hwmonux", "portagehub": "app-portage/portagehub"}
+COMPANION_PACKAGES = {"hwmonux": "app-misc/hwmonux", "portagehub": "app-portage/portagehub", "gentoo-settings": "app-admin/gentoo-settings",
+                      "kernelsmith": "sys-kernel/kernelsmith"}
 
 
 def explain_missing_part(result: ProbeResult, degraded: Sequence[str]) -> ProbeResult:
@@ -600,8 +601,10 @@ def tuning_expected(plan: Mapping[str, Any]) -> dict[str, bool] | None:
     if scalars.get("tuning") != "on":
         return None
     paths = {item[0] if isinstance(item, (list, tuple)) else item.get("path") for item in plan.get("files") or []}
-    return {"zram": scalars.get("zram") == "yes", "schedulers": "/etc/udev/rules.d/60-installer-ioschedulers.rules" in paths,
-            "thp": "/etc/tmpfiles.d/installer-thp.conf" in paths, "audio": "/etc/udev/rules.d/80-installer-audio-power.rules" in paths}
+    # By name without the number in front: RC4 moved them ahead of Gentoo Settings' own files (60-/59-/19-, were 80-/60-/80-).
+    has = lambda folder, name: any(str(path).startswith(folder) and str(path).endswith(name) for path in paths)  # noqa: E731
+    return {"zram": scalars.get("zram") == "yes", "schedulers": has("/etc/udev/rules.d/", "-installer-ioschedulers.rules"),
+            "thp": "/etc/tmpfiles.d/installer-thp.conf" in paths, "audio": has("/etc/udev/rules.d/", "-installer-audio-power.rules")}
 
 
 def tuning_problems(output: str, expected: Mapping[str, bool]) -> list[str]:

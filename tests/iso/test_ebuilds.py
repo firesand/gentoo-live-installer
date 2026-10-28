@@ -369,31 +369,50 @@ def test_the_opengl_fallback_patch_is_complete() -> None:
     assert "Renderer::Wgpu" in patch, "wgpu is tried first"
 
 
-def test_the_source_archive_has_everything_the_ebuild_and_cargo_need() -> None:
+def rust_apps() -> list[tuple[str, str, set[str]]]:
+    """(CATEGORY/NAME, directory below apps/, packed members) of every RUST_APPS line of the builder."""
     entrypoint = (ROOT / "iso/builder-entrypoint.sh").read_text()
-    packed = re.search(r'-C "\$\{WORKSPACE\}/apps/portagehub" -cf - (.*?) \\\n', entrypoint)
-    assert packed, "prepare_source_archives no longer packs apps/portagehub"
-    members = set(packed.group(1).split())
-    ebuild = ebuild_of(PORTAGEHUB).read_text()
-    needed = {"Cargo.toml", "Cargo.lock", "src", "dist"}
-    for line in re.findall(r"\b(?:dodoc|domenu|doins) ([^\n]+)", ebuild):
-        needed |= set(line.split())
+    block = re.search(r"^RUST_APPS=\(\n(.*?)^\)", entrypoint, re.M | re.S)
+    assert block, "iso/builder-entrypoint.sh no longer lists RUST_APPS"
+    found = [line.strip().strip('"').split("|") for line in block.group(1).splitlines() if line.strip()]
+    return [(atom, app, set(members.split())) for atom, app, members in found]
+
+
+def test_every_rust_application_is_packed() -> None:
+    assert [atom for atom, _, _ in rust_apps()] == ["app-portage/portagehub", "app-admin/gentoo-settings", "sys-kernel/kernelsmith"]
+
+
+@pytest.mark.parametrize("atom", ["app-portage/portagehub", "app-admin/gentoo-settings", "sys-kernel/kernelsmith"])
+def test_the_source_archive_has_everything_the_ebuild_and_cargo_need(atom: str) -> None:
+    [(app, members)] = [(app, members) for name, app, members in rust_apps() if name == atom]
+    source = ROOT / "apps" / app
+    ebuild = ebuild_of(OVERLAY / atom).read_text()
+    needed = {"Cargo.toml", "Cargo.lock"}
+    for line in re.findall(r"\b(?:dodoc|domenu|doins|doicon) ([^\n]+)", ebuild):
+        needed |= {word for word in line.split() if not word.startswith(("-", "$", '"$')) and word != "scalable"}
+    needed |= set(re.findall(r'sed "[^"]*" (\S+) >', ebuild))
     for name in sorted(needed):
         top = name.split("/")[0]
-        assert top in members, f"{name} is installed or built from, but the archive does not contain {top}"
-        assert (APP / top).exists(), f"apps/portagehub/{top} is missing"
-    # Whatever the build reads outside src/ and dist/ must be packed too.
-    if (APP / "build.rs").exists():
-        assert "build.rs" in members
-    for source in (APP / "src").rglob("*.rs"):
-        for path in re.findall(r'include_(?:bytes|str)!\(\s*"([^"]+)"', source.read_text()):
-            target = (source.parent / path).resolve()
-            assert target.is_relative_to(APP / "src") or target.is_relative_to(APP / "dist"), f"{source.name} includes {path}, which the archive lacks"
+        assert top in members, f"{atom}: {name} is installed or built from, but the archive does not contain {top}"
+        assert (source / top).exists(), f"apps/{app}/{top} is missing"
+    # Whatever the build reads must be packed too: the crates' sources, build scripts and included files.
+    crates = [crate for crate in (source, *(manifest.parent for manifest in source.glob("crates/*/Cargo.toml"))) if (crate / "src").is_dir()]
+    assert crates, f"apps/{app} has no crate with a src directory"
+    for crate in crates:
+        top = crate.relative_to(source).parts[0] if crate != source else "src"
+        assert top in members, f"{atom}: the crate in {crate.relative_to(source)} is not packed"
+        assert crate != source or not (crate / "build.rs").exists() or "build.rs" in members
+        for path in (crate / "src").rglob("*.rs"):
+            for included in re.findall(r'include_(?:bytes|str)!\(\s*"([^"]+)"', path.read_text()):
+                target = (path.parent / included).resolve()
+                assert target.relative_to(source).parts[0] in members, f"{path.name} includes {included}, which the archive lacks"
     for assets in ("assets", "fonts"):
-        assert not (APP / assets).exists() or assets in members
+        assert not (source / assets).exists() or assets in members
     required = (ROOT / "scripts/build-iso.sh").read_text()
-    for name in ("README.md", "SECURITY.md", "UPSTREAM"):
-        assert f"apps/portagehub/{name}" in required, f"build-iso.sh should insist on {name}"
+    for name in ("Cargo.toml", "Cargo.lock", "UPSTREAM"):
+        assert f"apps/{app}/{name}" in required, f"build-iso.sh should insist on apps/{app}/{name}"
+    if app == "portagehub":
+        assert "apps/portagehub/SECURITY.md" in required and "apps/portagehub/README.md" in required
 
 
 def test_the_installed_files_and_the_live_polkit_rule_agree() -> None:
@@ -416,6 +435,50 @@ def test_the_installed_files_and_the_live_polkit_rule_agree() -> None:
     assert desktop["Desktop Entry"]["Exec"] == "portagehub"
     fsscript = (ROOT / "iso/fsscript-stage2.sh").read_text()
     assert "/usr/bin/portagehub" in fsscript and "/usr/libexec/portagehub-helper" in fsscript
+
+
+def test_gentoo_settings_policy_rule_and_installed_files_agree() -> None:
+    """Gentoo Settings' helper is what its policy names; the live user's rule allows that action without a password."""
+    source = ROOT / "apps/gentoo-settings"
+    action = ElementTree.parse(source / "dist/org.gentoosettings.helper.policy").getroot().find("action")
+    assert action is not None and action.get("id") == "org.gentoosettings.helper"
+    annotate = {a.get("key"): a.text for a in action.findall("annotate")}
+    assert annotate["org.freedesktop.policykit.exec.path"] == "/usr/libexec/gentoo-settings-helper"
+    assert (source / "src/bin/gentoo-settings-helper.rs").is_file()
+    rule = (ROOT / "iso/root_overlay/etc/polkit-1/rules.d/50-gentoo-live.rules").read_text()
+    assert 'action.id == "org.gentoosettings.helper"' in rule
+    ebuild = ebuild_of(OVERLAY / "app-admin/gentoo-settings").read_text()
+    assert "dobin target/release/gentoo-settings\n" in ebuild
+    assert re.search(r"exeinto /usr/libexec\n\s+doexe target/release/gentoo-settings-helper\n", ebuild)
+    assert "domenu dist/gentoo-settings.desktop" in ebuild and "doins dist/org.gentoosettings.helper.policy" in ebuild
+    fsscript = (ROOT / "iso/fsscript-stage2.sh").read_text()
+    assert "/usr/bin/gentoo-settings" in fsscript and "/usr/libexec/gentoo-settings-helper" in fsscript
+
+
+def test_kernelsmith_policy_rule_and_installed_files_agree() -> None:
+    """KernelSmith runs its jobs through pkexec on itself; the ebuild fills in where it is installed."""
+    source = ROOT / "apps/kernelsmith"
+    text = (source / "packaging/org.kernelsmith.policy").read_text()
+    action = ElementTree.fromstring(text).find("action")
+    assert action is not None and action.get("id") == "org.kernelsmith.run-job"
+    annotate = {a.get("key"): a.text for a in action.findall("annotate")}
+    assert annotate["org.freedesktop.policykit.exec.path"] == "@BINDIR@/kernelsmith"
+    rule = (ROOT / "iso/root_overlay/etc/polkit-1/rules.d/50-gentoo-live.rules").read_text()
+    assert 'action.id == "org.kernelsmith.run-job"' in rule
+    ebuild = ebuild_of(OVERLAY / "sys-kernel/kernelsmith").read_text()
+    assert "dobin target/release/kernelsmith\n" in ebuild and "--package kernelsmith" in ebuild
+    assert 'sed "s|@BINDIR@|${EPREFIX}/usr/bin|" packaging/org.kernelsmith.policy' in ebuild
+    assert "domenu packaging/kernelsmith.desktop" in ebuild and "doicon -s scalable packaging/kernelsmith.svg" in ebuild
+    assert 'name = "kernelsmith"' in (source / "crates/app/Cargo.toml").read_text()
+    assert "/usr/bin/kernelsmith" in (ROOT / "iso/fsscript-stage2.sh").read_text()
+
+
+@pytest.mark.parametrize(("app", "source"), [("gentoo-settings", "/home/edo/Downloads/Gentoo-Settings"),
+                                             ("kernelsmith", "https://github.com/firesand/kernelsmith.git")])
+def test_the_new_applications_say_where_they_come_from(app: str, source: str) -> None:
+    fields = dict(line.split(": ", 1) for line in (ROOT / "apps" / app / "UPSTREAM").read_text().splitlines())
+    assert re.fullmatch(r"[0-9a-f]{40}", fields["commit"]) and fields["subject"] and fields["date"] and fields["source"] == source
+    assert not (ROOT / "apps" / app / "packaging/gentoo").exists() and not (ROOT / "apps" / app / "docs/screenshots").exists()
 
 
 def test_the_imported_sources_say_where_they_come_from() -> None:

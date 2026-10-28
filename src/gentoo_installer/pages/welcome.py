@@ -102,7 +102,7 @@ class WelcomePage(Page):
         explore = QLabel("Explore the included tools:")
         explore.setProperty("muted", True)
         companions.addWidget(explore)
-        for tool, caption in (("hwmonux", "HWMonux"), ("portagehub", "PortageHub")):
+        for tool, caption in (("hwmonux", "HWMonux"), ("portagehub", "PortageHub"), ("gentoo-settings", "Gentoo Settings"), ("kernelsmith", "KernelSmith")):
             button = QPushButton(caption)
             button.setObjectName("linkButton")
             button.clicked.connect(lambda _=False, name=tool: self.applicationRequested.emit(name))

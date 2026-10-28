@@ -178,6 +178,22 @@ class KernelFilesTests(unittest.TestCase):
                 self.assertFalse((root / "etc/kernel/config.d/00-installer.config").exists())
                 self.assertEqual(c.kernel_extra_atoms(m), [])
 
+    def test_the_newest_kernel_series_accepts_the_testing_kernel_and_the_long_term_one_does_not(self) -> None:
+        """The user's choice of 2026-10-28: the newest Gentoo kernel by default, so an update brings 7.3 as soon as Gentoo ships it."""
+        for kernel in ("gentoo-kernel-bin", "gentoo-kernel"):
+            with self.subTest(kernel=kernel):
+                root, m, _ = self.prepare(kernel=kernel)
+                self.assertEqual(m.system.kernel_series, "newest")
+                keywords = read(root, "etc/portage/package.accept_keywords/installer-kernel")
+                self.assertEqual([line for line in keywords.splitlines() if not line.startswith("#")],
+                                 ["sys-kernel/gentoo-kernel-bin ~amd64", "sys-kernel/gentoo-kernel ~amd64", "virtual/dist-kernel ~amd64"])
+                self.assertIn("newest Gentoo kernel", read(root, "etc/kernel/README"))
+                root, _, _ = self.prepare(kernel=kernel, kernel_series="longterm")
+                self.assertFalse((root / "etc/portage/package.accept_keywords/installer-kernel").exists())
+                self.assertIn("long-term kernel", read(root, "etc/kernel/README"))
+        root, _, _ = self.prepare(kernel="manual")
+        self.assertFalse((root / "etc/portage/package.accept_keywords/installer-kernel").exists())
+
     def test_eclean_kernel_comes_with_its_option(self) -> None:
         m = target_manifest()
         m.options.eclean_kernel = True

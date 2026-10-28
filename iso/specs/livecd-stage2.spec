@@ -59,7 +59,7 @@ livecd/rcadd:
 	gentoo-installerd|default
 	gentoo-rescue-approver|default
 	sshd|default
-# dev-lang/rust-bin (about 680 MiB) is only needed to build PortageHub in stage1; nothing
+# dev-lang/rust-bin (about 680 MiB) is only needed to build PortageHub, Gentoo Settings and KernelSmith in stage1; nothing
 # installed depends on it at run time (checked against /var/db/pkg of the r19 image).
 # dev-lang/go is only a BDEPEND of restic and rclone (go-module eclass; their programs are static); the
 # first Wave 6 image carried it and grew by 144 MiB.

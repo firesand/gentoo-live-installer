@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE pkgmetadata SYSTEM "https://www.gentoo.org/dtd/metadata.dtd">
+<pkgmetadata>
+	<longdescription lang="en">
+		KernelSmith detects the hardware and walks through building a slim, optimized kernel
+		(BORE, ThinLTO, AutoFDO, NTSYNC, native CPU tuning, localmodconfig) with plain-language
+		explanations. It installs through installkernel, rebuilds out-of-tree modules such as
+		nvidia-drivers, supports OpenRC and systemd, and uninstalls the kernels it built cleanly.
+		It can also hand its settings to a Portage distribution kernel via /etc/kernel/config.d.
+	</longdescription>
+	<upstream>
+		<remote-id type="github">firesand/kernelsmith</remote-id>
+	</upstream>
+</pkgmetadata>

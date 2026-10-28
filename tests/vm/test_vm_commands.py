@@ -119,9 +119,9 @@ def test_check_resume_flag_is_opt_in(tmp_path):
 
 
 @pytest.mark.parametrize(("selection", "expected"), [
-    (None, "both"), ("both", "both"), ("portagehub", "portagehub"), ("none", "none"),
+    (None, "all"), ("all", "all"), ("rust", "rust"), ("both", "both"), ("portagehub", "portagehub"), ("none", "none"),
 ])
-def test_companion_selection_option_defaults_to_existing_both(tmp_path, selection, expected):
+def test_companion_selection_option_defaults_to_all_as_the_installer_does(tmp_path, selection, expected):
     base = ["--scenario", "openrc", "--iso", str(tmp_path / "installer.iso")]
     if selection is not None:
         base.extend(("--companions", selection))
@@ -130,7 +130,8 @@ def test_companion_selection_option_defaults_to_existing_both(tmp_path, selectio
 
 @pytest.mark.parametrize(("scenario", "options", "warned"), [
     ("openrc", {"companions": "both", "memory": 4096}, True),       # the first real runs: the compiler was killed
-    ("defaults", {"companions": "both", "memory": 4096}, True),
+    ("defaults", {"companions": "all", "memory": 4096}, True),
+    ("openrc", {"companions": "rust", "memory": 4096}, False),      # three Rust builds, no PySide
     ("openrc", {"companions": "both", "memory": 12288}, False),     # the memory of a desktop install
     ("openrc", {"companions": "portagehub", "memory": 4096}, False),
     ("openrc", {"companions": "none", "memory": 2048}, False),
@@ -139,7 +140,8 @@ def test_installing_hwmonux_on_a_small_machine_is_called_out_before_an_hour_of_c
     note = vm.companion_memory_note(vm.SCENARIO_MAP[scenario], argparse.Namespace(**options))
     assert bool(note) is warned
     if warned:
-        assert "PySide" in note and "--companions portagehub" in note and "--memory 12288 --build-jobs 1 --swap-mib 4096" in note and f"{options['memory']} MiB" in note
+        assert "PySide" in note and "--companions rust" in note and "--memory 12288 --build-jobs 1 --swap-mib 4096" in note and f"{options['memory']} MiB" in note
+        assert f"--companions {options['companions']} installs HWMonux" in note
 
 
 def test_the_note_reaches_the_person_who_started_the_run(tmp_path, capsys, monkeypatch):
@@ -149,7 +151,7 @@ def test_the_note_reaches_the_person_who_started_the_run(tmp_path, capsys, monke
     argv = ["--scenario", "bios", "--iso", str(iso), "--ssh-host", "127.0.0.1", "--ssh-port", "40222", "--ssh-private-key", str(iso)]
     with pytest.raises(SystemExit):
         vm.main(argv)
-    assert "NOTE bios: --companions both installs HWMonux" in capsys.readouterr().err
+    assert "NOTE bios: --companions all installs HWMonux" in capsys.readouterr().err
 
 
 def test_companion_selection_rejects_unknown_value(tmp_path):
