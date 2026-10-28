@@ -1,6 +1,6 @@
 FROM gentoo/stage3:amd64-openrc@sha256:d60b786ab715b2bd5ec0efdbe90a55b261b68ba3f56c0a7f6b3de6ff768f034e
 
-ARG GENTOO_TREEISH=8694f43d32823e774da57921c6927f3a76c063a1
+ARG GENTOO_TREEISH=c845c18115c2412baaf8168ba50c0a910339eeeb
 # 40 hex digits, from iso/pins.env (scripts/build-iso.sh passes it).
 ARG GENTOO_TREEISH_SIGNER_FPR
 
