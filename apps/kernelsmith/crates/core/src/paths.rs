@@ -11,14 +11,6 @@ pub const APP: &str = "kernelsmith";
 /// integration records.
 pub const SYSTEM_STATE: &str = "/var/lib/kernelsmith";
 pub const SYSTEM_PATCH_DIR: &str = "/etc/kernelsmith/patches";
-/// Persistent module signing key: one PEM holding the private key followed by
-/// its certificate (the layout `scripts/sign-file` and Portage's
-/// MODULES_SIGN_KEY both accept). Created by the build script on first use.
-pub const SIGNING_KEY: &str = "/etc/kernelsmith/keys/modules-signing.pem";
-/// Portage pieces that keep rebuilt out-of-tree drivers signed with that key.
-pub const PORTAGE_SIGN_ENV: &str = "/etc/portage/env/kernelsmith-modules-sign.conf";
-pub const PORTAGE_SIGN_PKGENV: &str = "/etc/portage/package.env/kernelsmith-modules-sign";
-pub const PORTAGE_SIGN_USE: &str = "/etc/portage/package.use/kernelsmith-modules-sign";
 
 pub fn system_state() -> PathBuf {
     PathBuf::from(SYSTEM_STATE)

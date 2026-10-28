@@ -11,9 +11,8 @@ use crate::plan::{BuildPlan, Resolved, Seed};
 use crate::profiles::{self, ProfileId};
 use crate::slim::SlimMode;
 use crate::sources::KernelSource;
-use crate::paths;
 use crate::tuning;
-use crate::tweaks::{self, Op};
+use crate::tweaks::Op;
 use crate::util::{format_epoch, now_epoch, shell_quote as q};
 use std::fmt::Write as _;
 use std::path::Path;
@@ -66,10 +65,6 @@ pub struct ScriptInputs<'a> {
     pub resolved: &'a Resolved,
     /// Directory holding seed.config, modules.lst, patches/, plan.toml.
     pub job_dir: &'a Path,
-    /// What the seed really is (see `plan::resolve_seed`).
-    pub seed_label: &'a str,
-    /// Keep the (untrimmed) seed with the kernel for builds on top of it.
-    pub store_seed: bool,
 }
 
 fn expect_token(op: &Op) -> String {
@@ -107,13 +102,11 @@ fn config_calls(ops: &[Op]) -> String {
 }
 
 pub fn generate(inp: &ScriptInputs) -> String {
-    let ScriptInputs { plan, sys, src, resolved, job_dir, seed_label, store_seed } = inp;
+    let ScriptInputs { plan, sys, src, resolved, job_dir } = inp;
     let job = job_dir.display().to_string();
     let profile = profiles::get(plan.profile);
     let clang = plan.tweaks.get("compiler").map(String::as_str) == Some("clang");
     let autofdo_ready = plan.tweaks.get("autofdo").is_some_and(|v| v != "off");
-    let signing = plan.tweaks.get("signing").is_some_and(|v| v != "off");
-    let anticheat = plan.tweaks.get("anticheat").map(String::as_str) == Some("ready");
     let stages = stages_for(plan);
 
     let mut path = String::new();
@@ -218,9 +211,6 @@ echo "::plan::{stages}""#,
     if plan.tweaks.get("debug").map(String::as_str) == Some("btf") || plan.tweaks.get("sched_ext").map(String::as_str) == Some("on") {
         tools.push("pahole");
     }
-    if signing {
-        tools.push("openssl");
-    }
     let _ = writeln!(
         s,
         r#"
@@ -252,15 +242,10 @@ note "Copying the source to $TREE (instant on btrfs/xfs thanks to reflinks)"
 TREE_CREATED=1
 cp -a --reflink=auto "$SRC" "$TREE"
 mkdir -p "$TREE/.kernelsmith"
-cp "$JOB/plan.toml" "$TREE/.kernelsmith/plan.toml"{store_seed}
+cp "$JOB/plan.toml" "$TREE/.kernelsmith/plan.toml"
 note "Cleaning the copy (make mrproper)"
 "${{MAKE[@]}}" -s mrproper
-rm -f "$TREE"/localversion*"#,
-        store_seed = if *store_seed {
-            "\n# The untrimmed base configuration: a kernel built on top of this one starts from it,\n# not from this kernel's trimmed config.\ncp \"$JOB/seed.config\" \"$TREE/.kernelsmith/seed.config\""
-        } else {
-            ""
-        },
+rm -f "$TREE"/localversion*"#
     );
 
     // ── Patches ──
@@ -290,9 +275,9 @@ apply_patch() {{
         Seed::Defconfig => r#"note "Starting from upstream defaults (make defconfig)"
 "${MAKE[@]}" -s defconfig"#
             .to_string(),
-        _ => format!(
+        other => format!(
             "note {}\ncp \"$JOB/seed.config\" \"$TREE/.config\"",
-            q(&format!("Starting from: {seed_label}"))
+            q(&format!("Starting from: {}", other.label()))
         ),
     };
     let mut apply = String::from("apply_choices() {\n");
@@ -314,50 +299,6 @@ apply_patch() {{
         )
     };
 
-    let signing_setup = if signing {
-        let key = if plan.needs_root() { paths::SIGNING_KEY.to_string() } else { format!("{job}/keys/modules-signing.pem") };
-        format!(
-            r#"
-# ── Module signing key (created once, reused by every build) ─────────────────
-SIGN_KEY={key}
-SIGN_CERT=
-# A key already configured for Portage (MODULES_SIGN_KEY in make.conf or an env file)
-# wins: one key per machine, or drivers signed for one kernel get refused by the other.
-if command -v portageq >/dev/null; then
-    PORTAGE_SIGN_KEY=$(portageq envvar MODULES_SIGN_KEY 2>/dev/null || true)
-    if [[ -n $PORTAGE_SIGN_KEY && -s $PORTAGE_SIGN_KEY ]]; then
-        SIGN_KEY=$PORTAGE_SIGN_KEY
-        SIGN_CERT=$(portageq envvar MODULES_SIGN_CERT 2>/dev/null || true)
-        note "Using the module signing key Portage already knows: $SIGN_KEY"
-    fi
-fi
-if [[ ! -s $SIGN_KEY ]]; then
-    note "Creating the module signing key $SIGN_KEY"
-    mkdir -p "$(dirname "$SIGN_KEY")"
-    (
-        umask 077
-        openssl req -new -x509 -newkey rsa:4096 -sha512 -days 36500 -nodes -batch             -subj "/CN=Kernelsmith module signing key ($(cat /proc/sys/kernel/hostname 2>/dev/null || echo pc))/"             -keyout "$SIGN_KEY.tmp" -out "${{SIGN_KEY%.pem}}.crt" >/dev/null 2>&1
-        # One PEM with key + certificate: what scripts/sign-file and Portage's MODULES_SIGN_KEY expect.
-        cat "${{SIGN_KEY%.pem}}.crt" >> "$SIGN_KEY.tmp"
-        mv "$SIGN_KEY.tmp" "$SIGN_KEY"
-    )
-    # Portage signs rebuilt drivers as the portage user, so the group may read the key.
-    if getent group portage >/dev/null; then
-        chgrp portage "$SIGN_KEY" "${{SIGN_KEY%.pem}}.crt" && chmod 0640 "$SIGN_KEY" && chmod 0644 "${{SIGN_KEY%.pem}}.crt"
-    fi
-fi
-[[ -n $SIGN_CERT && -s $SIGN_CERT ]] || SIGN_CERT=${{SIGN_KEY%.pem}}.crt
-[[ -s $SIGN_CERT ]] || openssl x509 -in "$SIGN_KEY" -out "$SIGN_CERT"
-kconf --set-str MODULE_SIG_KEY "$SIGN_KEY"
-"${{MAKE[@]}}" -s olddefconfig
-SIGN_HASH=$(sed -n 's/^CONFIG_MODULE_SIG_HASH="\(.*\)"/\1/p' "$TREE/.config")
-SIGN_HASH=${{SIGN_HASH:-sha512}}"#,
-            key = q(&key),
-        )
-    } else {
-        String::new()
-    };
-
     let _ = writeln!(
         s,
         r#"
@@ -373,7 +314,7 @@ apply_choices
 "${{MAKE[@]}}" -s olddefconfig
 # Second pass: some options only become selectable once others are on.
 apply_choices
-"${{MAKE[@]}}" -s olddefconfig{signing_setup}"#
+"${{MAKE[@]}}" -s olddefconfig"#
     );
 
     // ── Verify ──
@@ -422,24 +363,13 @@ cp "$TREE/.config" "$TREE/.kernelsmith/config""#
     );
 
     // ── Build ──
-    let afdo_check = if plan.profile_data.is_some() {
-        r#"
-# The profile only helps if the compiler actually used it.
-if grep -qs -- '-fprofile-sample-use' "$TREE/init/.main.o.cmd"; then
-    note "AutoFDO profile applied to the build"
-else
-    warn "The AutoFDO profile was NOT applied (no -fprofile-sample-use in the compile commands)"
-fi"#
-    } else {
-        ""
-    };
     let _ = writeln!(
         s,
         r#"
 # ── 6. Compile ───────────────────────────────────────────────────────────────
 stage build "Compiling the kernel"
 "${{MAKE[@]}}"
-note "Kernel image: $("${{MAKE[@]}}" -s image_name)"{afdo_check}"#
+note "Kernel image: $("${{MAKE[@]}}" -s image_name)""#
     );
 
     if plan.install.install {
@@ -467,8 +397,6 @@ write_manifest() {{
         echo "modules_dir = \"/lib/modules/$REL\""
         echo "previous_symlink = \"$PREV_LINK\""
         echo "autofdo_ready = {autofdo}"
-        echo "autofdo_profile = {afdo_profile}"
-        echo "signing_key = {signing_key}"
         echo "files = ["
         if [[ -f $TREE/.kernelsmith/boot.files ]]; then
             while read -r f; do printf '  "%s",\n' "$f"; done < "$TREE/.kernelsmith/boot.files"
@@ -491,10 +419,9 @@ stage modules "Installing modules"
 INSTALL_STARTED=1
 write_manifest installing
 "${{MAKE[@]}}" INSTALL_MOD_STRIP=1 modules_install
-{sign_funcs}
+
 stage kernel "Installing kernel & updating bootloader"
 boot_snapshot > "$TREE/.kernelsmith/boot.before"
-{eac_entry}
 # Call Gentoo's installkernel directly (runs dracut/ugrd and updates GRUB or
 # systemd-boot per its USE flags); `make install` is only the fallback.
 if command -v installkernel >/dev/null; then
@@ -505,10 +432,6 @@ fi"##,
             name = q(&format!("\"{}\"", plan.name.replace('"', ""))),
             profile = q(&format!("\"{}\"", profile_slug(plan.profile))),
             autofdo = autofdo_ready,
-            afdo_profile = q(&format!("\"{}\"", plan.profile_data.as_ref().map(|p| p.afdo.display().to_string()).unwrap_or_default().replace('"', ""))),
-            signing_key = if signing { r#"\"$SIGN_KEY\""# } else { r#""""# },
-            sign_funcs = if signing { SIGN_FUNCS } else { "" },
-            eac_entry = if anticheat { eac_entry_snippet(sys) } else { String::new() },
         );
         if sys.boot.installkernel.is_none() {
             let _ = writeln!(
@@ -527,7 +450,6 @@ fi"#
 # Only files that are new AND carry this kernel's name belong to it.
 comm -13 "$TREE/.kernelsmith/boot.before" "$TREE/.kernelsmith/boot.after" \
     | grep -F -- "$REL" > "$TREE/.kernelsmith/boot.files" || true
-if [[ -f $TREE/.kernelsmith/extra.files ]]; then cat "$TREE/.kernelsmith/extra.files" >> "$TREE/.kernelsmith/boot.files"; fi
 note "Installed: $(tr '\n' ' ' < "$TREE/.kernelsmith/boot.files")"
 write_manifest installed"#
         );
@@ -556,20 +478,17 @@ done"#
             } else {
                 "PRESERVE="
             };
-            let portage_sign = if signing { portage_sign_snippet(sys) } else { String::new() };
             let _ = writeln!(
                 s,
                 r#"
 stage modrebuild "Rebuilding driver modules"
 {preserve}
-{portage_sign}
 MODREBUILD_OK=1
 note "Running: emerge @module-rebuild for the new kernel"
 if ! KERNEL_DIR="$TREE" emerge --ask=n --oneshot --quiet-build=y --color=n --nospinner @module-rebuild; then
     MODREBUILD_OK=0
     warn "Some driver modules failed to rebuild. The kernel is installed; fix the error above and run: KERNEL_DIR=$TREE emerge @module-rebuild"
 fi
-{sign_call}
 if [[ -n $PRESERVE && -d $PRESERVE ]]; then
     restored=0
     while read -r f; do
@@ -588,8 +507,7 @@ if [[ -n $PRESERVE && -d $PRESERVE ]]; then
     fi
     rm -rf "$PRESERVE"
 fi
-echo "::modrebuild::$MODREBUILD_OK""#,
-                sign_call = if signing { "sign_modules \"/lib/modules/$REL\"" } else { "" },
+echo "::modrebuild::$MODREBUILD_OK""#
             );
         }
     }
@@ -624,154 +542,6 @@ sync
 echo "::done::$REL""#
     );
     s
-}
-
-/// Shell functions for signing modules after the fact: every `.ko` under a
-/// directory that lacks the kernel's signature trailer gets one, compressed
-/// modules included. In-tree modules are already signed by `modules_install`.
-const SIGN_FUNCS: &str = r#"
-# ── Module signing helpers ────────────────────────────────────────────────────
-has_sig() {
-    # $1: module file, possibly compressed. The trailer is the last 28 bytes.
-    case $1 in
-        *.zst) zstd -dcq "$1" | tail -c 28 | grep -aq 'Module signature appended' ;;
-        *.xz)  xz -dc "$1" | tail -c 28 | grep -aq 'Module signature appended' ;;
-        *.gz)  gzip -dc "$1" | tail -c 28 | grep -aq 'Module signature appended' ;;
-        *)     tail -c 28 "$1" | grep -aq 'Module signature appended' ;;
-    esac
-}
-sign_modules() {
-    local dir=$1 ko plain signed=0 total=0
-    [[ -x $TREE/scripts/sign-file ]] || { warn "$TREE/scripts/sign-file is missing; out-of-tree modules were not signed"; return 0; }
-    while IFS= read -r -d '' ko; do
-        total=$((total + 1))
-        has_sig "$ko" && continue
-        plain=$ko
-        case $ko in
-            *.zst) plain=${ko%.zst}; zstd -dq --rm "$ko" -o "$plain" ;;
-            *.xz)  plain=${ko%.xz};  xz -d "$ko" ;;
-            *.gz)  plain=${ko%.gz};  gzip -d "$ko" ;;
-        esac
-        "$TREE/scripts/sign-file" "$SIGN_HASH" "$SIGN_KEY" "$SIGN_CERT" "$plain"
-        signed=$((signed + 1))
-        case $ko in
-            *.zst) zstd -q --rm -19 "$plain" ;;
-            *.xz)  xz "$plain" ;;
-            *.gz)  gzip -9 "$plain" ;;
-        esac
-    done < <(find "$dir" -type f \( -name '*.ko' -o -name '*.ko.zst' -o -name '*.ko.xz' -o -name '*.ko.gz' \) -print0)
-    note "Signed $signed of $total modules in $dir (the others already carried a signature)"
-}
-sign_modules "/lib/modules/$REL"
-"#;
-
-/// Portage configuration so that drivers rebuilt later (a new NVIDIA release,
-/// `emerge @module-rebuild`) are signed with the same key by linux-mod-r1.
-fn portage_sign_snippet(sys: &SystemInfo) -> String {
-    let atoms: Vec<&str> = sys.external_modules.iter().map(|p| p.atom.as_str()).collect();
-    if atoms.is_empty() {
-        return String::new();
-    }
-    let pkgenv: Vec<String> = atoms.iter().map(|a| format!("{a} kernelsmith-modules-sign.conf")).collect();
-    let pkguse: Vec<String> = atoms.iter().map(|a| format!("{a} modules-sign")).collect();
-    format!(
-        r#"# ── Keep Portage signing rebuilt drivers with the Kernelsmith key ──────────
-if [[ -d /etc/portage && ( -d /etc/portage/package.use || ! -e /etc/portage/package.use ) ]]; then
-    mkdir -p /etc/portage/env /etc/portage/package.env /etc/portage/package.use "$STATE/portage"
-    cat > {env} <<KS_EOF
-# Written by Kernelsmith: sign out-of-tree modules with the Kernelsmith key (linux-mod-r1).
-MODULES_SIGN_KEY="$SIGN_KEY"
-MODULES_SIGN_CERT="$SIGN_CERT"
-MODULES_SIGN_HASH="$SIGN_HASH"
-KS_EOF
-    printf '%s\n' {pkgenv} > {pkgenv_file}
-    printf '%s\n' {pkguse} > {pkguse_file}
-    # Listed like a Portage-mode integration, so Library → "Runtime tuning & Portage" can remove it.
-    printf '%s\n' {env} {pkgenv_file} {pkguse_file} > "$STATE/portage/signing.list"
-    note "Portage will sign {n} driver package(s) with $SIGN_KEY on every rebuild"
-else
-    warn "/etc/portage/package.use is a file; not adding USE=modules-sign for your driver packages"
-fi"#,
-        env = q(paths::PORTAGE_SIGN_ENV),
-        pkgenv = pkgenv.iter().map(|l| q(l)).collect::<Vec<_>>().join(" "),
-        pkgenv_file = q(paths::PORTAGE_SIGN_PKGENV),
-        pkguse = pkguse.iter().map(|l| q(l)).collect::<Vec<_>>().join(" "),
-        pkguse_file = q(paths::PORTAGE_SIGN_USE),
-        n = atoms.len(),
-    )
-}
-
-/// A GRUB script that adds a "(EAC)" entry booting this kernel with the
-/// command line Easy Anti-Cheat Linux v2 checks. Root device, subvolume and
-/// early microcode are derived the way 10_linux does it.
-fn eac_entry_snippet(sys: &SystemInfo) -> String {
-    let cmdline = tweaks::eac_cmdline(sys);
-    format!(
-        r##"# ── Anti-cheat boot entry (same kernel, EAC command line) ──────────────────
-if [[ -d /etc/grub.d ]] && command -v grub-mkconfig >/dev/null; then
-    EAC_SCRIPT="/etc/grub.d/41_kernelsmith-eac-$REL"
-    cat > "$EAC_SCRIPT" <<'KS_EOF'
-#!/bin/sh
-# Written by Kernelsmith: boots __REL__ with the options Easy Anti-Cheat Linux v2
-# checks on the measured command line. The normal entry stays unlocked.
-set -e
-prefix="/usr"
-exec_prefix="/usr"
-datarootdir="/usr/share"
-. "${{datarootdir}}/grub/grub-mkconfig_lib"
-REL=__REL__
-EAC_REQ="{cmdline}"
-kernel=/boot/vmlinuz-$REL
-[ -e "$kernel" ] || exit 0
-initrd=
-for i in /boot/initramfs-$REL.img /boot/initrd-$REL /boot/initrd.img-$REL; do
-    [ -e "$i" ] && initrd=$i && break
-done
-case x"$GRUB_DEVICE_UUID" in
-    x) LINUX_ROOT_DEVICE=${{GRUB_DEVICE}} ;;
-    *) LINUX_ROOT_DEVICE=UUID=${{GRUB_DEVICE_UUID}} ;;
-esac
-case x"$GRUB_FS" in
-    xbtrfs)
-        rootsubvol="`make_system_path_relative_to_its_root /`"
-        rootsubvol="${{rootsubvol#/}}"
-        [ "x${{rootsubvol}}" != x ] && GRUB_CMDLINE_LINUX="rootflags=subvol=${{rootsubvol}} ${{GRUB_CMDLINE_LINUX}}"
-        ;;
-esac
-early=
-for i in ${{GRUB_EARLY_INITRD_LINUX_STOCK}} ${{GRUB_EARLY_INITRD_LINUX_CUSTOM}}; do
-    [ -e "/boot/${{i}}" ] && early="$early $(make_system_path_relative_to_its_root "/boot/${{i}}")"
-done
-gettext_printf "Found anti-cheat entry kernel: %s\n" "$kernel" >&2
-cat <<ENTRY
-menuentry 'Gentoo (EAC) $REL' --class gentoo --class gnu-linux --class gnu --class os \$menuentry_id_option 'kernelsmith-eac-$REL' {{
-	load_video
-	insmod gzio
-	insmod part_gpt
-	insmod btrfs
-ENTRY
-[ x"$GRUB_DEVICE_BOOT" != x ] && prepare_grub_to_access_device "${{GRUB_DEVICE_BOOT}}" | grub_add_tab
-cat <<ENTRY
-	echo 'Loading Linux $REL (anti-cheat: lockdown=integrity, signed modules only, IOMMU on)'
-	linux $(make_system_path_relative_to_its_root "$kernel") root=${{LINUX_ROOT_DEVICE}} ro ${{GRUB_CMDLINE_LINUX}} ${{GRUB_CMDLINE_LINUX_DEFAULT}} ${{EAC_REQ}}
-ENTRY
-if [ -n "$initrd" ]; then
-    cat <<ENTRY
-	echo 'Loading initial ramdisk ...'
-	initrd${{early}} $(make_system_path_relative_to_its_root "$initrd")
-ENTRY
-fi
-echo '}}'
-KS_EOF
-    sed -i "s|__REL__|$REL|g" "$EAC_SCRIPT"
-    chmod 0755 "$EAC_SCRIPT"
-    echo "$EAC_SCRIPT" >> "$TREE/.kernelsmith/extra.files"
-    note "Added the anti-cheat GRUB entry script $EAC_SCRIPT"
-else
-    warn "No GRUB: add a boot entry for $REL yourself with these options: {cmdline}"
-fi"##,
-        cmdline = cmdline,
-    )
 }
 
 pub fn profile_slug(p: ProfileId) -> &'static str {
@@ -826,8 +596,6 @@ mod tests {
         p.patches.push(PlannedPatch { id: "bore".into(), title: "BORE scheduler".into(), file: PathBuf::from("/tmp/x/0001-bore.patch"), url: None });
         p.profile_data = Some(ProfileData { afdo: PathBuf::from("/home/u/kernel.afdo"), propeller_prefix: None });
         p.tweaks.insert("autofdo".into(), "autofdo".into());
-        p.tweaks.insert("signing".into(), "enforce".into());
-        p.tweaks.insert("anticheat".into(), "ready".into());
         p
     }
 
@@ -838,9 +606,8 @@ mod tests {
         let plan = full_plan(&sys);
         let resolved = plan::resolve(&plan, &sys, &src, None);
         assert_eq!(resolved.release, "7.3.0-gentoo-ks-gaming");
-        let s = generate(&ScriptInputs { plan: &plan, sys: &sys, src: &src, resolved: &resolved, job_dir: Path::new("/tmp/job"), seed_label: "Your current kernel's configuration", store_seed: true });
+        let s = generate(&ScriptInputs { plan: &plan, sys: &sys, src: &src, resolved: &resolved, job_dir: Path::new("/tmp/job") });
         bash_ok(&s);
-        assert!(s.contains("cp \"$JOB/seed.config\" \"$TREE/.kernelsmith/seed.config\""));
         for needle in [
             "set -Eeuo pipefail",
             "LLVM=1",
@@ -857,35 +624,11 @@ mod tests {
             "verify GENTOO_LINUX_INIT_SCRIPT y 1",
             "verify BTRFS_FS y 1",
             "verify DRM_FBDEV_EMULATION y 1",
-            "verify VMD y 1",
-            "verify MODULE_SIG_FORCE y 0",
-            "verify SECURITY_LOCKDOWN_LSM_EARLY y 0",
-            "verify NR_CPUS 16 0",
-            "openssl req -new -x509",
-            "kconf --set-str MODULE_SIG_KEY",
-            "scripts/sign-file",
-            "sign_modules \"/lib/modules/$REL\"",
-            "portageq envvar MODULES_SIGN_KEY",
-            "$STATE/portage/signing.list",
-            "/etc/portage/env/kernelsmith-modules-sign.conf",
-            "x11-drivers/nvidia-drivers modules-sign",
-            "41_kernelsmith-eac-$REL",
-            "lockdown=integrity lsm=landlock,lockdown,yama,integrity,bpf",
-            "intel_iommu=on",
-            "-fprofile-sample-use",
             "/etc/sysctl.d/90-kernelsmith.conf",
             "::done::$REL",
         ] {
             assert!(s.contains(needle), "script lacks: {needle}");
         }
-        // The embedded GRUB script must itself be valid POSIX sh.
-        let start = s.find("#!/bin/sh
-# Written by Kernelsmith").expect("grub script");
-        let end = start + s[start..].find("
-KS_EOF
-").expect("heredoc end");
-        let grub = s[start..end].replace("__REL__", "7.3.0-gentoo-ks-gaming");
-        bash_ok(&grub);
         // The cleanup trap must only ever delete a tree this run created.
         assert!(s.contains("$TREE_CREATED -eq 1 && $INSTALL_STARTED -eq 0"));
     }
@@ -896,7 +639,7 @@ KS_EOF
         let src = source();
         let plan = full_plan(&sys);
         let resolved = plan::resolve(&plan, &sys, &src, None);
-        let s = generate(&ScriptInputs { plan: &plan, sys: &sys, src: &src, resolved: &resolved, job_dir: Path::new("/tmp/job"), seed_label: "x", store_seed: false });
+        let s = generate(&ScriptInputs { plan: &plan, sys: &sys, src: &src, resolved: &resolved, job_dir: Path::new("/tmp/job") });
         let start = s.find("boot_snapshot() {").expect("snapshot function");
         let end = start + s[start..].find("\n}\n").expect("function end") + 3;
         let func = &s[start..end];
@@ -917,30 +660,11 @@ KS_EOF
         plan.install.install = false;
         plan.build_root = Some(PathBuf::from("/tmp/ks-builds"));
         let resolved = plan::resolve(&plan, &sys, &src, None);
-        let s = generate(&ScriptInputs { plan: &plan, sys: &sys, src: &src, resolved: &resolved, job_dir: Path::new("/tmp/job"), seed_label: "x", store_seed: false });
+        let s = generate(&ScriptInputs { plan: &plan, sys: &sys, src: &src, resolved: &resolved, job_dir: Path::new("/tmp/job") });
         bash_ok(&s);
-        assert!(!s.contains(".kernelsmith/seed.config"));
         assert!(!s.contains("modules_install"));
         assert!(!s.contains("EUID -eq 0 ]] || fail"));
         assert!(s.contains("TREE=/tmp/ks-builds/linux-7.3.0-gentoo-ks-server"));
-        // Signing is on by default; without root the key lives in the job directory.
-        assert!(s.contains("SIGN_KEY=/tmp/job/keys/modules-signing.pem"));
-        assert!(!s.contains("41_kernelsmith-eac"));
-    }
-
-    #[test]
-    fn signing_off_leaves_no_trace() {
-        let sys = hw::sample();
-        let src = source();
-        let mut plan = BuildPlan::new(&sys, ProfileId::Gaming, &src);
-        plan.tweaks.insert("signing".into(), "off".into());
-        plan.tweaks.insert("anticheat".into(), "off".into());
-        let resolved = plan::resolve(&plan, &sys, &src, None);
-        let s = generate(&ScriptInputs { plan: &plan, sys: &sys, src: &src, resolved: &resolved, job_dir: Path::new("/tmp/job"), seed_label: "x", store_seed: false });
-        bash_ok(&s);
-        for needle in ["SIGN_KEY=", "sign_modules", "kernelsmith-modules-sign", "41_kernelsmith-eac"] {
-            assert!(!s.contains(needle), "script should not contain {needle}");
-        }
     }
 
     #[test]

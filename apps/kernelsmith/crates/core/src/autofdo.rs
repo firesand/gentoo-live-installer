@@ -121,30 +121,6 @@ pub fn rebuild_plan(m: &Manifest, afdo: PathBuf) -> Result<BuildPlan> {
     Ok(plan)
 }
 
-/// The most recently recorded profile for any release. A profile from an older
-/// kernel still applies: AutoFDO matches by function name and simply ignores
-/// code that changed, so reusing it beats building "profile-ready" with no
-/// profile at all.
-pub fn latest_profile() -> Option<PathBuf> {
-    let mut best: Option<(std::time::SystemTime, PathBuf)> = None;
-    for e in std::fs::read_dir(paths::profiles_dir()).into_iter().flatten().flatten() {
-        // Recorded: <release>-<stamp>/kernel.afdo. Imported by hand: any *.afdo file.
-        let p = if e.path().is_dir() { e.path().join("kernel.afdo") } else { e.path() };
-        if p.extension().is_none_or(|x| x != "afdo") {
-            continue;
-        }
-        let Ok(md) = std::fs::metadata(&p) else { continue };
-        if md.len() == 0 {
-            continue;
-        }
-        let t = md.modified().unwrap_or(std::time::UNIX_EPOCH);
-        if best.as_ref().is_none_or(|(bt, _)| t > *bt) {
-            best = Some((t, p));
-        }
-    }
-    best.map(|(_, p)| p)
-}
-
 /// Previously recorded profiles for a release, newest first.
 pub fn profiles_for(release: &str) -> Vec<PathBuf> {
     let mut v: Vec<PathBuf> = std::fs::read_dir(paths::profiles_dir())

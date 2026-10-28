@@ -121,37 +121,6 @@ emerge --ask sys-kernel/cachyos-sources
 After a successful build: reboot and choose the new kernel in your boot menu (GRUB usually makes
 the newest kernel the default). Your previous kernel stays installed as a fallback.
 
-## Module signing & anti-cheat readiness
-
-*Optimizations → Security* has three related options:
-
-- **Module signing** — *Sign* makes the build sign every in-tree module and, after
-  `emerge @module-rebuild`, Kernelsmith signs the out-of-tree ones (NVIDIA, xpadneo, …) with the
-  same key. The key is created once in `/etc/kernelsmith/keys/modules-signing.pem` (root, readable
-  by the `portage` group) and reused by every build; `/etc/portage/env/kernelsmith-modules-sign.conf`
-  plus a `package.env`/`package.use` entry per driver package keep Portage signing them on later
-  rebuilds. If Portage already has a `MODULES_SIGN_KEY` (make.conf or an env file), that key is
-  used instead, so one machine never ends up with two signing keys. *Sign and enforce* additionally
-  sets `MODULE_SIG_FORCE`, so unsigned modules never load.
-  (`modinfo -F signer` only shows the signer when `sys-apps/kmod` has `USE=pkcs7`.)
-- **Anti-cheat readiness** — builds in what Easy Anti-Cheat Linux v2 checks on the machine
-  (lockdown LSM armed early, BPF LSM, `lsm=` order, IOMMU with DMA translation, TPM 2.0 drivers,
-  no MOK keyring trust) and, with GRUB, adds a second menu entry *Gentoo (EAC) <release>* that
-  boots the same kernel with `lockdown=integrity lsm=landlock,lockdown,yama,integrity,bpf
-  iommu.passthrough=0 module.sig_enforce=1 sysctl.kernel.kexec_load_disabled=1` (plus
-  `intel_iommu=on` on Intel). Your normal entry stays unlocked. Epic additionally requires a kernel
-  signed by a key on its well-known list, which no self-built kernel satisfies — this option gets
-  everything else out of the way.
-- **This PC only** trims (expert options): CPU count and single-node memory (`cpu_trim`), no
-  VM-guest code (`guest_trim`), the other CPU vendor's extras, absent CPU features and absent GPU
-  drivers (`platform_trim`), unused LSMs (`lsm_trim`), and the three hardening defaults with a
-  runtime cost (`hardening`, off by default).
-
-The *Hardware fit* step also gained families for encrypted/loop/zram disks with their ciphers,
-more filesystems, Docker/VM networking (br_netfilter, macvlan, vxlan, …), sensors/RGB
-controllers and optical drives/USB serial adapters — the modules that a plain `localmodconfig`
-drops because nothing had loaded them yet.
-
 ## Keeping it up to date
 
 - **Presets** remember every choice. Library → *Rebuild with newest sources* (or a saved preset)
@@ -162,13 +131,6 @@ drops because nothing had loaded them yet.
   kernelsmith build --preset ~/.config/kernelsmith/presets/gaming.toml --latest
   ```
 
-- **Building on top of a Kernelsmith kernel**: a trimmed kernel's own config is a poor base, because
-  every driver the earlier build dropped would stay dropped whatever you tick. Each build therefore
-  keeps the untrimmed configuration it started from in `/usr/src/linux-<release>/.kernelsmith/seed.config`,
-  and "Your current kernel" uses that stored base automatically when the running kernel is a
-  Kernelsmith build (or, for kernels built before this existed, the newest untrimmed seed of any
-  earlier job). The Review step warns when the base is still a trimmed config; `kernelsmith plan --seed FILE`
-  (or `running` / `tree` / `defconfig`) picks the base from the command line.
 - **Portage mode** (Install step → *Export to Portage…*): your choices become a config fragment
   merged by `kernel-build.eclass`, so `gentoo-kernel` / `cachyos-kernel` / `vanilla-kernel` are
   rebuilt with them on every update. Remove it from Library → *Runtime tuning & Portage*.
@@ -193,13 +155,10 @@ drops because nothing had loaded them yet.
 | `~/.local/share/kernelsmith/patches/` | Your own patches (also `/etc/kernelsmith/patches/`) |
 | `~/.local/share/kernelsmith/autofdo/` | Recorded AutoFDO profiles |
 | `~/.cache/kernelsmith/` | Downloaded patches and cached patch listings |
-| `/usr/src/linux-<release>/.kernelsmith/` | The plan, final config, untrimmed seed config, applied patches and logs of that build |
+| `/usr/src/linux-<release>/.kernelsmith/` | The plan, final config, applied patches and logs of that build |
 | `/var/lib/kernelsmith/kernels/<release>.toml` | Install manifest used for uninstall |
 | `/etc/sysctl.d/90-kernelsmith.conf`, `/etc/udev/rules.d/60-kernelsmith-ioschedulers.rules` | Runtime tuning pack |
 | `/etc/kernel/config.d/60-kernelsmith-<name>.config` | Portage mode fragment |
-| `/etc/kernelsmith/keys/modules-signing.pem` (+ `.crt`) | Module signing key, created on first signed build |
-| `/etc/portage/env/kernelsmith-modules-sign.conf`, `package.env/kernelsmith-modules-sign`, `package.use/kernelsmith-modules-sign` | Portage keeps rebuilt drivers signed |
-| `/etc/grub.d/41_kernelsmith-eac-<release>` | Anti-cheat GRUB entry (removed with the kernel) |
 
 ## Command line
 

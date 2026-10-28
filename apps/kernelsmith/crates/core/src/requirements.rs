@@ -75,11 +75,6 @@ pub fn groups(sys: &SystemInfo, inits: &[InitSystem]) -> Vec<ReqGroup> {
     if sys.storage.iter().any(|d| d.kind == DiskKind::Nvme) {
         root.extend([y("BLK_DEV_NVME")]);
     }
-    if sys.vmd {
-        // Intel VMD hides the NVMe drives behind its own controller; built in, the root
-        // disk is reachable even if the initramfs forgets the module.
-        root.push(y("VMD"));
-    }
     if sys.storage.iter().any(|d| matches!(d.kind, DiskKind::Ssd | DiskKind::Hdd)) {
         root.extend([y("SCSI"), y("BLK_DEV_SD"), y("ATA"), y("SATA_AHCI")]);
     }
@@ -160,8 +155,7 @@ pub fn groups(sys: &SystemInfo, inits: &[InitSystem]) -> Vec<ReqGroup> {
         out.push(group(
             "NVIDIA driver requirements",
             "x11-drivers/nvidia-drivers refuses to build without these. DRM_QXL is a tiny virtual-GPU \
-             driver kept only because it selects DRM_TTM and DRM_TTM_HELPER, promptless symbols that \
-             nvidia_drm links against and that vanish once no in-tree GPU driver selects them.",
+             driver kept only because it provides the TTM helper NVIDIA needs.",
             sys.needs_nvidia_support(),
             vec![
                 y("PROC_FS"), y("SYSVIPC"), y("X86_PAT"), y("MODULES"), y("DRM"), y("DRM_SIMPLEDRM"),

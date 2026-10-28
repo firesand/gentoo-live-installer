@@ -278,22 +278,6 @@ pub struct SystemInfo {
     pub dist_kernels: Vec<InstalledPkg>,
     pub source_packages: Vec<InstalledPkg>,
     pub gentoo: bool,
-    /// NUMA nodes the firmware exposes (1 on every desktop and laptop).
-    #[serde(default = "one")]
-    pub numa_nodes: usize,
-    /// Security modules active on the running kernel (`/sys/kernel/security/lsm`).
-    #[serde(default)]
-    pub active_lsms: Vec<String>,
-    /// Firmware word size (`/sys/firmware/efi/fw_platform_size`); 64 on any modern PC.
-    #[serde(default)]
-    pub efi_bits: Option<u32>,
-    /// An Intel VMD controller fronts the NVMe drives, so the root disk may sit behind it.
-    #[serde(default)]
-    pub vmd: bool,
-}
-
-fn one() -> usize {
-    1
 }
 
 impl SystemInfo {
@@ -407,10 +391,6 @@ pub fn sample() -> SystemInfo {
         dist_kernels: vec![],
         source_packages: vec![],
         gentoo: true,
-        numa_nodes: 1,
-        active_lsms: ["capability", "landlock", "lockdown", "yama", "bpf"].iter().map(|s| s.to_string()).collect(),
-        efi_bits: Some(64),
-        vmd: true,
     }
 }
 
@@ -481,34 +461,11 @@ pub fn detect() -> SystemInfo {
             .cloned()
             .collect(),
         gentoo: Path::new("/etc/gentoo-release").exists(),
-        numa_nodes: numa_nodes(),
-        active_lsms: read_trim("/sys/kernel/security/lsm")
-            .map(|s| s.split(',').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect())
-            .unwrap_or_default(),
-        efi_bits: read_trim("/sys/firmware/efi/fw_platform_size").and_then(|s| s.parse().ok()),
-        // Driver bound, or an unbound Intel "RAID bus controller" (VMD shows up as class 0x0104).
-        vmd: pci.iter().any(|d| d.driver.as_deref() == Some("vmd") || (d.vendor_id == 0x8086 && d.class >> 8 == 0x0104)),
         gpus,
         cpu,
         boot,
         toolchain,
     }
-}
-
-/// Memory nodes under /sys/devices/system/node (node0, node1, …).
-fn numa_nodes() -> usize {
-    std::fs::read_dir("/sys/devices/system/node")
-        .map(|d| {
-            d.flatten()
-                .filter(|e| {
-                    let n = e.file_name();
-                    let n = n.to_string_lossy();
-                    n.len() > 4 && n.starts_with("node") && n[4..].chars().all(|c| c.is_ascii_digit())
-                })
-                .count()
-        })
-        .unwrap_or(1)
-        .max(1)
 }
 
 fn detect_cpu() -> CpuInfo {

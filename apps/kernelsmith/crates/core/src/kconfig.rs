@@ -104,12 +104,6 @@ impl KConfig {
     }
 }
 
-/// Kernelsmith stamps every kernel it builds with `LOCALVERSION="-ks-<name>"`,
-/// so a config carrying that is already trimmed to one machine.
-pub fn is_kernelsmith_config(text: &str) -> bool {
-    KConfig::parse(text).str_val("LOCALVERSION").is_some_and(|v| v.starts_with("-ks-"))
-}
-
 /// Decompress `/proc/config.gz`.
 pub fn running_config_text() -> Result<String> {
     let raw = std::fs::read("/proc/config.gz").context("the running kernel does not expose /proc/config.gz")?;
@@ -193,12 +187,5 @@ mod tests {
         assert_eq!(c.str_val("HZ"), Some("1000"));
         assert_eq!(c.str_val("LOCALVERSION"), Some("-x"));
         assert_eq!(c.counts(), (1, 1));
-    }
-
-    #[test]
-    fn kernelsmith_configs_are_recognised() {
-        assert!(is_kernelsmith_config("CONFIG_LOCALVERSION=\"-ks-max\"\n"));
-        assert!(!is_kernelsmith_config("CONFIG_LOCALVERSION=\"-cachyos-dist\"\n"));
-        assert!(!is_kernelsmith_config("CONFIG_X=y\n"));
     }
 }

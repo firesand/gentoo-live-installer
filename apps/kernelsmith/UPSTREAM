@@ -1,4 +1,4 @@
 source: https://github.com/firesand/kernelsmith.git
-commit: 50061cf835c58c4345902bd511a18c670c14ce7c
-date: 2026-10-28 01:01:40 +0700
-subject: Seed: keep the untrimmed base with each kernel and never inherit a trim
+commit: 71d2703bde2fcba16c005fa5490b42e8ae8dac1f
+date: 2026-10-27 19:02:33 +0700
+subject: Initial release of Kernelsmith

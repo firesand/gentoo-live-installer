@@ -156,13 +156,6 @@ pub fn defaults(id: ProfileId, sys: &SystemInfo) -> Selection {
     set("rust", "off");
     set("cmdline", "desktop");
     set("mitigations", "on");
-    set("signing", "sign");
-    set("anticheat", "off");
-    set("lsm_trim", "unused_off");
-    set("hardening", "keep");
-    set("cpu_trim", "this_pc");
-    set("guest_trim", "bare_metal");
-    set("platform_trim", "this_pc");
 
     match id {
         ProfileId::Gaming => {
@@ -203,11 +196,6 @@ pub fn defaults(id: ProfileId, sys: &SystemInfo) -> Selection {
             set("cmdline", "off");
             set("tcp", "bbr");
             set("optimize", "o2");
-            // Servers get cloned, migrated and virtualised: keep the generic layout.
-            set("cpu_trim", "keep");
-            set("guest_trim", "keep");
-            set("platform_trim", "keep");
-            set("lsm_trim", "keep");
         }
     }
     s

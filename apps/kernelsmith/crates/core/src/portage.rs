@@ -102,8 +102,6 @@ pub fn cachyos_use(plan: &BuildPlan) -> String {
     let fdo = sel("autofdo");
     flags.push(if fdo != "off" { "autofdo".into() } else { "-autofdo".into() });
     flags.push(if fdo == "propeller" { "propeller".into() } else { "-propeller".into() });
-    // kernel-build.eclass signs with MODULES_SIGN_KEY (or a generated key) when USE=modules-sign.
-    flags.push(if sel("signing") != "off" { "modules-sign".into() } else { "-modules-sign".into() });
     format!("sys-kernel/cachyos-kernel {}", flags.join(" "))
 }
 

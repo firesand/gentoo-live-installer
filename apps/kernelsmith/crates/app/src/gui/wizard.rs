@@ -1023,22 +1023,14 @@ impl App {
                     kv(ui, "Source", format!("{} ({})", src.display(), src.flavor.label()));
                     let pr = profiles::get(plan.profile);
                     kv(ui, "Profile", format!("{} {}", pr.icon, pr.title));
-                    kv(ui, "Start from", plan::resolve_seed(plan, sys, src).label);
+                    kv(ui, "Start from", plan.seed.label());
                     kv(ui, "Drivers", format!("{} — keeping {} famil{}", plan.slim.label(), plan.keep.len(), if plan.keep.len() == 1 { "y" } else { "ies" }));
                     kv(ui, "Compiler", format!("{} · LTO {} · {}", sel("compiler"), sel("lto"), sel("optimize")));
                     kv(ui, "CPU target", sel("march"));
                     kv(ui, "Scheduler", format!("{} · sched_ext {}", sel("scheduler"), sel("sched_ext")));
                     kv(ui, "Timer", format!("{} · {} preemption", sel("hz"), sel("preempt")));
                     kv(ui, "Gaming", format!("NTSYNC {} · controllers {}", sel("ntsync"), sel("gaming_input")));
-                    kv(
-                        ui,
-                        "AutoFDO",
-                        match &plan.profile_data {
-                            Some(pd) => format!("Compiling with profile {}", pd.afdo.display()),
-                            None => sel("autofdo"),
-                        },
-                    );
-                    kv(ui, "Security", format!("signing {} · anti-cheat {}", sel("signing"), sel("anticheat")));
+                    kv(ui, "AutoFDO", if plan.profile_data.is_some() { "Rebuilding with your recorded profile".to_string() } else { sel("autofdo") });
                     let patch_names: Vec<&str> = plan.patches.iter().map(|p| p.title.as_str()).collect();
                     kv(ui, "Patches", if patch_names.is_empty() { "None".into() } else { patch_names.join(", ") });
                     kv(
@@ -1085,16 +1077,7 @@ impl App {
         ui.add_space(10.0);
         ui.horizontal(|ui| {
             if button(ui, "View build script", Btn::Secondary).clicked() {
-                let seed = plan::resolve_seed(plan, sys, src);
-                let body = script::generate(&ScriptInputs {
-                    plan,
-                    sys,
-                    src,
-                    resolved: &resolved,
-                    job_dir: &paths::jobs_dir().join("<job>"),
-                    seed_label: &seed.label,
-                    store_seed: seed.untrimmed && plan.seed != Seed::Defconfig,
-                });
+                let body = script::generate(&ScriptInputs { plan, sys, src, resolved: &resolved, job_dir: &paths::jobs_dir().join("<job>") });
                 self.modal = Some(Modal::Script { title: "Build script (runs as root)".into(), text: body });
             }
             if button(ui, "Save as preset…", Btn::Secondary).clicked() {
