@@ -360,7 +360,9 @@ run_logged() {
 
 image="localhost/gentoo-installer-catalyst:${GENTOO_TREEISH:0:12}"
 note "building pinned Gentoo builder image ${image}"
-if ! run_logged docker build --pull=false --build-arg "GENTOO_TREEISH=${GENTOO_TREEISH}" \
+# The image build compiles too (Catalyst and its tools): the same CPUs and the lowest weight as the build container.
+if ! run_logged docker build --pull=false --cpuset-cpus "${BUILD_CPUSET}" --cpu-shares 2 \
+	--build-arg "GENTOO_TREEISH=${GENTOO_TREEISH}" \
 	--build-arg "GENTOO_TREEISH_SIGNER_FPR=${GENTOO_TREEISH_SIGNER_FPR}" \
 	--file "${ROOT}/iso/Containerfile" --tag "${image}" "${ROOT}/iso"; then
 	die "Gentoo builder image creation failed; no ISO was accepted (log: ${LOG_FILE})"
@@ -369,7 +371,7 @@ image_id=$(docker image inspect --format '{{.Id}}' "${image}" 2>/dev/null || tru
 
 if ((CLEAN)); then
 	note "cleaning ${CACHE_DIR}/catalyst (keeping ${ISO_KEEP_STAGE1} stage1 archives)"
-	run_logged docker run --rm --init --platform linux/amd64 --entrypoint /bin/bash \
+	run_logged docker run --rm --init --platform linux/amd64 --entrypoint /bin/bash --cpuset-cpus "${BUILD_CPUSET}" --cpu-shares 2 \
 		--env "KEEP=${ISO_KEEP_STAGE1}" --env "CLEAN_PACKAGES=${CLEAN_PACKAGES}" \
 		--mount "type=bind,source=${CACHE_DIR}/catalyst,target=/var/tmp/catalyst" \
 		"${image}" -c '

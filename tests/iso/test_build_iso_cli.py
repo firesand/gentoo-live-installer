@@ -97,6 +97,8 @@ def test_the_container_leaves_the_reserved_cpus_and_has_the_lowest_weight(stubs)
                              env={**os.environ, "HOST_RESERVE_CPUS": "4"}).stdout.strip()
     assert option_values(run, "--cpuset-cpus") == [allowed] and option_values(run, "--cpu-shares") == ["2"]
     assert not any(cpu in allowed.replace("-", ",").split(",") for cpu in "0123")
+    [image] = [call for call in stubs.calls() if call[:1] == ["build"]]
+    assert option_values(image, "--cpuset-cpus") == [allowed] and option_values(image, "--cpu-shares") == ["2"]
 
 
 def test_log_file_is_created_announced_and_filled(stubs) -> None:
