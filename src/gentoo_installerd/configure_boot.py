@@ -173,11 +173,24 @@ class BootMixin(BootExtrasMixin):
 
     def kernel_stage_atoms(self, manifest: InstallManifest, layout: Sequence[LayoutEntry] = (), plan: object | None = None,
                            stack: ExistingStack | None = None) -> list[str]:
-        """What must exist before the kernel and initramfs are built."""
+        """What must exist before the kernel and initramfs are built (a distribution kernel takes the firmware along, kernel_package_atoms)."""
         # The console font is built into the initramfs, which copies every font installed when it is built.
         fonts = ["media-fonts/terminus-font"] if manifest.system.console_font.startswith("ter-") else []
-        return list(dict.fromkeys([*self.storage_tool_atoms(manifest, stack), *self.early_boot_atoms(manifest, plan),
+        early = [] if manifest.system.kernel in DIST_KERNELS else self.early_boot_atoms(manifest, plan)
+        return list(dict.fromkeys([*self.storage_tool_atoms(manifest, stack), *early,
                                    *self.filesystem_atoms(manifest, layout), *fonts]))
+
+    def kernel_package_atoms(self, manifest: InstallManifest, plan: object | None = None) -> list[str]:
+        """The kernel stage's emerge of the kernel; a distribution kernel takes the firmware and microcode with it.
+
+        Their dist-kernel flag needs virtual/dist-kernel. Emerged before any kernel exists, Portage satisfies that with
+        the virtual's first choice, gentoo-kernel, and compiles it from source next to gentoo-kernel-bin (an hour and
+        more, and again with every update). In the kernel's own emerge the chosen kernel satisfies it. A distribution
+        kernel always has dracut, which the stage runs again afterwards, so the image still holds the microcode.
+        """
+        early = self.early_boot_atoms(manifest, plan) if manifest.system.kernel in DIST_KERNELS else []
+        return list(dict.fromkeys([*early, "sys-kernel/installkernel", f"sys-kernel/{manifest.system.kernel}",
+                                   *self.kernel_extra_atoms(manifest)]))
 
     def kernel_atoms(self, manifest: InstallManifest) -> list[str]:
         atoms = ["sys-kernel/installkernel"]

@@ -35,7 +35,8 @@ class PortageStage(PortageNotes):
         stack = self._storage_stack()
         self.configurer.prepare_stack_packages(stack)
         required = [*self.configurer.kernel_stage_atoms(self.manifest, self.storage.layout, plan, stack),
-                    *self.configurer.kernel_atoms(self.manifest), *self.configurer.essential_atoms(self.manifest, plan),
+                    *self.configurer.kernel_atoms(self.manifest), *self.configurer.kernel_package_atoms(self.manifest, plan),
+                    *self.configurer.essential_atoms(self.manifest, plan),
                     *self.configurer.bootloader_atoms(self.manifest), *self.configurer.desktop_atoms(self.manifest, plan).required]
         try:
             self.configurer.pretend(self.manifest, list(dict.fromkeys(required)))

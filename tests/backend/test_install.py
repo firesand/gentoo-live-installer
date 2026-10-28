@@ -246,7 +246,9 @@ class InstallerFlowTests(unittest.TestCase):
                     indices = [i for i, command in enumerate(runner.commands) if atom in command]
                     self.assertEqual(len(indices), int(atom in expected))
                     if indices:
-                        self.assertLess(indices[0], kernel_index)
+                        # With the distribution kernel, in its own emerge: earlier, their virtual/dist-kernel pulls gentoo-kernel from source.
+                        self.assertEqual(indices[0], kernel_index)
+                        self.assertIn("sys-kernel/gentoo-kernel-bin", runner.commands[indices[0]])
                         self.assertLess(indices[0], initramfs_index)
 
 

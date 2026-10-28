@@ -270,8 +270,16 @@ class PackageSetTests(unittest.TestCase):
             plan = FakePlan(early_atoms=["sys-kernel/linux-firmware", "sys-firmware/sof-firmware"])
             batch = c.kernel_stage_atoms(m, [LayoutEntry("/dev/mapper/gentoo-root", "/", "ext4")], plan)
             self.assertEqual(batch[:2], ["sys-fs/cryptsetup", "sys-fs/lvm2"])
-            for atom in ("sys-kernel/linux-firmware", "sys-firmware/sof-firmware", "sys-fs/dosfstools"):
-                self.assertIn(atom, batch)
+            self.assertIn("sys-fs/dosfstools", batch)
+            # A distribution kernel takes the firmware along: before it, virtual/dist-kernel would pull gentoo-kernel (the RC4 VMs).
+            kernel = c.kernel_package_atoms(m, plan)
+            for atom in ("sys-kernel/linux-firmware", "sys-firmware/sof-firmware"):
+                self.assertNotIn(atom, batch)
+                self.assertIn(atom, kernel)
+            self.assertEqual(kernel[2:], ["sys-kernel/installkernel", "sys-kernel/gentoo-kernel-bin", "sys-block/io-scheduler-udev-rules"])
+            m = target_manifest(system={"kernel": "manual"})
+            self.assertIn("sys-kernel/linux-firmware", c.kernel_stage_atoms(m, (), plan))
+            self.assertNotIn("sys-kernel/linux-firmware", c.kernel_package_atoms(m, plan))
 
     def test_hardware_plan_atoms_join_the_stage_sets(self) -> None:
         plan = FakePlan(early_atoms=["sys-firmware/sof-firmware"], required_atoms=["sys-power/tlp"],

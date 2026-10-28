@@ -128,7 +128,7 @@ class KernelStageTests(StageHarness):
         index = {key: next(i for i, line in enumerate(lines) if key in line) for key in
                  ("sys-fs/xfsprogs", "sys-firmware/sof-firmware", "sys-kernel/installkernel", "nvidia-drivers", "--regenerate-all")}
         self.assertLess(index["sys-fs/xfsprogs"], index["sys-kernel/installkernel"])
-        self.assertLess(index["sys-firmware/sof-firmware"], index["sys-kernel/installkernel"])
+        self.assertEqual(index["sys-firmware/sof-firmware"], index["sys-kernel/installkernel"])  # with the kernel: kernel_package_atoms
         self.assertLess(index["sys-kernel/installkernel"], index["nvidia-drivers"])
         self.assertLess(index["nvidia-drivers"], index["--regenerate-all"])
         self.assertEqual(read(self.target, "etc/modprobe.d/nvidia.conf"), "blacklist nouveau\n")

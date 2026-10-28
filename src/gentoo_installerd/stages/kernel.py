@@ -29,7 +29,8 @@ class KernelStage(StorageStages):
         # Dracut needs the target's storage utilities when it builds the image.
         # Installing them in the later packages stage would produce an unusable
         # encrypted/LVM/RAID root image (or fail generation altogether). Firmware
-        # packages also supply microcode and dracut configuration, and the filesystem
+        # packages also supply microcode and dracut configuration (with a distribution
+        # kernel they come with the kernel itself, see kernel_package_atoms), and the filesystem
         # userland lets the installed system check its own partitions; later --noreplace skips them.
         self.configurer.prepare_stack_packages(stack)
         batch = self.configurer.kernel_stage_atoms(self.manifest, self.storage.layout, plan, stack)
@@ -46,7 +47,7 @@ class KernelStage(StorageStages):
             for relative, message in expected:
                 if not self.dry_run and not self.configurer.path(relative).exists():
                     raise InstallError(message)
-        self.configurer.emerge(self.manifest, ("--noreplace", "sys-kernel/installkernel", f"sys-kernel/{kernel}", *self.configurer.kernel_extra_atoms(self.manifest)))
+        self.configurer.emerge(self.manifest, ("--noreplace", *self.configurer.kernel_package_atoms(self.manifest, plan)))
         # Files and out-of-tree drivers from the hardware plan must exist before the initramfs is built.
         self.configurer.write_plan_files(plan)
         driver_atoms = [str(atom) for atom in getattr(plan, "driver_atoms", None) or []]
