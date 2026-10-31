@@ -231,6 +231,7 @@ DRIVER = textwrap.dedent("""
     sys.path.insert(0, {root!r})
     from tests.vm.helpers import load_vm_module
     vm = load_vm_module()
+    vm.host_share.available_mib = lambda meminfo=None: None  # this process has no conftest: see no_host_memory_reading
     vm.VM_ROOT = Path({vm_root!r})
     firmware = vm.OvmfFirmware(Path({code!r}), Path({variables!r}))
     vm.detect_ovmf = lambda candidates=None: firmware
@@ -254,6 +255,7 @@ def test_a_signal_stops_the_run_with_the_conventional_status_and_no_qemu_left(la
             dirs = lab.run_dirs()
             if dirs and (dirs[0] / "fake-guest" / "manifest.json").exists():
                 break  # the live VM is up and the install command is running
+            assert harness.poll() is None, f"the harness stopped early: {harness.stderr.read()}"
             time.sleep(0.1)
         else:
             raise AssertionError("the harness never reached the install step")

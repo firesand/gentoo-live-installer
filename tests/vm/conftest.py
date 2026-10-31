@@ -16,3 +16,9 @@ def no_host_memory_reading(monkeypatch):
     """The harness refuses to start a VM while the host lacks free memory (scripts/host_share.py); a contract test must
     not depend on how busy the developer's computer is, so the reading is "unknown", which is never refused."""
     monkeypatch.setattr("host_share.available_mib", lambda meminfo=None: None)
+
+
+@pytest.fixture(autouse=True)
+def no_host_priority_change(monkeypatch):
+    """vm.main() lowers the priority of its own process: here that is pytest, and nothing raises it again for the tests after this one."""
+    monkeypatch.setattr("host_share.lower_own_priority", lambda env=None: None)
