@@ -461,7 +461,7 @@ def build_manifest(scenario: Scenario, ssh_public_key: str, companions: str = "a
         manifest.accounts.hostname = scenario.hostname
         manifest.accounts.username = TEST_USERNAME
         manifest.accounts.password = TEST_PASSWORD
-        manifest.accounts.root_password = TEST_ROOT_PASSWORD
+        manifest.accounts.root_mode = "locked"  # the wizard's first choice: a root password here hid what a person gets (polkit, RC4)
         manifest.accounts.ssh_authorized_keys = [ssh_public_key.strip()]
         manifest.options.ssh = True
         apply_companions(manifest, companions)
@@ -1477,6 +1477,8 @@ def installed_system_probes(manifest: InstallManifest, scenario: Scenario, *, wo
         ("receipt", "cat /etc/gentoo-live-installer/install.json", lambda c, o: parse_receipt_probe(c, o, manifest)),
         ("sudo", "sudo -S -p '' true", parse_sudo_probe, password),
         ("root-lock", "sudo -S -p '' passwd -S root", lambda c, o: parse_root_lock_probe(c, o, manifest), password),
+        ("polkit", vm_probes.POLKIT_COMMAND, lambda c, o: vm_probes.parse_polkit_probe(c, o, manifest), password, 120),
+        ("config-proposals", vm_probes.CONFIG_PROPOSALS_COMMAND, vm_probes.parse_config_proposals_probe),
     ]
     if vm_probes.expects_efi_fallback(manifest):
         probes.append(("efi-fallback", vm_probes.efi_fallback_command(manifest), vm_probes.parse_efi_fallback_probe, password))

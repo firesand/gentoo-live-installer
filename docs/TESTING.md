@@ -148,7 +148,7 @@ them and even when the harness is killed with SIGKILL (the kernel sends QEMU SIG
 | `openrc`, `systemd` | minimal UEFI installs with each init system |
 | `uefi-luks` | an encrypted root, unlocked over the serial console without an operator |
 | `bios` | SeaBIOS, MBR partition table, static network configuration |
-| `defaults` | the untouched wizard defaults (KDE, OpenRC, firmware, microcode, all four companions); about 70 minutes in RC4 |
+| `defaults` | the untouched wizard defaults (KDE, OpenRC, root login off, firmware, microcode, all four companions); about 70 minutes in RC4 |
 | `bios-gpt` | SeaBIOS with a GPT disk: BIOS-boot partition and `grub-install i386-pc`; the boot flag of the protective MBR is read |
 | `openrc-luks` | OpenRC with dracut's non-systemd passphrase prompt |
 | `uefi-fresh-nvram` | the installed disk boots with empty NVRAM, so it needs the removable fallback path |
@@ -242,6 +242,8 @@ Information (`world-drift`) is kept in `result.json` and is neither.
 | `hardware-plan-file` | the daemon left `/var/lib/gentoo-installer/hardware-plan.json` in the live system (copied out to `hardware-plan.json`; the file is a record `{version, fingerprint, created, plan}`, a bare plan is read too) and the plan in it fits a virtual machine: no Intel microcode, no guest tools when they are switched off, the hypervisor's tool when it is on automatic and the DMI strings name the hypervisor | missing: finding; wrong: failure |
 | `hardware-plan` | the installed system agrees with the plan: no `sys-firmware/intel-microcode`, every guest tool of the plan installed unless the installer itself reported it as degraded, none when they are switched off | failure |
 | `kernel-provider` | with a distribution kernel, exactly the chosen one of `virtual/dist-kernel`'s providers is installed (`gentoo-kernel`, `gentoo-kernel-bin`, `vanilla-kernel`, `gentoo-kernel-modprep`). The RC4 VMs found RC3's installs with `gentoo-kernel` compiled from source next to `gentoo-kernel-bin`: firmware and microcode were emerged before the kernel, and their `dist-kernel` flag needs the virtual | failure |
+| `polkit` | a password dialog: `pkexec` in a real terminal, answered with the user's own password when it asks. It must get root and must not ask for root's password, which a default install (root login off) does not have. Skipped for `su` and for a user outside `wheel`. |
+| `config-proposals` | no `._cfg*` file waits in `/etc`: Portage would ask after the first emerge to merge a stock file over the installer's, and the stock `/etc/default/grub` has no disk-unlock arguments. |
 | `tuning` | the System tuning's live values: `sysctl` keys, transparent huge pages, the I/O scheduler per disk, zram's swap values and `zswap.enabled=0`, and `sysctl --system` without errors. A key written with a leading `-` may be refused (`setting key "K", ignoring: ...`; a VM has no hardware NMI watchdog and answers `Unknown error 524` to `kernel.nmi_watchdog`); an unknown key is not | failure |
 | `layout` | in a manual layout every row is mounted from the device the manifest named (the second disk's `/home`, its swap) | failure |
 | `world-resolve` | `emerge -pvuDN @world` resolves: no blocker, no conflict, no change the configuration would need | failure; no sudo: finding |

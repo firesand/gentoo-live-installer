@@ -246,6 +246,8 @@ def guest_rules(vm, scenario_name: str, *, guard: str = "vm_disk_guard", install
     guided = scenario_manifest(vm, scenario_name, firmware).storage
     if guided.firmware == "bios" and guided.mode == "erase":
         rules.append({"user": "^vmtest$", "match": vm_probes.BOOT_FLAG_MARK, "stdout": json.dumps(boot_flag_report(vm, scenario_name, firmware, flagged=boot_flag)) + "\n"})
+    rules += [{"user": "^vmtest$", "match": "^command -v pkexec", "stdout": "Authenticating as: Disposable VM test user (vmtest)\nPassword: \n0\n"},
+              {"user": "^vmtest$", "match": "^find /etc -name '._cfg", "stdout": ""}]
     if sudo:
         locked = scenario_manifest(vm, scenario_name, firmware).accounts.disable_root_login
         rules += [

@@ -28,6 +28,7 @@ class DesktopStage(StorageStages):
         warnings.extend(self.configurer.install_gaming(self.manifest, plan))  # the optional gaming setup; [] unless it was chosen
         self.configurer.configure_desktop_session(self.manifest)
         warnings.extend(self.configurer.run_plan_steps(plan))
+        self.configurer.drop_config_proposals(plan)
         # Only binary packages can leave the installed USE flags different from make.conf, so source
         # installs skip the (minutes-long) check.
         drift = self.configurer.world_drift(self.manifest) if self.manifest.portage.binhost else []

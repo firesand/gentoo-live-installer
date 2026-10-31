@@ -167,7 +167,28 @@ class KernelFilesTests(unittest.TestCase):
                 root, m, c = self.prepare(kernel=kernel)
                 self.assertIn("*/* dist-kernel", read(root, "etc/portage/package.use/installer-boot"))
                 self.assertIn(f"sys-kernel/{kernel}", read(root, "etc/kernel/README"))
-                self.assertEqual(c.kernel_extra_atoms(m), ["sys-block/io-scheduler-udev-rules"])
+
+    def test_gentoo_scheduler_rules_come_only_without_the_system_tuning(self) -> None:
+        for kernel in ("gentoo-kernel-bin", "gentoo-kernel"):
+            with self.subTest(kernel=kernel):
+                c = configurer(Path("/nonexistent"))
+                self.assertEqual(c.kernel_extra_atoms(target_manifest(system={"kernel": kernel})), [])
+                self.assertEqual(c.kernel_extra_atoms(target_manifest(system={"kernel": kernel}, hardware={"tuning": False})),
+                                 ["sys-block/io-scheduler-udev-rules"])
+
+    def test_stock_copies_beside_the_installers_files_go_and_the_others_stay(self) -> None:
+        """Accepting the stock /etc/default/grub would lose what unlocks the disk: the first kernel update then gives a system that does not start."""
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for name in ("etc/default/._cfg0000_grub", "etc/conf.d/._cfg0000_zram-init", "etc/conf.d/._cfg0000_hostname", "etc/default/grub", "etc/conf.d/zram-init"):
+                (root / name).parent.mkdir(parents=True, exist_ok=True)
+                (root / name).write_text("x")
+            plan = FakePlan()
+            plan.files = [("/etc/conf.d/zram-init", "ours", 0o644)]
+            configurer(root).drop_config_proposals(plan)
+            self.assertEqual(sorted(path.name for path in (root / "etc/default").iterdir()), ["grub"])
+            self.assertEqual(sorted(path.name for path in (root / "etc/conf.d").iterdir()), ["._cfg0000_hostname", "zram-init"])
+            configurer(Path("/nonexistent")).drop_config_proposals(None)
 
     def test_nothing_is_written_for_a_manual_or_custom_kernel(self) -> None:
         for kernel in ("manual", "custom"):
@@ -197,7 +218,7 @@ class KernelFilesTests(unittest.TestCase):
     def test_eclean_kernel_comes_with_its_option(self) -> None:
         m = target_manifest()
         m.options.eclean_kernel = True
-        self.assertEqual(configurer(Path("/nonexistent")).kernel_extra_atoms(m), ["sys-block/io-scheduler-udev-rules", "app-admin/eclean-kernel"])
+        self.assertEqual(configurer(Path("/nonexistent")).kernel_extra_atoms(m), ["app-admin/eclean-kernel"])
         self.assertIn("app-admin/eclean-kernel", configurer(Path("/nonexistent")).kernel_atoms(m))
 
     def test_the_config_snippet_goes_to_the_source_kernel_only(self) -> None:

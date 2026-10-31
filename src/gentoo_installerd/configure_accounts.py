@@ -9,6 +9,15 @@ from gentoo_installer.manifest import InstallManifest
 from .configure_base import ConfigurationError, ConfigurerBase
 from .runner import RunnerError
 
+POLKIT_WHEEL_FILE = "etc/polkit-1/rules.d/49-installer-wheel.rules"
+POLKIT_WHEEL_RULE = """// Administrators are the wheel group, written by the Gentoo installer. Delete this file to ask for root's password again.
+// Gentoo's default names only root, whose login is off unless you chose otherwise: no password could then pass the dialogs of the desktop,
+// Gentoo Settings, PortageHub and KernelSmith.
+polkit.addAdminRule(function(action, subject) {
+    return ["unix-group:wheel"];
+});
+"""
+
 
 class AccountsMixin(ConfigurerBase):
     def group_exists(self, name: str) -> bool:
@@ -90,9 +99,11 @@ class AccountsMixin(ConfigurerBase):
                 self.notify(f"warning: {username} could not be added to the group {group} ({exc})")
 
     def configure_privileges(self, manifest: InstallManifest) -> None:
-        """sudo and doas get a wheel rule; run0 (systemd's, asks polkit) and su (needs root's password) have nothing to configure."""
+        """sudo and doas get a wheel rule, and so does polkit, which everything but su asks (su needs root's password: nothing to configure)."""
         tool = manifest.accounts.privilege
         if tool == "sudo":
             self.write("etc/sudoers.d/wheel", "%wheel ALL=(ALL:ALL) ALL\n", 0o440)
         elif tool == "doas":
             self.write("etc/doas.conf", "permit persist :wheel\n", 0o600)
+        if tool != "su" and "wheel" in manifest.accounts.groups:  # with no user in wheel the rule would leave polkit no administrator at all
+            self.write(POLKIT_WHEEL_FILE, POLKIT_WHEEL_RULE)

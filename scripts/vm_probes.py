@@ -599,6 +599,56 @@ def parse_hardware_plan_file(text: str) -> dict[str, Any] | None:
     return record if isinstance(record, dict) and "schema" in record else None
 
 
+# --- administrators and the installer's own files ---------------------------------------------------------------------
+
+# What a password dialog does: pkexec in a real terminal, answered with the user's own password when it asks. The wizard turns root's login off by default,
+# so a dialog that wants root can never be passed. Gentoo Settings, PortageHub and KernelSmith all get their root rights this way.
+POLKIT_COMMAND = r"""command -v pkexec >/dev/null || { echo 'no pkexec'; exit 0; }
+python3 -c '
+import os, pty, select, sys, time
+password = sys.stdin.readline().encode()
+pid, terminal = pty.fork()
+if pid == 0:
+    os.execvp("pkexec", ["pkexec", "/usr/bin/id", "-u"])
+seen, sent, end = b"", False, time.monotonic() + 60
+while time.monotonic() < end:
+    if not select.select([terminal], [], [], 1)[0]:
+        continue
+    try:
+        data = os.read(terminal, 4096)
+    except OSError:
+        break
+    if not data:
+        break
+    seen += data
+    if not sent and b"Password:" in seen:
+        os.write(terminal, password)
+        sent = True
+print(seen.decode(errors="replace"))
+'"""
+CONFIG_PROPOSALS_COMMAND = "find /etc -name '._cfg*' 2>/dev/null; true"
+
+
+def parse_polkit_probe(returncode: int, output: str, manifest: Any) -> ProbeResult:
+    result = parse_probe_result("polkit", returncode, output)
+    accounts = manifest.accounts
+    if not result.success or output.strip() == "no pkexec" or accounts.privilege == "su" or "wheel" not in accounts.groups:
+        return result  # su asks for root's password by choice, and a user outside wheel is no administrator
+    if "Authenticating as: root" in output:
+        return ProbeResult("polkit", False, output, "polkit asks for root's password, not the user's: the wheel rule did not reach the installed system")
+    if not re.search(r"^0\s*$", ANSI_RE.sub("", output), re.MULTILINE):
+        return ProbeResult("polkit", False, output, "pkexec did not get root with the user's own password")
+    return result
+
+
+def parse_config_proposals_probe(returncode: int, output: str) -> ProbeResult:
+    """A new system does not ask after its first emerge to merge a stock file over the one the installer wrote."""
+    result = parse_probe_result("config-proposals", returncode, output)
+    if result.success and output.strip():
+        return ProbeResult("config-proposals", False, output, f"Portage's stock files wait beside the installer's: {' '.join(output.split())}")
+    return result
+
+
 # --- system tuning (gentoo_installerd/hwplan_tuning.py) ----------------------------------------------------------------
 
 # One "key value" line per fact; the sysctl --system run (as root, it only applies the files again) reports a key no kernel has.

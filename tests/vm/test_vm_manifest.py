@@ -124,7 +124,7 @@ def test_defaults_scenario_keeps_every_gui_default_except_disk_and_access():
     expected.accounts.hostname = "gentoo-vm-defaults"
     expected.accounts.username = vm.TEST_USERNAME
     expected.accounts.password = vm.TEST_PASSWORD
-    expected.accounts.root_password = vm.TEST_ROOT_PASSWORD
+    expected.accounts.root_mode = "locked"  # the wizard's first choice, as a fresh Personalize page shows it
     expected.accounts.ssh_authorized_keys = [PUBLIC_KEY]
     expected.options.ssh = True
 
@@ -173,7 +173,7 @@ def _flatten(value, prefix=""):
     return {prefix: value}
 
 
-ACCESS_ONLY = {"storage.device", "storage.device_id", "accounts.hostname", "accounts.username", "accounts.password",
+ACCESS_ONLY = {"accounts.root_mode", "accounts.disable_root_login", "storage.device", "storage.device_id", "accounts.hostname", "accounts.username", "accounts.password",
                "accounts.root_password", "accounts.ssh_authorized_keys", "options.ssh"}
 
 

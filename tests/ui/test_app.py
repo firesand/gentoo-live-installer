@@ -188,8 +188,8 @@ def test_vm_harness_manifests_survive_real_wizard_roundtrip(qtbot, monkeypatch, 
     if scenario_name == "defaults":  # KDE preselects the Desktop stage3 (the harness plan records the field as wizard-seeded)
         expected_manifest["system"]["stage_variant"] = "amd64-desktop-openrc"
     assert widget.manifest.to_dict(redact=False) == expected_manifest
-    assert widget.manifest.accounts.disable_root_login is (not scenario.defaults)  # the defaults scenario keeps root login
-    assert widget.manifest.accounts.root_password == harness.TEST_ROOT_PASSWORD
+    assert widget.manifest.accounts.disable_root_login is True  # in the defaults scenario because the wizard starts with root login off
+    assert widget.manifest.accounts.root_password == ("" if scenario.defaults else harness.TEST_ROOT_PASSWORD)
     widget.review.confirmation.setText("/dev/vda")
     widget.next.click()
     assert started == [True]

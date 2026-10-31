@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from gentoo_installerd.configure import choice_problems, generated_locales, live_input_problems, render_hosts, render_sshd_config
+from gentoo_installerd.configure_accounts import POLKIT_WHEEL_FILE
 from gentoo_installerd.runner import RunnerError
 
 from tests.backend.target_helpers import ScriptedRunner, configurer, mark_installed, read, target_manifest
@@ -279,6 +280,25 @@ def test_run0_and_su_write_no_rule_file(tmp_path, tool):
     c, _, _ = make(tmp_path, m)
     c.configure_privileges(m)
     assert not (tmp_path / "etc/sudoers.d").exists() and not (tmp_path / "etc/doas.conf").exists()
+
+
+@pytest.mark.parametrize("tool", ["sudo", "doas", "run0"])
+def test_the_user_passes_polkit_with_their_own_password(tmp_path, tool):
+    """Gentoo's polkit names only root, whose login is off by default: Gentoo Settings, PortageHub and KernelSmith could not get root (the RC4 VM)."""
+    m = target_manifest(accounts={"privilege": tool}, system={"init": "systemd", "stage_variant": "amd64-systemd"})
+    c, _, _ = make(tmp_path, m)
+    c.configure_privileges(m)
+    assert 'return ["unix-group:wheel"];' in read(tmp_path, POLKIT_WHEEL_FILE)
+    assert POLKIT_WHEEL_FILE.startswith("etc/polkit-1/rules.d/4")  # before Gentoo's 50-default.rules: the first answer counts
+    assert (tmp_path / POLKIT_WHEEL_FILE).stat().st_mode & 0o777 == 0o644  # polkitd is not root
+
+
+def test_su_and_a_user_outside_wheel_keep_root_as_the_administrator(tmp_path):
+    for accounts in ({"privilege": "su"}, {"groups": ["audio", "video"]}):
+        m = target_manifest(accounts=accounts)
+        c, _, _ = make(tmp_path, m)
+        c.configure_privileges(m)
+        assert not (tmp_path / POLKIT_WHEEL_FILE).exists()
 
 
 def test_privilege_tools_install_the_right_packages(tmp_path):

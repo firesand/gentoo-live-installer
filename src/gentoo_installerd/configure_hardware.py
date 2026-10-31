@@ -60,6 +60,14 @@ class HardwareMixin(PortageMixin):
         self.write_plan_files(plan)
         return self.run_plan_steps(plan)
 
+    def drop_config_proposals(self, plan: object | None = None) -> None:
+        """The installer's own files stay as they are. Portage leaves a package's stock copy beside a file written before the package came in, and
+        asks after every emerge to take it: the stock /etc/default/grub would lose what unlocks the disk at the next kernel update."""
+        for relative in ("etc/default/grub", *(str(item[0]) for item in _plan_list(self._plan(plan), "files"))):
+            path = self.path(relative)
+            for proposal in path.parent.glob(f"._cfg????_{path.name}"):
+                proposal.unlink()
+
     def write_plan_files(self, plan: object | None = None) -> None:
         """Files the hardware plan wants on the target (written as root:root).
 
