@@ -148,7 +148,7 @@ them and even when the harness is killed with SIGKILL (the kernel sends QEMU SIG
 | `openrc`, `systemd` | minimal UEFI installs with each init system |
 | `uefi-luks` | an encrypted root, unlocked over the serial console without an operator |
 | `bios` | SeaBIOS, MBR partition table, static network configuration |
-| `defaults` | the untouched wizard defaults (KDE, OpenRC, firmware, microcode, both companions); hours |
+| `defaults` | the untouched wizard defaults (KDE, OpenRC, firmware, microcode, all four companions); about 70 minutes in RC4 |
 | `bios-gpt` | SeaBIOS with a GPT disk: BIOS-boot partition and `grub-install i386-pc`; the boot flag of the protective MBR is read |
 | `openrc-luks` | OpenRC with dracut's non-systemd passphrase prompt |
 | `uefi-fresh-nvram` | the installed disk boots with empty NVRAM, so it needs the removable fallback path |
@@ -497,7 +497,7 @@ machine without the memory for PySide may not get HWMonux). The plan records the
 not assert them. The harness then takes the wizard's values over into the saved `manifest.json`, so
 that the probes judge what was really asked for; what the harness itself expected stays in
 `manifest-expected.json`, and `install.wizard_choices` in `result.json` lists every difference (a
-machine with enough memory, like the 12 GiB of the `defaults` job, is expected to keep both companions,
+machine with enough memory, like the 12 GiB of the `defaults` job, is expected to keep all four companions,
 and the list shows when it did not).
 The driver stops itself with status 2 when a page does not advance (`--navigation-timeout`) or the
 backend is silent (`--idle-timeout`), and retries a slow network (`--readiness-timeout`) but never
@@ -723,14 +723,15 @@ Read these before trusting, or blaming, a result.
 
 * **The AI rescue stick has no real-hardware run.** Its code is tested with fakes, and the VM scenarios above are run by hand. The login scraping, the console switch and the QR codes on a real console, the phone share with real phone browsers, and the Codex sandbox on the live kernel are untried (the checklist above).
 
-* **Little outside the original four scenarios has run on real QEMU.** The first Wave 3 matrix runs
-  (OpenRC with LUKS on NVMe, OpenRC, the install part of `rescue-gentoo`) installed a system that
-  booted and passed the basic probes. They failed on the HWMonux build (PySide ran out of memory, see
-  "Companions" above), on a check that read the daemon's plan file wrongly and on a drift of the
-  Portage world that the installer did not cause (the harness reads the plan record now, and the drift
-  is information). The new scenarios, the
-  hardware options, `--live-only`, the rescue flow and the rest of the Wave 3 matrix are tested
-  as argument lists and against the fake lab. The first real runs are also where QEMU and the
+* **Only part of the matrix runs on real QEMU for a release.** On the final RC4 test ISO these ran:
+  `defaults`, `secure-boot-live`, and `openrc` runs with a manual kernel, with `--cancel-then-resume`
+  and with `--live-only`. `openrc` and `systemd` ran on the ISO before it.
+* **What those jobs do not press.** `defaults` stops at the SDDM greeter and runs the companions' text
+  modes, so it does not prove a Plasma login. `--cancel-then-resume` calls the page's cancel method
+  and resumes with the daemon's `--resume`, so the Cancel button's question and the page's Resume
+  command are not part of it.
+* **The other scenarios, the hardware options and the rescue flow** are mostly tested as argument
+  lists and against the fake lab. A first real run is also where QEMU and the
   guests confirm what the harness assumes and the fake lab cannot know: that `-smbios file=`
   replaces QEMU's own enclosure record (the `dmi` probe of `laptop-smbios` checks `chassis_type`),
   that USB with 4096-byte sectors works, that `-kernel`/`-initrd` boots an ISO entry under OVMF and
@@ -738,12 +739,6 @@ Read these before trusting, or blaming, a result.
   output of `gentoo-rescue` and `gentoo-installer-text` on the live ISO of the same tree (the
   harness is tested against the rescue tool's laboratory, not against a live ISO). QEMU's IDE/SATA
   disks are 512-byte only, so `--disk-bus sata --sector-size 4096` is refused.
-* **LUKS unlock over serial needs the installed system to honour `system.kernel_cmdline_extra`**
-  (`configure.py` must put it on `/etc/kernel/cmdline` and `GRUB_CMDLINE_LINUX`). Until it does,
-  `uefi-luks` and `openrc-luks` time out waiting for the prompt, with a message saying so.
-* **`serial-less` fails until the daemon accepts `device_id_kind=path`.**
-* **`--gui-detect` on a BIOS machine fails until the wizard seeds the firmware from detection**
-  (the unit test in `tests/vm/test_vm_gui_driver.py` is an expected failure that starts passing then).
 * **The hardware plan is read from `/var/lib/gentoo-installer/hardware-plan.json`** (the daemon's
   state directory), from the `plan` key of the record the daemon writes there. A missing file, or one
   without a plan, is a finding; with `--strict-probes` (the matrix) it fails the run.

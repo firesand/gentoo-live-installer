@@ -59,8 +59,13 @@ def test_a_refused_key_marked_with_a_dash_passes_and_an_unknown_one_does_not():
     # The real OpenRC and systemd VMs of RC4: no hardware NMI watchdog, so kernel.nmi_watchdog (written "-kernel...") is refused.
     refused = GOOD + 'sysctl_error sysctl: setting key "kernel.nmi_watchdog", ignoring: Unknown error 524\n'
     assert vm_probes.parse_tuning_probe(0, refused, vm_probes.tuning_expected(nvme_plan())).success
+    # The manual-kernel VM of RC4, with 6.18.57: the same key is read-only there, and procps says so without ", ignoring".
+    read_only = GOOD + 'sysctl_error sysctl: setting key "kernel.nmi_watchdog": Operation not permitted\n'
+    assert vm_probes.parse_tuning_probe(0, read_only, vm_probes.tuning_expected(nvme_plan())).success
     for line in ('sysctl: "net.core.netdev_max_backlg" is an unknown key, ignoring',
-                 'sysctl: setting key "vm.vfs_cache_pressure": Invalid argument'):
+                 'sysctl: setting key "vm.vfs_cache_pressure": Invalid argument',
+                 'sysctl: setting key "vm.vfs_cache_pressure": Operation not permitted',
+                 'sysctl: setting key "kernel.nmi_watchdog": Invalid argument'):
         result = vm_probes.parse_tuning_probe(0, GOOD + f"sysctl_error {line}\n", vm_probes.tuning_expected(nvme_plan()))
         assert not result.success and line.removeprefix("sysctl: ") in result.error, line
 

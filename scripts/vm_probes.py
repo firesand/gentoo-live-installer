@@ -604,7 +604,9 @@ def parse_hardware_plan_file(text: str) -> dict[str, Any] | None:
 # One "key value" line per fact; the sysctl --system run (as root, it only applies the files again) reports a key no kernel has.
 # A key written with a leading "-" may be refused: procps says 'setting key "K", ignoring: ...' (a VM without a hardware
 # NMI watchdog answers ENOTSUPP, "Unknown error 524", to kernel.nmi_watchdog), which is what the "-" is for.
-SYSCTL_TOLERATED = re.compile(r'sysctl: setting key "[^"]+", ignoring: ')
+# Kernels up to 6.18 make that same key read-only there. procps checks the mode before it looks at the "-", so it says
+# 'setting key "K": Operation not permitted' and sysctl --system exits 1, with every other key applied. Only a manual kernel gets here.
+SYSCTL_TOLERATED = re.compile(r'sysctl: setting key "(?:[^"]+", ignoring: |kernel\.nmi_watchdog": Operation not permitted$)')
 TUNING_COMMAND = r"""for f in vm/vfs_cache_pressure vm/dirty_bytes vm/swappiness vm/page-cluster; do printf 'sysctl %s %s\n' "$f" "$(cat /proc/sys/$f)"; done
 printf 'thp_defrag %s\n' "$(cat /sys/kernel/mm/transparent_hugepage/defrag 2>/dev/null)"
 printf 'thp_ptes %s\n' "$(cat /sys/kernel/mm/transparent_hugepage/khugepaged/max_ptes_none 2>/dev/null)"

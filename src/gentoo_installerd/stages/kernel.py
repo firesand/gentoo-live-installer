@@ -81,7 +81,7 @@ class KernelStage(StorageStages):
         volumes = ([f"cryptsetup open {stack['luks_device']} {stack['mapper']}"] if "mapper" in stack else []) + ([f"vgchange -ay {stack['vg']}"] if "vg" in stack else [])
         opened = f"run '{' and '.join(volumes)}', then " if volumes else ""
         images = "the kernel as /boot/vmlinuz-<version>" + ("" if self.manifest.system.initramfs == "none" else " and its initramfs as /boot/initramfs-<version>.img")
-        return ("Manual kernel selected: everything but the kernel is installed, and the installer stops here so that you can install it. "
+        return ("Manual kernel selected: the installer stops here so that you can install the kernel; the rest of the installation follows when you resume. "
                 f"When the cleanup has finished, {opened}mount {', then '.join(mounts)}. Mount /proc, /sys, /dev and /run below it as the Handbook says, "
                 f"and chroot into {self.target_root}. Install {images}. "
                 f"Leave the chroot, run 'umount -R {self.target_root}', then run the installer again with the same options and --resume.")
