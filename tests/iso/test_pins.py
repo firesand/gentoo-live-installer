@@ -18,7 +18,9 @@ def test_pins_name_the_commit_and_its_signer(pins: dict[str, str]) -> None:
     assert re.fullmatch(r"[0-9a-f]{40}", pins["GENTOO_TREEISH"])
     assert re.fullmatch(r"[0-9A-F]{40}", pins["GENTOO_TREEISH_SIGNER_FPR"])
     assert re.fullmatch(r"[A-Z0-9_]{1,32}", pins["ISO_VOLID"])
-    assert pins["ISO_NAME"].endswith(".iso")
+    # The release is in the name: RC1 to RC4 shared one file name, and only the folder told them apart.
+    assert re.fullmatch(rf"gentoo-installer-amd64-rc[0-9.]+-{pins['STAGE3_TIMESTAMP']}\.iso", pins["ISO_NAME"])
+    assert "rc" not in pins["VERSION_STAMP"], "VERSION_STAMP names the cached stage1"
 
 
 def test_containerfile_verifies_the_tree_and_has_no_download_pipeline() -> None:

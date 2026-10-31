@@ -14,6 +14,7 @@ from types import ModuleType
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
+RELEASE_ISO = next(line.split("=", 1)[1] for line in (ROOT / "iso/pins.env").read_text().splitlines() if line.startswith("ISO_NAME="))
 FIXTURES = Path(__file__).resolve().parent / "fixtures"
 # The pinned Gentoo tree (read-only). Tests that need it are skipped without it.
 PINNED_TREE = Path(os.environ["ISO_TREE"]) if os.environ.get("ISO_TREE") else None

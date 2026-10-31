@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from .conftest import ROOT, load_script, run_bash, write_executable
+from .conftest import RELEASE_ISO, ROOT, load_script, run_bash, write_executable
 from .test_entrypoint import ENTRYPOINT, reuse, sandbox, stage1, write_receipt  # noqa: F401  (fixtures)
 
 verify = load_script("scripts/verify-iso.py", "verify_iso")
@@ -201,7 +201,7 @@ def publish(sandbox, workspace: Path, **env: str):
     sandbox.archives()
     built_dir = sandbox.dirs["store"] / "builds/23.0-default"
     built_dir.mkdir(parents=True)
-    name = "gentoo-installer-amd64-20261018T124555Z.iso"
+    name = RELEASE_ISO
     with open(built_dir / name, "wb") as stream:
         stream.truncate(10_000_001)
     for tool in ("isoinfo",):
@@ -240,7 +240,7 @@ def test_publish_runs_the_verifier_and_writes_every_sidecar(sandbox, publish_wor
 
 
 def test_an_earlier_manifest_of_the_same_name_feeds_the_size_warning(sandbox, publish_workspace: Path) -> None:
-    name = "gentoo-installer-amd64-20261018T124555Z.iso"
+    name = RELEASE_ISO
     sandbox.dirs["dist"].mkdir(parents=True, exist_ok=True)
     earlier = sandbox.dirs["dist"] / f"{name}.manifest.json"
     earlier.write_text('{"iso": {"size": 1}}')
@@ -269,6 +269,6 @@ def test_a_tiny_iso_is_never_published(sandbox, publish_workspace: Path) -> None
     sandbox.archives()
     built_dir = sandbox.dirs["store"] / "builds/23.0-default"
     built_dir.mkdir(parents=True)
-    (built_dir / "gentoo-installer-amd64-20261018T124555Z.iso").write_bytes(b"x" * 100)
+    (built_dir / RELEASE_ISO).write_bytes(b"x" * 100)
     result = sandbox.run("load_environment; publish_iso", WORKSPACE=str(publish_workspace))
     assert result.returncode != 0 and "implausibly small" in result.stderr

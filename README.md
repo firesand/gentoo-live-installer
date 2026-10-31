@@ -9,7 +9,7 @@ A live USB/DVD image that does these jobs on almost any 64-bit PC or laptop:
 
 The installer follows the official Gentoo Handbook for AMD64 and links to it. SSH on the installed system is on by default (root can never log in over SSH). Wi-Fi can be set up inside the installer and is carried over to the new system. [docs/USER-GUIDE.md](docs/USER-GUIDE.md) explains all of this for people who are new to Gentoo.
 
-The repository holds the wizard and the root daemon (`src/`), the ISO build (`iso/`, `scripts/build-iso.sh`), the Portage overlay (`packaging/`), two companion apps (`apps/portagehub`, `apps/hwmonux`) and the disposable-VM test harness (`scripts/test-vm.py`). Nothing here claims a tested install on real hardware: [docs/TESTING.md](docs/TESTING.md) lists what has run and what has not.
+The repository holds the wizard and the root daemon (`src/`), the ISO build (`iso/`, `scripts/build-iso.sh`), the Portage overlay (`packaging/`), four companion apps (`apps/portagehub`, `apps/hwmonux`, `apps/gentoo-settings`, `apps/kernelsmith`) and the disposable-VM test harness (`scripts/test-vm.py`). Nothing here claims a tested install on real hardware: [docs/TESTING.md](docs/TESTING.md) lists what has run and what has not.
 
 ## Before you boot it: Secure Boot
 
@@ -41,10 +41,10 @@ The text entries ask for a keyboard layout first (you type passwords in both too
 
 | | |
 |---|---|
-| **Works** | 64-bit x86 PCs, laptops and virtual machines. BIOS/CSM, 64-bit UEFI and 32-bit UEFI firmware (the ISO carries `bootx64.efi` and `bootia32.efi`). SATA/AHCI, NVMe (also behind Intel VMD), USB, SD/eMMC and virtio disks. Wi-Fi, Bluetooth and sound that the Linux 6.18 kernel and `linux-firmware` support. Intel, AMD and (with the open nouveau driver) NVIDIA graphics. The proprietary NVIDIA driver is installed by *Automatic* once you tick its licence (open kernel modules on Turing and newer, branch 580 on Maxwell, Pascal and Volta); otherwise nouveau. |
-| **Needs a step from you** | Secure Boot off (above). If the disk does not show up, switch the firmware's SATA mode from Intel RST/"RAID" to AHCI (mind Windows). A wrong clock is corrected once the network is up; the live system does not change a hardware clock that keeps local time (Windows). A disk that reports no serial number (a virtual disk, some USB adapters) must be approved in the installer's storage step: it is then recognised by its hardware path, size and model. |
+| **Works** | 64-bit x86 PCs, laptops and virtual machines. BIOS/CSM, 64-bit UEFI and 32-bit UEFI firmware (the ISO carries `bootx64.efi` and `bootia32.efi`). SATA/AHCI, NVMe (also behind Intel VMD), USB, SD/eMMC and virtio disks. Wi-Fi, Bluetooth and sound that the Linux 7.2 kernel and `linux-firmware` support. Intel, AMD and (with the open nouveau driver) NVIDIA graphics. The proprietary NVIDIA driver is installed by *Automatic* once you tick its licence (open kernel modules on Turing and newer, branch 580 on Maxwell, Pascal and Volta); otherwise nouveau. |
+| **Needs a step from you** | Secure Boot: one blue screen on the first start of the disc (above), and off before the first start of an installed system with GRUB, the default (docs/USER-GUIDE.md section 3). If the disk does not show up, switch the firmware's SATA mode from Intel RST/"RAID" to AHCI (mind Windows). A wrong clock is corrected once the network is up; the live system does not change a hardware clock that keeps local time (Windows). A disk that reports no serial number (a virtual disk, some USB adapters) must be approved in the installer's storage step: it is then recognised by its hardware path, size and model. |
 | **Not supported** | 32-bit CPUs, ARM machines (Apple Silicon Macs, Windows-on-ARM laptops, Raspberry Pi), Intel Macs with a T2 chip (the internal SSD is not visible), ZFS root, speech output or braille (the disc has no screen reader). |
-| **Known limits** | A GPU that is too new for the live kernel gets no accelerated desktop. The **Safe graphics** boot entry (`nomodeset`) then starts the desktop on the generic display driver (`simpledrm`, which the live kernel is built with: no 3D, but it works on almost every PC), and the text entries need no graphics at all ([docs/ISO.md](docs/ISO.md) section 9). The image is built from a fixed snapshot (Linux 6.18.57, Gentoo tree 2026-10): hardware released after it may lack drivers. Real-hardware boots are not part of the automated tests, only QEMU with BIOS and UEFI firmware. HWMonux, an optional program of the installed system, needs PySide6, which is compiled from source: about 40 minutes and up to 4 GiB of memory per compile job. On a PC with less than 8 GiB the installer says so and leaves the choice to you. |
+| **Known limits** | A GPU that is too new for the live kernel gets no accelerated desktop. The **Safe graphics** boot entry (`nomodeset`) then starts the desktop on the generic display driver (`simpledrm`, which the live kernel is built with: no 3D, but it works on almost every PC), and the text entries need no graphics at all ([docs/ISO.md](docs/ISO.md) section 9). The image is built from a fixed snapshot (Linux 7.2.13, Gentoo tree 2026-10): hardware released after it may lack drivers. Real-hardware boots are not part of the automated tests, only QEMU with BIOS and UEFI firmware. HWMonux, an optional program of the installed system, needs PySide6, which is compiled from source: about 40 minutes and up to 4 GiB of memory per compile job. On a PC with less than 8 GiB the installer says so and leaves the choice to you. |
 
 The live session never mounts or activates the PC's disks, volume groups or RAID arrays by itself. It ignores the lid switch and idle timers, so an installation or repair is not interrupted.
 
@@ -66,7 +66,7 @@ JOBS=4 ./scripts/build-iso.sh           # the release ISO into dist/
 ./scripts/build-iso.sh --sign-key 0xYOURKEYID   # also sign the checksums and the manifest
 ```
 
-* The result is `dist/gentoo-installer-amd64-<stamp>.iso` with `.sha512`, `.blake2b`, `.manifest.json` and `.packages.txt`. Every build writes a timestamped log to `dist/logs/`.
+* The result is `dist/gentoo-installer-amd64-<release>-<stamp>.iso` with `.sha512`, `.blake2b`, `.manifest.json` and `.packages.txt`. Every build writes a timestamped log to `dist/logs/`.
 * A following build reuses the stage1 of the previous one when nothing that goes into it changed (`--reuse auto`, the default). Otherwise it builds stage1 again; the binary package cache makes that shorter. `--reuse none` always builds everything. Use it for a release when in doubt.
 * The finished ISO is checked before it is published (`scripts/verify-iso.py`, rules in `iso/image-contract.json`): boot images, boot menu, initramfs, services, the repair and text-mode files, ownership, and no test access in a release.
 * Settings: `JOBS`, `LOAD_AVERAGE`, `BUILD_MEMORY` (container memory, default 8g), `BUILD_MIN_FREE_GIB`, `ISO_CACHE_DIR`, `ISO_DIST_DIR`, `ISO_LOG_DIR`, `ISO_SECCOMP`. `--clean` removes retained chroots and old stage1 archives.
@@ -92,7 +92,7 @@ install -d -m 0700 build/vm-control
 testkey="build/vm-control/iso-test-$(date +%s)"
 ssh-keygen -q -t ed25519 -N '' -f "$testkey"
 ISO_DIST_DIR=build/test-dist JOBS=2 ./scripts/build-iso.sh --test-key-file "$testkey.pub"
-python3 scripts/test-vm.py --scenario openrc --iso build/test-dist/gentoo-installer-amd64-20261018T124555Z-TESTKEY.iso \
+python3 scripts/test-vm.py --scenario openrc --iso build/test-dist/gentoo-installer-amd64-rc4-20261018T124555Z-TESTKEY.iso \
   --ssh-host 127.0.0.1 --ssh-port 40222 --ssh-private-key "$testkey"
 ```
 

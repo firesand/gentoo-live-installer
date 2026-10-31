@@ -12,12 +12,12 @@ import time
 
 import pytest
 
-from .conftest import ROOT, write_executable
+from .conftest import RELEASE_ISO, ROOT, write_executable
 
 pytestmark = pytest.mark.skipif(os.uname().machine != "x86_64", reason="the builder insists on an x86_64 host")
 
-RELEASE_NAME = "gentoo-installer-amd64-20261018T124555Z.iso"
-TEST_NAME = "gentoo-installer-amd64-20261018T124555Z-TESTKEY.iso"
+RELEASE_NAME = RELEASE_ISO
+TEST_NAME = RELEASE_ISO.replace(".iso", "-TESTKEY.iso")
 
 
 def option_values(call: list[str], name: str) -> list[str]:

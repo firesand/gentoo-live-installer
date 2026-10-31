@@ -123,7 +123,7 @@ There is no entry for speech output or braille: the disc has no screen reader (s
 | It is very slow | Use **Desktop in RAM**, or a USB 3 stick in a USB 3 port. |
 | A message asks to "Load keymap" | That is a text console entry. Type one of the layout names shown on the screen (for example `de` or `fr`) or press Enter for the default. You have 10 seconds. |
 
-**Why the desktop sometimes does not start.** A graphics chip that is newer than the live kernel (Linux 6.18) has no driver there, and the screen stays black. The **Safe graphics** entry starts the desktop through the generic display driver (`simpledrm`) that shows the picture the firmware already set up: no 3D and no choice of resolution, but it works on almost every PC. The text mode entries need no graphics at all. [ISO.md section 9](ISO.md#9-known-limits-and-follow-ups) has the details.
+**Why the desktop sometimes does not start.** A graphics chip that is newer than the live kernel (Linux 7.2) has no driver there, and the screen stays black. The **Safe graphics** entry starts the desktop through the generic display driver (`simpledrm`) that shows the picture the firmware already set up: no 3D and no choice of resolution, but it works on almost every PC. The text mode entries need no graphics at all. [ISO.md section 9](ISO.md#9-known-limits-and-follow-ups) has the details.
 
 ## 5. Network, keyboard and clock
 
@@ -500,8 +500,9 @@ The disc is read-only and its files are gone at power off. Save reports to a sec
 
 ## 13. What the disc cannot do
 
-* Boot with Secure Boot on, or on non-x86 machines.
-* Show an accelerated desktop on a GPU whose kernel driver the live kernel (6.18) lacks. The *Safe graphics* entry (generic `simpledrm`, no 3D) or the text mode entries still work (section 4).
+* Start on non-x86 machines.
+* Start an installed system that uses GRUB, the default, while Secure Boot is on. The disc itself starts with Secure Boot on, the system it installs does not yet (section 3).
+* Show an accelerated desktop on a GPU whose kernel driver the live kernel (Linux 7.2) lacks. The `.packages.txt` file next to the ISO names the exact version. The *Safe graphics* entry (generic `simpledrm`, no 3D) or the text mode entries still work (section 4).
 * Run on hardware released after the image was made if the kernel has no driver for it. Wi-Fi, graphics and sound chips of the newest generation are the usual cases.
 * Repair or install ZFS roots, or read BitLocker volumes (Windows).
 * Repair a Linux that is not Gentoo (section 9). It lists such a system but does not open it.

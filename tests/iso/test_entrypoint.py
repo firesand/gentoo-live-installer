@@ -13,7 +13,7 @@ import time
 
 import pytest
 
-from .conftest import ROOT, load_script, run_bash, write_executable
+from .conftest import RELEASE_ISO, ROOT, load_script, run_bash, write_executable
 
 ENTRYPOINT = ROOT / "iso/builder-entrypoint.sh"
 verify = load_script("scripts/verify-iso.py", "verify_iso")
@@ -95,9 +95,9 @@ def test_two_ebuilds_of_one_package_stop_the_build(sandbox, tmp_path: Path) -> N
 
 def test_flavours_follow_the_test_key(sandbox) -> None:
     release = sandbox.run("load_environment; echo $ISO_FLAVOR $ISO_NAME $ISO_VOLID")
-    assert release.stdout.split() == ["release", "gentoo-installer-amd64-20261018T124555Z.iso", "GENTOO_INSTALLER_AMD64"]
+    assert release.stdout.split() == ["release", RELEASE_ISO, "GENTOO_INSTALLER_AMD64"]
     test = sandbox.run("load_environment; echo $ISO_FLAVOR $ISO_NAME $ISO_VOLID", GENTOO_TEST_SSH_PUBLIC_KEY="ssh-ed25519 AAAA k")
-    assert test.stdout.split() == ["testkey", "gentoo-installer-amd64-20261018T124555Z-TESTKEY.iso", "GENTOO_INSTALLER_TESTKEY"]
+    assert test.stdout.split() == ["testkey", RELEASE_ISO.replace(".iso", "-TESTKEY.iso"), "GENTOO_INSTALLER_TESTKEY"]
 
 
 def test_flavour_and_key_must_agree(sandbox) -> None:
