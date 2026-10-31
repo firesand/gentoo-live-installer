@@ -208,10 +208,12 @@ class BootMixin(BootExtrasMixin):
         return [*atoms, *self.kernel_extra_atoms(manifest)]
 
     def kernel_extra_atoms(self, manifest: InstallManifest) -> list[str]:
-        """Tools that go with a distribution kernel: the right I/O scheduler per disk, and eclean-kernel when asked for."""
+        """Tools that go with a distribution kernel: Gentoo's I/O scheduler rules, and eclean-kernel when asked for."""
         if manifest.system.kernel not in DIST_KERNELS:
             return []
-        return ["sys-block/io-scheduler-udev-rules", *(["app-admin/eclean-kernel"] if manifest.options.eclean_kernel else [])]
+        # The System tuning writes its own rules for a distribution kernel. Gentoo's would run after them at every boot and put NVMe disks back on none.
+        schedulers = [] if manifest.hardware.tuning else ["sys-block/io-scheduler-udev-rules"]
+        return [*schedulers, *(["app-admin/eclean-kernel"] if manifest.options.eclean_kernel else [])]
 
     def bootloader_atoms(self, manifest: InstallManifest) -> list[str]:
         system = manifest.system

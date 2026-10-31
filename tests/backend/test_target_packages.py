@@ -276,7 +276,7 @@ class PackageSetTests(unittest.TestCase):
             for atom in ("sys-kernel/linux-firmware", "sys-firmware/sof-firmware"):
                 self.assertNotIn(atom, batch)
                 self.assertIn(atom, kernel)
-            self.assertEqual(kernel[2:], ["sys-kernel/installkernel", "sys-kernel/gentoo-kernel-bin", "sys-block/io-scheduler-udev-rules"])
+            self.assertEqual(kernel[2:], ["sys-kernel/installkernel", "sys-kernel/gentoo-kernel-bin"])
             m = target_manifest(system={"kernel": "manual"})
             self.assertIn("sys-kernel/linux-firmware", c.kernel_stage_atoms(m, (), plan))
             self.assertEqual(c.kernel_package_atoms(m, plan), [])  # the kernel stage stops before this emerge; "manual" is no package

@@ -10,6 +10,7 @@ import pytest
 
 from gentoo_installerd import hwplan, hwplan_tuning as tuning
 
+from tests.backend.target_helpers import configurer
 from tests.hardware.builders import manifest, profile, systemd
 
 ALL_FILES = {tuning.SYSCTL_FILE, tuning.IOSCHED_FILE, tuning.THP_FILE, tuning.WIFI_FILE, tuning.AUDIO_TLP_FILE, tuning.AUDIO_RULES_FILE,
@@ -59,6 +60,18 @@ def test_the_swap_settings_follow_zram(zram):
     text = files_of(result)[tuning.SYSCTL_FILE][0]
     assert ("vm.swappiness = 150" in text) == ("vm.page-cluster = 0" in text) == (zram == "yes")
     assert ("zswap.enabled=0" in result.kernel_cmdline) == (zram == "yes")
+
+
+@pytest.mark.parametrize("kernel", ["gentoo-kernel-bin", "gentoo-kernel", "manual", "custom"])
+@pytest.mark.parametrize("on", [True, False])
+def test_the_scheduler_rules_never_compete_with_gentoos_package(kernel, on):
+    """The package's rule runs after ours at every boot: on an NVMe disk it wrote none over Kyber (the first real NVMe VM of RC4)."""
+    m = manifest(system={"kernel": kernel}, hardware={"tuning": on})
+    ours = tuning.IOSCHED_FILE in files_of(hwplan.plan(m, profile()))
+    package = "sys-block/io-scheduler-udev-rules" in configurer(Path("/nonexistent")).kernel_extra_atoms(m)
+    assert not (ours and package)
+    assert ours == (on and kernel in tuning.DIST_KERNELS)
+    assert package == (not on and kernel in tuning.DIST_KERNELS)
 
 
 @pytest.mark.parametrize("kernel", ["manual", "custom"])
