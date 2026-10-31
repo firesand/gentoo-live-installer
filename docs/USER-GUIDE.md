@@ -80,7 +80,7 @@ On a PC with **Windows BitLocker or "Device encryption"**: look up the recovery 
 
 The disc's key is only for the disc. What happens to the new system depends on its boot loader:
 
-* **GRUB (the default)** is not signed. The PC will not start it while Secure Boot is on. Turn Secure Boot off before the first start of the new system, or choose another boot loader. When Secure Boot is on, the installer says so on the Readiness and Review pages.
+* **GRUB (the default)** is not signed. The PC will not start it while Secure Boot is on. Turn Secure Boot off before the first start of the new system, or choose another boot loader. When Secure Boot is on, the installer says so on the Readiness and Review pages, and again when the new system is ready to start.
 * **systemd-boot or the EFI stub, with a Unified Kernel Image and your own signing key**, can work with Secure Boot. This is an advanced choice. You make the key and the certificate. The installer signs the boot files with them. You add the certificate to the firmware's key list (the installer says where it left the file). The proprietary NVIDIA driver cannot be combined with this, because its kernel modules would not be signed.
 
 ### UEFI or BIOS (CSM)?
@@ -170,7 +170,7 @@ You can import and export settings. A settings file never contains passwords.
 
 When it finishes, restart, remove the stick, and boot the new system. If the new system does not start, boot the disc again and use the repair tool (section 9).
 
-If an installation fails, the installer shows the failing step and the buttons **Try again**, **Resume installation** and **Save diagnostics…**. It resumes on the same disk. If a late step fails after the boot loader was installed, the installer says *Your new system is installed and can start*: restart now and fix the rest from the installed system, or press **Retry the desktop step**. If you cancel while the disk is being changed, only **Start over** is offered, because the disk is half done. If a repair session still holds the disks, the installer says it cannot start yet and nothing is changed (section 12). The log is in `/var/lib/gentoo-installer/install.log` (read it with `sudo less`). The daemon's own messages are in `/var/log/gentoo-installerd.log`.
+If an installation fails, the installer shows the failing step and the buttons **Try again**, **Resume installation** and **Save diagnostics…**. It resumes on the same disk. If a late step fails after the boot loader was installed, the installer says *Your new system is installed and can start*: restart now and fix the rest from the installed system, or press **Retry the desktop step**. After an error or a cancel the installer first finishes and releases the disks; the buttons that start something appear when that is done. If you cancel after the boot loader was installed, the new system can start, and the same two choices are offered. If you cancel while the disk is being changed, only **Erase again and restart installation** is offered, because the disk is half done. If a repair session still holds the disks, the installer says it cannot start yet and nothing is changed (section 12). The log is in `/var/lib/gentoo-installer/install.log` (read it with `sudo less`). The daemon's own messages are in `/var/log/gentoo-installerd.log`.
 
 ## 7. Install in text mode
 

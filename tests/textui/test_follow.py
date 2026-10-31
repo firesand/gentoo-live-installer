@@ -95,6 +95,23 @@ def test_a_failure_reports_the_error_the_stage_and_whether_it_can_be_resumed(ins
     assert "Error: emerge failed: dev-libs/broken-1.2 could not be built (Installing the base system)" in script.flat
 
 
+def test_a_cleanup_failure_is_a_note_beside_the_cause(installer, host: FakeHost) -> None:
+    job = failing_job()
+    job.insert(-1, error("Cleanup failed: target is busy", "install.cleanup_failed", "cleanup"))
+    follower, _ = follower_for(installer(jobs=[job]), host)
+    outcome = follower.run(start_request())
+    assert (outcome.state, outcome.code, outcome.stage) == ("failed", "install.failed", "base")
+    assert outcome.message.startswith("emerge failed") and "Cleanup failed: target is busy" in outcome.warnings
+
+
+def test_a_cancel_stays_a_cancel_when_the_disks_could_not_be_released(installer, host: FakeHost) -> None:
+    job = [stage("storage", 10, "completed"), error("Installation cancelled", "install.cancelled", "stage3", resumable=True),
+           error("Cleanup failed: target is busy", "install.cleanup_failed", "cleanup"), completed(False, "Installation cancelled", resumable=True)]
+    follower, _ = follower_for(installer(jobs=[job]), host)
+    outcome = follower.run(start_request())
+    assert outcome.state == "cancelled" and outcome.resumable and "Cleanup failed: target is busy" in outcome.warnings
+
+
 def test_resumable_comes_from_the_status_when_the_events_do_not_say(installer, host: FakeHost) -> None:
     fake = installer(jobs=[[stage("storage", 5), error("boom"), completed(False)]])  # no resumable key in either event (an older service)
     fake.resumable_override = True

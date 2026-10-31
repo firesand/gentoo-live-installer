@@ -79,6 +79,7 @@ CHECKLIST_NAMES = {
 }
 LONG_STEPS_HINT = "The long steps are the kernel and the desktop; the others take a few minutes."
 CANCEL_WARNING = "Cancelling after the disk was changed leaves a partly installed system that cannot start; you can resume or start over later."
+CANCEL_WARNING_BOOTABLE = "The new system can already start. Cancelling stops the steps that are left; you can retry them later."
 GENTOO_NEWS_URL = "https://www.gentoo.org/support/news-items/"
 ERASE_AGAIN = "Erase again and restart installation"
 # Share of the overall bar per stage (sum 100, cleanup 0). Used when the
@@ -429,6 +430,7 @@ class ProgressPage(Page):
         self._retryable: bool | None = None
         self._resumable: bool | None = None
         self._bootable = False  # the bootloader step finished: the new system starts even though a later step failed
+        self._bootloader_done = False  # in this run: a resumed one has not got there yet, and until then the service says not bootable
         self._degraded: list[str] = []  # optional parts that could not be installed
         self._warnings: list[str] = []  # things that went wrong after the install itself succeeded (cleanup)
         self._restart_offered = False
@@ -496,7 +498,7 @@ class ProgressPage(Page):
         self.more_menu = QMenu(self)
         self.reconnect_button = PanelCommand("Reconnect", parent=self)
         self.resume_button = PanelCommand("Resume installation", parent=self)
-        self.retry_button = PanelCommand("Try again", parent=self)
+        self.retry_button = PanelCommand("Try again", danger=True, parent=self)  # the menu entry is built here; only Erase again ever reaches it
         self.settings_button = PanelCommand("Back to settings", parent=self)
         self.save_log_button = PanelCommand("Save log…", quiet=True, parent=self)
         self.repair_button = PanelCommand("Open the repair tool", parent=self)
@@ -606,10 +608,11 @@ class ProgressPage(Page):
         primary: PanelCommand | None = None
         secondary: PanelCommand | None = None
         candidates = [command for command in available if not command.danger and not command.quiet]
+        waiting = self._failure_reported and not self._terminal  # the page asks for patience: Save diagnostics is not the next step
         if self._restart_offered:
             secondary = next((command for command in candidates if command in (self.reconnect_button, self.resume_button, self.retry_button)), None)
         else:
-            primary = candidates[0] if candidates else None
+            primary = next((command for command in candidates if command is self.reconnect_button or not waiting), None)
         for command in self.commands:
             quiet_button = command is secondary or (command.quiet and command.available)
             command.present("primary" if command is primary else "secondary" if quiet_button else "menu")
@@ -647,7 +650,7 @@ class ProgressPage(Page):
 
     def reconnect(self) -> None:
         if self._socket_path:
-            self.attach(self._socket_path, 0 if self._busy else self.last_seq)
+            self.attach(self._socket_path, 0 if self._busy or self._failure_reported else self.last_seq)  # 0: the replay brings the error back
 
     def resume(self) -> None:
         """Resume with the manifest that started the job (its fingerprint must match)."""
@@ -692,6 +695,9 @@ class ProgressPage(Page):
         self.cancel.setEnabled(True)
         self.cancel.setVisible(True)
         self.cancel_note.setVisible(True)
+        self._bootloader_done = False
+        self.cancel_note.setText(CANCEL_WARNING)
+        self.cancel.setToolTip(CANCEL_WARNING)
         self._finish = {}
         self.checklist.reset()
         self.first_steps_card.hide()
@@ -714,7 +720,14 @@ class ProgressPage(Page):
 
     # --- events -----------------------------------------------------------------------------
 
+    def _retired(self) -> bool:
+        """True in a slot called by a worker that a later run replaced: Qt still delivers what it queued, and that is about the old job."""
+        sender = self.sender()
+        return sender is not None and sender is not self.worker
+
     def handle_event(self, event: dict) -> None:
+        if self._retired():
+            return
         kind = event.get("event") or event.get("type") or event.get("ev")
         stage = event.get("stage", "") or ""
         raw_data = event.get("data")
@@ -767,6 +780,10 @@ class ProgressPage(Page):
                 self._storage_started = self._storage_done = True
             else:
                 self._storage_started = True
+        elif stage == "bootloader" and status in {"completed", "skipped"}:
+            self._bootloader_done = True
+            self.cancel_note.setText(CANCEL_WARNING_BOOTABLE)
+            self.cancel.setToolTip(CANCEL_WARNING_BOOTABLE)
         self.stage.setText(STAGE_LABELS.get(stage, stage.replace("_", " ").title() or "Working…"))
         if kind == "stage" and stage:
             self.checklist.stage_event(stage, status)
@@ -905,7 +922,7 @@ class ProgressPage(Page):
     def _completed(self, message: str, data: dict) -> None:
         self._terminal = True
         self.flush_log()
-        learned = self._absorb_outcome(data)
+        self._absorb_outcome(data)
         if data.get("success", True) is True and not self._failure_reported:
             self.model.finish()
             self.progress.setRange(0, 100)
@@ -931,13 +948,23 @@ class ProgressPage(Page):
             self.finished.emit(True)
         elif not self._failure_reported:
             self._fail(message or "The installation did not complete successfully.")
-        elif learned:
-            self._present_failure()  # the completed event knew more than the error event (the system can start)
+        else:
+            self._job_over()
+
+    def _job_over(self) -> None:
+        """The failed job has let go of the disks: offer what comes next, and only now tell the window how the run ended."""
+        self._terminal = True
+        self._present_failure()
+        if not self._finished_emitted:
+            self._finished_emitted = True
+            self.finished.emit(False)
 
     def _fail(self, message: str, *, stage: str = "", cancelled: bool = False, retryable: bool | None = None, busy: bool = False, blocked: bool = False,
               resumable: bool | None = None) -> None:
         self.flush_log()
-        first = not self._failure_reported
+        if self._failure_reported and stage == "cleanup":
+            self._add_warning(message)  # the cause stays the headline; disks that could not be released are a note beside it
+            return
         self._failure_reported = True
         self._cancelled = self._cancelled or cancelled
         self._busy = self._busy or busy
@@ -947,15 +974,15 @@ class ProgressPage(Page):
         if resumable is not None:
             self._resumable = resumable
         self._failure_message, self._failure_stage = message, stage or self._stage
-        self._present_failure()
         line = "ERROR: " + message
         if line != self._last_error_line:
             self._last_error_line = line
             self._append_log(line)
             self.flush_log()
-        if first and not self._finished_emitted:
-            self._finished_emitted = True
-            self.finished.emit(False)
+        if self._terminal:
+            self._job_over()
+        else:
+            self._present_failure()
 
     def _present_failure(self) -> None:
         message, failing = self._failure_message, self._failure_stage
@@ -964,10 +991,12 @@ class ProgressPage(Page):
         label = STAGE_LABELS.get(failing, "")
         self.checklist.fail(failing if failing in CHECKLIST_STAGES else "")
         self._set_severity("warning" if self._cancelled or self._busy or self._blocked or self._bootable else "error")
-        if self._cancelled:
+        if self._cancelled and not self._bootable:
             self.stage.setText("Installation cancelled")
             if not self._storage_started:
-                self.detail.setText("No disk has been changed. Choose Try again or Back to settings.")
+                self.detail.setText("No disk has been changed." + (" Choose Try again or Back to settings." if self._terminal else ""))
+            elif not self._terminal:
+                self.detail.setText(f"{STAGE_LABELS['cleanup']}…")
             elif self._can_resume():
                 self.detail.setText("The disk is partially installed; choose Resume or Back to settings.")
             else:
@@ -997,17 +1026,20 @@ class ProgressPage(Page):
     def _show_result_panel(self) -> None:
         changed = self._storage_started
         resumable = self._can_resume()
-        bootable = self._bootable and not self._cancelled and not self._busy
+        bootable = self._bootable and not self._busy
+        over = self._terminal  # the job holds the disks until then: nothing that starts a run or changes a disk can work yet
         self.resume_button.setText("Resume installation")
         if self._busy:
             hint = "Nothing was started. The running installation keeps going; reconnect to follow it."
         elif self._blocked:
             hint = "Nothing was started and nothing on your disks was changed. Close the repair tool (or unmount what it holds), then try again."
+        elif not over:
+            hint = "The installer is finishing and releasing the disks. What you can do next appears here when that is done."
         elif bootable:
             step = "the desktop step" if self._failure_stage == "desktop" else "the last step"
-            hint = ("The computer can start the new system now. One later step did not finish, so some programs may be missing. "
-                    f"You can restart now and fix that from the installed system, or retry {step} first.")
             resumable = self._resumable is not False and self._retryable is not False and self._manifest is not None
+            hint = ("The computer can start the new system now. One later step did not finish, so some programs may be missing. "
+                    "You can restart now and fix that from the installed system" + (f", or retry {step} first." if resumable else "."))
             self.resume_button.setText("Retry the desktop step" if self._failure_stage == "desktop" else "Retry the last step")
         elif self._cancelled:
             hint = "The installation was cancelled. " + (
@@ -1028,9 +1060,9 @@ class ProgressPage(Page):
         self.retry_button.setText(ERASE_AGAIN if changed else "Try again")
         self.retry_button.danger = changed
         self._set_buttons(
-            retry=not self._busy and not bootable, resume=resumable, reconnect=self._busy, settings=not bootable, save=not self._busy,
-            diagnostics=not self._busy, quit_=True, restart=bootable,
-            repair=changed and not bootable and not self._busy and not self._blocked,
+            retry=over and not self._busy and not bootable, resume=over and resumable, reconnect=self._busy, settings=over and not bootable, save=not self._busy,
+            diagnostics=not self._busy, quit_=True, restart=over and bootable,
+            repair=over and changed and not bootable and not self._busy and not self._blocked,
         )
         self.result_panel.show()
 
@@ -1076,17 +1108,21 @@ class ProgressPage(Page):
             hardware=tuple(str(line) for line in (self._finish.get("first_steps") or ()) if isinstance(line, str)))
 
     def _connection_failed(self, message: str) -> None:
+        if self._retired():
+            return
         self._connection_lost("Could not connect to the privileged installer backend. " + message)
 
     def _worker_finished(self) -> None:
-        if not self._terminal and not self._failure_reported:
+        if self._retired():
+            return
+        if not self._terminal:
             self._connection_lost("The installer backend stopped before reporting completion.")
         self.workerStopped.emit()
 
     def _connection_lost(self, message: str) -> None:
         """The stream ended without a result. If the job still runs, offer to
         reconnect; otherwise report the daemon's own last error."""
-        if self._failure_reported or self._terminal:
+        if self._terminal:
             return
         state = daemon_client.probe(self._socket_path, timeout=1.0) if self._socket_path else None
         if state is not None and state.reachable and state.job_running:
@@ -1107,7 +1143,11 @@ class ProgressPage(Page):
             self._set_buttons(reconnect=can_attach, save=True, diagnostics=True, quit_=True)
             self.result_panel.show()
             return
+        if self._failure_reported:
+            self._job_over()  # the stream ended after the error, with no completed event, and the job is gone: nothing more is coming
+            return
         specific = str(state.status.get("error", "")) if state is not None and state.reachable else ""
+        self._terminal = True
         self._fail(specific or message)
 
     # --- cancel ----------------------------------------------------------------------------------
@@ -1116,7 +1156,9 @@ class ProgressPage(Page):
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Warning)
         box.setWindowTitle("Cancel the installation?")
-        if self._storage_done:
+        if self._bootloader_done:
+            box.setText(f"{CANCEL_WARNING_BOOTABLE} Some programs may be missing until then.")
+        elif self._storage_done:
             box.setText("The disk has already been modified. Cancelling leaves a partially installed system that cannot boot; you can resume later or start over.")
         elif self._storage_started:
             box.setText("The disk is being changed right now. Cancelling stops this half-way and leaves the disk half-prepared, so it cannot boot; you can only start over.")
@@ -1139,6 +1181,8 @@ class ProgressPage(Page):
             self.request_cancel()
 
     def request_cancel(self) -> None:
+        if self._terminal or self._failure_reported:
+            return  # the run ended while the question was open: the result stays on the page
         self.cancel.setEnabled(False)
         self.detail.setText("Cancelling… waiting for a safe stopping point")
         if self.worker:
@@ -1146,7 +1190,7 @@ class ProgressPage(Page):
         self.cancelRequested.emit()
 
     def _cancel_acknowledged(self, accepted: bool, message: str) -> None:
-        if accepted or self._terminal or self._failure_reported:
+        if accepted or self._terminal or self._failure_reported or self._retired():
             return
         self.cancel.setEnabled(True)
         self.detail.setText(f"The cancellation was not accepted: {message}")

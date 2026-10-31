@@ -419,10 +419,12 @@ class InstallFollower:
     def _finish(self) -> Outcome:
         run = self.run_state
         done = event_data(run.completed or {})
-        failing = run.errors[-1] if run.errors else {}
+        causes = [event for event in run.errors if event.get("stage") != "cleanup"]  # disks that could not be released are a note beside the cause
+        failing = (causes or run.errors)[-1] if run.errors else {}
         detail = event_data(failing)
         degraded = list(dict.fromkeys([*run.degraded, *[str(item) for item in done.get("degraded") or []]]))
-        warnings = list(dict.fromkeys([*run.warnings, *[str(item) for item in done.get("warnings") or []]]))
+        late = [str(event.get("error") or event.get("message")) for event in run.errors if causes and event.get("stage") == "cleanup"]
+        warnings = list(dict.fromkeys([*run.warnings, *[str(item) for item in done.get("warnings") or []], *late]))
         outcome = Outcome("success", str((run.completed or {}).get("message") or ""), last_seq=run.last_seq, percent=run.percent,
                           degraded=degraded, warnings=warnings, log_path=self._log_path())
         if done.get("success") is True:

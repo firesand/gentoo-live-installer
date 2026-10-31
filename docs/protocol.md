@@ -28,7 +28,9 @@ everything below that is new is additive, and clients discover it with
   rescue queries).
 * Every streaming request ends with exactly one `completed` event (`data.success`).
   Failures send one `error` event first. A client must not treat `error` alone as the
-  end of a stream.
+  end of a stream: a job that ran then cleans up, still holds the disks, and `start` answers
+  `install.busy`. Offer a resume, a retry or a new start only after `completed`, or when
+  the stream ended without one and the service reports no running job.
 
 ### Error codes
 
@@ -90,9 +92,11 @@ the table of the current job, `capabilities.stages` the default one):
   `data = {success, bootable, degraded, warnings}`, plus `resumable` after a failure.
   `degraded` lists optional parts that failed (a desktop package, the NVIDIA driver, a
   service). `warnings` lists texts the user should read: decisions of the hardware plan that
-  differ from what was asked (the proprietary driver does not fit this PC) and a cleanup
-  that failed after a finished installation. Such a run is `success: true`: the system is
-  installed, and the warning says which commands release the disks before a restart.
+  differ from what was asked (the proprietary driver does not fit this PC), a cleanup
+  that failed after a finished installation, and, once the bootloader stage is done, that this
+  PC's Secure Boot will refuse the unsigned system. A cleanup that failed after a finished
+  installation is `success: true`: the system is installed, and the warning says which commands
+  release the disks before a restart.
   On success `data` also carries what the finish page shows: `first_steps` (at most six lines of the
   hardware plan, possibly empty), `boot_check` (one line, e.g. "Boot check passed: GRUB found the
   kernel and initramfs"; absent when unknown), `news_unread` (number of unread Gentoo news items;
