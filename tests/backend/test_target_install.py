@@ -62,6 +62,14 @@ class PortageStageTests(StageHarness):
         self.assertNotIn("media-video/pipewire", pretend)  # optional packages are not part of the gate
         self.assertEqual((self.target / "etc/portage/make.conf").read_text().count("MAKEOPTS"), 1)
 
+    def test_a_manual_kernel_has_no_kernel_package_to_resolve(self) -> None:
+        """"manual" is a choice, not a package: asking emerge for sys-kernel/manual ended the install here, before its handoff."""
+        installer = self.make(target_manifest(system={"kernel": "manual"}))
+        installer._portage()
+        pretend = next(line for line in self.chroot_lines() if " --pretend " in f" {line} ")
+        self.assertIn("sys-kernel/installkernel", pretend)
+        self.assertNotIn("sys-kernel/manual", pretend)
+
     def test_an_unresolvable_choice_stops_here_and_names_the_flag(self) -> None:
         runner = ScriptedRunner()
         runner.script("*--pretend", ("fail", EmergeDiagnosisTests.USE_CHANGES))
@@ -143,7 +151,67 @@ class KernelStageTests(StageHarness):
 
     def test_manual_kernel_is_a_command_line_feature_with_clear_instructions(self) -> None:
         installer = self.prepare(m=target_manifest(system={"kernel": "manual"}))
-        with self.assertRaisesRegex(InstallError, "chroot into that directory"):
+        installer.storage.layout = list(reversed(LAYOUT))  # the root comes first in the text, whatever the order of the layout
+        with self.assertRaises(InstallError) as caught:
+            installer._kernel()
+        text = str(caught.exception)
+        for words in (f"mount /dev/sda3 at {self.target}, then /dev/sda1 at {self.target}/efi", f"chroot into {self.target}",  # no fstab exists yet
+                      "/boot/vmlinuz-<version>", "/boot/initramfs-<version>.img", f"umount -R {self.target}", "--resume"):
+            self.assertIn(words, text)
+        self.assertNotIn("cryptsetup", text)
+
+    def test_manual_kernel_names_the_volumes_it_closed_as_the_resume_looks_for_them(self) -> None:
+        installer = self.prepare(m=target_manifest(system={"kernel": "manual"}, storage={"luks": True, "lvm": True, "luks_passphrase": "long-enough-passphrase"}))
+        installer.storage._stack.update({"luks_device": "/dev/sda3", "mapper": "gentoo-crypt", "vg": "gentoo"})
+        with self.assertRaisesRegex(InstallError, "run 'cryptsetup open /dev/sda3 gentoo-crypt and vgchange -ay gentoo', then mount"):
+            installer._kernel()
+
+    def test_manual_kernel_gives_the_options_of_a_subvolume(self) -> None:
+        """Without subvol=@home the default subvolume shows up at /home; the installer's own mounts use the options too."""
+        installer = self.prepare(m=target_manifest(system={"kernel": "manual"}))
+        installer.storage.layout = [LayoutEntry("/dev/sda3", "/", "btrfs", options="subvol=@,compress=zstd"), LayoutEntry("/dev/sda3", "/home", "btrfs", options="subvol=@home,compress=zstd")]
+        with self.assertRaisesRegex(InstallError, f"/dev/sda3 at {self.target}/home with -o subvol=@home,compress=zstd"):
+            installer._kernel()
+
+    def test_manual_kernel_without_an_initramfs_is_not_told_to_make_one(self) -> None:
+        installer = self.prepare(m=target_manifest(system={"kernel": "manual", "initramfs": "none"}))
+        with self.assertRaises(InstallError) as caught:
+            installer._kernel()
+        self.assertIn("Install the kernel as /boot/vmlinuz-<version>. Leave", str(caught.exception))
+
+    def test_manual_kernel_gets_everything_of_the_stage_but_the_kernel(self) -> None:
+        """The stop came first, and neither the chroot nor the resumed install got any of this: no later stage does it."""
+        plan = FakePlan(early_atoms=["sys-kernel/linux-firmware"], files=[("etc/modprobe.d/tuning.conf", "options x y=1\n", 0o644)],
+                        driver_atoms=["x11-drivers/nvidia-drivers"])
+        m = target_manifest(system={"kernel": "manual", "init": "systemd", "stage_variant": "amd64-systemd", "desktop": "minimal", "bootloader": "systemd-boot"},
+                            storage={"luks": True, "lvm": True, "luks_passphrase": "long-enough-passphrase"})
+        installer = self.prepare(m=m, plan=plan)
+        installer.storage.layout = [LayoutEntry("/dev/sda3", "/", "xfs"), LayoutEntry("/dev/sda1", "/efi", "vfat")]
+        installer.storage._stack["luks_device"] = "/dev/sda3"
+        for relative in ("usr/lib/systemd/systemd-cryptsetup", "usr/lib/systemd/boot/efi/systemd-bootx64.efi"):
+            (self.target / relative).parent.mkdir(parents=True, exist_ok=True)
+            (self.target / relative).write_bytes(b"x")
+        with self.assertRaises(InstallError):
+            installer._kernel()
+        lines = self.chroot_lines()
+        ran = "\n".join(lines)
+        for atom in ("sys-fs/cryptsetup", "sys-fs/lvm2", "sys-fs/xfsprogs", "sys-fs/dosfstools", "sys-kernel/linux-firmware", "sys-kernel/installkernel", "sys-kernel/dracut"):
+            self.assertIn(atom, ran)
+        self.assertIn("--update --newuse --oneshot sys-apps/systemd", ran)  # the flags of systemd-boot and the LUKS helper
+        self.assertEqual(read(self.target, "etc/modprobe.d/tuning.conf"), "options x y=1\n")
+        for skipped in ("sys-kernel/manual", "nvidia-drivers", "--regenerate-all"):  # a driver needs the kernel the person has not installed yet
+            self.assertNotIn(skipped, ran)
+
+    def test_a_resumed_manual_kernel_passes_with_the_names_the_boot_loader_stage_reads(self) -> None:
+        m = target_manifest(system={"kernel": "manual"})
+        installer = self.prepare(m=m, resume=True)
+        (self.target / "boot").mkdir()
+        (self.target / "boot/vmlinuz-6.12.0").write_bytes(b"kernel")
+        (self.target / "boot/initramfs-6.12.0.img").write_bytes(b"initramfs")
+        installer._kernel()
+        self.assertTrue(any("Verified manually installed" in line for line in self.logs()))
+        (self.target / "boot/initramfs-6.12.0.img").rename(self.target / "boot/initramfs.img")  # _boot_images would refuse this one
+        with self.assertRaisesRegex(InstallError, "/boot/initramfs-<version>.img"):
             installer._kernel()
 
     def test_only_the_dist_kernel_flow_remains(self) -> None:

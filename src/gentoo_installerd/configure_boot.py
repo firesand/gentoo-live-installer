@@ -164,6 +164,12 @@ def efi_arch(plan: object | None) -> str:
     return "ia32" if grub_efi_target(plan) == "i386-efi" else "x64"
 
 
+# installkernel names the file vmlinuz-<version>; systemd's kernel-install (compat layout) kernel-<version>. The boot loader stage reads
+# these, and a resumed manual kernel must have them: a name only one of the two accepts fails much later.
+KERNEL_IMAGES = ("vmlinuz-*", "kernel-*")
+INITRAMFS_IMAGES = ("initramfs-*.img", "initrd-*")
+
+
 class BootMixin(BootExtrasMixin):
     # ----- package sets ------------------------------------------------------------------------
 
@@ -188,8 +194,9 @@ class BootMixin(BootExtrasMixin):
         more, and again with every update). In the kernel's own emerge the chosen kernel satisfies it. A distribution
         kernel always has dracut, which the stage runs again afterwards, so the image still holds the microcode.
         """
-        early = self.early_boot_atoms(manifest, plan) if manifest.system.kernel in DIST_KERNELS else []
-        return list(dict.fromkeys([*early, "sys-kernel/installkernel", f"sys-kernel/{manifest.system.kernel}",
+        if manifest.system.kernel not in DIST_KERNELS:
+            return []  # a kernel installed by hand: the stage stops before this emerge, and "manual" is no package
+        return list(dict.fromkeys([*self.early_boot_atoms(manifest, plan), "sys-kernel/installkernel", f"sys-kernel/{manifest.system.kernel}",
                                    *self.kernel_extra_atoms(manifest)]))
 
     def kernel_atoms(self, manifest: InstallManifest) -> list[str]:
@@ -521,13 +528,12 @@ class BootMixin(BootExtrasMixin):
 
     def _boot_images(self, manifest: InstallManifest) -> tuple[Path, Path | None]:
         boot = self.path("boot")
-        # installkernel names the file vmlinuz-<version>; systemd's kernel-install (compat layout) kernel-<version>.
-        kernels = sorted([*boot.glob("vmlinuz-*"), *boot.glob("kernel-*")], key=lambda path: path.stat().st_mtime, reverse=True)
+        kernels = sorted((path for pattern in KERNEL_IMAGES for path in boot.glob(pattern)), key=lambda path: path.stat().st_mtime, reverse=True)
         if not kernels:
             raise ConfigurationError("No installed kernel was found under /boot")
         initramfs = None
         if manifest.system.initramfs != "none":
-            images = sorted([*boot.glob("initramfs-*.img"), *boot.glob("initrd-*")], key=lambda path: path.stat().st_mtime, reverse=True)
+            images = sorted((path for pattern in INITRAMFS_IMAGES for path in boot.glob(pattern)), key=lambda path: path.stat().st_mtime, reverse=True)
             if not images:
                 raise ConfigurationError("No installed initramfs was found under /boot")
             initramfs = images[0]
