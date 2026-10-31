@@ -139,6 +139,7 @@
      "power": "none",
      "prime": "off",
      "removable_fallback": "always",
+     "secure_boot_refuses": true,
      "sof_firmware": "no",
      "target": "this",
      "thermald": "no",
@@ -344,6 +345,7 @@
       ],
       "title": "Gentoo Linux (safe graphics)"
      },
+     "secure_boot_refuses": true,
      "sof_firmware": "no",
      "target": "this",
      "thermald": "no",
@@ -691,6 +693,7 @@
      "power": "none",
      "prime": "off",
      "removable_fallback": "always",
+     "secure_boot_refuses": true,
      "sof_firmware": "no",
      "target": "this",
      "thermald": "no",

@@ -621,6 +621,9 @@ class Installer(Stage3Stage, RepositoryStage, PortageStage, KernelStage, Bootloa
     def _stage_done(self, name: str) -> None:
         if name == "bootloader":
             self._bootable = True
+            # From here on every outcome says the system can start, so every outcome carries what stands in its way.
+            if self.hardware_plan is not None and self.hardware_plan.scalars.get("secure_boot_refuses") is True and finish_stage.SECURE_BOOT_FIRST_START not in self.warnings:
+                self.warnings.append(finish_stage.SECURE_BOOT_FIRST_START)
         elif name == "stage3":
             self._discard_stage3_archive()
 

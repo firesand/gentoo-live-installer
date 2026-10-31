@@ -22,6 +22,7 @@ LOG = logging.getLogger(__name__)
 
 BOOTLOADER_NAMES = {"grub": "GRUB", "systemd-boot": "systemd-boot", "refind": "rEFInd", "limine": "Limine"}
 FILE_CAPABILITY_TARGETS = ("/bin/ping", "/usr/bin/ping", "/usr/bin/newuidmap", "/bin/newuidmap")
+SECURE_BOOT_FIRST_START = "Secure Boot is on in this PC and the new system is not signed, so the PC will refuse to start it. Turn Secure Boot off in the firmware setup before you restart."
 
 
 def _out(installer: Installer, argv: tuple[str, ...]) -> str | None:

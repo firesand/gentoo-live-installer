@@ -823,3 +823,27 @@ def test_optional_services_are_enabled_only_when_their_package_installed():
     assert result.services_to_enable(lambda name: False) == []
     trim = plan(systemd(**quiet()), profile())
     assert trim.services_to_enable(lambda name: False) == [("fstrim.timer", "default")]       # a plain service needs no package of its own
+
+
+def secure_boot_machine(state: str = "enabled", firmware: str = "uefi") -> dict:
+    machine = profile(firmware=firmware)
+    machine["firmware"]["secure_boot"] = state
+    return machine
+
+
+def test_a_pc_with_secure_boot_on_refuses_the_unsigned_default() -> None:
+    plan = hwplan.plan(manifest(), secure_boot_machine())
+    assert plan.scalars["secure_boot_refuses"] is True
+    assert hwplan.HardwarePlan.from_dict(plan.to_dict()).scalars["secure_boot_refuses"] is True  # a resume reads the plan back
+
+
+@pytest.mark.parametrize(("sections", "machine"), [
+    pytest.param({"system": {"secure_boot": True}}, secure_boot_machine(), id="signed"),
+    pytest.param({"system": {"bootloader": "none"}}, secure_boot_machine(), id="a boot loader of ones own"),
+    pytest.param({"hardware": {"target": "portable"}}, secure_boot_machine(), id="for other PCs"),
+    pytest.param({"storage": {"firmware": "bios"}}, secure_boot_machine(), id="legacy boot"),
+    pytest.param({}, secure_boot_machine("disabled"), id="secure boot off"),
+    pytest.param({}, secure_boot_machine("setup"), id="setup mode"),
+])
+def test_nothing_is_said_about_secure_boot_when_it_will_not_refuse(sections: dict, machine: dict) -> None:
+    assert "secure_boot_refuses" not in hwplan.plan(manifest(**sections), machine).scalars

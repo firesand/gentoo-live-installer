@@ -90,6 +90,15 @@ def disk_warning(manifest: InstallManifest, info: SystemInfo | None) -> str:
     return heading + ("\n" + "\n".join(lines) if lines else "")
 
 
+def secure_boot_warning(manifest: InstallManifest, info: SystemInfo | None) -> str:
+    """Why this PC will refuse the new system ("" when it will not). Directly under the disk warning: it is noticed, or the first start fails."""
+    system = manifest.system
+    if (info is None or manifest.storage.firmware != "uefi" or system.secure_boot or system.bootloader == "none" or manifest.hardware.target == "portable"
+            or firmware_secure_boot(info) != "enabled"):
+        return ""
+    return SECURE_BOOT_UNSIGNED.format(loader=BOOT_LOADER_NAMES.get(system.bootloader, system.bootloader))
+
+
 def manifest_warnings(manifest: InstallManifest, info: SystemInfo | None = None) -> list[str]:
     """Things worth knowing that do not stop the installation."""
     extra = getattr(manifest, "warnings", None)
@@ -104,14 +113,13 @@ def manifest_warnings(manifest: InstallManifest, info: SystemInfo | None = None)
         warnings.extend(storage_capacity(manifest, info)[1])
         if manifest.storage.firmware == "bios" and info.uefi:
             warnings.append("Legacy BIOS was chosen on a computer started in UEFI mode: the installed system boots only through the firmware's CSM/legacy mode.")
-        if manifest.storage.firmware == "uefi" and not system.secure_boot and firmware_secure_boot(info) == "enabled":
-            warnings.append(SECURE_BOOT_UNSIGNED.format(loader=BOOT_LOADER_NAMES.get(system.bootloader, system.bootloader)))
+        warnings.append(secure_boot_warning(manifest, info))
         if manifest.storage.device_id_kind == "path":
             warnings.append("The target disk has no serial number; it is recognised by its hardware path, size and model.")
         for finding in info.warnings:
             if finding.get("severity") in {"warning", "error"} and finding.get("message"):
                 warnings.append(str(finding["message"]))
-    return list(dict.fromkeys(warnings))
+    return [warning for warning in dict.fromkeys(warnings) if warning]
 
 
 def selection_problems(manifest: InstallManifest, info: SystemInfo | None) -> list[str]:
@@ -584,13 +592,14 @@ class ReviewPage(Page):
         storage = self.manifest.storage
         self._rows = self._collect_rows()
         self._rebuild_groups()
-        self.warning.setText(disk_warning(self.manifest, self.info))
+        secure_boot = secure_boot_warning(self.manifest, self.info)
+        self.warning.setText(disk_warning(self.manifest, self.info) + (f"\n\n{secure_boot}" if secure_boot else ""))
         self.storage_plan.setText(storage_plan_text(self.manifest, self.info))
         hardware = self.info.hardware if self.info is not None else {}
         lines = plan_lines(hardware_plan(self.manifest, hardware)) if hardware else []
         self.hardware_plan.setText("\n".join("• " + line for line in lines))
         self.hardware_card.setVisible(bool(lines))
-        notes = manifest_warnings(self.manifest, self.info)
+        notes = [note for note in manifest_warnings(self.manifest, self.info) if note != secure_boot]
         self.notes.setText("Good to know:\n• " + "\n• ".join(notes) if notes else "")
         self.notes.setVisible(bool(notes))
         wanted = required_confirmations(self.manifest, self.info)

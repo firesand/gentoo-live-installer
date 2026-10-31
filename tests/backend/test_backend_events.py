@@ -12,6 +12,7 @@ from gentoo_installerd.configure import Configurer
 from gentoo_installerd.install import InstallBusyError, InstallError, Installer
 from gentoo_installerd.runner import DryRunRunner, InstallCancelled
 from gentoo_installerd.storage import StorageError, StorageManager
+from gentoo_installerd.stages.finish import SECURE_BOOT_FIRST_START
 
 from tests.backend.helpers import FakeInspector, FakeRunner, manifest
 
@@ -167,7 +168,8 @@ class TestPlanWarningsInTheResult:
         inst = Installer(m, runner=DryRunRunner(), target_root=tmp_path / "t", state_dir=tmp_path / "s", dry_run=True, inspector=Static(), emit=events.append)
         assert inst.run()
         warnings = completed(events).data["warnings"]
-        assert len(warnings) == 1 and warnings[0].startswith("The proprietary NVIDIA driver was not installed because it does not fit this PC")
+        assert len(warnings) == 2 and warnings[0].startswith("The proprietary NVIDIA driver was not installed because it does not fit this PC")
+        assert warnings[1] == SECURE_BOOT_FIRST_START  # this laptop has Secure Boot on
 
     def test_a_machine_with_nothing_to_report_has_no_warnings(self, tmp_path):
         inst, events = installer(tmp_path)

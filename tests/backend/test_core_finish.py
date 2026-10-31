@@ -51,6 +51,21 @@ class ValidationWarningTests(Base):
         installer._validate()
         self.assertEqual(installer.warnings, [])
 
+    def test_a_pc_that_will_refuse_the_system_says_so_from_the_bootloader_on(self) -> None:
+        installer = self.prepare(plan=FakePlan(scalars={"secure_boot_refuses": True}))
+        installer.hardware_plan = installer._plan()
+        installer._stage_done("stage3")
+        self.assertEqual(installer.warnings, [])
+        installer._stage_done("bootloader")
+        installer._stage_done("bootloader")  # a resume reports it again
+        self.assertEqual(installer.warnings, [finish.SECURE_BOOT_FIRST_START])
+
+    def test_a_pc_that_starts_the_system_hears_nothing_about_secure_boot(self) -> None:
+        installer = self.prepare(plan=FakePlan())
+        installer.hardware_plan = installer._plan()
+        installer._stage_done("bootloader")
+        self.assertEqual(installer.warnings, [])
+
     def test_lost_file_capabilities_warn(self) -> None:
         installer = self.prepare()
         self.runner.outputs.clear()

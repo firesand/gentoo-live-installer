@@ -37,7 +37,7 @@ UEFI_ONLY = ("systemd-boot", "efi-stub")
 BIOS_REASON = "This PC starts in BIOS (legacy) mode, and this boot loader needs UEFI. GRUB works here."
 
 SECURE_BOOT_ON_NOTE = ("Secure Boot is on in this PC’s firmware. Either turn it off in the firmware screen (easiest), "
-                       "or tick Secure Boot below and let the installer sign the boot files.")
+                       "or choose systemd-boot below, tick Secure Boot and let the installer sign the boot files.")
 SECURE_BOOT_CONFIRM = ("Secure Boot makes the computer start only boot files signed with your key; you must enroll the key in the firmware once. "
                        "Updates are signed automatically.")
 SECURE_BOOT_CONFIRM_MISSING = "Tick the box that confirms you understand how Secure Boot works, or turn Secure Boot off."

@@ -736,6 +736,10 @@ class _Planner(NvidiaPlanMixin, DevicePlanMixin, SessionPlanMixin, TuningPlanMix
 
     def boot(self) -> None:
         self.p.scalars["removable_fallback"] = resolve_removable_fallback(self.m, self.hw)
+        system, hardware = self.m.system, self.m.hardware
+        if (self.m.storage.firmware == "uefi" and not system.secure_boot and system.bootloader != "none" and hardware.target != "portable"
+                and self.hw.firmware.secure_boot == "enabled"):
+            self.p.scalars["secure_boot_refuses"] = True  # not said for a portable system or a boot loader of one's own: this PC's firmware does not decide those
         efi_bits = self.hw.firmware.efi_bits if self.m.storage.firmware == "uefi" else 0
         self.p.scalars["grub_target"] = "i386-pc" if self.m.storage.firmware == "bios" else ("i386-efi" if efi_bits == 32 else "x86_64-efi")
         if efi_bits == 32 and self.m.system.bootloader == "grub":
