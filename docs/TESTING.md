@@ -726,7 +726,7 @@ Read these before trusting, or blaming, a result.
 
 * **The AI rescue stick has no real-hardware run.** Its code is tested with fakes, and the VM scenarios above are run by hand. The login scraping, the console switch and the QR codes on a real console, the phone share with real phone browsers, and the Codex sandbox on the live kernel are untried (the checklist above).
 
-* **What ran on real QEMU for RC4.** On the final test ISO (commit 26b3095): the 12 scenarios of
+* **What ran on real QEMU for RC4.** On the final test ISO: the 12 scenarios of
   `wave3`, with `openrc` run with a manual kernel, with `--cancel-then-resume` and with `--live-only`,
   plus an install with Secure Boot on in the firmware. The other matrices did not run. The release ISO
   of the same commit has no SSH login, so it was only booted, on Secure Boot, BIOS and UEFI, and judged

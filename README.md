@@ -1,4 +1,5 @@
 # Gentoo LiveCD Installer
+> **This project is assisted by AI.** AI coding agents wrote most of it, directed by the maintainer ([AI assistance](#ai-assistance)). It is **unofficial**: not an official Gentoo release, and not made or endorsed by the Gentoo Foundation. It is a **release candidate**: install it only on a spare disk or a spare PC ([Status](#status)).
 
 A live USB/DVD image that does these jobs on almost any 64-bit PC or laptop:
 
@@ -22,6 +23,24 @@ The disc starts with **Secure Boot** on or off. With Secure Boot on, the first s
 The first program on the disc is Fedora's shim, signed by Microsoft. The boot menu (GRUB) and Linux are signed with a key made for this one version of the disc. Its private half is destroyed when the build ends, so every version needs this step once. "View key 0" shows a fingerprint that must match the `.secureboot.txt` file published next to the ISO.
 
 If the PC still refuses the stick ("Secure Boot Violation"), it trusts only Windows: turn on "Allow Microsoft 3rd Party UEFI CA" in the firmware setup, or set Secure Boot to *Disabled* there (F2, Del, F10, F12 or Esc right after power on). On a PC that runs **Windows with BitLocker or "Device encryption"**, look up your recovery key first (<https://aka.ms/myrecoverykey>): changing Secure Boot can make Windows ask for it. The same text is on the disc as `SECURE-BOOT.txt`. The installed Gentoo starts with GRUB, which is not signed: turn Secure Boot off before its first start, or choose systemd-boot with Secure Boot signing ([docs/USER-GUIDE.md](docs/USER-GUIDE.md)).
+
+## AI assistance
+
+This project is AI-assisted. AI coding agents wrote most of the code, the tests and the documentation: Claude Code from 2026-10-24, and other AI coding agents before that. The maintainer set the goals, made the decisions and directed the work. Commits written with Claude carry a `Co-Authored-By` line, so the history shows where it was used.
+
+The work was checked with automated tests and with full installs in virtual machines ([docs/TESTING.md](docs/TESTING.md) says what ran and what did not). Those checks do not replace your own judgement, and the [license](LICENSE) gives no warranty.
+
+This is separate from the optional *AI rescue* boot entry described above, which you choose to use and which works with your own account.
+
+## Status
+
+RC4 is a release candidate. Its release ISO was boot-tested on Secure Boot, BIOS and UEFI, and the full installs ran on a test ISO of the same commit, all in virtual machines. That build has not run on real hardware yet, and no test machine had an NVIDIA card, so the NVIDIA driver paths were not run. [docs/TESTING.md](docs/TESTING.md) lists the known gaps.
+
+An install erases the disk you choose. Use a spare disk or a spare PC, and keep a backup of anything you care about.
+
+## Download
+
+The ISO is about 2.4 GB, too large for a GitHub release, so it is published on SourceForge. The link will appear here when the upload is finished. Until then you can build the ISO yourself: see [Build the ISO](#build-the-iso).
 
 ## The boot menu
 
@@ -98,6 +117,12 @@ python3 scripts/test-vm.py --scenario openrc --iso build/test-dist/gentoo-instal
 ```
 
 Never hand a `-TESTKEY` image to anybody: whoever has the key can log in as root. Remove the key pair when you are done. Build the test ISO from the same tree as the harness: an older ISO rejects a newer settings file. [docs/TESTING.md](docs/TESTING.md) describes the scenarios (disks, firmware, network cards, laptop identities, LUKS, rescue), the memory rules, the KVM and software-emulation timeouts and the known gaps. The harness creates a new qcow2 disk under `build/vm`, never touches a host block device, and forwards SSH on loopback only. If `GENTOO_TEST_SSH_PUBLIC_KEY` is exported in your shell, `build-iso.sh` uses it silently: unset it before a normal build.
+
+## License
+
+GPL-2.0-or-later, see [LICENSE](LICENSE). The apps in `apps/` keep their own licenses: Gentoo Settings is GPL-3.0-or-later; PortageHub, KernelSmith and HWMonux are GPL-2.0-or-later. The System tuning values take [CachyOS-Settings](https://github.com/CachyOS/CachyOS-Settings) (GPL-3.0) as a reference; the files here are written for this project.
+
+Gentoo is a trademark of the Gentoo Foundation, Inc. and of Förderverein Gentoo e.V. The [Gentoo Name and Logo Usage Guidelines](https://www.gentoo.org/inside-gentoo/foundation/name-logo-guidelines.html) apply.
 
 ## Source entry points
 
