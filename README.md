@@ -42,6 +42,23 @@ An install erases the disk you choose. Use a spare disk or a spare PC, and keep 
 
 The ISO is about 2.4 GB, too large for a GitHub release, so it is published on SourceForge. The link will appear here when the upload is finished. Until then you can build the ISO yourself: see [Build the ISO](#build-the-iso).
 
+## Screenshots
+
+These come from the RC4 test runs in a virtual machine, so they show the test user `vmtest`, the host name `gentoo-vm-defaults` and QEMU hardware. The first two are from the release ISO, the others from a default install with the test ISO of the same commit.
+
+| | |
+|---|---|
+| ![The wizard's Welcome page on the release ISO, started with Secure Boot on](docs/screenshots/wizard-welcome.png) | ![MokManager asking which disk holds the key of the disc](docs/screenshots/secure-boot-enroll-key.png) |
+| The wizard on the release ISO, started with Secure Boot on | Secure Boot: enrolling the key of the disc in MokManager |
+| ![The Review page, which asks you to type the target disk before anything is changed](docs/screenshots/wizard-review.png) | ![The Install page after Cancel, offering Resume installation](docs/screenshots/wizard-resume.png) |
+| Nothing changes until you type the target disk and start the install | After Cancel, Resume continues without formatting again |
+| ![The finished install with its first steps in Gentoo](docs/screenshots/wizard-finished.png) | ![The installed KDE Plasma desktop on Wayland](docs/screenshots/installed-plasma.png) |
+| The finished install and its first steps | The installed system: KDE Plasma on Wayland |
+| ![PortageHub on the installed system](docs/screenshots/app-portagehub.png) | ![Gentoo Settings on the installed system](docs/screenshots/app-gentoo-settings.png) |
+| PortageHub, a graphical front end for Portage | Gentoo Settings, for system tuning |
+| ![KernelSmith on the installed system](docs/screenshots/app-kernelsmith.png) | ![HWMonux showing the sensors of the virtual machine](docs/screenshots/app-hwmonux.png) |
+| KernelSmith, a guided custom kernel builder | HWMonux, a hardware sensor viewer |
+
 ## The boot menu
 
 | Entry | Use it to |
