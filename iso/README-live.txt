@@ -129,6 +129,10 @@ it changes anything. If you do not want to erase a whole disk, prepare free
 space with GParted first (the partition editor in the applications menu) and
 choose the manual disk layout.
 
+The new system starts with GRUB, which is not signed. If Secure Boot is on,
+turn it off in the firmware settings before the first start of the new
+system; SECURE-BOOT.txt says why, and what else you can choose.
+
 No desktop? Choose "Install in text mode" in the boot menu, or type "sudo
 gentoo-installer-text" on a text console. It asks the same questions one at
 a time and installs the same system.

@@ -251,7 +251,8 @@ Information (`world-drift`) is kept in `result.json` and is neither.
 | `install-degraded` | the installer's final event reports no `degraded` parts (a desktop package or the NVIDIA driver that failed) and no `warnings` (a cleanup that failed after a good install). The finding carries the installer's own reasons, whole (also `install.completed` in `result.json`) | finding; a failure under `--strict-probes`: a part that did not install is a real problem |
 | `dmi` | the VM shows the DMI identity the scenario asked for | failure |
 | `sshd-service`, `sshd-config` | sshd runs and is enabled at boot (`rc-service sshd status` and `rc-update show default`, or `systemctl is-active` and `is-enabled`); `sudo sshd -T` says `permitrootlogin no`, no empty passwords, and a password login is possible exactly when `accounts.ssh_password_login` is true (password authentication, or keyboard-interactive with PAM, which is how Gentoo's own drop-in asks for passwords) | failure; no sudo: finding |
-| `sudo`, `root-lock` | the new user can use sudo with the password; root's password is locked as asked | finding |
+| `sudo` | the new user can use sudo with the password | finding |
+| `root-lock` | root's password status is locked when root login is off (the wizard's default), set otherwise | not readable (no sudo): finding; wrong: failure |
 
 `--no-world-probe` skips the world probe (minutes on a desktop); `--world-timeout` bounds it.
 `--fresh-nvram-check` (UEFI) boots the installed disk once more with an empty NVRAM after the
