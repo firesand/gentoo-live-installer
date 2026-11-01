@@ -10,6 +10,8 @@ from __future__ import annotations
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 
+from .hardware_data import DIST_KERNELS
+
 HANDBOOK_WORKING = "https://wiki.gentoo.org/wiki/Handbook:AMD64/Full/Working"
 HANDBOOK_PORTAGE = "https://wiki.gentoo.org/wiki/Handbook:AMD64/Full/Portage"
 HANDBOOK_FINALIZING = "https://wiki.gentoo.org/wiki/Handbook:AMD64/Installation/Finalizing"
@@ -36,18 +38,30 @@ class FirstSteps:
     news_unread: int | None = None
     hardware: Sequence[str] = field(default_factory=tuple)  # HardwarePlan.first_steps
     bootloader: str = "grub"
+    # What this install brought: a step never names a command the new system does not have.
+    gentoolkit: bool = False  # eclean-dist
+    eclean_kernel: bool = False
+    networkmanager: bool = True  # nmtui
 
 
 def privileged(command: str, privilege: str) -> str:
     return PRIVILEGE_PREFIX.get(privilege, "sudo ") + command
 
 
+def with_tool(command: str, atom: str, installed: bool, privilege: str) -> str:
+    """The command, after the emerge that brings its tool when the install did not."""
+    return privileged(command, privilege) if installed else privileged(f"emerge --ask {atom}", privilege) + " && " + privileged(command, privilege)
+
+
 def from_manifest(manifest, *, boot_check: str = "", news_unread: int | None = None, hardware: Iterable[str] = ()) -> FirstSteps:
-    """FirstSteps for an InstallManifest (anything with .accounts, .options and .system)."""
+    """FirstSteps for an InstallManifest (anything with .accounts, .options, .system and .network)."""
     return FirstSteps(
         username=manifest.accounts.username, hostname=manifest.accounts.hostname, privilege=manifest.accounts.privilege,
         ssh=bool(manifest.options.ssh), minimal=manifest.system.desktop == "minimal", boot_check=boot_check,
-        news_unread=news_unread, hardware=tuple(hardware), bootloader=manifest.system.bootloader)
+        news_unread=news_unread, hardware=tuple(hardware), bootloader=manifest.system.bootloader,
+        gentoolkit=bool(manifest.options.gentoolkit),
+        eclean_kernel=bool(manifest.options.eclean_kernel) and manifest.system.kernel in DIST_KERNELS,  # configure_boot.kernel_extra_atoms
+        networkmanager=manifest.network.manager == "networkmanager")
 
 
 def login_line(steps: FirstSteps) -> str:
@@ -85,16 +99,16 @@ def steps_lines(steps: FirstSteps) -> list[str]:
         "Update the system: " + privileged("emerge --sync", p) + " && " + privileged("emerge --ask --update --deep --newuse @world", p),
         f"Read the Handbook part 'Working with Gentoo': {HANDBOOK_WORKING}",
         f"Your settings live in /etc/portage/make.conf and /etc/portage/package.use ({HANDBOOK_PORTAGE}).",
-        "Free disk space from old downloads: " + privileged("eclean-dist -d", p),
+        "Free disk space from old downloads: " + with_tool("eclean-dist -d", "app-portage/gentoolkit", steps.gentoolkit, p),
         "After a kernel update, rebuild the out-of-tree drivers: " + privileged("emerge @module-rebuild", p)
-        + ". Old kernels stay installed; remove them with " + privileged("eclean-kernel", p) + ".",
+        + ". Old kernels stay installed; remove them with " + with_tool("eclean-kernel", "app-admin/eclean-kernel", steps.eclean_kernel, p) + ".",
         "After installing another operating system, run " + privileged("grub-mkconfig -o /boot/grub/grub.cfg", p)
         + " so the boot menu lists it." if steps.bootloader == "grub" else
         "After installing another operating system, check that your boot manager lists it.",
     ]
     if steps.ssh:
         lines.append(f"From another computer on this network, log in with: {login_line(steps)}")
-    if steps.minimal:
+    if steps.minimal and steps.networkmanager:
         lines.append("To connect to Wi-Fi on this system without a desktop, run " + privileged("nmtui", p) + ".")
     return lines
 

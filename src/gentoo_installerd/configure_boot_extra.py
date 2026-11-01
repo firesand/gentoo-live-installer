@@ -132,7 +132,8 @@ class BootExtrasMixin(ConfigurerBase):
             lines += ["", f"Secure Boot: the hook signs every new boot image with the key in {SECURE_BOOT_DIR} (root only)."]
         if system.kernel == "gentoo-kernel" and system.kernel_config_snippet.strip():
             lines += ["", "Your own kernel configuration lines are in /etc/kernel/config.d/00-installer.config."]
-        lines += ["", "Old kernels: eclean-kernel (app-admin/eclean-kernel) removes the ones you no longer need."]
+        lines += ["", "Old kernels: eclean-kernel removes the ones you no longer need." + ("" if manifest.options.eclean_kernel else
+                                                                                           " Install it first: emerge --ask app-admin/eclean-kernel")]
         return "\n".join(lines) + "\n"
 
     def link_cmdline_for_dracut(self, manifest: InstallManifest) -> None:

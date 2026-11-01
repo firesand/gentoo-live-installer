@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from gentoo_installer import first_steps
 from gentoo_installerd.configure import choice_problems, generated_locales, live_input_problems, render_hosts, render_sshd_config
 from gentoo_installerd.configure_accounts import POLKIT_WHEEL_FILE
 from gentoo_installerd.runner import RunnerError
@@ -392,6 +393,16 @@ def test_optional_tools(tmp_path):
     assert "app-admin/eclean-kernel" not in atoms and "app-admin/eclean-kernel" in c.kernel_extra_atoms(m)
     m, c, _, _ = tools(tmp_path, file_indexing=True)
     assert "sys-apps/mlocate" in c.system_tool_atoms(m)  # the older setting still works
+
+
+@pytest.mark.parametrize("kernel", ["gentoo-kernel-bin", "gentoo-kernel", "manual", "custom"])
+@pytest.mark.parametrize("ticked", [True, False])
+def test_the_first_steps_say_what_the_atoms_really_bring(tmp_path, kernel, ticked):
+    m, c, _, _ = tools(tmp_path, gentoolkit=ticked, eclean_kernel=ticked)
+    m.system.kernel = kernel
+    steps = first_steps.from_manifest(m)
+    assert steps.gentoolkit == ("app-portage/gentoolkit" in c.system_tool_atoms(m))
+    assert steps.eclean_kernel == ("app-admin/eclean-kernel" in c.kernel_extra_atoms(m))
 
 
 def test_essential_atoms_carry_the_tool_atoms(tmp_path):

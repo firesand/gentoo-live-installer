@@ -1104,6 +1104,8 @@ class ProgressPage(Page):
             username=str(login.get("username") or base.username), hostname=str(login.get("hostname") or base.hostname),
             privilege=str(login.get("privilege") or base.privilege), ssh=bool(login.get("ssh", base.ssh)),
             minimal=bool(login.get("minimal", base.minimal)), bootloader=str(login.get("bootloader") or base.bootloader),
+            gentoolkit=bool(login.get("gentoolkit", base.gentoolkit)), eclean_kernel=bool(login.get("eclean_kernel", base.eclean_kernel)),
+            networkmanager=bool(login.get("networkmanager", base.networkmanager)),
             boot_check=str(self._finish.get("boot_check") or ""), news_unread=news if isinstance(news, int) else None,
             hardware=tuple(str(line) for line in (self._finish.get("first_steps") or ()) if isinstance(line, str)))
 

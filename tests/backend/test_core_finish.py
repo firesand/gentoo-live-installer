@@ -150,7 +150,7 @@ class FirstStepsFileTests(Base):
         self.assertEqual(data, {"first_steps": [], "boot_check": "Boot check passed: GRUB found the kernel", "news_unread": 0})
         self.assertEqual(login["username"], installer.manifest.accounts.username)
         self.assertEqual(login["hostname"], installer.manifest.accounts.hostname)
-        self.assertEqual(set(login), {"username", "hostname", "privilege", "ssh", "minimal", "bootloader"})
+        self.assertEqual(set(login), {"username", "hostname", "privilege", "ssh", "minimal", "bootloader", "gentoolkit", "eclean_kernel", "networkmanager"})
         self.assertEqual(installer._finish_data(False), {})
 
 
@@ -163,6 +163,26 @@ class TextBuilderTests(unittest.TestCase):
         self.assertIn("doas eclean-dist -d", text)
         self.assertNotIn("Boot check", text)
         self.assertNotIn("news", text)
+
+    def test_a_tool_the_install_did_not_bring_comes_with_its_emerge(self) -> None:
+        """The default install has neither cleaner: a bare eclean-dist was "command not found", on the page that says all is done (RC4)."""
+        m = manifest()
+        m.accounts.privilege = "sudo"
+        text = first_steps.first_steps_text(first_steps.from_manifest(m))
+        self.assertIn("Free disk space from old downloads: sudo emerge --ask app-portage/gentoolkit && sudo eclean-dist -d", text)
+        self.assertIn("remove them with sudo emerge --ask app-admin/eclean-kernel && sudo eclean-kernel.", text)
+        m.options.gentoolkit = m.options.eclean_kernel = True
+        text = first_steps.first_steps_text(first_steps.from_manifest(m))
+        self.assertIn("Free disk space from old downloads: sudo eclean-dist -d", text)
+        self.assertIn("remove them with sudo eclean-kernel.", text)
+
+    def test_nmtui_is_named_only_where_networkmanager_is(self) -> None:
+        m = manifest()
+        m.system.desktop = "minimal"
+        self.assertIn("nmtui", first_steps.first_steps_text(first_steps.from_manifest(m)))
+        for manager in ("dhcpcd", "netifrc", "systemd-networkd"):
+            m.network.manager = manager
+            self.assertNotIn("nmtui", first_steps.first_steps_text(first_steps.from_manifest(m)))
 
     def test_dry_run_installer_has_no_finish_side_effects(self) -> None:
         installer = Installer(manifest(), runner=DryRunRunner(), dry_run=True, inspector=FakeInspector(), emit=lambda e: None)

@@ -736,7 +736,8 @@ class Installer(Stage3Stage, RepositoryStage, PortageStage, KernelStage, Bootloa
             "first_steps": list(self.hardware_plan.first_steps) if self.hardware_plan is not None else [],
             # What the finish page needs to build its card without a manifest (a GUI that attached to the job has none).
             "login": {"username": steps.username, "hostname": steps.hostname, "privilege": steps.privilege, "ssh": steps.ssh,
-                      "minimal": steps.minimal, "bootloader": steps.bootloader},
+                      "minimal": steps.minimal, "bootloader": steps.bootloader, "gentoolkit": steps.gentoolkit,
+                      "eclean_kernel": steps.eclean_kernel, "networkmanager": steps.networkmanager},
         }
         if self.boot_check:
             data["boot_check"] = self.boot_check

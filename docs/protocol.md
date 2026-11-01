@@ -100,8 +100,9 @@ the table of the current job, `capabilities.stages` the default one):
   On success `data` also carries what the finish page shows: `first_steps` (at most six lines of the
   hardware plan, possibly empty), `boot_check` (one line, e.g. "Boot check passed: GRUB found the
   kernel and initramfs"; absent when unknown), `news_unread` (number of unread Gentoo news items;
-  absent when unknown) and `login` (`username`, `hostname`, `privilege`, `ssh`, `minimal`, `bootloader`:
-  enough to build the "Your first steps in Gentoo" text without a manifest, e.g. after an attach).
+  absent when unknown) and `login` (`username`, `hostname`, `privilege`, `ssh`, `minimal`, `bootloader`,
+  `gentoolkit`, `eclean_kernel`, `networkmanager`: enough to build the "Your first steps in Gentoo" text
+  without a manifest, e.g. after an attach; the last three say which tools the steps may name as installed).
   The validation stage adds plain-sentence entries to `warnings` for an empty `/etc/machine-id` (OpenRC),
   a `ping` that lost its file capabilities and an initramfs without the early microcode. The same text
   is written to `/home/<user>/FIRST-STEPS.txt` (mode 0644, owned by the user).

@@ -187,6 +187,20 @@ def test_missing_news_and_boot_check_hide_only_their_lines(page):
     assert "doas emerge --sync" in page.first_steps_text.text() and "ssh ana@box" not in page.first_steps_text.text()
 
 
+def test_the_finish_card_takes_what_was_installed_from_the_daemon(page):
+    """A GUI that attached to the job has no manifest: what the install brought comes with the login data, like the rest of the card."""
+    started(page)
+    login = {"username": "ana", "hostname": "box", "privilege": "sudo", "ssh": False, "minimal": True, "bootloader": "grub",
+             "gentoolkit": True, "eclean_kernel": True, "networkmanager": False}
+    success(page, login=login)
+    text = page.first_steps_text.text()
+    assert "sudo eclean-dist -d" in text and "sudo eclean-kernel" in text
+    assert "emerge --ask app-" not in text and "nmtui" not in text
+    success(page, login={**login, "gentoolkit": False, "eclean_kernel": False, "networkmanager": True})
+    text = page.first_steps_text.text()
+    assert "emerge --ask app-portage/gentoolkit" in text and "emerge --ask app-admin/eclean-kernel" in text and "nmtui" in text
+
+
 def test_the_finish_card_matches_the_text_in_the_file(page):
     manifest = InstallManifest()
     started(page, manifest)

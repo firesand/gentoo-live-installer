@@ -221,6 +221,12 @@ class KernelFilesTests(unittest.TestCase):
         self.assertEqual(configurer(Path("/nonexistent")).kernel_extra_atoms(m), ["app-admin/eclean-kernel"])
         self.assertIn("app-admin/eclean-kernel", configurer(Path("/nonexistent")).kernel_atoms(m))
 
+    def test_the_kernel_readme_says_how_to_get_eclean_kernel_when_the_install_did_not_bring_it(self) -> None:
+        m = target_manifest()
+        self.assertIn("Install it first: emerge --ask app-admin/eclean-kernel", configurer(Path("/nonexistent")).kernel_readme(m))
+        m.options.eclean_kernel = True
+        self.assertNotIn("emerge --ask", configurer(Path("/nonexistent")).kernel_readme(m))
+
     def test_the_config_snippet_goes_to_the_source_kernel_only(self) -> None:
         snippet = "CONFIG_HZ_1000=y\n# CONFIG_DEBUG_INFO is not set"
         root, _, _ = self.prepare(kernel="gentoo-kernel", kernel_config_snippet=snippet)
