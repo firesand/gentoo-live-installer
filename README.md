@@ -28,6 +28,7 @@ If the PC still refuses the stick ("Secure Boot Violation"), it trusts only Wind
 | Entry | Use it to |
 |---|---|
 | Gentoo installer and rescue desktop | Install with the wizard, or open the repair window. The default. |
+| **Safe graphics** | The same desktop on a generic display driver, for a black screen or no picture. |
 | **Repair a system (text console)** | Fix a Gentoo system that does not start. No desktop, works with any graphics chip. |
 | **Install in text mode** | Install without a desktop. |
 | **AI rescue (text console)** | Optional: the repair console plus an AI assistant that helps you diagnose. Downloaded on first use, read-only until you approve each root command. [docs/RESCUE-AI.md](docs/RESCUE-AI.md) |
@@ -66,7 +67,7 @@ JOBS=4 ./scripts/build-iso.sh           # the release ISO into dist/
 ./scripts/build-iso.sh --sign-key 0xYOURKEYID   # also sign the checksums and the manifest
 ```
 
-* The result is `dist/gentoo-installer-amd64-<release>-<stamp>.iso` with `.sha512`, `.blake2b`, `.manifest.json` and `.packages.txt`. Every build writes a timestamped log to `dist/logs/`.
+* The result is `dist/gentoo-installer-amd64-<release>-<stamp>.iso` with `.sha512`, `.blake2b`, `.manifest.json`, `.packages.txt`, `.secureboot.cer` and `.secureboot.txt`. Every build writes a timestamped log to `dist/logs/`.
 * A following build reuses the stage1 of the previous one when nothing that goes into it changed (`--reuse auto`, the default). Otherwise it builds stage1 again; the binary package cache makes that shorter. `--reuse none` always builds everything. Use it for a release when in doubt.
 * The finished ISO is checked before it is published (`scripts/verify-iso.py`, rules in `iso/image-contract.json`): boot images, boot menu, initramfs, services, the repair and text-mode files, ownership, and no test access in a release.
 * Settings: `JOBS`, `LOAD_AVERAGE`, `BUILD_MEMORY` (container memory, default 8g), `BUILD_MIN_FREE_GIB`, `ISO_CACHE_DIR`, `ISO_DIST_DIR`, `ISO_LOG_DIR`, `ISO_SECCOMP`. `--clean` removes retained chroots and old stage1 archives.

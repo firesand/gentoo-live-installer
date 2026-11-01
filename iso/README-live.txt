@@ -102,8 +102,7 @@ system (text console)" (to fix a Gentoo system that does not start). Both work
 without a graphics driver, so they work on every PC. The tool starts by
 itself after you have chosen the keyboard layout. Choose "Text console only"
 if you want a plain shell. Newer graphics chips sometimes need a newer
-kernel than this disc has; the release notes say which hardware generations
-were tested.
+kernel than this disc has.
 
 4. NETWORK
 ----------

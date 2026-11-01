@@ -306,7 +306,7 @@ SPECS: tuple[Spec, ...] = (
     Spec("battery_charge_limit", "Battery charge limit", "choice", (("0", "No limit"), ("80", "Stop charging at 80%"), ("60", "Stop charging at 60%")), advanced=True, group="power",
          hint="A battery that is not always full lasts more years. Uses TLP, so it replaces power-profiles-daemon; the laptop must support it."),
     Spec("lid_action", "When the lid is closed", "choice", _choices("lid_action", {"suspend": "Sleep (the default)", "lock": "Lock the screen", "ignore": "Do nothing"}),
-         advanced=True, group="power", hint="What closing the lid does, on battery and on the charger."),
+         advanced=True, group="power", hint="What closing the lid does, on battery and on the charger. A desktop's own power settings can override this."),
     Spec("vendor_workarounds", "Known fixes for this computer's maker", "check", advanced=True, group="power",
          hint="Applies the small fixes the installer knows for your model, for example the lid of a Razer Blade."),
     Spec("signed_modules", "Signed kernel modules (Secure Boot)", "choice", (("off", "Off"), ("auto", "Automatic (not available yet)"), ("kernel_key", "Kernel key (not available yet)")),

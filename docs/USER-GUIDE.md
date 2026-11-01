@@ -202,6 +202,7 @@ sudo gentoo-installer-text --manifest settings.json --yes --confirm-device /dev/
 * Plug in the charger. Closing the lid does not suspend the live system, so an installation continues with the lid closed. Nothing can prevent a flat battery from stopping the install.
 * **Wi-Fi and Bluetooth**: the disc includes the firmware for most chips. Broadcom chips that only work with the proprietary `wl` driver need Ethernet or phone tethering during the installation. See section 5 for how to connect.
 * **Power saving** of the installed system: the installer can set up `power-profiles-daemon` or `tlp`, weekly TRIM for SSDs and compressed RAM swap. The defaults come from what it detects.
+* **Closing the lid** on the installed system: *When the lid is closed* on the **Hardware** tab sets what the system does. A desktop with its own power settings, such as Plasma, can override that choice; if the lid does something else, change it in the desktop's settings.
 * **Hybrid graphics** (Intel or AMD plus NVIDIA): the live desktop runs on the GPU that the firmware starts with, usually the integrated one. The installer can set up PRIME render offload for the installed system. Then the NVIDIA card is used only for programs you start with `prime-run`, and the integrated GPU does the rest and saves battery.
 * Fingerprint readers, IR cameras and some touch-screens do not work in the live session.
 * Tablets without a keyboard have no on-screen keyboard on the disc.
