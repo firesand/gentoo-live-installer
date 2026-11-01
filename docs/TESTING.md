@@ -726,13 +726,19 @@ Read these before trusting, or blaming, a result.
 
 * **The AI rescue stick has no real-hardware run.** Its code is tested with fakes, and the VM scenarios above are run by hand. The login scraping, the console switch and the QR codes on a real console, the phone share with real phone browsers, and the Codex sandbox on the live kernel are untried (the checklist above).
 
-* **Only part of the matrix runs on real QEMU for a release.** On the final RC4 test ISO these ran:
-  `defaults`, `secure-boot-live`, and `openrc` runs with a manual kernel, with `--cancel-then-resume`
-  and with `--live-only`. `openrc` and `systemd` ran on the ISO before it.
+* **What ran on real QEMU for RC4.** On the final test ISO (commit 26b3095): the 12 scenarios of
+  `wave3`, with `openrc` run with a manual kernel, with `--cancel-then-resume` and with `--live-only`,
+  plus an install with Secure Boot on in the firmware. The other matrices did not run. The release ISO
+  of the same commit has no SSH login, so it was only booted, on Secure Boot, BIOS and UEFI, and judged
+  by a script typed on its console. It was not installed from. Its package list equals the test ISO's.
 * **What those jobs do not press.** `defaults` stops at the SDDM greeter and runs the companions' text
   modes, so it does not prove a Plasma login. `--cancel-then-resume` calls the page's cancel method
   and resumes with the daemon's `--resume`, so the Cancel button's question and the page's Resume
-  command are not part of it.
+  command are not part of it. For RC4 one-off scripts, not matrix jobs yet, did press these on a real
+  default install (root locked, all four companions): the Cancel question, Resume, a Plasma login on
+  Wayland, a desktop password dialog answered with keystrokes, and each app's window. A script started
+  each app's privileged helper. Nothing clicked Apply inside an app's window, so the dialog and the
+  helpers are proven separately.
 * **The other scenarios, the hardware options and the rescue flow** are mostly tested as argument
   lists and against the fake lab. A first real run is also where QEMU and the
   guests confirm what the harness assumes and the fake lab cannot know: that `-smbios file=`
