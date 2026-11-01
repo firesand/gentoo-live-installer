@@ -80,8 +80,10 @@ the table of the current job, `capabilities.stages` the default one):
 * The `preflight` progress event carries `data.inspection` (the `inspect` reply without
   `hardware`) and `data.hardware_setup` (the plan's summary lines). The `storage` progress event
   carries `data.data.layout` and `data.data.plan` (what happens to which disk).
-* An `error` event always has `stage`, `error` (text) and
-  `data = {code, retryable, resumable, bootable}`. `retryable`: starting again can work (a
+* An `error` event of an install job always has `stage`, `error` (text) and
+  `data = {code, retryable, resumable, bootable}`. A request the daemon refuses before a job
+  starts has no `stage`, and its `data` holds only `code` and extras such as `blocked`.
+  `retryable`: starting again can work (a
   cancel is retryable). `resumable`: a run with `resume: true` continues from the checkpoints
   (storage was prepared). `bootable`: the bootloader stage completed, so the disk boots even
   though the run failed. Every `error` is followed by `completed` with `success: false`.
@@ -345,7 +347,7 @@ The `repository` stage emits one `progress` event with `data.news = {"unread": N
 | `generic_uki` | bool | `false` | Also build a generic Unified Kernel Image. `true` is refused with "not available yet". |
 | `bootloader` | adds `none` | `grub` | `none` installs no boot loader and needs no UEFI; the kernel options stay in `/etc/kernel/cmdline`. Not with Secure Boot. |
 | `secure_boot_mode` | `off`, `own-key`, `create`, `shim` | `off` | An old file with `secure_boot: true` loads as `own-key`; `secure_boot` and the mode always agree. `create` makes the key on the target (no key files needed), `own-key` copies the user's. Either way the key is kept in `/etc/secureboot` (root only, 0600) and the ESP hook signs every new image. `shim` is refused with "not available yet". |
-| `serial_console` | string | `""` | e.g. `ttyS0,115200`. Effect later. |
+| `serial_console` | string | `""` | e.g. `ttyS0,115200`. Adds `console=tty0 console=<value>` to the kernel command line and a login prompt on that port: `serial-getty@<port>.service` on systemd, an `agetty` line in `/etc/inittab` on OpenRC. |
 | `desktop` | adds `cinnamon`, `mate`, `lxqt`, `gnome-light`, `sway`, `i3` | `kde` | The desktop registry (`src/gentoo_installer/desktops.py`) is the single source: profile suffix, display manager, packages, USE flags, services, sizes, stage3 families. Cinnamon needs the `desktop/gnome` profile, so Hardened and No-multilib refuse it. Sway and i3 are for experienced users. |
 | `domain` | string | `""` | Domain name; `/etc/hosts` says `host.domain host` (no domain: just `host`). |
 | `hosts_extra` | list of `"address name [alias...]"` | `[]` | Extra /etc/hosts lines, appended as written (one space between fields). |
@@ -372,8 +374,8 @@ The `repository` stage emits one `progress` event with `data.news = {"unread": N
 | `journal_persistent` | bool | `false` | systemd only (refused with OpenRC): creates `/var/log/journal`. |
 | `browser` | `firefox`, `none` | `firefox` | Firefox on every graphical desktop: from the binary package host when it has the package, otherwise `firefox-bin` (also for source installs, where Firefox would compile for hours). |
 | `flathub` | bool | `false` | Installs Flatpak (as `flatpak` does), the desktop's portal backends, and adds the Flathub remote system-wide after the desktop is installed (a warning with the command when there is no network). |
-| `input_method` | `auto`, `none`, `ibus`, `fcitx5` | `auto` | `auto` installs nothing yet. |
-| `accessibility` | bool | `false` | Effect later. |
+| `input_method` | `auto`, `none`, `ibus`, `fcitx5` | `auto` | Graphical desktops only. `auto` follows the locale: Chinese, Japanese and Korean get `ibus` on GNOME and `fcitx5` on the others, other locales nothing. |
+| `accessibility` | bool | `false` | Graphical desktops only: installs Orca, speech-dispatcher, espeak-ng and at-spi2-core and adds a first step. |
 | `gaming` | `off`, `flatpak`, `native` | `off` | `native` is refused without multilib and without `gaming_accept_external`; both are refused on the minimal desktop. `off` changes nothing. Implemented in `configure_gaming.py`; the wording and the read-only readiness list are in `gaming_readiness.py`. |
 | `gaming_tweaks` | bool | `true` | Read only when `gaming` is not `off`: sysctl `vm.max_map_count`, NTSYNC (dist kernels only) and GameMode. |
 | `gaming_windows_tools` | bool | `false` | Native mode: Heroic, Wine, DXVK, VKD3D-Proton, protontricks (Flatpak mode installs Heroic as a Flatpak anyway). |
@@ -386,12 +388,12 @@ The `repository` stage emits one `progress` event with `data.news = {"unread": N
 | `nvidia_modules` | `auto`, `open`, `closed` | `auto` | `closed` is invalid on Blackwell (hwplan checks later). |
 | `nvk` | `auto`, `on`, `off` | `auto` | Saved `yes`/`no` load as `on`/`off`. The plan's `scalars["nvk"]` keeps `yes`/`no`. |
 | `safe_graphics_entry` | bool | `true` | With the NVIDIA proprietary driver (`scalars.gpu_driver == "nvidia"`) every boot loader gets a second entry that starts with `nomodeset module_blacklist=nvidia,nvidia_drm,nvidia_modeset,nvidia_uvm,nouveau`: a GRUB submenu (`/etc/grub.d/42_gentoo_safe_graphics`), `loader/entries/gentoo-safe.conf`, a second `efibootmgr` entry, and `EFI/Linux/gentoo-safe.efi` for UKI installs. |
-| `nvidia_rtd3` | `auto`, `on`, `off` | `auto` | Effect later. |
+| `nvidia_rtd3` | `auto`, `on`, `off` | `auto` | With the NVIDIA driver, `auto` turns runtime power management on when nothing blocks it: `/etc/modprobe.d/nvidia-pm.conf` and `/etc/udev/rules.d/80-nvidia-pm.rules`. `on` with something in the way is the blocking error `hw.nvidia_rtd3_unavailable`. |
 | `nvidia_extras` | list of `vaapi`, `cuda`, `nvtop`, `persistenced` | `[]` | `cuda` needs `nvidia_cuda_license_accepted`. |
 | `nvidia_cuda_license_accepted` | bool | `false` | |
-| `signed_modules` | `off`, `auto`, `kernel_key` | `off` | Effect after the Secure Boot VM test. |
+| `signed_modules` | `off`, `auto`, `kernel_key` | `off` | Only `off` passes: the other values are the blocking error `hw.signed_modules_unavailable` until the Secure Boot test is done. |
 | `devices` | object of bool | `{}` | Keys: `openrazer`, `openrgb`, `game_rules`, `solaar`, `razer_frontend`, `iio_sensors`, `bolt`, `wacom`, `fingerprint`, `asus_tools`, `thinkfan`; any other key is an error. |
-| `battery_charge_limit` | `0`, `60`, `80` | `0` | Effect later. |
-| `lid_action` | `suspend`, `lock`, `ignore` | `suspend` | Effect later. |
-| `vendor_workarounds` | bool | `false` | Effect later. |
+| `battery_charge_limit` | `0`, `60`, `80` | `0` | With TLP: `/etc/tlp.d/90-installer-battery.conf` (Automatic power management then picks TLP on a laptop). With the ASUS tools any limit is the blocking error `hw.asus_power_conflict`. |
+| `lid_action` | `suspend`, `lock`, `ignore` | `suspend` | Anything but `suspend`, on a computer with a lid or a portable install: `10-installer-lid.conf` in `/etc/systemd/logind.conf.d` (systemd) or `/etc/elogind/logind.conf.d` (OpenRC). |
+| `vendor_workarounds` | bool | `false` | On a Razer Blade adds `button.lid_init_state=open` to the kernel command line; elsewhere an info note. |
 | `tuning` | bool | `true` | System tuning after CachyOS-Settings (`hwplan_tuning.py`, USER-GUIDE section 8): sysctl memory and writeback values (with zram also `vm.swappiness = 150`, `vm.page-cluster = 0` and `zswap.enabled=0` on the kernel command line); I/O schedulers and huge pages with a distribution kernel; the Wi-Fi country from the time zone plus `net-wireless/wireless-regdb` when there is a Wi-Fi card; audio power saving only on battery (TLP's setting with TLP, a udev rule otherwise); tap to click on a laptop with an X11 desktop or Sway; the watchdog modules blacklisted (not in a VM). The same files for OpenRC and systemd; `scalars.tuning` is `on` or `off`, `scalars.wifi_country` the country or `""`. |
