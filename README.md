@@ -1,5 +1,5 @@
 # Gentoo LiveCD Installer
-> **This project is assisted by AI.** AI coding agents wrote most of it, directed by the maintainer ([AI assistance](#ai-assistance)). It is **unofficial**: not an official Gentoo release, and not made or endorsed by the Gentoo Foundation. It is a **release candidate**: install it only on a spare disk or a spare PC ([Status](#status)).
+> **This project is assisted by AI.** AI coding agents wrote most of it, directed by the maintainer ([AI assistance](#ai-assistance)). It is **unofficial**: not an official Gentoo release, and not made or endorsed by the Gentoo Foundation. It is a **release candidate**: install it only on a spare disk or a spare PC ([Status](#status)). **Download the ISO from [SourceForge](https://sourceforge.net/projects/gentoo-live-installer/files/rc4/)** (checksum and Secure Boot fingerprint: [Download](#download)).
 
 A live USB/DVD image that does these jobs on almost any 64-bit PC or laptop:
 
@@ -40,7 +40,17 @@ An install erases the disk you choose. Use a spare disk or a spare PC, and keep 
 
 ## Download
 
-The ISO is about 2.4 GB, too large for a GitHub release, so it is published on SourceForge. The link will appear here when the upload is finished. Until then you can build the ISO yourself: see [Build the ISO](#build-the-iso).
+**RC4:** [gentoo-installer-amd64-rc4-20261018T124555Z.iso](https://sourceforge.net/projects/gentoo-live-installer/files/rc4/gentoo-installer-amd64-rc4-20261018T124555Z.iso/download) (2.4 GB), on SourceForge because it is too large for a GitHub release. The [files page](https://sourceforge.net/projects/gentoo-live-installer/files/rc4/) also has the checksums, the package list, the build manifest and the disc's Secure Boot certificate.
+
+Check the download before you write it to a USB stick:
+
+```sh
+sha512sum -c gentoo-installer-amd64-rc4-20261018T124555Z.iso.sha512
+```
+
+SHA-512: `84ad31f1a0665fdef54ed2a9695b04140615515f1beb4e4747e57feb56faafc72997dffeaff444c29b18532295ec152df4ee18b23135bad9c62f25915667ad49`
+
+With Secure Boot on, enroll the disc's key only if MokManager shows this fingerprint: `07 7B 5F 1B 7D B5 CD A0 6F C2 90 FC D8 DF AC 9D 9C E3 2C 47`. The source of this ISO is the tag [`rc4`](https://github.com/firesand/gentoo-live-installer/tree/rc4).
 
 ## Screenshots
 
