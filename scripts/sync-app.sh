@@ -4,9 +4,9 @@
 # Usage: scripts/sync-app.sh APP [--source DIR] [--source-name TEXT] [--dest DIR] [--patches DIR] [COMMIT]
 #
 #   APP            portagehub, gentoo-settings or kernelsmith; it chooses the defaults below
-#   --source DIR   the application's git repository (PortageHub /home/edo/Downloads/Gentoo_package_mananger, Gentoo
-#                  Settings /home/edo/Downloads/Gentoo-Settings, KernelSmith .cache/upstream/kernelsmith.git, a mirror of
-#                  https://github.com/firesand/kernelsmith.git made with `git clone --mirror`)
+#   --source DIR   the application's git repository (defaults: $PORTAGEHUB_SOURCE or .cache/upstream/portagehub.git,
+#                  $GENTOO_SETTINGS_SOURCE or .cache/upstream/gentoo-settings.git, and
+#                  .cache/upstream/kernelsmith.git, a mirror of https://github.com/firesand/kernelsmith.git)
 #   --source-name TEXT  what UPSTREAM calls the source (default: its path; KernelSmith: the GitHub address)
 #   --dest DIR     the directory to fill (default apps/APP)
 #   --patches DIR  the live CD's patches to the application, checked against the new tree
@@ -47,12 +47,12 @@ case ${1:-} in
 		;;
 	portagehub)
 		name=PortageHub
-		source_dir=/home/edo/Downloads/Gentoo_package_mananger
+		source_dir=${PORTAGEHUB_SOURCE:-${root}/.cache/upstream/portagehub.git}
 		package=app-portage/portagehub
 		;;
 	gentoo-settings)
 		name="Gentoo Settings"
-		source_dir=/home/edo/Downloads/Gentoo-Settings
+		source_dir=${GENTOO_SETTINGS_SOURCE:-${root}/.cache/upstream/gentoo-settings.git}
 		package=app-admin/gentoo-settings
 		;;
 	kernelsmith)

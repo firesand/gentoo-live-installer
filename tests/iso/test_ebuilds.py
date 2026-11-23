@@ -473,7 +473,7 @@ def test_kernelsmith_policy_rule_and_installed_files_agree() -> None:
     assert "/usr/bin/kernelsmith" in (ROOT / "iso/fsscript-stage2.sh").read_text()
 
 
-@pytest.mark.parametrize(("app", "source"), [("gentoo-settings", "/home/edo/Downloads/Gentoo-Settings"),
+@pytest.mark.parametrize(("app", "source"), [("gentoo-settings", "local/gentoo-settings"),
                                              ("kernelsmith", "https://github.com/firesand/kernelsmith.git")])
 def test_the_new_applications_say_where_they_come_from(app: str, source: str) -> None:
     fields = dict(line.split(": ", 1) for line in (ROOT / "apps" / app / "UPSTREAM").read_text().splitlines())
@@ -483,5 +483,6 @@ def test_the_new_applications_say_where_they_come_from(app: str, source: str) ->
 
 def test_the_imported_sources_say_where_they_come_from() -> None:
     fields = dict(line.split(": ", 1) for line in (APP / "UPSTREAM").read_text().splitlines())
-    assert re.fullmatch(r"[0-9a-f]{40}", fields["commit"]) and fields["subject"] and fields["date"] and fields["source"].startswith("/")
+    assert re.fullmatch(r"[0-9a-f]{40}", fields["commit"]) and fields["subject"] and fields["date"] and fields["source"]
+    assert not fields["source"].startswith("/home/"), "UPSTREAM must not leak a personal local path"
     assert not (APP / ".github").exists() and not (APP / "dist/gentoo").exists()

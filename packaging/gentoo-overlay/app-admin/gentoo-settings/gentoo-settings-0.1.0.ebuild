@@ -5,7 +5,7 @@ EAPI=8
 
 inherit desktop multiprocessing
 
-DESCRIPTION="CachyOS-Settings style system tuning for Gentoo (OpenRC and systemd), egui front end"
+DESCRIPTION="CachyOS-style system tuning for Gentoo (OpenRC and systemd), egui GUI"
 HOMEPAGE="https://wiki.gentoo.org/wiki/No_homepage"
 # The distfile is made by the ISO builder (scripts/build-iso.sh) from apps/gentoo-settings, which
 # `scripts/sync-app.sh gentoo-settings` fills from the Gentoo Settings repository (apps/gentoo-settings/UPSTREAM

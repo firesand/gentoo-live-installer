@@ -19,13 +19,19 @@ OVERLAY = ROOT / "packaging/gentoo-overlay"
 COMPANIONS = {
     "hwmonux": ("app-misc", ROOT / "apps/hwmonux/pyproject.toml", ("project", "version")),
     "portagehub": ("app-portage", ROOT / "apps/portagehub/Cargo.toml", ("package", "version")),
+    "gentoo-settings": ("app-admin", ROOT / "apps/gentoo-settings/Cargo.toml", ("package", "version")),
+    "kernelsmith": ("sys-kernel", ROOT / "apps/kernelsmith/Cargo.toml", ("workspace", "package", "version")),
 }
 
 
 def application_version(name: str) -> str:
     _, manifest, keys = COMPANIONS[name]
-    data = tomllib.loads(manifest.read_text())
-    return data[keys[0]][keys[1]]
+    data: object = tomllib.loads(manifest.read_text())
+    for key in keys:
+        assert isinstance(data, dict)
+        data = data[key]
+    assert isinstance(data, str)
+    return data
 
 
 def ebuild_versions(category: str, name: str) -> list[str]:
