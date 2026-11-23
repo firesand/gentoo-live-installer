@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 # Tell the user of a text console where the repair tool and the installers are.
 # The desktop does not need this, so nothing is printed when a display exists, and scripts
 # and scp (not interactive) must not see it. /etc/profile.d/20-gentoo-autostart.sh can start

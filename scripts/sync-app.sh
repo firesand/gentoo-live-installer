@@ -48,18 +48,18 @@ case ${1:-} in
 	portagehub)
 		name=PortageHub
 		source_dir=${PORTAGEHUB_SOURCE:-${root}/.cache/upstream/portagehub.git}
-		package=app-portage/portagehub
+		package="app-portage/portagehub"
 		;;
 	gentoo-settings)
 		name="Gentoo Settings"
 		source_dir=${GENTOO_SETTINGS_SOURCE:-${root}/.cache/upstream/gentoo-settings.git}
-		package=app-admin/gentoo-settings
+		package="app-admin/gentoo-settings"
 		;;
 	kernelsmith)
 		name=KernelSmith
 		source_dir=${root}/.cache/upstream/kernelsmith.git
 		source_name=https://github.com/firesand/kernelsmith.git
-		package=sys-kernel/kernelsmith
+		package="sys-kernel/kernelsmith"
 		;;
 	'') usage_error "name the application: portagehub, gentoo-settings or kernelsmith" ;;
 	*) usage_error "unknown application: $1 (portagehub, gentoo-settings or kernelsmith)" ;;

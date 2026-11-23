@@ -11,6 +11,7 @@ readonly ISO_TESTKEY_NAME_SUFFIX=-TESTKEY
 readonly ISO_TESTKEY_VOLID_SUFFIX=_TESTKEY
 
 # iso_apply_flavor release|testkey: adjust ISO_NAME and ISO_VOLID in place (idempotent).
+# shellcheck disable=SC2034
 iso_apply_flavor() {
 	case ${1:-} in
 		release)

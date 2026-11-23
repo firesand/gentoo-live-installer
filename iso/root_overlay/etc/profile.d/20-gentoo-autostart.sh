@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 # Start the repair tool or the text installer on the first console login when the boot
 # menu asked for it.
 #

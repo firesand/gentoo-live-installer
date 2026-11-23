@@ -376,7 +376,7 @@ build_stage1() {
 		seed_subpath="23.0-default/livecd-stage1-amd64-${VERSION_STAMP}-completed"
 		python3 "${WORKSPACE}/iso/stage_reuse.py" reseed-spec "${BUILD_DIR}/livecd-stage1.spec" "${seed_subpath}" \
 			> "${BUILD_DIR}/livecd-stage1-reseed.spec"
-		local atom reinstall= saved_options=${EMERGE_DEFAULT_OPTS} started
+		local atom reinstall='' saved_options=${EMERGE_DEFAULT_OPTS} started
 		for atom in ${RESEED_ATOMS}; do
 			reinstall+="${reinstall:+ }--reinstall-atoms=${atom}"
 		done
@@ -403,7 +403,7 @@ build_stage1() {
 
 publish_iso() {
 	local built="${CATALYST_STORE}/builds/23.0-default/${ISO_NAME}"
-	local verified="${BUILD_DIR}/verify-iso.json" packages="${BUILD_DIR}/packages.txt" size previous=()
+	local verified="${BUILD_DIR}/verify-iso.json" packages_file="${BUILD_DIR}/packages.txt" size previous=()
 	[[ -s ${built} ]] || die "Catalyst completed without producing ${built}"
 	size=$(stat -c %s "${built}")
 	((size > 10000000)) || die "Catalyst ISO is implausibly small"
@@ -423,13 +423,13 @@ publish_iso() {
 	log "Verifying the finished ISO (${ISO_FLAVOR})"
 	python3 "${WORKSPACE}/scripts/verify-iso.py" "${built}" --flavor "${ISO_FLAVOR}" --workspace "${WORKSPACE}" \
 		--spec "${BUILD_DIR}/livecd-stage2.spec" \
-		--json "${verified}" --packages-out "${packages}" --workdir "${BUILD_DIR}/verify-iso" \
+		--json "${verified}" --packages-out "${packages_file}" --workdir "${BUILD_DIR}/verify-iso" \
 		${previous[@]+"${previous[@]}"} \
 		|| die "the ISO failed the image checks; nothing was published"
 	rm -rf -- "${BUILD_DIR}/verify-iso"
 	install -m 0644 "${built}" "${DIST}/.${ISO_NAME}.partial"
 	mv "${DIST}/.${ISO_NAME}.partial" "${DIST}/${ISO_NAME}"
-	install -m 0644 "${packages}" "${DIST}/${ISO_NAME}.packages.txt"
+	install -m 0644 "${packages_file}" "${DIST}/${ISO_NAME}.packages.txt"
 	# The certificate MokManager enrolls and its fingerprint, published next to the ISO so that a user
 	# can compare it with "View key 0" (iso/cd_overlay/SECURE-BOOT.txt).
 	install -m 0644 "${BUILD_DIR}/secure-boot.cer" "${DIST}/${ISO_NAME}.secureboot.cer"

@@ -26,7 +26,7 @@ reserve=${HOST_RESERVE_CPUS:-8}
 
 # The CPUs of $1 (a list like 0-31 or 0-3,8-11) numbered at least $reserve, as a list of ranges.
 share_cpus() {
-	local part cpu first last start= previous= out=
+	local part cpu first last start='' previous='' out=''
 	local -a parts kept=()
 	IFS=, read -ra parts <<<"$1"
 	for part in "${parts[@]}"; do

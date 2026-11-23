@@ -89,7 +89,7 @@ step_python_syntax() {
 step_shell_syntax() {
     status=0
     for file in $(shell_files); do
-        if head -n 1 "$file" | grep -q bash; then shell=bash; else shell=sh; fi
+        if head -n 1 "$file" | grep -q bash; then shell="bash"; else shell="sh"; fi
         "$shell" -n "$file" || { echo "    $file does not parse" >&2; status=1; }
     done
     return $status

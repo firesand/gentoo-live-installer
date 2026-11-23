@@ -223,4 +223,4 @@ def test_each_application_is_named_and_its_packaging_and_screenshots_stay_out(up
 def test_the_default_patches_are_next_to_each_ebuild() -> None:
     text = SYNC_APP.read_text()
     for package in ("app-portage/portagehub", "app-admin/gentoo-settings", "sys-kernel/kernelsmith"):
-        assert f"package={package}" in text
+        assert f'package="{package}"' in text
