@@ -540,6 +540,7 @@ class RescueManager:
                     problems.append(f"{session.sid}: {', '.join(result.leftovers)} still busy")
             except Exception as exc:  # a failing release must not block the shutdown of the others
                 problems.append(f"{session.sid}: {exc}")
+        self.audit.close()
         return problems
 
     # ---- crash recovery ----------------------------------------------------------------------------------------------------------------------

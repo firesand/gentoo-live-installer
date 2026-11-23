@@ -99,8 +99,20 @@ class AuditLog:
     def close(self) -> None:
         with self._lock:
             if self._fd >= 0:
-                os.close(self._fd)
+                try:
+                    os.close(self._fd)
+                except OSError:
+                    pass
                 self._fd = -1
+
+    def __del__(self) -> None:
+        fd = getattr(self, "_fd", -1)
+        if fd >= 0:
+            self._fd = -1
+            try:
+                os.close(fd)
+            except OSError:
+                pass
 
 
 class NullAudit(AuditLog):

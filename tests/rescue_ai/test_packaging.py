@@ -14,7 +14,7 @@ def test_the_package_data_patterns_ship_every_file_of_the_tree() -> None:
     pyproject = tomllib.loads((REPO / "pyproject.toml").read_text())
     patterns = pyproject["tool"]["setuptools"]["package-data"]["gentoo_rescue_ai"]
     shipped = {Path(path) for pattern in patterns for path in glob.glob(str(PACKAGE / pattern), recursive=True) if Path(path).is_file() and not Path(path).is_symlink()}
-    wanted = {p for p in (PACKAGE / "data").rglob("*") if p.is_file() and not p.is_symlink()}
+    wanted = {p for p in (PACKAGE / "data").rglob("*") if p.is_file() and not p.is_symlink() and "__pycache__" not in p.parts and p.suffix != ".pyc"}
     assert wanted <= shipped, sorted(wanted - shipped)
 
 

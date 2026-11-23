@@ -216,10 +216,12 @@ class VtConsole:
             termios.tcsetattr(fd, termios.TCSAFLUSH, new)  # TCSAFLUSH also throws away anything typed before the question
             self.show(prompt)
             deadline = time.monotonic() + timeout
+            poller = select.poll()
+            poller.register(fd, select.POLLIN | select.POLLHUP | select.POLLERR)
             data = b""
             while not data.endswith(b"\n"):
                 left = deadline - time.monotonic()
-                if left <= 0 or not select.select([fd], [], [], left)[0]:
+                if left <= 0 or not poller.poll(max(1, int(left * 1000))):
                     return None
                 chunk = os.read(fd, 256)
                 if not chunk:
@@ -498,6 +500,8 @@ class Approver:
             return
         if self._caller_gone(conn):
             self.audit.write("answer", answer="caller left before the command started", argv=shown, pid=peer.pid)
+            self.console.show("The caller left before the command started. Going back.\n")
+            self.console.leave()
             return
         self.audit.write("answer", answer="approved", argv=shown, pid=peer.pid)
         self.console.show("Approved. Running it; its output goes back to the agent.\n")

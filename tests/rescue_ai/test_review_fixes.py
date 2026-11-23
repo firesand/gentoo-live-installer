@@ -268,7 +268,10 @@ def test_a_link_counts_by_its_folder_not_by_its_own_mode(tmp_path) -> None:
     for folder in (tmp_path, tmp_path / "usr", usr_bin):
         folder.chmod(0o755)
     stranger = approver.Peer(pid=1, uid=os.getuid() + 4242, gid=os.getgid() + 4242, name="")  # not the owner of these files
-    assert approver.changeable_by_peer(str(tmp_path / "bin" / "true"), stranger) == ""
+    # Outside scripts/sandbox.sh, host /tmp is 1777 (world-writable), so changeable_by_peer may legitimately flag /tmp itself,
+    # but it must never flag the symlink (bin) or anything inside tmp_path.
+    found = approver.changeable_by_peer(str(tmp_path / "bin" / "true"), stranger)
+    assert not found.startswith(str(tmp_path)), found
     # but a link in a folder the agent can write is still caught (by its folder)
     tmp_path.chmod(0o777)
     try:
@@ -287,3 +290,35 @@ def test_a_note_of_the_approver_is_not_shown_as_a_file_the_agent_can_change() ->
     assert f"Note: {note}." in text and "can still change the folder" not in text
     text = approver.prompt_text(approver.Peer(1, 999, 999, "rescue-ai"), ["/bin/cat", "/home/rescue-ai/x"], "/", ["/home/rescue-ai/x"])
     assert "The agent can still change /home/rescue-ai/x after you read this command" in text and "Note:" not in text
+
+
+def test_approver_leaves_console_when_caller_vanishes_after_approval(tmp_path) -> None:
+    """If the caller disconnects while the person is approving, the approver must still switch back from its VT."""
+    console = FakeConsole(PASSWORD)
+    ran: list[list[str]] = []
+    client_sock, server_sock = socket.socketpair(socket.AF_UNIX, socket.SOCK_STREAM)
+    try:
+        client_sock.sendall(b'{"argv": ["/bin/true"], "cwd": "/"}\n')
+
+        class ClosingConsole(FakeConsole):
+            def read_secret(self, prompt: str, timeout: float) -> str | None:
+                client_sock.close()
+                return super().read_secret(prompt, timeout)
+
+        console = ClosingConsole(PASSWORD)
+        service = approver.Approver(
+            console,
+            PASSWORD,
+            approver.Audit(str(tmp_path / "audit.log")),
+            {ME},
+            runner=lambda argv, cwd, send: (ran.append(argv) or 0),
+            peer_of=lambda _c: approver.Peer(1, ME, os.getgid(), "rescue-ai"),
+            program_check=lambda _p, _peer: "",
+            cwd_check=lambda _c, _peer: "",
+        )
+        service.handle(server_sock)
+    finally:
+        server_sock.close()
+        client_sock.close()
+    assert not ran
+    assert console.entered == 1 and console.left == 1

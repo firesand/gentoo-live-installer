@@ -45,8 +45,9 @@ class Terminal:
         self.mark = 0
 
     def _read(self, timeout: float) -> bool:
-        ready, _, _ = select.select([self.master], [], [], timeout)
-        if not ready:
+        poller = select.poll()
+        poller.register(self.master, select.POLLIN | select.POLLHUP | select.POLLERR)
+        if not poller.poll(max(0, int(timeout * 1000))):
             return False
         try:
             data = os.read(self.master, 65536)

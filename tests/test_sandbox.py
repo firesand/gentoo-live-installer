@@ -136,9 +136,12 @@ def test_terminating_the_sandbox_ends_the_command_inside() -> None:
 
 def test_ctrl_c_still_reaches_programs_inside() -> None:
     """bubblewrap must not be started as a background job: that would make everything inside ignore SIGINT."""
+    import signal
+
     script = "import signal; print(signal.getsignal(signal.SIGINT) is signal.default_int_handler)"
     assert run("python3", "-c", script).stdout.strip() == "True"
-    assert run("sh", "-c", "grep SigIgn /proc/self/status").stdout.split()[1] == "0000000000000000"
+    sig_ign = int(run("sh", "-c", "grep SigIgn /proc/self/status").stdout.split()[1], 16)
+    assert not (sig_ign & (1 << (signal.SIGINT - 1)))
 
 
 # --- scripts/test-slot.sh --------------------------------------------------------------------------------------------------

@@ -122,11 +122,13 @@ def run_relayed(argv: Sequence[str], *, cwd: str, env: dict[str, str], stdin_fd:
         except OSError:
             pass
 
+    poller = select.poll()
+    poller.register(master, select.POLLIN | select.POLLHUP | select.POLLERR)
     previous = signal.signal(signal.SIGWINCH, resize) if hasattr(signal, "SIGWINCH") and _main_thread() else None
     deadline = time.monotonic() + timeout
     try:
         while True:
-            ready = select.select([master], [], [], 0.2)[0]
+            ready = poller.poll(200)
             if ready:
                 try:
                     data = os.read(master, 4096)
@@ -138,7 +140,7 @@ def run_relayed(argv: Sequence[str], *, cwd: str, env: dict[str, str], stdin_fd:
                 on_text(data.decode("utf-8", "replace"))
             elif child.poll() is not None:
                 # drain what is left, then stop
-                while select.select([master], [], [], 0.05)[0]:
+                while poller.poll(50):
                     try:
                         data = os.read(master, 4096)
                     except OSError:

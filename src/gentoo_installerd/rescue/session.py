@@ -716,6 +716,7 @@ class RescueSession:
             pass
         self.state = "closed"
         self.audit.record("release", message="session released", released=len(result.released), sync=True)
+        self.audit.close()
         self.forget()
         return result
 

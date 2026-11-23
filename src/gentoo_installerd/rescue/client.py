@@ -223,8 +223,11 @@ def attach_terminal(master: int, stdin_fd: int = 0, stdout_fd: int = 1) -> int:
             resize()
         open_input = True
         while True:
-            readers = [master] + ([stdin_fd] if open_input else [])
-            ready, _w, _x = select.select(readers, [], [], 0.5)
+            poller = select.poll()
+            poller.register(master, select.POLLIN | select.POLLHUP | select.POLLERR)
+            if open_input:
+                poller.register(stdin_fd, select.POLLIN | select.POLLHUP | select.POLLERR)
+            ready = {fd for fd, _ in poller.poll(500)}
             if master in ready:
                 try:
                     data = os.read(master, 4096)

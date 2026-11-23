@@ -282,6 +282,7 @@ def start(args: argparse.Namespace, *, say: Callable[[str], None] = print, which
                                stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     time.sleep(0.5)
     if process.poll() is not None:
+        cleanup(folder)
         raise ShareError("ttyd did not start (is the port or the interface in use?).")
     state = State(os.getpid(), process.pid, port, address, interface, bool(args.read_only), args.minutes, time.time(), str(folder), fingerprint(openssl, cert))
     (folder / "state.json").write_text(json.dumps(asdict(state)), encoding="utf-8")
@@ -308,8 +309,13 @@ def start(args: argparse.Namespace, *, say: Callable[[str], None] = print, which
     if os.fork() != 0:
         return 0
     os.setsid()
-    for fd in (0, 1, 2):
-        os.dup2(os.open(os.devnull, os.O_RDWR), fd)
+    devnull = os.open(os.devnull, os.O_RDWR)
+    try:
+        for fd in (0, 1, 2):
+            os.dup2(devnull, fd)
+    finally:
+        if devnull > 2:
+            os.close(devnull)
     try:
         state.supervisor = os.getpid()
         (folder / "state.json").write_text(json.dumps(asdict(state)), encoding="utf-8")
