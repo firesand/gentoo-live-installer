@@ -72,7 +72,7 @@ class ServerProtocolTests(unittest.TestCase):
         class FakeUnixServer:
             socket_mode = 0
 
-            def __init__(self, path, manager):
+            def __init__(self, path, manager, registry=None):
                 self.socket = socket.socket(socket.AF_UNIX)
                 self.socket.bind(path)
 

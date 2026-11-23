@@ -9,6 +9,10 @@ use std::path::PathBuf;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    if std::env::var_os("PKEXEC_UID").is_some() && args.first().map(String::as_str) != Some("run-job") {
+        eprintln!("kernelsmith: under pkexec only 'run-job' is allowed");
+        std::process::exit(2);
+    }
     let code = match args.first().map(String::as_str) {
         None | Some("gui") => match gui::run() {
             Ok(()) => 0,

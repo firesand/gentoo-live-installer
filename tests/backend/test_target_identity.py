@@ -454,6 +454,33 @@ class LiveProfileImportTests(unittest.TestCase):
         self.assertEqual(imported, [])
         self.assertEqual(sum("certificate that is missing" in note for note in self.notes), 2)
 
+    def test_symlinked_certificate_outside_allowed_roots_is_skipped(self) -> None:
+        with tempfile.TemporaryDirectory() as outside:
+            secret = Path(outside) / "secret.key"
+            secret.write_text("TOP-SECRET")
+            link = self.live / "ca-link.pem"
+            link.symlink_to(secret)
+            (self.live / "Uni.nmconnection").write_text(self.ENTERPRISE.format(ca=link))
+            with patch("gentoo_installerd.configure_network.CERTIFICATE_ROOTS", (str(self.base) + "/",)):
+                imported = self.importer().import_live_network_profiles(target_manifest(network={"import_live_profiles": True}))
+        self.assertEqual(imported, [])
+        self.assertFalse((self.root / "etc/NetworkManager/system-connections/Uni.nmconnection").exists())
+
+    def test_copy_live_wifi_profile_copies_certificates_and_rejects_symlinks(self) -> None:
+        ca = self.live / "ca.pem"
+        ca.write_text("UNI-CERT")
+        uid = "11111111-2222-3333-4444-555555555555"
+        enterprise = f"[connection]\nid=Uni\nuuid={uid}\ntype=wifi\n\n[802-1x]\neap=peap;\nca-cert={ca}\n"
+        (self.live / "Uni.nmconnection").write_text(enterprise)
+        with patch("gentoo_installerd.configure_network.CERTIFICATE_ROOTS", (str(self.base) + "/",)):
+            copied_name = self.importer().copy_live_wifi_profile(target_manifest(network={"copy_live_wifi": uid}))
+        self.assertEqual(copied_name, "Uni.nmconnection")
+        profile = (self.root / "etc/NetworkManager/system-connections/Uni.nmconnection").read_text()
+        self.assertNotIn("@@CERT", profile)
+        copied = [line.partition("=")[2] for line in profile.splitlines() if line.startswith("ca-cert=")][0]
+        self.assertTrue(copied.startswith("/etc/NetworkManager/certs/"))
+        self.assertEqual((self.root / copied.lstrip("/")).read_text(), "UNI-CERT")
+
     def test_import_is_only_done_when_asked_for(self) -> None:
         (self.live / "Office.nmconnection").write_text(self.WIFI)
         c = self.importer()

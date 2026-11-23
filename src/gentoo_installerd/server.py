@@ -1265,10 +1265,9 @@ def serve(
             LOG.warning("Found what an earlier installation left behind: %s", "; ".join(leftovers))
         plugins = load_plugins(active, rescue=rescue)
         path.unlink(missing_ok=True)  # a stale socket; the lock proves no other daemon is using it
-        with UnixServer(str(path), manager) as server:
+        with UnixServer(str(path), manager, active) as server:
             bound = True
             secure_socket(path, group_id)  # right away: until now only root could connect
-            server.registry = active
             controller = ShutdownController(server, manager, active)
             if install_signals:
                 restore_signals = install_signal_handlers(controller)

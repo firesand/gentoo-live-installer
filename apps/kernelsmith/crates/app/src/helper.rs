@@ -6,6 +6,7 @@
 
 use kernelsmith_core::util::is_root;
 use std::io::{BufRead, BufReader, Write};
+use std::os::fd::AsRawFd;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
@@ -17,20 +18,35 @@ fn private_copy(script: &Path) -> std::io::Result<PathBuf> {
     std::fs::create_dir_all(dir)?;
     std::fs::set_permissions(dir, std::fs::Permissions::from_mode(0o700))?;
     let dest = dir.join(format!("job-{}.sh", std::process::id()));
+    let _ = std::fs::remove_file(&dest);
     let body = std::fs::read(script)?;
-    let mut f = std::fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o700).open(&dest)?;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .mode(0o700)
+        .open(&dest)?;
     f.write_all(&body)?;
     Ok(dest)
 }
 
 fn open_log(log: &Path) -> Option<std::fs::File> {
-    let f = std::fs::OpenOptions::new().create(true).append(true).mode(0o644).open(log).ok()?;
+    let f = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .custom_flags(libc::O_NOFOLLOW | libc::O_CLOEXEC)
+        .mode(0o644)
+        .open(log)
+        .ok()?;
+    // Only regular files; never follow symlinks or chown special nodes.
+    let fmeta = f.metadata().ok()?;
+    if !fmeta.is_file() {
+        return None;
+    }
     // Hand the log to whoever owns the job directory, not root.
     if is_root() {
-        if let Some(meta) = log.parent().and_then(|d| std::fs::metadata(d).ok()) {
-            if let Ok(c) = std::ffi::CString::new(log.as_os_str().as_encoded_bytes()) {
-                unsafe { libc::chown(c.as_ptr(), meta.uid(), meta.gid()) };
-            }
+        if let Some(meta) = log.parent().and_then(|d| std::fs::symlink_metadata(d).ok()).filter(|m| m.is_dir()) {
+            unsafe { libc::fchown(f.as_raw_fd(), meta.uid(), meta.gid()) };
         }
     }
     Some(f)

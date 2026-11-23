@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import os
 import re
+import tempfile
 from dataclasses import dataclass, field, fields, is_dataclass
 from functools import lru_cache
 from collections.abc import Sequence
@@ -853,8 +855,18 @@ class InstallManifest:
     def save(self, path: str | Path, redact: bool = True) -> None:
         target = Path(path)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(self.to_json(redact) + "\n")
-        target.chmod(0o600)
+        fd, temporary = tempfile.mkstemp(dir=target.parent, prefix=f".{target.name}.")
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                os.fchmod(handle.fileno(), 0o600)
+                handle.write(self.to_json(redact) + "\n")
+                handle.flush()
+            os.replace(temporary, target)
+        finally:
+            try:
+                os.unlink(temporary)
+            except FileNotFoundError:
+                pass
 
     def validate(self) -> list[str]:
         return [error for errors in self.validate_sections().values() for error in errors]

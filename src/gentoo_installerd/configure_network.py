@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import ipaddress
+import os
 import re
 import types
 import uuid
@@ -228,6 +229,26 @@ class NetworkMixin(ConfigurerBase):
             if marker not in stock:
                 self.write("etc/dhcpcd.conf", stock.rstrip("\n") + ("\n" if stock else "") + render_dhcpcd_static(manifest))
 
+    def _copy_profile_certificates(self, source_name: str, profile: ImportedProfile) -> str | None:
+        """Copy certificates referenced by a live profile into the target and rewrite placeholders; None if any is missing or unsafe."""
+        text = profile.text
+        for index, (placeholder, live_path) in enumerate(profile.certificates):
+            certificate = Path(live_path)
+            try:
+                resolved = os.path.realpath(certificate)
+                resolved_path = Path(resolved)
+                if (not live_path.startswith(CERTIFICATE_ROOTS) or not resolved.startswith(CERTIFICATE_ROOTS)
+                        or ".." in certificate.parts or not resolved_path.is_file()
+                        or resolved_path.stat().st_size > 1024 * 1024):
+                    return None
+                data = resolved_path.read_bytes()
+            except OSError:
+                return None
+            target_name = f"etc/NetworkManager/certs/{hashlib.sha256(source_name.encode()).hexdigest()[:8]}-{index}-{certificate.name}"
+            self.write_bytes(target_name, data, 0o600)
+            text = text.replace(placeholder, "/" + target_name)
+        return text
+
     def copy_live_wifi_profile(self, manifest: InstallManifest) -> str:
         """Copy the one live Wi-Fi connection named by ``network.copy_live_wifi`` (with its secret) to the target.
 
@@ -250,7 +271,11 @@ class NetworkMixin(ConfigurerBase):
             profile = rewrite_keyfile(text, portable=portable, drop_wifi_interface=portable)
             if profile is None or profile.connection_type not in {"wifi", "802-11-wireless"}:
                 break
-            self._write_profile(source.name, profile.text)
+            rewritten = self._copy_profile_certificates(source.name, profile)
+            if rewritten is None:
+                self.notify(f"warning: Wi-Fi connection {source.name} refers to a certificate that is missing or unsafe; skipped")
+                return ""
+            self._write_profile(source.name, rewritten)
             self.notify(f"Copied the Wi-Fi connection {source.stem} from this session")
             return source.name
         self.notify(f"warning: the Wi-Fi connection {wanted} of this session was not found; the installed system will not know it")
@@ -272,26 +297,11 @@ class NetworkMixin(ConfigurerBase):
                 continue
             if profile is None:
                 continue
-            text = profile.text
-            missing = False
-            for index, (placeholder, live_path) in enumerate(profile.certificates):
-                certificate = Path(live_path)
-                try:
-                    if not live_path.startswith(CERTIFICATE_ROOTS) or ".." in certificate.parts or not certificate.is_file() \
-                            or certificate.stat().st_size > 1024 * 1024:
-                        missing = True
-                        break
-                    data = certificate.read_bytes()
-                except OSError:
-                    missing = True
-                    break
-                target_name = f"etc/NetworkManager/certs/{hashlib.sha256(source.name.encode()).hexdigest()[:8]}-{index}-{certificate.name}"
-                self.write_bytes(target_name, data, 0o600)
-                text = text.replace(placeholder, "/" + target_name)
-            if missing:
+            rewritten = self._copy_profile_certificates(source.name, profile)
+            if rewritten is None:
                 self.notify(f"warning: network profile {source.name} refers to a certificate that is missing; skipped")
                 continue
-            self._write_profile(source.name, text)
+            self._write_profile(source.name, rewritten)
             imported.append(source.stem)
         if imported:
             self.notify("Copied network connections from this session: " + ", ".join(imported))

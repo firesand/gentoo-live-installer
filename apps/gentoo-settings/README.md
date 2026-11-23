@@ -130,8 +130,7 @@ left alone. The full list is in [`src/managed.rs`](src/managed.rs): drop-ins in
 
 - The GUI runs as your user. Changes go through
   `/usr/libexec/gentoo-settings-helper`, started with `pkexec` once per
-  transaction (`auth_admin_keep`, so a second apply within a few minutes doesn't
-  ask again).
+  transaction (`auth_admin`, asking for the administrator password each time).
 - The helper accepts **tweak ids, on/off and a value — nothing else**. It
   computes files and commands from its own built-in catalog. Values are checked
   against each tweak's range or choices. Only paths in the managed list are

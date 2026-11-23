@@ -1,5 +1,5 @@
 //! Running the privileged helper for one transaction: through `pkexec` (one
-//! polkit prompt; `auth_admin_keep` spares a second one for a few minutes),
+//! polkit prompt per transaction, `auth_admin`),
 //! directly when the GUI already runs as root, or on a scratch tree when
 //! `GENTOO_SETTINGS_ROOT` is set.
 
