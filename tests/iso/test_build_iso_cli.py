@@ -91,12 +91,15 @@ def test_the_build_starts_only_while_16_gib_stay_free_for_the_user(stubs) -> Non
 
 def test_the_container_leaves_the_reserved_cpus_and_has_the_lowest_weight(stubs) -> None:
     stubs.env["STUB_ISO_NAME"] = RELEASE_NAME
-    assert stubs.run(extra_env={"HOST_RESERVE_CPUS": "4"}).returncode == 0
+    cpus = os.cpu_count() or 1
+    reserve = min(4, max(1, cpus - 1))
+    assert stubs.run(extra_env={"HOST_RESERVE_CPUS": str(reserve)}).returncode == 0
     run = stubs.runs()[0]
     allowed = subprocess.run([str(ROOT / "scripts/low-priority.sh"), "--cpus"], capture_output=True, text=True,
-                             env={**os.environ, "HOST_RESERVE_CPUS": "4"}).stdout.strip()
+                             env={**os.environ, "HOST_RESERVE_CPUS": str(reserve)}).stdout.strip()
     assert option_values(run, "--cpuset-cpus") == [allowed] and option_values(run, "--cpu-shares") == ["2"]
-    assert not any(cpu in allowed.replace("-", ",").split(",") for cpu in "0123")
+    if cpus > 1:
+        assert not any(str(cpu) in allowed.replace("-", ",").split(",") for cpu in range(reserve))
     [image] = [call for call in stubs.calls() if call[:1] == ["build"]]
     assert option_values(image, "--cpuset-cpus") == [allowed] and option_values(image, "--cpu-shares") == ["2"]
 

@@ -76,6 +76,11 @@ def test_the_console_hint_names_the_ai_tool_only_when_the_disc_has_it(tmp_path) 
 
     script = ROOT / "iso/root_overlay/etc/profile.d/10-gentoo-rescue-hint.sh"
     base = {k: v for k, v in os.environ.items() if k not in ("DISPLAY", "WAYLAND_DISPLAY")}
+    clean_path = os.pathsep.join(
+        entry for entry in base.get("PATH", "").split(os.pathsep)
+        if entry and not os.path.exists(os.path.join(entry, "gentoo-rescue-ai"))
+    )
+    base["PATH"] = clean_path
     without = subprocess.run(["bash", "--norc", "-i", "-c", f". {script}"], capture_output=True, text=True, env=base, check=False)
     assert "gentoo-rescue-ai" not in without.stdout
     write_executable(tmp_path / "gentoo-rescue-ai", "#!/bin/sh\n")

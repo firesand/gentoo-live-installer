@@ -363,6 +363,7 @@ class FormGrid(QGridLayout):
 
     def add_field(self, row: int, label: str, widget: QWidget, hint: str = "") -> None:
         caption = QLabel(label)
+        caption.setWordWrap(True)
         caption.setBuddy(widget)
         self.addWidget(caption, row, 0, Qt.AlignmentFlag.AlignTop)
         self.addWidget(widget, row, 1)

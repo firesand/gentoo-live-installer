@@ -16,7 +16,10 @@ MANAGED = ROOT / "etc" / "claude-code" / "managed-settings.json"
 
 
 def test_the_tree_mirrors_where_the_files_go_and_holds_no_sudo_rule() -> None:
-    files = sorted(str(p.relative_to(ROOT)) for p in ROOT.rglob("*") if p.is_file() and not p.is_symlink())
+    files = sorted(
+        str(p.relative_to(ROOT)) for p in ROOT.rglob("*")
+        if p.is_file() and not p.is_symlink() and "__pycache__" not in p.parts and p.suffix != ".pyc"
+    )
     assert files == sorted([
         "etc/claude-code/CLAUDE.md", "etc/claude-code/managed-settings.json", "etc/gentoo-rescue/AGENTS.md", "etc/gentoo-rescue/hooks/pretooluse-guard.py",
         "etc/skel-rescue-ai/.codex/config.toml", "etc/skel-rescue-ai/.config/opencode/opencode.json", "etc/skel-rescue-ai/.bashrc", "etc/skel-rescue-ai/.bash_profile"])

@@ -581,6 +581,7 @@ def make_manager(runner, tmp_path, **kwargs):
         "cmdline_path": tmp_path / "cmdline",
         "proc_root": tmp_path / "proc",
         "dev_root": tmp_path / "dev",
+        "xfs_config_dir": tmp_path / "xfs-mkfs",
         "sleep": lambda seconds: None,
         "kill": lambda pid, sig: None,
     }

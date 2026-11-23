@@ -611,7 +611,6 @@ def test_the_same_image_fails_when_something_is_taken_away(tmp_path: Path, live_
     assert {"squashfs.services", "squashfs.ownership", "grub.entries", "squashfs.content"} <= ids
 
 
-@pytest.mark.skipif(tools_missing(), reason="xorriso, isoinfo, gensquashfs and rdsquashfs are needed")
 def contract_without_secure_boot(tmp_path: Path) -> Path:
     """The command line on the synthetic image: this host has no sbverify, and the image no signed files (the checks above cover them)."""
     contract = {key: value for key, value in CONTRACT.items() if key != "secure_boot"}
@@ -620,6 +619,7 @@ def contract_without_secure_boot(tmp_path: Path) -> Path:
     return path
 
 
+@pytest.mark.skipif(tools_missing(), reason="xorriso, isoinfo, gensquashfs and rdsquashfs are needed")
 def test_command_line_report_and_package_list(tmp_path: Path, live_make_conf: str, pins: dict[str, str]) -> None:
     iso = build_iso(tmp_path, "release", live_make_conf, pins)
     report_path, packages_path = tmp_path / "report.json", tmp_path / "packages.txt"
