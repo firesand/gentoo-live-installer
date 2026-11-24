@@ -139,7 +139,7 @@ install -d -m 0700 build/vm-control
 testkey="build/vm-control/iso-test-$(date +%s)"
 ssh-keygen -q -t ed25519 -N '' -f "$testkey"
 ISO_DIST_DIR=build/test-dist JOBS=2 ./scripts/build-iso.sh --test-key-file "$testkey.pub"
-python3 scripts/test-vm.py --scenario openrc --iso build/test-dist/gentoo-installer-amd64-rc4-20261018T124555Z-TESTKEY.iso \
+python3 scripts/test-vm.py --scenario openrc --iso build/test-dist/gentoo-installer-amd64-rc5-20261018T124555Z-TESTKEY.iso \
   --ssh-host 127.0.0.1 --ssh-port 40222 --ssh-private-key "$testkey"
 ```
 
