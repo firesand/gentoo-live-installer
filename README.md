@@ -1,5 +1,5 @@
 # Gentoo LiveCD Installer
-> **This project is assisted by AI.** AI coding agents wrote most of it, directed by the maintainer ([AI assistance](#ai-assistance)). It is **unofficial**: not an official Gentoo release, and not made or endorsed by the Gentoo Foundation. It is a **release candidate**: install it only on a spare disk or a spare PC ([Status](#status)). **Download the ISO from [SourceForge](https://sourceforge.net/projects/gentoo-live-installer/files/rc4/)** (checksum and Secure Boot fingerprint: [Download](#download)).
+> **This project is assisted by AI.** AI coding agents wrote most of it, directed by the maintainer ([AI assistance](#ai-assistance)). It is **unofficial**: not an official Gentoo release, and not made or endorsed by the Gentoo Foundation. It is a **release candidate**: install it only on a spare disk or a spare PC ([Status](#status)). **Download the ISO from [SourceForge](https://sourceforge.net/projects/gentoo-live-installer/files/rc5/)** (checksum and Secure Boot fingerprint: [Download](#download)).
 
 A live USB/DVD image that does these jobs on almost any 64-bit PC or laptop:
 
@@ -34,23 +34,23 @@ This is separate from the optional *AI rescue* boot entry described above, which
 
 ## Status
 
-RC4 is a release candidate. Its release ISO was boot-tested on Secure Boot, BIOS and UEFI, and the full installs ran on a test ISO of the same commit, all in virtual machines. That build has not run on real hardware yet, and no test machine had an NVIDIA card, so the NVIDIA driver paths were not run. [docs/TESTING.md](docs/TESTING.md) lists the known gaps.
+RC5 is a release candidate built from the RC4 base with post-RC4 security, rescue, UI, and CI fixes. RC4 was boot-tested on Secure Boot, BIOS and UEFI, and full installs ran on a test ISO of the same base in virtual machines. Neither build has run on real hardware yet, and no test machine had an NVIDIA card, so the NVIDIA driver paths were not run. [docs/TESTING.md](docs/TESTING.md) lists the known gaps.
 
 An install erases the disk you choose. Use a spare disk or a spare PC, and keep a backup of anything you care about.
 
 ## Download
 
-**RC4:** [gentoo-installer-amd64-rc4-20261018T124555Z.iso](https://sourceforge.net/projects/gentoo-live-installer/files/rc4/gentoo-installer-amd64-rc4-20261018T124555Z.iso/download) (2.4 GB), on SourceForge because it is too large for a GitHub release. The [files page](https://sourceforge.net/projects/gentoo-live-installer/files/rc4/) also has the checksums, the package list, the build manifest and the disc's Secure Boot certificate.
+**RC5:** [gentoo-installer-amd64-rc5-20261018T124555Z.iso](https://sourceforge.net/projects/gentoo-live-installer/files/rc5/gentoo-installer-amd64-rc5-20261018T124555Z.iso/download) (2.4 GB), on SourceForge because it is too large for a GitHub release. The [files page](https://sourceforge.net/projects/gentoo-live-installer/files/rc5/) also has the checksums, the package list, the build manifest and the disc's Secure Boot certificate.
 
 Check the download before you write it to a USB stick:
 
 ```sh
-sha512sum -c gentoo-installer-amd64-rc4-20261018T124555Z.iso.sha512
+sha512sum -c gentoo-installer-amd64-rc5-20261018T124555Z.iso.sha512
 ```
 
-SHA-512: `84ad31f1a0665fdef54ed2a9695b04140615515f1beb4e4747e57feb56faafc72997dffeaff444c29b18532295ec152df4ee18b23135bad9c62f25915667ad49`
+SHA-512: `f0d9e13010a57930499334324d2b00722d2a6671581f16bf5acc340333ca09ac9b365e08ec209c3bc4e79295529ee65f1506c88031a295ae660f1d2e1a95e718`
 
-With Secure Boot on, enroll the disc's key only if MokManager shows this fingerprint: `07 7B 5F 1B 7D B5 CD A0 6F C2 90 FC D8 DF AC 9D 9C E3 2C 47`. The source of this ISO is the tag [`rc4`](https://github.com/firesand/gentoo-live-installer/tree/rc4).
+With Secure Boot on, enroll the disc's key only if MokManager shows this fingerprint: `98 EE 57 7B 3C DB DB 30 E3 FF FE 5A 8A 8C 4B 67 7E A7 F2 1F`. The source of this ISO is the tag [`rc5`](https://github.com/firesand/gentoo-live-installer/tree/rc5).
 
 ## Screenshots
 
